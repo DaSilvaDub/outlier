@@ -46,9 +46,18 @@ Notes:
 
 ```powershell
 python -m outlier_scrapers.discover --league MLB --league WNBA
+python -m outlier_scrapers.discover --league MLB --league WNBA --deep
 python -m outlier_scrapers.props --league MLB --all
 python -m outlier_scrapers.props --league WNBA --all
-python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props
+python -m outlier_scrapers.line_movement --league MLB --all
+python -m outlier_scrapers.line_movement --league WNBA --all
+python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --line-movement
+```
+
+For a fast smoke run, limit market-detail calls:
+
+```powershell
+python -m outlier_scrapers.line_movement --league MLB --limit 25 --workers 4
 ```
 
 ## Tests

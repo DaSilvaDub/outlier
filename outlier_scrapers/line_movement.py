@@ -1,0 +1,506 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import Any
+
+from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
+from .normalizer import (
+    _to_float,
+    _to_int,
+    detect_scope,
+    implied_probability,
+    normalize_book_label,
+    parse_market_descriptor,
+)
+from .paths import league_paths
+from .props import write_json
+from .registry import SportConfig, get_sport_config, normalize_market, supported_leagues
+
+
+SIDES = ("OVER", "UNDER")
+DEFAULT_WORKERS = 4
+
+
+def _diff_float(current: float | None, opened: float | None) -> float | None:
+    if current is None or opened is None:
+        return None
+    return round(current - opened, 3)
+
+
+def _diff_int(current: int | None, opened: int | None) -> int | None:
+    if current is None or opened is None:
+        return None
+    return current - opened
+
+
+def _side_token(value: Any) -> str:
+    token = str(value or "").strip().upper()
+    return token if token in SIDES else ""
+
+
+def _ordered_market_ids(props_latest: dict[str, Any], limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    records = props_latest.get("records")
+    if not isinstance(records, list):
+        return [], {}
+
+    seen: set[str] = set()
+    ids: list[str] = []
+    context: dict[str, dict[str, Any]] = {}
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        market_id = str(row.get("market_id") or "").strip()
+        if not market_id or market_id in seen:
+            continue
+        seen.add(market_id)
+        ids.append(market_id)
+        context[market_id] = {
+            "event_id": row.get("event_id"),
+            "market": row.get("market"),
+            "market_raw": row.get("market_raw"),
+            "player": row.get("player"),
+            "player_raw": row.get("player_raw"),
+            "team": row.get("team"),
+            "team_raw": row.get("team_raw"),
+            "opponent": row.get("opponent"),
+            "opponent_raw": row.get("opponent_raw"),
+            "matchup": row.get("matchup"),
+            "matchup_raw": row.get("matchup_raw"),
+            "sport_context": row.get("sport_context"),
+        }
+        if limit is not None and len(ids) >= limit:
+            break
+    return ids, context
+
+
+def load_props_market_ids(league: str, limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]], str]:
+    config = get_sport_config(league)
+    path = league_paths(config.league_id).normalized / f"{config.league_id.lower()}_props_latest.json"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing props file {path}. Run python -m outlier_scrapers.props --league {config.league_id} --all first."
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    market_ids, context = _ordered_market_ids(payload, limit=limit)
+    return market_ids, context, str(path)
+
+
+def _market_context(
+    payload: dict[str, Any],
+    config: SportConfig,
+    props_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+    player = market.get("player") if isinstance(market.get("player"), dict) else {}
+    props_context = props_context or {}
+    market_label = market.get("label") or props_context.get("market_raw") or ""
+    proposition = market.get("proposition")
+    market_raw = parse_market_descriptor({"marketLabel": market_label, "proposition": proposition})
+    scope = detect_scope(market_label, market_raw)
+    canonical_market = None
+    if scope == "full_game":
+        canonical_market = normalize_market(config, proposition) or normalize_market(config, market_raw)
+
+    return {
+        "event_id": market.get("eventId") or props_context.get("event_id"),
+        "market_id": market.get("marketId") or props_context.get("market_id"),
+        "market": canonical_market,
+        "market_raw": market_raw or props_context.get("market_raw"),
+        "market_label": market_label or None,
+        "market_type": market.get("marketType"),
+        "prop_type": market.get("propType"),
+        "proposition": proposition,
+        "player": player.get("fullName") or props_context.get("player"),
+        "player_raw": player.get("fullName") or props_context.get("player_raw"),
+        "player_id": player.get("playerId"),
+        "team_id": player.get("teamId"),
+        "team": props_context.get("team"),
+        "team_raw": props_context.get("team_raw"),
+        "opponent": props_context.get("opponent"),
+        "opponent_raw": props_context.get("opponent_raw"),
+        "matchup": props_context.get("matchup"),
+        "matchup_raw": props_context.get("matchup_raw"),
+        "is_active": market.get("isActive"),
+        "scope": scope,
+    }
+
+
+def _current_outcomes_by_side(market: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    outcomes = market.get("outcomes") if isinstance(market.get("outcomes"), list) else []
+    by_side: dict[str, dict[str, Any]] = {}
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        side = _side_token(outcome.get("position") or outcome.get("label"))
+        if not side:
+            continue
+        existing = by_side.get(side)
+        if existing is None or (outcome.get("primary") is True and existing.get("primary") is not True):
+            by_side[side] = outcome
+    return by_side
+
+
+def _history_by_side(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    market_history = payload.get("marketHistory")
+    movements = []
+    if isinstance(market_history, dict) and isinstance(market_history.get("marketMovements"), list):
+        movements = market_history["marketMovements"]
+
+    by_side: dict[str, list[dict[str, Any]]] = {side: [] for side in SIDES}
+    for movement in movements:
+        if not isinstance(movement, dict):
+            continue
+        value = movement.get("value") if isinstance(movement.get("value"), dict) else {}
+        movement_types = movement.get("movementTypes")
+        types = [str(item) for item in movement_types] if isinstance(movement_types, list) else []
+        for side in SIDES:
+            side_payload = value.get(side)
+            if not isinstance(side_payload, dict):
+                continue
+            by_side[side].append(
+                {
+                    "updated": movement.get("updated"),
+                    "movement_types": types,
+                    "line": _to_float(side_payload.get("line")),
+                    "odds": _to_int(side_payload.get("odds")),
+                    "decimal_odds": _to_float(side_payload.get("decimalOdds")),
+                }
+            )
+
+    for side, rows in by_side.items():
+        by_side[side] = sorted(rows, key=lambda row: str(row.get("updated") or ""))
+    return by_side
+
+
+def _books_from_outcome(outcome: dict[str, Any]) -> list[str]:
+    books = outcome.get("books") if isinstance(outcome.get("books"), list) else []
+    labels = [normalize_book_label(book) for book in books if str(book or "").strip()]
+    odds = outcome.get("odds")
+    if isinstance(odds, list):
+        for entry in odds:
+            if not isinstance(entry, dict):
+                continue
+            book = entry.get("book")
+            if isinstance(book, str) and book.strip():
+                label = normalize_book_label(book)
+                if label not in labels:
+                    labels.append(label)
+            elif isinstance(book, dict):
+                raw = book.get("name") or book.get("label") or book.get("bookId") or book.get("id")
+                if raw:
+                    label = normalize_book_label(raw)
+                    if label not in labels:
+                        labels.append(label)
+    return labels
+
+
+def _american_prices_from_outcome(outcome: dict[str, Any]) -> list[int]:
+    odds = outcome.get("odds")
+    if isinstance(odds, list):
+        prices: list[int] = []
+        for entry in odds:
+            if not isinstance(entry, dict):
+                continue
+            price = _to_int(entry.get("american"))
+            if price is not None:
+                prices.append(price)
+        return prices
+    price = _to_int(odds)
+    return [price] if price is not None else []
+
+
+def _best_american_price(outcome: dict[str, Any]) -> int | None:
+    prices = _american_prices_from_outcome(outcome)
+    return max(prices) if prices else None
+
+
+def normalize_market_detail(
+    *,
+    league: str,
+    payload: dict[str, Any],
+    props_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    config = get_sport_config(league)
+    market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+    context = _market_context(payload, config, props_context)
+    current_by_side = _current_outcomes_by_side(market)
+    history_by_side = _history_by_side(payload)
+    sides = [side for side in SIDES if side in current_by_side or history_by_side.get(side)]
+
+    rows: list[dict[str, Any]] = []
+    for side in sides:
+        current = current_by_side.get(side, {})
+        history = history_by_side.get(side, [])
+        opened = history[0] if history else {}
+        latest = history[-1] if history else {}
+        current_line = _to_float(current.get("line"))
+        current_odds = _best_american_price(current)
+        open_line = opened.get("line")
+        open_odds = opened.get("odds")
+        movement_types = sorted(
+            {
+                movement_type
+                for movement in history
+                for movement_type in movement.get("movement_types", [])
+                if movement_type
+            }
+        )
+
+        rows.append(
+            {
+                "league": config.league_id,
+                "event_id": context.get("event_id"),
+                "market_id": context.get("market_id"),
+                "side": side,
+                "player": context.get("player"),
+                "player_raw": context.get("player_raw"),
+                "player_id": context.get("player_id"),
+                "team": context.get("team"),
+                "team_raw": context.get("team_raw"),
+                "opponent": context.get("opponent"),
+                "opponent_raw": context.get("opponent_raw"),
+                "matchup": context.get("matchup"),
+                "matchup_raw": context.get("matchup_raw"),
+                "market": context.get("market"),
+                "market_raw": context.get("market_raw"),
+                "market_label": context.get("market_label"),
+                "market_type": context.get("market_type"),
+                "prop_type": context.get("prop_type"),
+                "proposition": context.get("proposition"),
+                "scope": context.get("scope"),
+                "is_active": context.get("is_active"),
+                "current_line": current_line,
+                "current_odds": current_odds,
+                "current_ip_pct": implied_probability(current_odds),
+                "current_odds_count": len(_american_prices_from_outcome(current)),
+                "open_line": open_line,
+                "open_odds": open_odds,
+                "open_ip_pct": implied_probability(open_odds),
+                "latest_history_line": latest.get("line"),
+                "latest_history_odds": latest.get("odds"),
+                "latest_movement_at": latest.get("updated"),
+                # Deltas describe the recorded consensus movement path
+                # (open -> latest history) so line and odds are measured on the
+                # same basis. current_line/current_odds remain the separate live
+                # best-book snapshot.
+                "line_delta_from_open": _diff_float(latest.get("line"), open_line),
+                "odds_delta_from_open": _diff_int(latest.get("odds"), open_odds),
+                "movement_count": len(history),
+                "movement_types": movement_types,
+                "history_available": bool(history),
+                "books": _books_from_outcome(current),
+                "book_count": len(_books_from_outcome(current)),
+                "movements": history,
+                "sport_context": {
+                    "market_group_id": market.get("marketGroupId"),
+                    "market_group_sort_order": market.get("marketGroupSortOrder"),
+                    "include_overtime": market.get("includeOvertime"),
+                    "source": "sportsdata/markets/{marketId}",
+                },
+            }
+        )
+    return rows
+
+
+def build_line_movement_payload(
+    *,
+    league: str,
+    market_payloads: list[dict[str, Any]],
+    props_context: dict[str, dict[str, Any]],
+    source_url_template: str,
+    props_latest: str,
+    fetch_errors: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    markets_without_records: list[str | None] = []
+    for payload in market_payloads:
+        market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+        market_id = str(market.get("marketId") or "").strip() or None
+        market_rows = normalize_market_detail(
+            league=league,
+            payload=payload,
+            props_context=props_context.get(market_id or "", {}),
+        )
+        if market_rows:
+            rows.extend(market_rows)
+        else:
+            markets_without_records.append(market_id)
+
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "league": get_sport_config(league).league_id,
+        "source_url_template": source_url_template,
+        "source_method": "api",
+        "props_latest": props_latest,
+        "market_count": len(market_payloads),
+        "markets_with_records": len({row.get("market_id") for row in rows if row.get("market_id")}),
+        "markets_without_records": markets_without_records,
+        "record_count": len(rows),
+        "fetch_errors": fetch_errors or [],
+        "primary_record_array": "records",
+        "records": sorted(
+            rows,
+            key=lambda row: (
+                str(row.get("matchup_raw") or ""),
+                str(row.get("player_raw") or ""),
+                str(row.get("market_raw") or ""),
+                str(row.get("side") or ""),
+            ),
+        ),
+        "data_contract": {
+            "dataset": "outlier_line_movement",
+            "version": "1.0",
+            "intended_use": "Standalone Outlier market-detail line movement for betting triage.",
+            "join_key": "league+market_id",
+            "row_grain": "one row per market_id+side",
+        },
+    }
+
+
+def export_line_movement_for_league(
+    client: OutlierApiClient,
+    league: str,
+    *,
+    limit: int | None = None,
+    workers: int = DEFAULT_WORKERS,
+) -> dict[str, Any]:
+    config = get_sport_config(league)
+    paths = league_paths(config.league_id).ensure()
+    market_ids, props_context, props_latest = load_props_market_ids(config.league_id, limit=limit)
+
+    payloads_by_id: dict[str, dict[str, Any]] = {}
+    fetch_errors: list[dict[str, Any]] = []
+    worker_count = max(1, int(workers or 1))
+    if worker_count == 1 or len(market_ids) <= 1:
+        for market_id in market_ids:
+            try:
+                payloads_by_id[market_id] = client.fetch_market(market_id)
+            except AuthRequiredError:
+                raise
+            except OutlierApiError as exc:
+                fetch_errors.append({"market_id": market_id, "status": "error", "error": str(exc)[:200]})
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(client.fetch_market, market_id): market_id for market_id in market_ids}
+            for future in as_completed(futures):
+                market_id = futures[future]
+                try:
+                    payloads_by_id[market_id] = future.result()
+                except AuthRequiredError:
+                    raise
+                except OutlierApiError as exc:
+                    fetch_errors.append({"market_id": market_id, "status": "error", "error": str(exc)[:200]})
+
+    market_payloads = [payloads_by_id[market_id] for market_id in market_ids if market_id in payloads_by_id]
+
+    exported_at = datetime.now().astimezone().isoformat()
+    raw_payload = {
+        "exported_at": exported_at,
+        "league": config.league_id,
+        "source": "Outlier authenticated API",
+        "props_latest": props_latest,
+        "market_ids_requested": market_ids,
+        "workers": worker_count,
+        "markets": market_payloads,
+        "fetch_errors": fetch_errors,
+    }
+    raw_latest = paths.raw / f"{config.league_id.lower()}_line_movement_raw_latest.json"
+    raw_archive = paths.timestamped(paths.raw, "line_movement_raw")
+    write_json(raw_latest, raw_payload)
+    write_json(raw_archive, raw_payload)
+
+    source_template = client.url_for("/sportsdata/markets/{marketId}")
+    normalized = build_line_movement_payload(
+        league=config.league_id,
+        market_payloads=market_payloads,
+        props_context=props_context,
+        source_url_template=source_template,
+        props_latest=props_latest,
+        fetch_errors=fetch_errors,
+    )
+    normalized_latest = paths.normalized / f"{config.league_id.lower()}_line_movement_latest.json"
+    normalized_archive = paths.timestamped(paths.normalized, "line_movement")
+    write_json(normalized_latest, normalized)
+    write_json(normalized_archive, normalized)
+
+    status_value = "partial" if fetch_errors else "ok"
+    status = {
+        "league": config.league_id,
+        "status": status_value,
+        "raw_latest": str(raw_latest),
+        "normalized_latest": str(normalized_latest),
+        "props_latest": props_latest,
+        "markets_requested": len(market_ids),
+        "markets_fetched": len(market_payloads),
+        "markets_with_records": normalized["markets_with_records"],
+        "markets_without_record_count": len(normalized["markets_without_records"]),
+        "fetch_error_count": len(fetch_errors),
+        "record_count": normalized["record_count"],
+        "workers": worker_count,
+    }
+    write_json(paths.reports / "line_movement_status_latest.json", status)
+    return status
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export Outlier market-detail line movement")
+    parser.add_argument("--league", choices=supported_leagues(), required=True)
+    parser.add_argument("--all", action="store_true", help="Accepted for clarity; exports all market IDs")
+    parser.add_argument("--limit", type=int, help="Limit unique market IDs for a smoke run")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent market-detail fetches")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.limit is not None and args.limit <= 0:
+        print("--limit must be a positive integer")
+        return 2
+    if args.workers <= 0:
+        print("--workers must be a positive integer")
+        return 2
+
+    try:
+        client = OutlierApiClient()
+        status = export_line_movement_for_league(
+            client,
+            args.league,
+            limit=args.limit,
+            workers=args.workers,
+        )
+    except AuthRequiredError as exc:
+        paths = league_paths(args.league).ensure()
+        report = {
+            "league": args.league.upper(),
+            "status": "auth_required",
+            "generated_at": datetime.now().astimezone().isoformat(),
+            "error": str(exc)[:200],
+        }
+        write_json(paths.reports / "line_movement_status_latest.json", report)
+        print(f"{args.league.upper()}: auth_required")
+        return 1
+    except (OutlierApiError, FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        paths = league_paths(args.league).ensure()
+        report = {
+            "league": args.league.upper(),
+            "status": "error",
+            "generated_at": datetime.now().astimezone().isoformat(),
+            "error": str(exc)[:300],
+        }
+        write_json(paths.reports / "line_movement_status_latest.json", report)
+        print(f"{args.league.upper()}: error")
+        return 1
+
+    print(
+        f"{status['league']}: exported {status['record_count']} line-movement records "
+        f"from {status['markets_fetched']}/{status['markets_requested']} markets"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
