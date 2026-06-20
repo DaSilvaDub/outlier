@@ -1,0 +1,37 @@
+{
+  "props": [
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "mlb-event-1",
+        "marketId": "market-1",
+        "marketLabel": "Aaron Judge - Total Bases",
+        "proposition": "TOTAL_BASES",
+        "position": "OVER",
+        "line": 1.5,
+        "teamId": "nyy-id",
+        "bestOdds": 120,
+        "books": ["HARD_ROCK"],
+        "bookOdds": {"HARD_ROCK": {"odds": 120}}
+      },
+      "stats": {"l5": 0.6, "l10": 0.7, "l20": 0.55, "h2h": 0.5, "curSeason": 0.52, "prevSeason": 0.49}
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "mlb-event-2",
+        "marketId": null,
+        "marketLabel": "Aaron Judge - Mystery Barrel Prop",
+        "proposition": "MYSTERY_BARREL_PROP",
+        "position": "OVER",
+        "line": 1.5,
+        "teamId": "nyy-id",
+        "bestOdds": -110,
+        "books": ["FANDUEL"],
+        "bookOdds": {"FANDUEL": {"odds": -110}}
+      },
+      "stats": {"l5": 0.4}
+    }
+  ]
+}
+

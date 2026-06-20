@@ -1,0 +1,17 @@
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Standalone Outlier auth/session material. Do not commit secrets.
+config/*
+!config/.gitkeep
+config/outlier_session.json
+config/.outlier_session/
+config/api_bearer_token.txt
+config/api_request_headers.json
+
+# Live scraper outputs.
+data/*
+!data/.gitkeep
