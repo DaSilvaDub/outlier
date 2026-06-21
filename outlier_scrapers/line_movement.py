@@ -461,13 +461,40 @@ def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_")
     if not isinstance(ev_outcome, dict):
         return {
             f"{prefix}calculated_ev_pct": None,
+            f"{prefix}calculated_ev_method": None,
+            f"{prefix}kelly_pct": None,
             f"{prefix}devig_odds": None,
+            f"{prefix}devig_decimal": None,
             f"{prefix}vig_pct": None,
             f"{prefix}width_pct": None,
         }
+    
+    calculated_ev = ev_outcome.get("calculatedEV")
+    method_used = None
+    ev_val = None
+    kelly_val = None
+    
+    if isinstance(calculated_ev, dict):
+        for method in ["AVERAGE", "MULTIPLICATIVE", "ADDITIVE", "SHIN", "POWER", "PROBIT", "WORSTCASE"]:
+            if method in calculated_ev and isinstance(calculated_ev[method], dict):
+                method_used = method
+                ev_val = calculated_ev[method].get("ev")
+                kelly_val = calculated_ev[method].get("kelly")
+                break
+                
+    devig = ev_outcome.get("deVigOdds")
+    devig_american = None
+    devig_decimal = None
+    if isinstance(devig, dict):
+        devig_american = _to_int(devig.get("american"))
+        devig_decimal = _to_float(devig.get("decimal"))
+
     return {
-        f"{prefix}calculated_ev_pct": percent_number(ev_outcome.get("calculatedEV")),
-        f"{prefix}devig_odds": _to_float(ev_outcome.get("deVigOdds")),
+        f"{prefix}calculated_ev_pct": percent_number(ev_val),
+        f"{prefix}calculated_ev_method": method_used,
+        f"{prefix}kelly_pct": percent_number(kelly_val),
+        f"{prefix}devig_odds": devig_american,
+        f"{prefix}devig_decimal": devig_decimal,
         f"{prefix}vig_pct": percent_number(ev_outcome.get("vig")),
         f"{prefix}width_pct": percent_number(ev_outcome.get("width")),
     }
@@ -681,6 +708,7 @@ def normalize_market_detail(
                     "market_group_sort_order": market.get("marketGroupSortOrder"),
                     "include_overtime": market.get("includeOvertime"),
                     "source": "sportsdata/markets/{marketId}",
+                    "ev_methods": list(ev_outcome.get("calculatedEV", {}).keys()) if isinstance(ev_outcome, dict) and isinstance(ev_outcome.get("calculatedEV"), dict) else [],
                 },
             }
         )

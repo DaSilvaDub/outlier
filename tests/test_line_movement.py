@@ -50,8 +50,11 @@ def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
         payload["market"]["evOutcomes"] = [
             {
                 "outcomeId": f"{market_id}-over",
-                "calculatedEV": 0.125,
-                "deVigOdds": 0.54,
+                "calculatedEV": {
+                    "AVERAGE": {"noVigOdds": {"american": "-115", "decimal": 1.86}, "ev": 0.125, "kelly": 0.13},
+                    "MULTIPLICATIVE": {"noVigOdds": {"american": "-120"}, "ev": 0.11, "kelly": 0.115},
+                },
+                "deVigOdds": {"american": "-115", "decimal": 1.86, "fraction": "20/23"},
                 "vig": 0.02,
                 "width": 0.04,
                 "books": {
@@ -72,8 +75,10 @@ def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
             },
             {
                 "outcomeId": f"{market_id}-under",
-                "calculatedEV": 0.03,
-                "deVigOdds": 0.46,
+                "calculatedEV": {
+                    "ADDITIVE": {"ev": 0.03, "kelly": 0.035},
+                },
+                "deVigOdds": {"american": "+110", "decimal": 2.1, "fraction": "11/10"},
                 "vig": 0.01,
                 "width": 0.02,
                 "books": {},
@@ -152,10 +157,14 @@ def test_normalize_market_detail_maps_ev_outcomes_to_side_rows():
     assert over["ev_book_count"] == 2
     assert over["ev_books"] == ["DraftKings", "FanDuel"]
     assert over["ev_calculated_ev_pct"] == 12.5
-    assert over["ev_devig_odds"] == 0.54
+    assert over["ev_calculated_ev_method"] == "AVERAGE"
+    assert over["ev_kelly_pct"] == 13.0
+    assert over["ev_devig_odds"] == -115
+    assert over["ev_devig_decimal"] == 1.86
     assert over["ev_vig_pct"] == 2.0
     assert over["ev_width_pct"] == 4.0
     assert under["ev_available"] is True
+    assert under["ev_calculated_ev_method"] == "ADDITIVE"
     assert under["ev_book_count"] == 0
     assert under["ev_books"] == []
 
@@ -167,8 +176,8 @@ def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missi
     payload["market"]["evOutcomes"] = [
         {
             "position": "OVER",
-            "calculatedEV": 0.07,
-            "deVigOdds": 0.52,
+            "calculatedEV": {"AVERAGE": {"ev": 0.07, "kelly": 0.08}},
+            "deVigOdds": {"american": "-110", "decimal": 1.91},
             "vig": 0.01,
             "width": 0.03,
             "books": {
@@ -190,6 +199,8 @@ def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missi
     assert over["outcome_id"] is None
     assert over["ev_available"] is True
     assert over["ev_calculated_ev_pct"] == 7.0
+    assert over["ev_calculated_ev_method"] == "AVERAGE"
+    assert over["ev_devig_odds"] == -110
     assert over["ev_book_count"] == 1
     assert under["ev_available"] is False
     assert len(ev_records) == 1
@@ -360,7 +371,10 @@ def test_export_line_movement_writes_ev_records_and_status(tmp_path, monkeypatch
     assert over_dk["market_id"] == "m1"
     assert over_dk["outcome_id"] == "m1-over"
     assert over_dk["calculated_ev_pct"] == 12.5
-    assert over_dk["devig_odds"] == 0.54
+    assert over_dk["calculated_ev_method"] == "AVERAGE"
+    assert over_dk["kelly_pct"] == 13.0
+    assert over_dk["devig_odds"] == -115
+    assert over_dk["devig_decimal"] == 1.86
     assert over_dk["book_odds"] == 110
     assert over_dk["book_decimal_odds"] == 2.1
     assert over_dk["max_bet"] == 250.0
@@ -369,6 +383,7 @@ def test_export_line_movement_writes_ev_records_and_status(tmp_path, monkeypatch
     assert under_no_book["book"] is None
     assert under_no_book["book_odds"] is None
     assert under_no_book["calculated_ev_pct"] == 3.0
+    assert under_no_book["calculated_ev_method"] == "ADDITIVE"
 
 
 def test_export_line_movement_warns_and_records_stale_props(tmp_path, monkeypatch, capsys):
