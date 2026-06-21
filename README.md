@@ -2,7 +2,8 @@
 
 This repo is intentionally separate from `nba-props-pipeline`.
 
-V1 supports Outlier discovery and props export for `MLB` and `WNBA`.
+V2 supports Outlier discovery, props, insights, and line-movement export for
+`MLB` and `WNBA`.
 The NBA pipeline is read-only reference only; this project does not import from it
 and does not write into it.
 
@@ -50,9 +51,11 @@ python -m outlier_scrapers.discover --league MLB --league WNBA
 python -m outlier_scrapers.discover --league MLB --league WNBA --deep
 python -m outlier_scrapers.props --league MLB --all
 python -m outlier_scrapers.props --league WNBA --all
+python -m outlier_scrapers.insights --league MLB --all
+python -m outlier_scrapers.insights --league WNBA --all
 python -m outlier_scrapers.line_movement --league MLB --all
 python -m outlier_scrapers.line_movement --league WNBA --all
-python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --line-movement
+python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --insights --line-movement
 ```
 
 For a fast smoke run, limit market-detail calls:

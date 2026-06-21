@@ -46,3 +46,22 @@ def test_refresh_runs_line_movement_without_props_step(monkeypatch, capsys):
     assert result == 0
     assert "MLB line movement: exported 2 records from 1/1 markets" in captured.out
     assert calls["line_movement"] == 1
+
+
+def test_refresh_runs_insights(monkeypatch, capsys):
+    calls = {"insights": 0}
+
+    monkeypatch.setattr(refresh_mod, "OutlierApiClient", FakeClient)
+
+    def insights(client, league):
+        calls["insights"] += 1
+        return {"record_count": 3}
+
+    monkeypatch.setattr(refresh_mod, "export_insights_for_league", insights)
+
+    result = refresh_mod.main(["--league", "WNBA", "--insights"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WNBA insights: exported 3 insights" in captured.out
+    assert calls["insights"] == 1

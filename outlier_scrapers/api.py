@@ -38,14 +38,36 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def _props_signature(props: list[Any]) -> tuple[Any, ...]:
+def _record_id(record: Any) -> str:
+    if not isinstance(record, dict):
+        return ""
+    for key in ("insightId", "outcomeId", "marketOutcomeId", "marketId", "id"):
+        value = record.get(key)
+        if value:
+            return str(value)
+    outcome = record.get("outcome")
+    if isinstance(outcome, dict):
+        return str(outcome.get("outcomeId") or outcome.get("marketId") or "")
+    return ""
+
+
+def _records_signature(records: list[Any]) -> tuple[Any, ...]:
     """A cheap fingerprint of a page used to detect lack of progress."""
-    ids: list[str] = []
-    for record in props:
-        if isinstance(record, dict):
-            outcome = record.get("outcome") if isinstance(record.get("outcome"), dict) else {}
-            ids.append(str(outcome.get("outcomeId") or outcome.get("marketId") or ""))
-    return (len(props), tuple(ids[:3]), tuple(ids[-3:]))
+    ids = [_record_id(record) for record in records]
+    return (len(records), tuple(ids[:3]), tuple(ids[-3:]))
+
+
+def _page_token_and_meta(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Return (nextPageToken, page-meta), supporting both layouts.
+
+    playerProps nests pagination under ``_page``; insights puts ``nextPageToken``
+    at the top level with no ``_page`` wrapper.
+    """
+    meta = payload.get("_page") if isinstance(payload.get("_page"), dict) else {}
+    token = str(meta.get("nextPageToken") or "").strip()
+    if not token:
+        token = str(payload.get("nextPageToken") or "").strip()
+    return token, meta
 
 
 class OutlierApiError(RuntimeError):
@@ -128,52 +150,53 @@ class OutlierApiClient:
         value = page_token if page_token is not None else page_number
         return self.fetch_json(f"{base_path}{sep}{param}={quote(str(value))}")
 
-    def fetch_player_props(
+    def _fetch_paginated(
         self,
-        league: str,
+        base: str,
+        record_key: str,
         *,
         max_pages: int = MAX_PROP_PAGES,
     ) -> dict[str, Any]:
-        """Fetch all pages of playerProps, merged into one ``props`` array.
+        """Fetch all pages of a paginated list endpoint, merged under record_key.
 
-        Follows ``_page.nextPageToken`` when present, otherwise walks
-        ``_page.pageNumber`` up to ``_page.pages``. Stops on a repeated token,
-        a page that does not advance, exhaustion, or ``max_pages`` (safety cap).
-        A non-secret ``_page_summary`` is attached describing what happened.
+        Follows ``nextPageToken`` (under ``_page`` or top-level), otherwise walks
+        ``_page.pageNumber`` up to ``_page.pages``. The next-page query param is
+        unknown, so we try a candidate list and lock onto whichever advances the
+        feed (verified by a changed page signature). Stops on a repeated token, a
+        non-advancing page, exhaustion, or ``max_pages``. A non-secret
+        ``_page_summary`` is attached.
         """
-        token = league.strip().upper()
-        base = f"/sportsdata/leagues/{token}/playerProps"
         first = self.fetch_json(base)
-        props = list(first.get("props") or [])
-        meta = first.get("_page") if isinstance(first.get("_page"), dict) else {}
+        records = list(first.get(record_key) or [])
+        token, meta = _page_token_and_meta(first)
         pages_total = _as_int(meta.get("pages"))
-        has_token = bool(str(meta.get("nextPageToken") or "").strip())
 
         summary: dict[str, Any] = {
             "pages_reported": pages_total,
             "total_reported": _as_int(meta.get("total")),
             "pages_fetched": 1,
-            "merged_props": len(props),
+            "merged_records": len(records),
+            f"merged_{record_key}": len(records),
             "pagination_method": None,
             "param_used": None,
             "stopped_reason": "single_page",
         }
 
-        if not has_token and (not pages_total or pages_total <= 1):
-            first["props"] = props
+        if not token and (not pages_total or pages_total <= 1):
+            first[record_key] = records
             first["_page_summary"] = summary
             return first
 
-        last_sig = _props_signature(props)
+        last_sig = _records_signature(records)
         seen_tokens: set[str] = set()
         locked_param: str | None = None
         method: str | None = None
-        current_meta = meta
+        current = first
         fetched = 1
         stopped = "exhausted"
 
         while fetched < max_pages:
-            token_val = str(current_meta.get("nextPageToken") or "").strip()
+            token_val, current_meta = _page_token_and_meta(current)
             cur_num = _as_int(current_meta.get("pageNumber")) or fetched
             use_token = bool(token_val)
 
@@ -201,8 +224,8 @@ class OutlierApiClient:
                     raise
                 except OutlierApiError:
                     continue
-                cand_props = candidate.get("props") if isinstance(candidate.get("props"), list) else []
-                if cand_props and _props_signature(cand_props) != last_sig:
+                cand_records = candidate.get(record_key) if isinstance(candidate.get(record_key), list) else []
+                if cand_records and _records_signature(cand_records) != last_sig:
                     page = candidate
                     used_param = param
                     break
@@ -213,24 +236,37 @@ class OutlierApiClient:
 
             locked_param = used_param
             method = "nextPageToken" if use_token else "pageNumber"
-            page_props = page.get("props")
-            props.extend(page_props)
-            last_sig = _props_signature(page_props)
+            page_records = page.get(record_key)
+            records.extend(page_records)
+            last_sig = _records_signature(page_records)
             fetched += 1
-            current_meta = page.get("_page") if isinstance(page.get("_page"), dict) else {}
+            current = page
         else:
             stopped = "max_pages_cap"
 
         summary.update(
             pages_fetched=fetched,
-            merged_props=len(props),
+            merged_records=len(records),
+            **{f"merged_{record_key}": len(records)},
             pagination_method=method,
             param_used=locked_param,
             stopped_reason=stopped,
         )
-        first["props"] = props
+        first[record_key] = records
         first["_page_summary"] = summary
         return first
+
+    def fetch_player_props(self, league: str, *, max_pages: int = MAX_PROP_PAGES) -> dict[str, Any]:
+        token = league.strip().upper()
+        return self._fetch_paginated(
+            f"/sportsdata/leagues/{token}/playerProps", "props", max_pages=max_pages
+        )
+
+    def fetch_insights(self, league: str, *, max_pages: int = MAX_PROP_PAGES) -> dict[str, Any]:
+        token = league.strip().upper()
+        return self._fetch_paginated(
+            f"/sportsdata/leagues/{token}/insights", "insights", max_pages=max_pages
+        )
 
     def fetch_market(self, market_id: str) -> dict[str, Any]:
         return self.fetch_json(f"/sportsdata/markets/{market_id}")

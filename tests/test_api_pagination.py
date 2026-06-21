@@ -35,6 +35,8 @@ def test_token_pagination_merges_pages_and_summarizes():
     assert len(out["props"]) == 5
     summary = out["_page_summary"]
     assert summary["pages_fetched"] == 3
+    assert summary["merged_props"] == 5
+    assert summary["merged_records"] == 5
     assert summary["pagination_method"] == "nextPageToken"
     assert summary["param_used"] == "pageToken"
     # The secret token must never appear in the non-secret summary.

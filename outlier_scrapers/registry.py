@@ -52,6 +52,9 @@ WNBA_TEAM_ALIASES = {
     "PHOENIXMERCURY": "PHX",
     "SEA": "SEA",
     "SEATTLESTORM": "SEA",
+    "TOR": "TOR",
+    "TORONTOTEMPO": "TOR",
+    "TEMPO": "TOR",
     "WAS": "WAS",
     "WASHINGTONMYSTICS": "WAS",
 }
@@ -151,6 +154,8 @@ BASKETBALL_MARKET_ALIASES = {
     "STEALS_BLOCKS": "S+B",
     "TURNOVERS": "TO",
     "FANTASYSCORE": "FANTASY",
+    "FANTASYSCOREPP": "FANTASY_PP",
+    "FANTASYSCOREUD": "FANTASY_UD",
     # Keys are matched after _compact() (uppercased, alnum-only), so the
     # canonical lookup keys carry no separators. Proposition strings are tried
     # first by the normalizer; the "*ATT" variants cover the market_raw fallback
@@ -218,6 +223,12 @@ MLB_MARKET_ALIASES = {
     "WALKSALLOWED": "BBA",
     "PITCHESTHROWN": "PT",
     "BATTERSFACED": "BF",
+    "FANTASYSCORE": "FANTASY",
+    "FANTASYSCOREPP": "FANTASY_PP",
+    "FANTASYSCOREUD": "FANTASY_UD",
+    "MONEYLINE": "ML",
+    "SPREAD": "SPREAD",
+    "TOTAL": "TOTAL",
 }
 
 
@@ -290,4 +301,3 @@ def normalize_market(config: SportConfig, value: object) -> str | None:
     if not token:
         return None
     return config.market_aliases.get(token)
-
