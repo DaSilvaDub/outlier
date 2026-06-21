@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -23,6 +24,27 @@ from .registry import SportConfig, get_sport_config, normalize_market, supported
 
 SIDES = ("OVER", "UNDER")
 DEFAULT_WORKERS = 4
+STALE_PROPS_MAX_AGE_HOURS = 12.0
+
+
+class StalePropsError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class PropsFreshness:
+    generated_at: str | None
+    age_hours: float | None
+    is_stale: bool
+    stale_reason: str | None
+
+
+@dataclass(frozen=True)
+class PropsMarketSource:
+    market_ids: list[str]
+    context: dict[str, dict[str, Any]]
+    path: str
+    freshness: PropsFreshness
 
 
 def _diff_float(current: float | None, opened: float | None) -> float | None:
@@ -77,7 +99,97 @@ def _ordered_market_ids(props_latest: dict[str, Any], limit: int | None = None) 
     return ids, context
 
 
-def load_props_market_ids(league: str, limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]], str]:
+def _parse_props_generated_at(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _props_freshness(
+    props_latest: dict[str, Any],
+    *,
+    now: datetime,
+    max_age_hours: float = STALE_PROPS_MAX_AGE_HOURS,
+) -> PropsFreshness:
+    generated_at = props_latest.get("generated_at")
+    generated_text = generated_at if isinstance(generated_at, str) else None
+    parsed = _parse_props_generated_at(generated_text)
+    if parsed is None:
+        reason = "missing props generated_at" if not generated_text else "invalid props generated_at"
+        return PropsFreshness(
+            generated_at=generated_text,
+            age_hours=None,
+            is_stale=True,
+            stale_reason=reason,
+        )
+
+    if parsed.tzinfo is None:
+        generated_local = parsed.replace(tzinfo=now.tzinfo)
+    elif now.tzinfo is None:
+        generated_local = parsed.replace(tzinfo=None)
+    else:
+        generated_local = parsed.astimezone(now.tzinfo)
+
+    raw_age_hours = (now - generated_local).total_seconds() / 3600.0
+    age_hours = round(raw_age_hours, 2)
+    reasons: list[str] = []
+    if generated_local.date() != now.date():
+        reasons.append(
+            f"props date {generated_local.date().isoformat()} != today {now.date().isoformat()}"
+        )
+    if raw_age_hours > max_age_hours:
+        reasons.append(f"props age {raw_age_hours:.3f}h > {max_age_hours:.2f}h")
+    if raw_age_hours < -1.0:
+        reasons.append(f"props generated_at is {abs(raw_age_hours):.3f}h in the future")
+
+    return PropsFreshness(
+        generated_at=generated_text,
+        age_hours=age_hours,
+        is_stale=bool(reasons),
+        stale_reason="; ".join(reasons) if reasons else None,
+    )
+
+
+def _stale_props_warning(league: str, props_latest: str, freshness: PropsFreshness) -> str:
+    age_text = "unknown" if freshness.age_hours is None else f"{freshness.age_hours:.2f}"
+    generated_at = freshness.generated_at or "missing"
+    reason = freshness.stale_reason or "unknown freshness"
+    return (
+        f"WARNING: {league} props_latest is stale ({reason}). "
+        f"props_generated_at={generated_at}; props_age_hours={age_text}; "
+        f"props_latest={props_latest}. Run props first or use "
+        f"python -m outlier_scrapers.refresh --league {league} --props --line-movement."
+    )
+
+
+def _props_freshness_status_fields(
+    freshness: PropsFreshness,
+    *,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "props_generated_at": freshness.generated_at,
+        "props_age_hours": freshness.age_hours,
+        "props_is_stale": freshness.is_stale,
+        "props_stale_reason": freshness.stale_reason,
+    }
+    if warning:
+        fields["props_freshness_warning"] = warning
+    return fields
+
+
+def load_props_market_source(
+    league: str,
+    limit: int | None = None,
+    *,
+    now: datetime | None = None,
+) -> PropsMarketSource:
     config = get_sport_config(league)
     path = league_paths(config.league_id).normalized / f"{config.league_id.lower()}_props_latest.json"
     if not path.exists():
@@ -86,7 +198,19 @@ def load_props_market_ids(league: str, limit: int | None = None) -> tuple[list[s
         )
     payload = json.loads(path.read_text(encoding="utf-8"))
     market_ids, context = _ordered_market_ids(payload, limit=limit)
-    return market_ids, context, str(path)
+    freshness = _props_freshness(payload, now=now or datetime.now().astimezone())
+    return PropsMarketSource(
+        market_ids=market_ids,
+        context=context,
+        path=str(path),
+        freshness=freshness,
+    )
+
+
+def load_props_market_ids(league: str, limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]], str]:
+    source = load_props_market_source(league, limit=limit)
+    return source.market_ids, source.context, source.path
+
 
 
 def _market_context(
@@ -367,10 +491,39 @@ def export_line_movement_for_league(
     *,
     limit: int | None = None,
     workers: int = DEFAULT_WORKERS,
+    require_fresh_props: bool = False,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     config = get_sport_config(league)
     paths = league_paths(config.league_id).ensure()
-    market_ids, props_context, props_latest = load_props_market_ids(config.league_id, limit=limit)
+    export_now = now or datetime.now().astimezone()
+    props_source = load_props_market_source(config.league_id, limit=limit, now=export_now)
+    market_ids = props_source.market_ids
+    props_context = props_source.context
+    props_latest = props_source.path
+    freshness = props_source.freshness
+    freshness_warning = (
+        _stale_props_warning(config.league_id, props_latest, freshness)
+        if freshness.is_stale
+        else None
+    )
+    freshness_status = _props_freshness_status_fields(
+        freshness,
+        warning=freshness_warning,
+    )
+    if freshness_warning:
+        print(freshness_warning, file=sys.stderr)
+        if require_fresh_props:
+            report = {
+                "league": config.league_id,
+                "status": "stale_props",
+                "generated_at": export_now.isoformat(),
+                "props_latest": props_latest,
+                "error": freshness_warning[:300],
+                **freshness_status,
+            }
+            write_json(paths.reports / "line_movement_status_latest.json", report)
+            raise StalePropsError(freshness_warning)
 
     payloads_by_id: dict[str, dict[str, Any]] = {}
     fetch_errors: list[dict[str, Any]] = []
@@ -441,6 +594,7 @@ def export_line_movement_for_league(
         "fetch_error_count": len(fetch_errors),
         "record_count": normalized["record_count"],
         "workers": worker_count,
+        **freshness_status,
     }
     write_json(paths.reports / "line_movement_status_latest.json", status)
     return status
@@ -452,6 +606,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", help="Accepted for clarity; exports all market IDs")
     parser.add_argument("--limit", type=int, help="Limit unique market IDs for a smoke run")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent market-detail fetches")
+    parser.add_argument(
+        "--require-fresh-props",
+        action="store_true",
+        help="Exit before fetching markets if props_latest is stale or missing generated_at",
+    )
     return parser.parse_args(argv)
 
 
@@ -471,7 +630,11 @@ def main(argv: list[str] | None = None) -> int:
             args.league,
             limit=args.limit,
             workers=args.workers,
+            require_fresh_props=args.require_fresh_props,
         )
+    except StalePropsError:
+        print(f"{args.league.upper()}: stale_props")
+        return 1
     except AuthRequiredError as exc:
         paths = league_paths(args.league).ensure()
         report = {

@@ -13,8 +13,8 @@ def test_auth_required_error_writes_no_success_artifact(tmp_path, monkeypatch):
     def opener(request, timeout):
         raise HTTPError(
             request.full_url,
-            403,
-            "forbidden",
+            401,
+            "unauthorized",
             hdrs=None,
             fp=io.BytesIO(b'{"message":"denied"}'),
         )
@@ -28,4 +28,3 @@ def test_auth_required_error_writes_no_success_artifact(tmp_path, monkeypatch):
         raise AssertionError("Expected export failure")
 
     assert not list((tmp_path / "data").glob("**/*props_latest.json"))
-

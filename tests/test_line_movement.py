@@ -1,10 +1,12 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from outlier_scrapers.api import AuthRequiredError
+from outlier_scrapers.api import AuthRequiredError, OutlierApiError
 from outlier_scrapers.line_movement import (
+    StalePropsError,
     export_line_movement_for_league,
     normalize_market_detail,
 )
@@ -136,12 +138,23 @@ class FakeClient:
         return f"https://api.test{path}"
 
 
-def _write_props_latest(tmp_path: Path, league="MLB"):
+class CountingClient(FakeClient):
+    def __init__(self, payloads):
+        super().__init__(payloads)
+        self.fetch_count = 0
+
+    def fetch_market(self, market_id):
+        self.fetch_count += 1
+        return super().fetch_market(market_id)
+
+
+def _write_props_latest(tmp_path: Path, league="MLB", generated_at: str | None = None):
     path = tmp_path / "data" / league / "normalized" / f"{league.lower()}_props_latest.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
+                "generated_at": generated_at or datetime.now().astimezone().isoformat(),
                 "records": [
                     {
                         "league": league,
@@ -167,13 +180,23 @@ def _write_props_latest(tmp_path: Path, league="MLB"):
     return path
 
 
+FRESH_NOW = datetime(2026, 6, 21, 15, 0, tzinfo=timezone.utc)
+FRESH_PROPS_GENERATED_AT = "2026-06-21T10:00:00+00:00"
+STALE_PROPS_GENERATED_AT = "2026-06-20T11:00:00+00:00"
+SLIGHTLY_OLD_PROPS_GENERATED_AT = "2026-06-21T02:59:59+00:00"
+
+
 def test_export_line_movement_writes_raw_normalized_and_status(tmp_path, monkeypatch):
     from outlier_scrapers import paths as paths_mod
 
     monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
-    _write_props_latest(tmp_path)
+    _write_props_latest(tmp_path, generated_at=FRESH_PROPS_GENERATED_AT)
 
-    status = export_line_movement_for_league(FakeClient({"m1": _market_detail()}), "MLB")
+    status = export_line_movement_for_league(
+        FakeClient({"m1": _market_detail()}),
+        "MLB",
+        now=FRESH_NOW,
+    )
 
     assert status["status"] == "ok"
     assert status["markets_requested"] == 1
@@ -181,6 +204,10 @@ def test_export_line_movement_writes_raw_normalized_and_status(tmp_path, monkeyp
     assert status["markets_with_records"] == 1
     assert status["markets_without_record_count"] == 0
     assert status["record_count"] == 2
+    assert status["props_generated_at"] == FRESH_PROPS_GENERATED_AT
+    assert status["props_age_hours"] == 5.0
+    assert status["props_is_stale"] is False
+    assert status["props_stale_reason"] is None
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
     assert normalized["data_contract"]["row_grain"] == "one row per market_id+side"
     assert normalized["markets_without_records"] == []
@@ -188,12 +215,87 @@ def test_export_line_movement_writes_raw_normalized_and_status(tmp_path, monkeyp
     assert Path(status["raw_latest"]).exists()
 
 
-def _write_props_latest_multi(tmp_path: Path, league="MLB"):
+def test_export_line_movement_warns_and_records_stale_props(tmp_path, monkeypatch, capsys):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest(tmp_path, generated_at=STALE_PROPS_GENERATED_AT)
+
+    status = export_line_movement_for_league(
+        FakeClient({"m1": _market_detail()}),
+        "MLB",
+        now=FRESH_NOW,
+    )
+
+    captured = capsys.readouterr()
+    assert "WARNING: MLB props_latest is stale" in captured.err
+    assert status["status"] == "ok"
+    assert status["props_generated_at"] == STALE_PROPS_GENERATED_AT
+    assert status["props_age_hours"] == 28.0
+    assert status["props_is_stale"] is True
+    assert "props date 2026-06-20 != today 2026-06-21" in status["props_stale_reason"]
+    assert "props_freshness_warning" in status
+
+
+def test_export_line_movement_warns_when_props_are_just_over_age_limit(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest(tmp_path, generated_at=SLIGHTLY_OLD_PROPS_GENERATED_AT)
+
+    status = export_line_movement_for_league(
+        FakeClient({"m1": _market_detail()}),
+        "MLB",
+        now=FRESH_NOW,
+    )
+
+    captured = capsys.readouterr()
+    assert "WARNING: MLB props_latest is stale" in captured.err
+    assert status["props_is_stale"] is True
+    assert "props age" in status["props_stale_reason"]
+
+
+def test_export_line_movement_require_fresh_props_hard_stops(tmp_path, monkeypatch, capsys):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest(tmp_path, generated_at=STALE_PROPS_GENERATED_AT)
+    client = CountingClient({"m1": _market_detail()})
+
+    with pytest.raises(StalePropsError):
+        export_line_movement_for_league(
+            client,
+            "MLB",
+            require_fresh_props=True,
+            now=FRESH_NOW,
+        )
+
+    captured = capsys.readouterr()
+    assert "WARNING: MLB props_latest is stale" in captured.err
+    assert client.fetch_count == 0
+    report = json.loads(
+        (tmp_path / "data" / "MLB" / "reports" / "line_movement_status_latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["status"] == "stale_props"
+    assert report["props_generated_at"] == STALE_PROPS_GENERATED_AT
+    assert report["props_age_hours"] == 28.0
+    assert report["props_is_stale"] is True
+    assert not list((tmp_path / "data").glob("**/*line_movement_latest.json"))
+
+
+def _write_props_latest_multi(tmp_path: Path, league="MLB", generated_at: str | None = None):
     path = tmp_path / "data" / league / "normalized" / f"{league.lower()}_props_latest.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
+                "generated_at": generated_at or datetime.now().astimezone().isoformat(),
                 "records": [
                     {"league": league, "event_id": "e1", "market_id": "m1",
                      "player_raw": "Aaron Judge", "matchup_raw": "NYY @ BOS", "market_raw": "Hits"},
@@ -226,6 +328,29 @@ def test_export_line_movement_threaded_reports_markets_without_records(tmp_path,
     assert status["record_count"] == 2
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
     assert normalized["markets_without_records"] == ["m2"]
+
+
+def test_export_line_movement_threaded_records_fetch_errors_as_partial(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest_multi(tmp_path)
+    client = FakeClient(
+        {
+            "m1": _market_detail(market_id="m1"),
+            "m2": OutlierApiError("HTTP 403 for https://api.test/sportsdata/markets/m2: body_len=0"),
+        }
+    )
+
+    status = export_line_movement_for_league(client, "MLB", workers=2)
+
+    assert status["status"] == "partial"
+    assert status["markets_requested"] == 2
+    assert status["markets_fetched"] == 1
+    assert status["fetch_error_count"] == 1
+    normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["fetch_errors"][0]["market_id"] == "m2"
+    assert normalized["records"]
 
 
 def test_export_line_movement_auth_error_writes_no_success_artifacts(tmp_path, monkeypatch):

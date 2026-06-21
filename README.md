@@ -13,8 +13,9 @@ Place a fresh Outlier Playwright storage state at one of:
 - `config/.outlier_session/storage_state.json`
 - `config/outlier_session.json`
 
-The current saved sessions in the NBA repo returned `403`, so live commands will
-likely require re-auth before they can fetch data.
+If live commands report `auth_required` from an HTTP `401`, capture a fresh
+session before retrying. HTTP `403` can also be a transient throttle/WAF block
+and is retried by the API client before being reported as a normal fetch error.
 
 The `.outlier_session` path has precedence over the legacy `outlier_session.json`.
 These files contain live auth material. They are ignored by git, but this folder is
@@ -59,6 +60,10 @@ For a fast smoke run, limit market-detail calls:
 ```powershell
 python -m outlier_scrapers.line_movement --league MLB --limit 25 --workers 4
 ```
+
+Line movement reads market IDs from the latest normalized props file. Refresh
+props first for the current slate, or use `--require-fresh-props` to stop before
+fetching if that props file is stale.
 
 ## Tests
 

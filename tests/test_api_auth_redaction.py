@@ -89,15 +89,15 @@ def test_fetch_json_retries_only_transient_statuses():
     assert calls["count"] == 2
 
 
-def test_fetch_json_403_is_auth_required_and_not_retried():
+def test_fetch_json_401_is_auth_required_and_not_retried():
     calls = {"count": 0}
 
     def opener(request, timeout):
         calls["count"] += 1
         raise HTTPError(
             request.full_url,
-            403,
-            "forbidden",
+            401,
+            "unauthorized",
             hdrs=None,
             fp=io.BytesIO(b'{"message":"denied"}'),
         )
@@ -112,12 +112,60 @@ def test_fetch_json_403_is_auth_required_and_not_retried():
     assert calls["count"] == 1
 
 
-def test_fetch_json_auth_error_redacts_response_body_values():
+def test_fetch_json_403_then_success_is_retried(monkeypatch):
+    monkeypatch.setattr("outlier_scrapers.api.time.sleep", lambda _: None)
+    calls = {"count": 0}
+
     def opener(request, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(
+                request.full_url,
+                403,
+                "forbidden",
+                hdrs=None,
+                fp=io.BytesIO(b'{"message":"temporary block"}'),
+            )
+        return FakeResponse(b'{"ok": true}')
+
+    client = OutlierApiClient(storage_state=storage_state(), opener=opener, max_retries=2)
+    assert client.fetch_json("/test") == {"ok": True}
+    assert calls["count"] == 2
+
+
+def test_fetch_json_persistent_403_raises_outlier_api_error_not_auth_required(monkeypatch):
+    monkeypatch.setattr("outlier_scrapers.api.time.sleep", lambda _: None)
+    calls = {"count": 0}
+
+    def opener(request, timeout):
+        calls["count"] += 1
         raise HTTPError(
             request.full_url,
             403,
             "forbidden",
+            hdrs=None,
+            fp=io.BytesIO(b'{"message":"temporary block"}'),
+        )
+
+    client = OutlierApiClient(storage_state=storage_state(), opener=opener, max_retries=2)
+    try:
+        client.fetch_json("/test")
+    except AuthRequiredError as exc:
+        raise AssertionError("Expected OutlierApiError") from exc
+    except OutlierApiError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("Expected OutlierApiError")
+    assert calls["count"] == 2
+    assert "HTTP 403" in text
+
+
+def test_fetch_json_auth_error_redacts_response_body_values():
+    def opener(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            401,
+            "unauthorized",
             hdrs=None,
             fp=io.BytesIO(
                 b'{"message":"denied","token":"secret-token","bookOdds":{"HR":{"odds":-110}}}'

@@ -17,7 +17,9 @@ from .redaction import shape_summary
 # lines 262-293 as inspected on 2026-06-19.
 
 API_BASE_URL = "https://api.outlier.bet"
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+# Outlier can return short-lived 403s during bursty market-detail fetches.
+# Treat only 401 as a definitive auth failure.
+RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
 
 # playerProps is paginated. The exact query-param name Outlier expects for the
 # next page is not documented, so we try a small candidate list and lock onto
@@ -96,7 +98,7 @@ class OutlierApiClient:
                     raise OutlierApiError(f"Unexpected non-object payload for {url}")
             except HTTPError as exc:
                 last_error = exc
-                if exc.code in {401, 403}:
+                if exc.code == 401:
                     raise AuthRequiredError(_safe_http_error_message(exc, url)) from exc
                 if exc.code not in RETRYABLE_STATUS_CODES or attempt >= self.max_retries:
                     raise OutlierApiError(_safe_http_error_message(exc, url)) from exc

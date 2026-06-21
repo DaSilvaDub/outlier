@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     for league in args.league:
+        props_failed = False
         if args.discover:
             report = summarize_league(client, league)
             write_discovery_report(league, report)
@@ -45,8 +46,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{league.upper()} props: exported {status['record_count']} records")
             except Exception as exc:
                 print(f"{league.upper()} props: failed ({str(exc)[:200]})")
+                props_failed = True
                 exit_code = 1
         if args.line_movement:
+            if args.props and props_failed:
+                print(f"{league.upper()} line movement: skipped (props failed)")
+                exit_code = 1
+                continue
             try:
                 status = export_line_movement_for_league(client, league)
                 print(
