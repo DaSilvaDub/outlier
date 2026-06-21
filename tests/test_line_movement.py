@@ -148,6 +148,23 @@ class CountingClient(FakeClient):
         return super().fetch_market(market_id)
 
 
+class SequenceClient:
+    def __init__(self, payloads):
+        self.payloads = {market_id: list(results) for market_id, results in payloads.items()}
+        self.calls: dict[str, int] = {}
+
+    def fetch_market(self, market_id):
+        self.calls[market_id] = self.calls.get(market_id, 0) + 1
+        results = self.payloads[market_id]
+        result = results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def url_for(self, path):
+        return f"https://api.test{path}"
+
+
 def _write_props_latest(tmp_path: Path, league="MLB", generated_at: str | None = None):
     path = tmp_path / "data" / league / "normalized" / f"{league.lower()}_props_latest.json"
     path.parent.mkdir(parents=True)
@@ -342,15 +359,127 @@ def test_export_line_movement_threaded_records_fetch_errors_as_partial(tmp_path,
         }
     )
 
-    status = export_line_movement_for_league(client, "MLB", workers=2)
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=0,
+    )
 
     assert status["status"] == "partial"
     assert status["markets_requested"] == 2
     assert status["markets_fetched"] == 1
     assert status["fetch_error_count"] == 1
+    assert status["retry_403_markets"] == 1
+    assert status["retry_403_recovered"] == 0
+    assert status["retry_403_residual_errors"] == 1
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
     assert normalized["fetch_errors"][0]["market_id"] == "m2"
+    assert normalized["fetch_errors"][0]["http_status"] == 403
     assert normalized["records"]
+
+
+def test_export_line_movement_mop_up_recovers_first_pass_403(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [
+                OutlierApiError(
+                    "HTTP 403 for https://api.test/sportsdata/markets/m2: body_len=0"
+                ),
+                _market_detail(market_id="m2"),
+            ],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=0,
+    )
+
+    assert status["status"] == "ok"
+    assert status["markets_requested"] == 2
+    assert status["markets_fetched"] == 2
+    assert status["fetch_error_count"] == 0
+    assert status["retry_403_markets"] == 1
+    assert status["retry_403_recovered"] == 1
+    assert status["retry_403_residual_errors"] == 0
+    assert client.calls["m2"] == 2
+    raw = json.loads(Path(status["raw_latest"]).read_text(encoding="utf-8"))
+    assert raw["retry_403_markets"] == 1
+    assert raw["retry_403_recovered"] == 1
+    normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["fetch_errors"] == []
+    assert {row["market_id"] for row in normalized["records"]} == {"m1", "m2"}
+
+
+def test_export_line_movement_can_disable_403_mop_up(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [
+                OutlierApiError(
+                    "HTTP 403 for https://api.test/sportsdata/markets/m2: body_len=0"
+                )
+            ],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_failed_403=False,
+        retry_403_cooldown_seconds=0,
+    )
+
+    assert status["status"] == "partial"
+    assert status["fetch_error_count"] == 1
+    assert status["retry_403_enabled"] is False
+    assert status["retry_403_markets"] == 0
+    assert client.calls["m2"] == 1
+
+
+def test_export_line_movement_mop_up_does_not_retry_404(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [
+                OutlierApiError(
+                    "HTTP 404 for https://api.test/sportsdata/markets/m2: body_len=0"
+                )
+            ],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=0,
+    )
+
+    assert status["status"] == "partial"
+    assert status["fetch_error_count"] == 1
+    assert status["retry_403_markets"] == 0
+    assert status["retry_403_recovered"] == 0
+    assert client.calls["m2"] == 1
+    normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["fetch_errors"][0]["http_status"] == 404
 
 
 def test_export_line_movement_auth_error_writes_no_success_artifacts(tmp_path, monkeypatch):

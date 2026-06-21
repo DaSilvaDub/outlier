@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +27,8 @@ from .registry import SportConfig, get_sport_config, normalize_market, supported
 SIDES = ("OVER", "UNDER")
 DEFAULT_WORKERS = 4
 STALE_PROPS_MAX_AGE_HOURS = 12.0
+DEFAULT_RETRY_403_COOLDOWN_SECONDS = 15.0
+DEFAULT_RETRY_403_WORKERS = 1
 
 
 class StalePropsError(ValueError):
@@ -182,6 +186,61 @@ def _props_freshness_status_fields(
     if warning:
         fields["props_freshness_warning"] = warning
     return fields
+
+
+def _http_status_from_error_text(text: str) -> int | None:
+    match = re.search(r"\bHTTP\s+(\d{3})\b", text)
+    return int(match.group(1)) if match else None
+
+
+def _fetch_error(market_id: str, exc: OutlierApiError) -> dict[str, Any]:
+    error = str(exc)[:200]
+    record: dict[str, Any] = {
+        "market_id": market_id,
+        "status": "error",
+        "error": error,
+    }
+    http_status = _http_status_from_error_text(error)
+    if http_status is not None:
+        record["http_status"] = http_status
+    return record
+
+
+def _is_http_403_error(error: dict[str, Any]) -> bool:
+    if error.get("http_status") == 403:
+        return True
+    return _http_status_from_error_text(str(error.get("error") or "")) == 403
+
+
+def _fetch_market_payloads(
+    client: OutlierApiClient,
+    market_ids: list[str],
+    *,
+    workers: int,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    payloads_by_id: dict[str, dict[str, Any]] = {}
+    fetch_errors: list[dict[str, Any]] = []
+    worker_count = max(1, int(workers or 1))
+    if worker_count == 1 or len(market_ids) <= 1:
+        for market_id in market_ids:
+            try:
+                payloads_by_id[market_id] = client.fetch_market(market_id)
+            except AuthRequiredError:
+                raise
+            except OutlierApiError as exc:
+                fetch_errors.append(_fetch_error(market_id, exc))
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(client.fetch_market, market_id): market_id for market_id in market_ids}
+            for future in as_completed(futures):
+                market_id = futures[future]
+                try:
+                    payloads_by_id[market_id] = future.result()
+                except AuthRequiredError:
+                    raise
+                except OutlierApiError as exc:
+                    fetch_errors.append(_fetch_error(market_id, exc))
+    return payloads_by_id, fetch_errors
 
 
 def load_props_market_source(
@@ -493,6 +552,9 @@ def export_line_movement_for_league(
     workers: int = DEFAULT_WORKERS,
     require_fresh_props: bool = False,
     now: datetime | None = None,
+    retry_failed_403: bool = True,
+    retry_403_cooldown_seconds: float = DEFAULT_RETRY_403_COOLDOWN_SECONDS,
+    retry_403_workers: int = DEFAULT_RETRY_403_WORKERS,
 ) -> dict[str, Any]:
     config = get_sport_config(league)
     paths = league_paths(config.league_id).ensure()
@@ -525,28 +587,48 @@ def export_line_movement_for_league(
             write_json(paths.reports / "line_movement_status_latest.json", report)
             raise StalePropsError(freshness_warning)
 
-    payloads_by_id: dict[str, dict[str, Any]] = {}
-    fetch_errors: list[dict[str, Any]] = []
     worker_count = max(1, int(workers or 1))
-    if worker_count == 1 or len(market_ids) <= 1:
-        for market_id in market_ids:
-            try:
-                payloads_by_id[market_id] = client.fetch_market(market_id)
-            except AuthRequiredError:
-                raise
-            except OutlierApiError as exc:
-                fetch_errors.append({"market_id": market_id, "status": "error", "error": str(exc)[:200]})
-    else:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(client.fetch_market, market_id): market_id for market_id in market_ids}
-            for future in as_completed(futures):
-                market_id = futures[future]
-                try:
-                    payloads_by_id[market_id] = future.result()
-                except AuthRequiredError:
-                    raise
-                except OutlierApiError as exc:
-                    fetch_errors.append({"market_id": market_id, "status": "error", "error": str(exc)[:200]})
+    payloads_by_id, first_pass_errors = _fetch_market_payloads(
+        client,
+        market_ids,
+        workers=worker_count,
+    )
+    retry_403_market_ids = [
+        str(error.get("market_id"))
+        for error in first_pass_errors
+        if error.get("market_id") and _is_http_403_error(error)
+    ]
+    retry_403_count = len(retry_403_market_ids)
+    retry_403_recovered = 0
+    retry_403_residual_errors = 0
+    retry_403_worker_count = max(1, int(retry_403_workers or 1))
+    retry_errors: list[dict[str, Any]] = []
+    if retry_failed_403 and retry_403_market_ids:
+        if retry_403_cooldown_seconds > 0:
+            time.sleep(retry_403_cooldown_seconds)
+        retry_payloads, retry_errors = _fetch_market_payloads(
+            client,
+            retry_403_market_ids,
+            workers=retry_403_worker_count,
+        )
+        payloads_by_id.update(retry_payloads)
+        retry_403_recovered = len(retry_payloads)
+        retry_403_residual_errors = len(retry_errors)
+
+    fetch_errors = [
+        error
+        for error in first_pass_errors
+        if not (retry_failed_403 and _is_http_403_error(error))
+    ]
+    fetch_errors.extend(retry_errors)
+    retry_403_summary = {
+        "retry_403_enabled": retry_failed_403,
+        "retry_403_markets": retry_403_count if retry_failed_403 else 0,
+        "retry_403_recovered": retry_403_recovered,
+        "retry_403_residual_errors": retry_403_residual_errors,
+        "retry_403_cooldown_seconds": retry_403_cooldown_seconds if retry_failed_403 else 0,
+        "retry_403_workers": retry_403_worker_count if retry_failed_403 else 0,
+    }
 
     market_payloads = [payloads_by_id[market_id] for market_id in market_ids if market_id in payloads_by_id]
 
@@ -558,6 +640,7 @@ def export_line_movement_for_league(
         "props_latest": props_latest,
         "market_ids_requested": market_ids,
         "workers": worker_count,
+        **retry_403_summary,
         "markets": market_payloads,
         "fetch_errors": fetch_errors,
     }
@@ -594,6 +677,7 @@ def export_line_movement_for_league(
         "fetch_error_count": len(fetch_errors),
         "record_count": normalized["record_count"],
         "workers": worker_count,
+        **retry_403_summary,
         **freshness_status,
     }
     write_json(paths.reports / "line_movement_status_latest.json", status)
@@ -606,6 +690,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", help="Accepted for clarity; exports all market IDs")
     parser.add_argument("--limit", type=int, help="Limit unique market IDs for a smoke run")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent market-detail fetches")
+    parser.add_argument(
+        "--no-retry-failed-403",
+        action="store_true",
+        help="Disable the post-run single-market retry pass for HTTP 403 fetch errors",
+    )
+    parser.add_argument(
+        "--retry-403-cooldown-seconds",
+        type=float,
+        default=DEFAULT_RETRY_403_COOLDOWN_SECONDS,
+        help="Cooldown before retrying first-pass HTTP 403 market failures",
+    )
+    parser.add_argument(
+        "--retry-403-workers",
+        type=int,
+        default=DEFAULT_RETRY_403_WORKERS,
+        help="Workers for the HTTP 403 mop-up retry pass",
+    )
     parser.add_argument(
         "--require-fresh-props",
         action="store_true",
@@ -622,6 +723,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.workers <= 0:
         print("--workers must be a positive integer")
         return 2
+    if args.retry_403_workers <= 0:
+        print("--retry-403-workers must be a positive integer")
+        return 2
+    if args.retry_403_cooldown_seconds < 0:
+        print("--retry-403-cooldown-seconds must be non-negative")
+        return 2
 
     try:
         client = OutlierApiClient()
@@ -631,6 +738,9 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             workers=args.workers,
             require_fresh_props=args.require_fresh_props,
+            retry_failed_403=not args.no_retry_failed_403,
+            retry_403_cooldown_seconds=args.retry_403_cooldown_seconds,
+            retry_403_workers=args.retry_403_workers,
         )
     except StalePropsError:
         print(f"{args.league.upper()}: stale_props")

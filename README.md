@@ -65,6 +65,10 @@ Line movement reads market IDs from the latest normalized props file. Refresh
 props first for the current slate, or use `--require-fresh-props` to stop before
 fetching if that props file is stale.
 
+Persistent HTTP `403` market-detail failures get a cooldown mop-up pass by
+default. Use `--retry-403-cooldown-seconds`, `--retry-403-workers`, or
+`--no-retry-failed-403` to tune or disable that recovery.
+
 ## Tests
 
 ```powershell
