@@ -30,6 +30,7 @@ DEFAULT_WORKERS = 4
 STALE_PROPS_MAX_AGE_HOURS = 12.0
 DEFAULT_RETRY_403_COOLDOWN_SECONDS = 15.0
 DEFAULT_RETRY_403_WORKERS = 1
+EV_METHOD_PRIORITY = ("AVERAGE", "MULTIPLICATIVE", "ADDITIVE", "SHIN", "POWER", "PROBIT", "WORSTCASE")
 
 
 class StalePropsError(ValueError):
@@ -457,6 +458,18 @@ def _ev_outcomes_by_side(
     return {side: rows[0] for side, rows in by_side.items() if len(rows) == 1}
 
 
+def _selected_ev_method(ev_outcome: dict[str, Any] | None) -> tuple[str | None, dict[str, Any]]:
+    if not isinstance(ev_outcome, dict):
+        return None, {}
+    calculated_ev = ev_outcome.get("calculatedEV")
+    if isinstance(calculated_ev, dict):
+        for method in EV_METHOD_PRIORITY:
+            method_payload = calculated_ev.get(method)
+            if isinstance(method_payload, dict):
+                return method, method_payload
+    return None, {}
+
+
 def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_") -> dict[str, Any]:
     if not isinstance(ev_outcome, dict):
         return {
@@ -469,20 +482,16 @@ def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_")
             f"{prefix}width_pct": None,
         }
     
+    method_used, method_payload = _selected_ev_method(ev_outcome)
     calculated_ev = ev_outcome.get("calculatedEV")
-    method_used = None
-    ev_val = None
-    kelly_val = None
-    
-    if isinstance(calculated_ev, dict):
-        for method in ["AVERAGE", "MULTIPLICATIVE", "ADDITIVE", "SHIN", "POWER", "PROBIT", "WORSTCASE"]:
-            if method in calculated_ev and isinstance(calculated_ev[method], dict):
-                method_used = method
-                ev_val = calculated_ev[method].get("ev")
-                kelly_val = calculated_ev[method].get("kelly")
-                break
+    ev_val = method_payload.get("ev")
+    kelly_val = method_payload.get("kelly")
+    if not isinstance(calculated_ev, dict):
+        ev_val = calculated_ev
                 
     devig = ev_outcome.get("deVigOdds")
+    if not isinstance(devig, dict):
+        devig = method_payload.get("noVigOdds")
     devig_american = None
     devig_decimal = None
     if isinstance(devig, dict):
@@ -497,6 +506,22 @@ def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_")
         f"{prefix}devig_decimal": devig_decimal,
         f"{prefix}vig_pct": percent_number(ev_outcome.get("vig")),
         f"{prefix}width_pct": percent_number(ev_outcome.get("width")),
+    }
+
+
+def _ev_sport_context(ev_outcome: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(ev_outcome, dict):
+        return {
+            "calculated_ev_methods": None,
+            "selected_ev_method": None,
+            "ev_method_priority": list(EV_METHOD_PRIORITY),
+        }
+    method_used, _ = _selected_ev_method(ev_outcome)
+    calculated_ev = ev_outcome.get("calculatedEV")
+    return {
+        "calculated_ev_methods": calculated_ev if isinstance(calculated_ev, dict) else None,
+        "selected_ev_method": method_used,
+        "ev_method_priority": list(EV_METHOD_PRIORITY),
     }
 
 
@@ -584,6 +609,7 @@ def normalize_ev_records(
             "current_odds": _best_american_price(current),
             "current_ip_pct": implied_probability(_best_american_price(current)),
             **_ev_metric_fields(ev_outcome, prefix=""),
+            "sport_context": _ev_sport_context(ev_outcome),
         }
         if not book_rows:
             rows.append(
@@ -708,7 +734,7 @@ def normalize_market_detail(
                     "market_group_sort_order": market.get("marketGroupSortOrder"),
                     "include_overtime": market.get("includeOvertime"),
                     "source": "sportsdata/markets/{marketId}",
-                    "ev_methods": list(ev_outcome.get("calculatedEV", {}).keys()) if isinstance(ev_outcome, dict) and isinstance(ev_outcome.get("calculatedEV"), dict) else [],
+                    **_ev_sport_context(ev_outcome),
                 },
             }
         )

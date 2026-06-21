@@ -163,6 +163,8 @@ def test_normalize_market_detail_maps_ev_outcomes_to_side_rows():
     assert over["ev_devig_decimal"] == 1.86
     assert over["ev_vig_pct"] == 2.0
     assert over["ev_width_pct"] == 4.0
+    assert over["sport_context"]["selected_ev_method"] == "AVERAGE"
+    assert over["sport_context"]["calculated_ev_methods"]["MULTIPLICATIVE"]["ev"] == 0.11
     assert under["ev_available"] is True
     assert under["ev_calculated_ev_method"] == "ADDITIVE"
     assert under["ev_book_count"] == 0
@@ -176,8 +178,9 @@ def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missi
     payload["market"]["evOutcomes"] = [
         {
             "position": "OVER",
-            "calculatedEV": {"AVERAGE": {"ev": 0.07, "kelly": 0.08}},
-            "deVigOdds": {"american": "-110", "decimal": 1.91},
+            "calculatedEV": {
+                "AVERAGE": {"noVigOdds": {"american": "-110", "decimal": 1.91}, "ev": 0.07, "kelly": 0.08}
+            },
             "vig": 0.01,
             "width": 0.03,
             "books": {
@@ -206,6 +209,7 @@ def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missi
     assert len(ev_records) == 1
     assert ev_records[0]["side"] == "OVER"
     assert ev_records[0]["current_line"] == 1.5
+    assert ev_records[0]["sport_context"]["calculated_ev_methods"]["AVERAGE"]["kelly"] == 0.08
 
 
 def test_normalize_market_detail_gates_scoped_market_to_none():
@@ -375,6 +379,8 @@ def test_export_line_movement_writes_ev_records_and_status(tmp_path, monkeypatch
     assert over_dk["kelly_pct"] == 13.0
     assert over_dk["devig_odds"] == -115
     assert over_dk["devig_decimal"] == 1.86
+    assert over_dk["sport_context"]["selected_ev_method"] == "AVERAGE"
+    assert over_dk["sport_context"]["calculated_ev_methods"]["MULTIPLICATIVE"]["ev"] == 0.11
     assert over_dk["book_odds"] == 110
     assert over_dk["book_decimal_odds"] == 2.1
     assert over_dk["max_bet"] == 250.0
