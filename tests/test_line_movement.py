@@ -8,11 +8,12 @@ from outlier_scrapers.api import AuthRequiredError, OutlierApiError
 from outlier_scrapers.line_movement import (
     StalePropsError,
     export_line_movement_for_league,
+    normalize_ev_records,
     normalize_market_detail,
 )
 
 
-def _market_detail(*, market_id="m1", market_history=True):
+def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
     payload = {
         "market": {
             "eventId": "e1",
@@ -26,6 +27,7 @@ def _market_detail(*, market_id="m1", market_history=True):
             "player": {"fullName": "Aaron Judge", "playerId": "p1", "teamId": "nyy-id"},
             "outcomes": [
                 {
+                    "outcomeId": f"{market_id}-over",
                     "position": "OVER",
                     "line": 1.5,
                     "odds": "-120",
@@ -33,6 +35,7 @@ def _market_detail(*, market_id="m1", market_history=True):
                     "books": ["DRAFTKINGS", "FANDUEL"],
                 },
                 {
+                    "outcomeId": f"{market_id}-under",
                     "position": "UNDER",
                     "line": 1.5,
                     "odds": "+100",
@@ -43,6 +46,39 @@ def _market_detail(*, market_id="m1", market_history=True):
         },
         "marketHistory": None,
     }
+    if ev_outcomes:
+        payload["market"]["evOutcomes"] = [
+            {
+                "outcomeId": f"{market_id}-over",
+                "calculatedEV": 0.125,
+                "deVigOdds": 0.54,
+                "vig": 0.02,
+                "width": 0.04,
+                "books": {
+                    "DRAFTKINGS": {
+                        "american": "+110",
+                        "decimal": 2.1,
+                        "state": "NY",
+                        "maxBet": 250.0,
+                        "book": {"name": "DraftKings"},
+                    },
+                    "FANDUEL": {
+                        "american": "-105",
+                        "decimal": 1.95,
+                        "state": "NJ",
+                        "book": {"name": "FanDuel"},
+                    },
+                },
+            },
+            {
+                "outcomeId": f"{market_id}-under",
+                "calculatedEV": 0.03,
+                "deVigOdds": 0.46,
+                "vig": 0.01,
+                "width": 0.02,
+                "books": {},
+            },
+        ]
     if market_history:
         payload["marketHistory"] = {
             "marketId": market_id,
@@ -101,6 +137,64 @@ def test_normalize_market_detail_exports_open_current_and_delta():
     assert over["latest_movement_at"] == "2026-06-20T11:00:00Z"
     assert over["history_available"] is True
     assert over["books"] == ["DraftKings", "FanDuel"]
+    assert over["ev_available"] is False
+    assert over["ev_book_count"] == 0
+
+
+def test_normalize_market_detail_maps_ev_outcomes_to_side_rows():
+    rows = normalize_market_detail(league="MLB", payload=_market_detail(ev_outcomes=True))
+
+    over = next(row for row in rows if row["side"] == "OVER")
+    under = next(row for row in rows if row["side"] == "UNDER")
+    assert over["outcome_id"] == "m1-over"
+    assert over["ev_available"] is True
+    assert over["ev_outcome_id"] == "m1-over"
+    assert over["ev_book_count"] == 2
+    assert over["ev_books"] == ["DraftKings", "FanDuel"]
+    assert over["ev_calculated_ev_pct"] == 12.5
+    assert over["ev_devig_odds"] == 0.54
+    assert over["ev_vig_pct"] == 2.0
+    assert over["ev_width_pct"] == 4.0
+    assert under["ev_available"] is True
+    assert under["ev_book_count"] == 0
+    assert under["ev_books"] == []
+
+
+def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missing():
+    payload = _market_detail(ev_outcomes=True)
+    for outcome in payload["market"]["outcomes"]:
+        outcome.pop("outcomeId", None)
+    payload["market"]["evOutcomes"] = [
+        {
+            "position": "OVER",
+            "calculatedEV": 0.07,
+            "deVigOdds": 0.52,
+            "vig": 0.01,
+            "width": 0.03,
+            "books": {
+                "DRAFTKINGS": {
+                    "american": "+105",
+                    "decimal": 2.05,
+                    "state": "NY",
+                    "book": {"name": "DraftKings"},
+                }
+            },
+        }
+    ]
+
+    rows = normalize_market_detail(league="MLB", payload=payload)
+    ev_records = normalize_ev_records(league="MLB", payload=payload)
+
+    over = next(row for row in rows if row["side"] == "OVER")
+    under = next(row for row in rows if row["side"] == "UNDER")
+    assert over["outcome_id"] is None
+    assert over["ev_available"] is True
+    assert over["ev_calculated_ev_pct"] == 7.0
+    assert over["ev_book_count"] == 1
+    assert under["ev_available"] is False
+    assert len(ev_records) == 1
+    assert ev_records[0]["side"] == "OVER"
+    assert ev_records[0]["current_line"] == 1.5
 
 
 def test_normalize_market_detail_gates_scoped_market_to_none():
@@ -122,6 +216,7 @@ def test_normalize_market_detail_preserves_market_with_no_history():
     assert over["open_odds"] is None
     assert over["current_line"] == 1.5
     assert over["current_odds"] == -120
+    assert over["ev_available"] is False
 
 
 class FakeClient:
@@ -225,11 +320,55 @@ def test_export_line_movement_writes_raw_normalized_and_status(tmp_path, monkeyp
     assert status["props_age_hours"] == 5.0
     assert status["props_is_stale"] is False
     assert status["props_stale_reason"] is None
+    assert status["markets_with_ev_count"] == 0
+    assert status["ev_outcome_count"] == 0
+    assert status["ev_record_count"] == 0
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["data_contract"]["version"] == "1.1"
     assert normalized["data_contract"]["row_grain"] == "one row per market_id+side"
+    assert normalized["data_contract"]["secondary_record_arrays"]["ev_records"].startswith("one row")
     assert normalized["markets_without_records"] == []
+    assert normalized["ev_records"] == []
+    assert normalized["ev_record_count"] == 0
     assert {row["side"] for row in normalized["records"]} == {"OVER", "UNDER"}
     assert Path(status["raw_latest"]).exists()
+
+
+def test_export_line_movement_writes_ev_records_and_status(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest(tmp_path, generated_at=FRESH_PROPS_GENERATED_AT)
+
+    status = export_line_movement_for_league(
+        FakeClient({"m1": _market_detail(ev_outcomes=True)}),
+        "MLB",
+        now=FRESH_NOW,
+    )
+
+    assert status["status"] == "ok"
+    assert status["markets_with_ev_count"] == 1
+    assert status["ev_outcome_count"] == 2
+    assert status["ev_record_count"] == 3
+    normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["markets_with_ev_count"] == 1
+    assert normalized["ev_outcome_count"] == 2
+    assert normalized["ev_record_count"] == 3
+    assert len(normalized["ev_records"]) == 3
+
+    over_dk = next(row for row in normalized["ev_records"] if row["side"] == "OVER" and row["book"] == "DraftKings")
+    assert over_dk["market_id"] == "m1"
+    assert over_dk["outcome_id"] == "m1-over"
+    assert over_dk["calculated_ev_pct"] == 12.5
+    assert over_dk["devig_odds"] == 0.54
+    assert over_dk["book_odds"] == 110
+    assert over_dk["book_decimal_odds"] == 2.1
+    assert over_dk["max_bet"] == 250.0
+
+    under_no_book = next(row for row in normalized["ev_records"] if row["side"] == "UNDER")
+    assert under_no_book["book"] is None
+    assert under_no_book["book_odds"] is None
+    assert under_no_book["calculated_ev_pct"] == 3.0
 
 
 def test_export_line_movement_warns_and_records_stale_props(tmp_path, monkeypatch, capsys):

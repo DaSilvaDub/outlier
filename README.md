@@ -72,6 +72,10 @@ Persistent HTTP `403` market-detail failures get a cooldown mop-up pass by
 default. Use `--retry-403-cooldown-seconds`, `--retry-403-workers`, or
 `--no-retry-failed-403` to tune or disable that recovery.
 
+When Outlier returns `market.evOutcomes`, line movement also normalizes EV
+candidates into the `ev_records` secondary array and surfaces EV counts in the
+status report.
+
 ## Tests
 
 ```powershell

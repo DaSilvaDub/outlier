@@ -18,6 +18,7 @@ from .normalizer import (
     implied_probability,
     normalize_book_label,
     parse_market_descriptor,
+    percent_number,
 )
 from .paths import league_paths
 from .props import write_json
@@ -401,6 +402,191 @@ def _best_american_price(outcome: dict[str, Any]) -> int | None:
     return max(prices) if prices else None
 
 
+def _outcome_id(outcome: dict[str, Any]) -> str:
+    return str(outcome.get("outcomeId") or outcome.get("id") or "").strip()
+
+
+def _current_outcomes_by_id(market: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    outcomes = market.get("outcomes") if isinstance(market.get("outcomes"), list) else []
+    by_id: dict[str, dict[str, Any]] = {}
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        outcome_id = _outcome_id(outcome)
+        if not outcome_id:
+            continue
+        existing = by_id.get(outcome_id)
+        if existing is None or (outcome.get("primary") is True and existing.get("primary") is not True):
+            by_id[outcome_id] = outcome
+    return by_id
+
+
+def _ev_outcomes(market: dict[str, Any]) -> list[dict[str, Any]]:
+    ev_outcomes = market.get("evOutcomes")
+    if not isinstance(ev_outcomes, list):
+        return []
+    return [outcome for outcome in ev_outcomes if isinstance(outcome, dict)]
+
+
+def _ev_outcomes_by_id(market: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for outcome in _ev_outcomes(market):
+        outcome_id = str(outcome.get("outcomeId") or "").strip()
+        if outcome_id:
+            by_id[outcome_id] = outcome
+    return by_id
+
+
+def _ev_outcomes_by_side(
+    market: dict[str, Any],
+    current_by_id: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    by_side: dict[str, list[dict[str, Any]]] = {}
+    for ev_outcome in _ev_outcomes(market):
+        outcome_id = str(ev_outcome.get("outcomeId") or "").strip()
+        current = current_by_id.get(outcome_id, {})
+        side = _side_token(
+            current.get("position")
+            or current.get("label")
+            or ev_outcome.get("position")
+            or ev_outcome.get("side")
+            or ev_outcome.get("label")
+        )
+        if side:
+            by_side.setdefault(side, []).append(ev_outcome)
+    return {side: rows[0] for side, rows in by_side.items() if len(rows) == 1}
+
+
+def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_") -> dict[str, Any]:
+    if not isinstance(ev_outcome, dict):
+        return {
+            f"{prefix}calculated_ev_pct": None,
+            f"{prefix}devig_odds": None,
+            f"{prefix}vig_pct": None,
+            f"{prefix}width_pct": None,
+        }
+    return {
+        f"{prefix}calculated_ev_pct": percent_number(ev_outcome.get("calculatedEV")),
+        f"{prefix}devig_odds": _to_float(ev_outcome.get("deVigOdds")),
+        f"{prefix}vig_pct": percent_number(ev_outcome.get("vig")),
+        f"{prefix}width_pct": percent_number(ev_outcome.get("width")),
+    }
+
+
+def _ev_book_rows(ev_outcome: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(ev_outcome, dict) or not isinstance(ev_outcome.get("books"), dict):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for book_key, payload in ev_outcome["books"].items():
+        book_payload = payload if isinstance(payload, dict) else {}
+        book_meta = book_payload.get("book") if isinstance(book_payload.get("book"), dict) else {}
+        raw_book = str(
+            book_meta.get("name")
+            or book_meta.get("label")
+            or book_meta.get("bookId")
+            or book_meta.get("id")
+            or book_key
+            or ""
+        ).strip()
+        book_odds = _to_int(book_payload.get("american"))
+        rows.append(
+            {
+                "book": normalize_book_label(raw_book),
+                "book_raw": str(book_key or raw_book or "").strip() or None,
+                "book_odds": book_odds,
+                "book_decimal_odds": _to_float(book_payload.get("decimal")),
+                "book_ip_pct": implied_probability(book_odds),
+                "book_state": str(book_payload.get("state") or "").strip() or None,
+                "max_bet": _to_float(book_payload.get("maxBet")),
+            }
+        )
+    return sorted(rows, key=lambda row: str(row.get("book") or row.get("book_raw") or ""))
+
+
+def normalize_ev_records(
+    *,
+    league: str,
+    payload: dict[str, Any],
+    props_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    config = get_sport_config(league)
+    market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+    context = _market_context(payload, config, props_context)
+    current_by_id = _current_outcomes_by_id(market)
+    current_by_side = _current_outcomes_by_side(market)
+
+    rows: list[dict[str, Any]] = []
+    for ev_outcome in _ev_outcomes(market):
+        outcome_id = str(ev_outcome.get("outcomeId") or "").strip()
+        current = current_by_id.get(outcome_id, {})
+        side = _side_token(
+            current.get("position")
+            or current.get("label")
+            or ev_outcome.get("position")
+            or ev_outcome.get("side")
+            or ev_outcome.get("label")
+        )
+        if not current and side:
+            current = current_by_side.get(side, {})
+        book_rows = _ev_book_rows(ev_outcome)
+        base = {
+            "league": config.league_id,
+            "event_id": context.get("event_id"),
+            "market_id": context.get("market_id"),
+            "outcome_id": outcome_id or None,
+            "side": side or None,
+            "player": context.get("player"),
+            "player_raw": context.get("player_raw"),
+            "player_id": context.get("player_id"),
+            "team": context.get("team"),
+            "team_raw": context.get("team_raw"),
+            "opponent": context.get("opponent"),
+            "opponent_raw": context.get("opponent_raw"),
+            "matchup": context.get("matchup"),
+            "matchup_raw": context.get("matchup_raw"),
+            "market": context.get("market"),
+            "market_raw": context.get("market_raw"),
+            "market_label": context.get("market_label"),
+            "market_type": context.get("market_type"),
+            "prop_type": context.get("prop_type"),
+            "proposition": context.get("proposition"),
+            "scope": context.get("scope"),
+            "is_active": context.get("is_active"),
+            "current_line": _to_float(current.get("line")),
+            "current_odds": _best_american_price(current),
+            "current_ip_pct": implied_probability(_best_american_price(current)),
+            **_ev_metric_fields(ev_outcome, prefix=""),
+        }
+        if not book_rows:
+            rows.append(
+                {
+                    **base,
+                    "book": None,
+                    "book_raw": None,
+                    "book_odds": None,
+                    "book_decimal_odds": None,
+                    "book_ip_pct": None,
+                    "book_state": None,
+                    "max_bet": None,
+                }
+            )
+            continue
+        for book_row in book_rows:
+            rows.append({**base, **book_row})
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("matchup_raw") or ""),
+            str(row.get("player_raw") or ""),
+            str(row.get("market_raw") or ""),
+            str(row.get("side") or ""),
+            str(row.get("book") or row.get("book_raw") or ""),
+        ),
+    )
+
+
 def normalize_market_detail(
     *,
     league: str,
@@ -411,6 +597,9 @@ def normalize_market_detail(
     market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
     context = _market_context(payload, config, props_context)
     current_by_side = _current_outcomes_by_side(market)
+    current_by_id = _current_outcomes_by_id(market)
+    ev_by_outcome_id = _ev_outcomes_by_id(market)
+    ev_by_side = _ev_outcomes_by_side(market, current_by_id)
     history_by_side = _history_by_side(payload)
     sides = [side for side in SIDES if side in current_by_side or history_by_side.get(side)]
 
@@ -422,6 +611,9 @@ def normalize_market_detail(
         latest = history[-1] if history else {}
         current_line = _to_float(current.get("line"))
         current_odds = _best_american_price(current)
+        current_outcome_id = _outcome_id(current)
+        ev_outcome = ev_by_outcome_id.get(current_outcome_id) or ev_by_side.get(side)
+        ev_book_rows = _ev_book_rows(ev_outcome)
         open_line = opened.get("line")
         open_odds = opened.get("odds")
         movement_types = sorted(
@@ -438,6 +630,7 @@ def normalize_market_detail(
                 "league": config.league_id,
                 "event_id": context.get("event_id"),
                 "market_id": context.get("market_id"),
+                "outcome_id": current_outcome_id or None,
                 "side": side,
                 "player": context.get("player"),
                 "player_raw": context.get("player_raw"),
@@ -477,6 +670,11 @@ def normalize_market_detail(
                 "history_available": bool(history),
                 "books": _books_from_outcome(current),
                 "book_count": len(_books_from_outcome(current)),
+                "ev_available": ev_outcome is not None,
+                "ev_outcome_id": str(ev_outcome.get("outcomeId") or "").strip() if ev_outcome else None,
+                "ev_book_count": len(ev_book_rows),
+                "ev_books": [str(row.get("book") or row.get("book_raw") or "") for row in ev_book_rows],
+                **_ev_metric_fields(ev_outcome),
                 "movements": history,
                 "sport_context": {
                     "market_group_id": market.get("marketGroupId"),
@@ -499,10 +697,25 @@ def build_line_movement_payload(
     fetch_errors: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
+    ev_rows: list[dict[str, Any]] = []
+    ev_outcome_count = 0
+    markets_with_ev: set[str] = set()
     markets_without_records: list[str | None] = []
     for payload in market_payloads:
         market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
         market_id = str(market.get("marketId") or "").strip() or None
+        ev_outcomes = _ev_outcomes(market)
+        if ev_outcomes:
+            ev_outcome_count += len(ev_outcomes)
+            if market_id:
+                markets_with_ev.add(market_id)
+            ev_rows.extend(
+                normalize_ev_records(
+                    league=league,
+                    payload=payload,
+                    props_context=props_context.get(market_id or "", {}),
+                )
+            )
         market_rows = normalize_market_detail(
             league=league,
             payload=payload,
@@ -523,6 +736,9 @@ def build_line_movement_payload(
         "markets_with_records": len({row.get("market_id") for row in rows if row.get("market_id")}),
         "markets_without_records": markets_without_records,
         "record_count": len(rows),
+        "markets_with_ev_count": len(markets_with_ev),
+        "ev_outcome_count": ev_outcome_count,
+        "ev_record_count": len(ev_rows),
         "fetch_errors": fetch_errors or [],
         "primary_record_array": "records",
         "records": sorted(
@@ -534,12 +750,16 @@ def build_line_movement_payload(
                 str(row.get("side") or ""),
             ),
         ),
+        "ev_records": ev_rows,
         "data_contract": {
             "dataset": "outlier_line_movement",
-            "version": "1.0",
+            "version": "1.1",
             "intended_use": "Standalone Outlier market-detail line movement for betting triage.",
             "join_key": "league+market_id",
             "row_grain": "one row per market_id+side",
+            "secondary_record_arrays": {
+                "ev_records": "one row per market_id+outcome_id+book; no-book EV outcomes keep a null-book row",
+            },
         },
     }
 
@@ -676,6 +896,9 @@ def export_line_movement_for_league(
         "markets_without_record_count": len(normalized["markets_without_records"]),
         "fetch_error_count": len(fetch_errors),
         "record_count": normalized["record_count"],
+        "markets_with_ev_count": normalized["markets_with_ev_count"],
+        "ev_outcome_count": normalized["ev_outcome_count"],
+        "ev_record_count": normalized["ev_record_count"],
         "workers": worker_count,
         **retry_403_summary,
         **freshness_status,
