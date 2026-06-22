@@ -55,8 +55,31 @@ python -m outlier_scrapers.insights --league MLB --all
 python -m outlier_scrapers.insights --league WNBA --all
 python -m outlier_scrapers.line_movement --league MLB --all
 python -m outlier_scrapers.line_movement --league WNBA --all
-python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --insights --line-movement
+python -m outlier_scrapers.cards --league WNBA
+python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --insights --line-movement --cards
 ```
+
+`--all` is shorthand for `--props --insights --line-movement --cards`, so the
+usual one-command run is:
+
+```powershell
+python -m outlier_scrapers.refresh --league WNBA --all
+```
+
+## Triage cards
+
+`cards` joins the latest normalized props, line movement, EV, and insights into
+one ranked per-`market_id` view, written to `data/<LEAGUE>/cards/`:
+
+- `cards_latest.json` — full payload (both boards, coverage, snapshot skew).
+- `cards_latest.html` — self-contained, openable review artifact.
+
+It reads `*_latest.json` only, so run it after the scrape feeds (refresh does
+this for you when `--cards`/`--all` is passed; `cards` runs last and is skipped
+if upstream props/line-movement failed). Two boards: **A** = verified Outlier EV
+(`AVERAGE` method), **B** = signal candidates (descriptive composite; the
+`proxy_market` edge is a market signal, not EV). `refresh --cards` alone needs no
+API session — it just rebuilds the board from existing files.
 
 For a fast smoke run, limit market-detail calls:
 

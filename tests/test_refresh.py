@@ -65,3 +65,21 @@ def test_refresh_runs_insights(monkeypatch, capsys):
     assert result == 0
     assert "WNBA insights: exported 3 insights" in captured.out
     assert calls["insights"] == 1
+
+
+def test_refresh_cards_only_does_not_require_api_client(monkeypatch, capsys):
+    def boom(*args, **kwargs):
+        raise AssertionError("API client must not be constructed for --cards only")
+
+    monkeypatch.setattr(refresh_mod, "OutlierApiClient", boom)
+
+    def fake_cards(league):
+        return {"coverage": {"cards_total": 5, "board_a_cards": 2, "board_b_cards": 3}}
+
+    monkeypatch.setattr(refresh_mod, "export_cards_for_league", fake_cards)
+
+    result = refresh_mod.main(["--league", "WNBA", "--cards"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WNBA cards: exported 5 cards (Board A=2, Board B=3)" in captured.out
