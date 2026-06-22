@@ -277,3 +277,32 @@ def test_non_average_ev_is_excluded_from_board_a(tmp_path, monkeypatch):
 
     payload = build_cards_payload("WNBA")
     assert payload["coverage"]["board_a_cards"] == 0
+
+
+def test_ev_side_anchors_to_ev_line_over_movement(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+    # EV exists only for the 8.5 UNDER, but movement tracks 9.5. The Board A
+    # headline must anchor to the EV line (8.5), not the movement line (9.5),
+    # so the card never shows one line's price with another line's EV.
+    props = [
+        _prop("m1", "UNDER", 8.5, -110, "oEV"),
+        _prop("m1", "UNDER", 9.5, 100, "o95"),
+    ]
+    movement = [_movement("m1", "UNDER", 9.5)]
+    ev_records = [_ev("m1", "UNDER", 2.0, "oEV")]  # _ev current_line == 8.5
+
+    _write_latest(data_dir, "WNBA", "props", props)
+    _write_latest(data_dir, "WNBA", "line_movement", movement, extra={"ev_records": ev_records})
+    _write_latest(data_dir, "WNBA", "insights", [])
+
+    payload = build_cards_payload("WNBA")
+    assert payload["coverage"]["board_a_cards"] == 1
+    side = payload["board_a"][0]["sides"]["UNDER"]
+    assert side["line"] == 8.5  # anchored to EV line, not movement's 9.5
+    assert side["outcome_id"] == side["ev"]["outcome_id"]
+    assert side["ev"]["is_alt_line_fallback"] is False
+    assert "ev_line_fallback" not in payload["board_a"][0]["flags"]
+    assert {a["line"] for a in side["alt_lines"]} == {9.5}

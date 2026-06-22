@@ -490,17 +490,17 @@ def _pick_main_side_row(
 ) -> dict[str, Any]:
     """Choose the *main* line for a side among a market's alt lines.
 
-    A ``market_id`` bundles many alt lines (e.g. PTS 4.5..19.5). The tracked
-    main line is the one the movement feed (or EV) reports; otherwise fall back
-    to the price closest to pick'em (implied ~50%), since "most books" is
-    unreliable (longshot alts can carry more books).
+    A ``market_id`` bundles many alt lines (e.g. PTS 4.5..19.5). On an
+    EV-bearing side we anchor to the EV outcome's line first: Board A ranks that
+    exact bet, so the headline line must match it (otherwise the card shows one
+    line's price with another line's EV). Otherwise use the movement-tracked
+    line, then fall back to the price closest to pick'em (implied ~50%), since
+    "most books" is unreliable (longshot alts can carry more books).
     """
-    target = None
-    if mv and mv.get("current_line") is not None:
+    ev_lines = [_to_float(r.get("current_line")) for r in ev_rows if r.get("current_line") is not None]
+    target = next((x for x in ev_lines if x is not None), None)
+    if target is None and mv and mv.get("current_line") is not None:
         target = _to_float(mv.get("current_line"))
-    if target is None:
-        ev_lines = [_to_float(r.get("current_line")) for r in ev_rows if r.get("current_line") is not None]
-        target = next((x for x in ev_lines if x is not None), None)
     if target is not None:
         exact = [r for r in side_rows if _to_float(r.get("line")) == target]
         if exact:
@@ -644,6 +644,8 @@ def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
     vig = ev.get("vig_pct")
     if isinstance(vig, (int, float)) and vig > HIGH_VIG_PCT:
         flags.append("high_vig")
+    if ev.get("is_alt_line_fallback"):
+        flags.append("ev_line_fallback")
     return flags
 
 

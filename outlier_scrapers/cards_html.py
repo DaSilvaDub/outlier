@@ -136,10 +136,6 @@ window.addEventListener('DOMContentLoaded',()=>{
 """
 
 
-def _badge_class(bucket: str) -> str:
-    return bucket.replace(" ", "\\ ")
-
-
 def render_html(payload: dict[str, Any]) -> str:
     cov = payload.get("coverage", {})
     skew = payload.get("snapshot_skew", {})
