@@ -445,7 +445,8 @@ def _ev_for_side(
 
     matched_rows = [r for r in rows if r.get("outcome_id") == main_outcome_id] if main_outcome_id else []
     if not matched_rows and main_line is not None:
-        matched_rows = [r for r in rows if _to_float(r.get("line")) == main_line]
+        # Normalized EV rows carry the line as ``current_line`` (no ``line`` key).
+        matched_rows = [r for r in rows if _to_float(r.get("current_line")) == main_line]
 
     is_fallback = False
     if matched_rows:
@@ -476,10 +477,12 @@ def _ev_for_side(
         "kelly_pct": best.get("kelly_pct"),
         "vig_pct": best.get("vig_pct"),
         "width_pct": best.get("width_pct"),
+        "devig_odds": best.get("devig_odds"),
         "devig_decimal": best.get("devig_decimal"),
         "outcome_id": best.get("outcome_id"),
         "is_alt_line_fallback": is_fallback,
-        "books": books,
+        "ev_book_count": len(books),
+        "ev_books": books,
     }
 
 
@@ -639,7 +642,13 @@ def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
     if view.get("signal", {}).get("insight_conflict"):
         flags.append("insight_conflict")
     book_count = ev.get("ev_book_count") or 0
-    if book_count <= 1 or all(b.get("max_bet") in (None, 0) for b in ev.get("ev_books", [])):
+    # Only treat max_bet as a liquidity signal when it is actually reported;
+    # Outlier leaves it null for many books, which must not false-flag.
+    reported_limits = [
+        b.get("max_bet") for b in ev.get("ev_books", []) if isinstance(b.get("max_bet"), (int, float))
+    ]
+    low_limits = bool(reported_limits) and all(limit <= 0 for limit in reported_limits)
+    if book_count <= 1 or low_limits:
         flags.append("thin_liquidity")
     vig = ev.get("vig_pct")
     if isinstance(vig, (int, float)) and vig > HIGH_VIG_PCT:

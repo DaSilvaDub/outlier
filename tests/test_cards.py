@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from outlier_scrapers import cards
 from outlier_scrapers.cards import (
     build_cards_payload,
@@ -306,3 +308,105 @@ def test_ev_side_anchors_to_ev_line_over_movement(tmp_path, monkeypatch):
     assert side["ev"]["is_alt_line_fallback"] is False
     assert "ev_line_fallback" not in payload["board_a"][0]["flags"]
     assert {a["line"] for a in side["alt_lines"]} == {9.5}
+
+
+def test_missing_props_or_line_movement_hard_fails(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+
+    # Only line_movement + insights present -> props missing -> hard fail.
+    _write_latest(data_dir, "WNBA", "line_movement", [], extra={"ev_records": []})
+    _write_latest(data_dir, "WNBA", "insights", [])
+    with pytest.raises(FileNotFoundError):
+        build_cards_payload("WNBA")
+
+    # Now props present but line_movement missing -> hard fail.
+    (data_dir / "WNBA" / "normalized" / "wnba_line_movement_latest.json").unlink()
+    _write_latest(data_dir, "WNBA", "props", [_prop("m1", "OVER", 2.5, 120, "o1")])
+    with pytest.raises(FileNotFoundError):
+        build_cards_payload("WNBA")
+
+
+def test_missing_insights_is_optional_and_recorded(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+    _write_latest(data_dir, "WNBA", "props", [_prop("m1", "OVER", 2.5, 120, "o1")])
+    _write_latest(data_dir, "WNBA", "line_movement", [], extra={"ev_records": []})
+    # no insights file written
+
+    payload = build_cards_payload("WNBA")
+    assert payload["missing_feeds"] == ["insights"]
+    assert payload["coverage"]["cards_total"] == 1
+
+
+def test_board_a_ev_object_schema_and_liquidity(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+    props = [_prop("m1", "OVER", 8.5, -105, "o1"), _prop("m1", "UNDER", 8.5, -105, "oEV")]
+    movement = [_movement("m1", "UNDER", 8.5)]
+    ev1 = _ev("m1", "UNDER", 2.0, "oEV")  # DraftKings, max_bet 250
+    ev2 = _ev("m1", "UNDER", 1.5, "oEV")
+    ev2["book"] = "FanDuel"
+    ev2["book_odds"] = -108
+    _write_latest(data_dir, "WNBA", "props", props)
+    _write_latest(data_dir, "WNBA", "line_movement", movement, extra={"ev_records": [ev1, ev2]})
+    _write_latest(data_dir, "WNBA", "insights", [])
+
+    payload = build_cards_payload("WNBA")
+    card = payload["board_a"][0]
+    ev = card["sides"]["UNDER"]["ev"]
+    # contract consumed by _board_a_flags and the HTML renderer
+    assert {"ev_books", "ev_book_count", "devig_odds"} <= set(ev.keys())
+    assert ev["ev_book_count"] == 2
+    assert {b["book"] for b in ev["ev_books"]} == {"DraftKings", "FanDuel"}
+    # two real books with a reported max_bet -> not thin
+    assert "thin_liquidity" not in card["flags"]
+
+
+def test_single_book_ev_flags_thin_liquidity(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+    props = [_prop("m1", "OVER", 8.5, -105, "o1"), _prop("m1", "UNDER", 8.5, -105, "oEV")]
+    ev = _ev("m1", "UNDER", 2.0, "oEV")
+    ev["max_bet"] = None  # uniformly-null max_bet must NOT drive the flag
+    _write_latest(data_dir, "WNBA", "props", props)
+    _write_latest(data_dir, "WNBA", "line_movement", [_movement("m1", "UNDER", 8.5)], extra={"ev_records": [ev]})
+    _write_latest(data_dir, "WNBA", "insights", [])
+
+    payload = build_cards_payload("WNBA")
+    card = payload["board_a"][0]
+    assert card["sides"]["UNDER"]["ev"]["ev_book_count"] == 1
+    assert "thin_liquidity" in card["flags"]  # driven by single book, not null max_bet
+
+
+def test_ev_fallback_uses_current_line_not_arbitrary_side_ev(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    data_dir = tmp_path / "data"
+    # Two UNDER lines; movement/main line is 8.5. EV exists for 8.5 (current_line)
+    # under a DIFFERENT outcome_id, plus a higher-EV row at 6.5. The 8.5 EV must
+    # win via current_line, never the arbitrary best-side 6.5 EV.
+    props = [_prop("m1", "UNDER", 8.5, -105, "oMAIN"), _prop("m1", "UNDER", 6.5, 120, "o65")]
+    movement = [_movement("m1", "UNDER", 8.5)]
+    ev_main = _ev("m1", "UNDER", 1.0, "NOT_OMAIN")  # current_line 8.5, outcome_id mismatched
+    ev_alt = _ev("m1", "UNDER", 9.9, "o65")
+    ev_alt["current_line"] = 6.5
+    ev_alt["book"] = "Caesars"
+    _write_latest(data_dir, "WNBA", "props", props)
+    _write_latest(data_dir, "WNBA", "line_movement", movement, extra={"ev_records": [ev_main, ev_alt]})
+    _write_latest(data_dir, "WNBA", "insights", [])
+
+    payload = build_cards_payload("WNBA")
+    side = payload["board_a"][0]["sides"]["UNDER"]
+    assert side["line"] == 8.5
+    assert side["ev"]["best_ev_pct"] == 1.0  # matched by current_line, not the 9.9 at 6.5
+    assert side["ev"]["is_alt_line_fallback"] is False
