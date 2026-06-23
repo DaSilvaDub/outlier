@@ -318,6 +318,8 @@ class Indexes:
     ev_by_market: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     insights_by_outcome: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     insights_by_market_side: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    enrichment: dict[str, dict[str, Any]] = field(default_factory=dict)
+    enrichment_loaded: bool = False
 
 
 def build_indexes(
@@ -404,14 +406,32 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
                 "event_id": row.get("event_id"),
             }
+    # Game/team-market rows carry no player; key on the event + proposition.
+    # ``proposition`` must be present so assemble_game_card can resolve the valid
+    # sides via game_sides() instead of falling back to positional sides.
+    for row in rows:
+        if row and (row.get("proposition") or row.get("position")):
+            return {
+                "event_id": row.get("event_id"),
+                "proposition": row.get("proposition"),
+                "market": row.get("market") or row.get("market_raw"),
+                "market_raw": row.get("market_raw"),
+                "scope": row.get("scope") or (row.get("sport_context") or {}).get("scope"),
+                "team": row.get("team"),
+                "matchup": row.get("matchup") or row.get("matchup_raw"),
+            }
     return {}
 
 
 def _group_key(identity: dict[str, Any]) -> str:
-    return "|".join(
-        str(identity.get(k) or "")
-        for k in ("player_id", "market", "scope")
-    )
+    # Game/team cards carry no player_id, so key them on event + proposition to
+    # keep distinct matchups from colliding. Player cards keep their existing
+    # player_id|market|scope key (identity has "player", never "proposition").
+    if "proposition" in identity:
+        keys = ("event_id", "proposition", "market", "scope")
+    else:
+        keys = ("player_id", "market", "scope")
+    return "|".join(str(identity.get(k) or "") for k in keys)
 
 
 def _side_data_from_prop(prop: dict[str, Any]) -> dict[str, Any]:
@@ -560,7 +580,11 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         matched = _match_insights(idx, market_id, side, sdata.get("outcome_id"), sdata.get("line"))
         score = signal_score(side, sdata, mv, matched)
         proxy = proxy_market_edge(side, sdata.get("books", []), fair.get(side)) if fair else None
-        side_views[side] = {
+
+        outcome_id = str(sdata.get("outcome_id") or "")
+        enrichment_data = idx.enrichment.get(outcome_id) if outcome_id else None
+
+        side_view = {
             **{k: sdata.get(k) for k in ("side", "line", "best_odds", "outcome_id", "orf_score")},
             "hit_rates": {k: sdata.get(k) for k in ("l5_pct", "l10_pct", "l20_pct", "h2h_pct", "season_pct")},
             "alt_lines": alt_lines.get(side, []),
@@ -570,6 +594,12 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             "insights": [_slim_insight(i) for i in matched],
             "ev": _ev_for_side(ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))),
         }
+
+        if idx.enrichment_loaded:
+            side_view["per_book_odds"] = enrichment_data.get("per_book_odds") if enrichment_data else []
+            side_view["public_money"] = enrichment_data.get("public_money") if enrichment_data else None
+
+        side_views[side] = side_view
 
     card = {
         "card_id": market_id,
@@ -581,6 +611,102 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     }
     _route_and_rank(card)
     return card
+
+
+
+def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
+    from .normalizer import game_sides
+    props = idx.props_by_market.get(market_id, [])
+    ev_rows = idx.ev_by_market.get(market_id, [])
+    movement = idx.movement_by_market.get(market_id, {})
+    identity = _identity(props + ev_rows)
+    proposition = str(identity.get("proposition") or "")
+
+    valid_sides = game_sides(proposition)
+
+    # Group by position
+    rows_by_side: dict[str, list[dict[str, Any]]] = {s: [] for s in valid_sides} if valid_sides else {}
+    for prop in props:
+        pos = str(prop.get("position") or "").upper()
+        if not valid_sides:
+            if pos not in rows_by_side:
+                rows_by_side[pos] = []
+            rows_by_side[pos].append(prop)
+        elif pos in rows_by_side:
+            rows_by_side[pos].append(prop)
+
+    main_row: dict[str, dict[str, Any]] = {}
+    alt_lines: dict[str, list[dict[str, Any]]] = {}
+    for side, rws in rows_by_side.items():
+        if not rws:
+            continue
+        side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
+        chosen = _pick_main_side_row(rws, movement.get(side), side_ev)
+        main_row[side] = chosen
+        alt_lines[side] = [
+            {"line": r.get("line"), "best_odds": r.get("best_odds"), "book_count": len(r.get("books") or [])}
+            for r in sorted(rws, key=lambda r: (_to_float(r.get("line")) or 0.0))
+            if r is not chosen
+        ]
+
+    sides_data = {s: _side_data_from_game(r, s) for s, r in main_row.items()}
+
+    over_r, under_r = main_row.get("OVER"), main_row.get("UNDER")
+    fair = None
+    if over_r and under_r and _to_float(over_r.get("line")) == _to_float(under_r.get("line")):
+        fair = two_way_fair(over_r.get("best_odds"), under_r.get("best_odds"))
+
+    side_views: dict[str, dict[str, Any]] = {}
+    for side, sdata in sides_data.items():
+        mv = movement.get(side)
+        matched = _match_insights(idx, market_id, side, sdata.get("outcome_id"), sdata.get("line"))
+        score = signal_score(side, sdata, mv, matched)
+        proxy = proxy_market_edge(side, sdata.get("books", []), fair.get(side)) if fair else None
+
+        side_view = {
+            **{k: sdata.get(k) for k in ("side", "line", "best_odds", "outcome_id")},
+            "hit_rates": {},
+            "alt_lines": alt_lines.get(side, []),
+            "movement": _slim_movement(mv),
+            "signal": score,
+            "proxy_market_edge": proxy,
+            "insights": [_slim_insight(i) for i in matched],
+            "ev": _ev_for_side(ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))),
+            "public_money": sdata.get("public_money"),
+        }
+        side_views[side] = side_view
+
+    card = {
+        "card_id": market_id,
+        "league": next((r.get("league") for r in props + ev_rows if r.get("league")), None),
+        "group_key": _group_key(identity),
+        **identity,
+        "sides": side_views,
+        "fair": fair,
+    }
+    _route_and_rank(card)
+    return card
+
+
+def _best_american_price(row: dict[str, Any]) -> int | None:
+    # Normalized game books carry the american price under ``odds`` (matching the
+    # props book contract); tolerate a raw ``american`` key as a fallback.
+    odds = [
+        b.get("odds") if b.get("odds") is not None else b.get("american")
+        for b in row.get("books", [])
+        if isinstance(b, dict) and (b.get("odds") is not None or b.get("american") is not None)
+    ]
+    return max(odds) if odds else None
+
+def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
+    return {
+        "side": side,
+        "line": prop.get("line"),
+        "best_odds": _best_american_price(prop) if "best_odds" not in prop else prop.get("best_odds"),
+        "books": prop.get("books") or [],
+        "outcome_id": prop.get("outcome_id"),
+        "public_money": prop.get("public_money"),
+    }
 
 
 def _slim_movement(mv: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -704,6 +830,12 @@ def build_cards_payload(league: str) -> dict[str, Any]:
     insights = _records(insights_payload)
 
     idx = build_indexes(props, movement, ev_records, insights)
+
+    enrichment_payload = load_latest(lg, "games_enrichment")
+    if enrichment_payload:
+        idx.enrichment_loaded = True
+        idx.enrichment = enrichment_payload.get("enrichment") or {}
+
     market_ids = sorted(set(idx.props_by_market) | set(idx.ev_by_market))
     cards = [assemble_card(mid, idx) for mid in market_ids]
 
@@ -793,6 +925,121 @@ def export_cards_for_league(league: str) -> dict[str, Any]:
     write_json(paths.reports / "cards_status_latest.json", status)
     return status
 
+
+def build_game_cards_payload(league: str) -> dict[str, Any]:
+    paths = league_paths(league)
+    lg = paths.league
+    games_payload = load_latest(lg, "games")
+    movement_payload = load_latest(lg, "games_line_movement")
+    # Insights are stored as context in games file, or we could load them. The plan says games insights are in games file context.
+    # We will pass an empty list to insights since the game_board logic is similar, but insights can be extracted.
+
+    if not games_payload:
+        raise FileNotFoundError(f"Missing games payload for {lg}")
+
+    props = _records(games_payload)
+    movement = _records(movement_payload) if movement_payload else []
+    ev_records = _records(movement_payload, "ev_records") if movement_payload else []
+
+    # We could extract insights from games_payload context
+    insights = []
+    context = games_payload.get("context", {})
+    insights_context = context.get("insights", {})
+    for event_insights in insights_context.values():
+        insights.extend(event_insights)
+
+    idx = build_indexes(props, movement, ev_records, insights)
+    market_ids = sorted(set(idx.props_by_market) | set(idx.ev_by_market))
+
+    # Filter out WINNING_MARGIN markets from the board
+    filtered_market_ids = []
+    for mid in market_ids:
+        mid_props = idx.props_by_market.get(mid, [])
+        if any(p.get("proposition") == "WINNING_MARGIN" for p in mid_props):
+            continue
+        filtered_market_ids.append(mid)
+
+    cards = [assemble_game_card(mid, idx) for mid in filtered_market_ids]
+
+    board_a = sorted(
+        (c for c in cards if c.get("board") == "A"),
+        key=lambda c: c.get("rank_value") if c.get("rank_value") is not None else float("-inf"),
+        reverse=True,
+    )
+    board_b = sorted(
+        (c for c in cards if c.get("board") == "B"),
+        key=lambda c: c.get("rank_value") or 0.0,
+        reverse=True,
+    )
+
+    skew = snapshot_skew(
+        {
+            "games": (games_payload or {}).get("generated_at"),
+            "line_movement": (movement_payload or {}).get("generated_at") if movement_payload else None,
+        }
+    )
+
+    payload = {
+        "league": lg,
+        "source_method": "join",
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "missing_feeds": ["line_movement"] if not movement_payload else [],
+        "snapshot_skew": skew,
+        "coverage": {
+            "games_records": len(props),
+            "games_markets": len(idx.props_by_market),
+            "movement_records": len(movement),
+            "ev_records_average": sum(len(v) for v in idx.ev_by_market.values()),
+            "ev_markets": len(idx.ev_by_market),
+            "cards_total": len(cards),
+            "board_a_cards": len(board_a),
+            "board_b_cards": len(board_b),
+        },
+        "board_a": board_a,
+        "board_b": board_b,
+        "context": context,
+        "data_contract": {
+            "dataset": "outlier_games_cards",
+            "version": "1.0",
+            "intended_use": "Ranked game/team market triage view joining games, line movement, EV, and insights.",
+            "card_id": "market_id",
+            "group_key": "player_id+market+scope",
+            "boards": {
+                "A": "Verified Outlier EV (method=AVERAGE), ranked by calculated_ev_pct",
+                "B": "Signal candidates, ranked by descriptive composite",
+            },
+        },
+    }
+    return payload
+
+
+def export_game_cards_for_league(league: str) -> dict[str, Any]:
+    paths = league_paths(league)
+    cards_dir = paths.root / "cards"
+    cards_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = build_game_cards_payload(paths.league)
+
+    latest_json = cards_dir / f"{paths.league.lower()}_games_cards_latest.json"
+    archive_json = paths.timestamped(cards_dir, "games_cards")
+    write_json(latest_json, payload)
+    write_json(archive_json, payload)
+
+    html = render_html(payload)
+    latest_html = cards_dir / f"{paths.league.lower()}_games_cards_latest.html"
+    latest_html.write_text(html, encoding="utf-8")
+
+    status = {
+        "league": paths.league,
+        "status": "ok",
+        "missing_feeds": payload.get("missing_feeds", []),
+        "cards_latest_json": str(latest_json),
+        "cards_latest_html": str(latest_html),
+        "coverage": payload["coverage"],
+        "snapshot_skew": payload["snapshot_skew"],
+    }
+    write_json(paths.reports / "games_cards_status_latest.json", status)
+    return status
 
 # --------------------------------------------------------------------------- #
 # CLI

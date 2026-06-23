@@ -271,6 +271,24 @@ class OutlierApiClient:
     def fetch_market(self, market_id: str) -> dict[str, Any]:
         return self.fetch_json(f"/sportsdata/markets/{market_id}")
 
+    def fetch_event(self, event_id: str) -> dict[str, Any]:
+        return self.fetch_json(f"/sportsdata/events/{event_id}")
+
+    def fetch_event_markets(self, event_id: str, market_type: str) -> dict[str, Any]:
+        return self.fetch_json(f"/sportsdata/events/{event_id}/markets?marketType={quote(market_type)}")
+
+    def fetch_event_insights(self, event_id: str, *, max_pages: int = MAX_PROP_PAGES) -> dict[str, Any]:
+        return self._fetch_paginated(
+            f"/sportsdata/events/{event_id}/insights", "insights", max_pages=max_pages
+        )
+
+    def fetch_event_matchup(self, event_id: str) -> dict[str, Any]:
+        return self.fetch_json(f"/sportsdata/events/{event_id}/matchup")
+
+    def fetch_team_injuries(self, league: str, team_id: str) -> dict[str, Any]:
+        token = league.strip().upper()
+        return self.fetch_json(f"/sportsdata/leagues/{token}/teams/{team_id}/injuries")
+
 
 def _safe_http_error_message(exc: HTTPError, url: str) -> str:
     """Return an error string with body shape only, never raw payload values."""

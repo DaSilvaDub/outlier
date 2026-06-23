@@ -273,6 +273,36 @@ def _books_from_outcome(outcome: dict[str, Any]) -> list[dict[str, Any]]:
     return books
 
 
+def _books_from_game_outcome(outcome: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-book prices for a game/team outcome.
+
+    The Games API returns ``odds: [{book, american, decimal}]`` (flat list),
+    unlike the props ``bookOdds`` map. We emit the same normalized book shape as
+    ``_books_from_outcome`` (``book``/``odds``/``odds_raw``) so downstream card
+    helpers stay feed-agnostic, plus ``decimal`` when present.
+    """
+    odds = outcome.get("odds")
+    if not isinstance(odds, list):
+        return []
+    books: list[dict[str, Any]] = []
+    for entry in odds:
+        if not isinstance(entry, dict):
+            continue
+        book_token = str(entry.get("book") or "").strip()
+        american = _to_int(entry.get("american"))
+        if not book_token or american is None:
+            continue
+        books.append(
+            {
+                "book": normalize_book_label(book_token),
+                "odds": american,
+                "odds_raw": str(entry.get("american")),
+                "decimal": _to_float(entry.get("decimal")),
+            }
+        )
+    return books
+
+
 def _dedupe_key(row: dict[str, Any]) -> tuple[str, ...]:
     market_identity = str(row.get("market_id") or row.get("market_raw") or "").strip()
     return (
@@ -416,6 +446,169 @@ def build_normalized_payload(
             "version": "1.0",
             "intended_use": "Standalone Outlier props data for sport-specific betting triage.",
             "dedupe_key": "league+event_id+(market_id|market_raw)+player_raw+side+line",
+        },
+    }
+
+
+def game_sides(proposition: Any) -> tuple[str, ...]:
+    token = str(proposition or "").strip().upper()
+    if token in {"SPREAD", "MONEYLINE"}:
+        return ("HOME", "AWAY")
+    if token == "MONEYLINE_THREE_WAY":
+        return ("HOME", "AWAY", "DRAW")
+    if token == "TOTAL":
+        return ("OVER", "UNDER")
+    return ()
+
+
+def normalize_games(
+    *,
+    config: SportConfig,
+    schedule_payload: dict[str, Any],
+    events_payloads: list[dict[str, Any]],
+    source_url: str,
+) -> dict[str, Any]:
+    schedule_index = build_schedule_index(schedule_payload, config)
+
+    rows: list[dict[str, Any]] = []
+    events_context: dict[str, Any] = {}
+    teams_context: dict[str, Any] = {}
+    insights_context: dict[str, Any] = {}
+
+    for event_data in events_payloads:
+        event_id = str(event_data.get("eventId") or "").strip()
+        if not event_id:
+            continue
+        event_info = schedule_index.get(event_id, {})
+
+        matchup = event_data.get("matchup")
+        if isinstance(matchup, dict):
+            events_context[event_id] = {
+                "matchup_type": matchup.get("matchupType"),
+                "team_rankings": matchup.get("teamRankings") or [],
+                "lineups": matchup.get("lineups") or []
+            }
+
+        insights = event_data.get("insights")
+        if isinstance(insights, list):
+            insights_context[event_id] = insights
+
+        for injury in event_data.get("injuries") or []:
+            if not isinstance(injury, dict):
+                continue
+            team_id = str(injury.get("teamId") or injury.get("team_id") or "")
+            if team_id:
+                teams_context.setdefault(team_id, {}).setdefault("injuries", []).append(injury)
+
+        for market in event_data.get("markets") or []:
+            if not isinstance(market, dict):
+                continue
+
+            market_type = str(market.get("marketType") or "")
+            if market_type in {"PLAYER_PROP", "GAME_PROP"}:
+                continue
+
+            proposition = str(market.get("proposition") or "")
+            market_label = market.get("label")
+            market_raw = parse_market_descriptor(market)
+            scope = detect_scope(market_label, market_raw)
+
+            canonical_market = None
+            if scope == "full_game":
+                canonical_market = normalize_market(config, proposition) or normalize_market(config, market_raw)
+
+            market_id = str(market.get("marketId") or "")
+
+            for outcome in market.get("outcomes") or []:
+                if not isinstance(outcome, dict):
+                    continue
+                outcome_id = str(outcome.get("outcomeId") or outcome.get("id") or "")
+
+                position = str(outcome.get("position") or outcome.get("label") or "").strip().upper()
+                line = _to_float(outcome.get("line"))
+
+                team, team_raw = None, None
+                if market_type == "GAMELINE" and position in {"HOME", "AWAY"}:
+                    team_key = position.lower()
+                    team_raw_key = f"{team_key}_raw"
+                    team = event_info.get(team_key)
+                    team_raw = event_info.get(team_raw_key)
+                elif market_type == "TEAM_PROP":
+                    market_team_id = str(outcome.get("teamId") or market.get("teamId") or "")
+                    if market_team_id:
+                        if market_team_id == event_info.get("home_team_id"):
+                            team = event_info.get("home")
+                            team_raw = event_info.get("home_raw")
+                        elif market_team_id == event_info.get("away_team_id"):
+                            team = event_info.get("away")
+                            team_raw = event_info.get("away_raw")
+                    else:
+                        label_lower = str(market_label or "").lower()
+                        home_name = str(event_info.get("home_raw") or "").lower()
+                        away_name = str(event_info.get("away_raw") or "").lower()
+                        if home_name and home_name in label_lower:
+                            team = event_info.get("home")
+                            team_raw = event_info.get("home_raw")
+                        elif away_name and away_name in label_lower:
+                            team = event_info.get("away")
+                            team_raw = event_info.get("away_raw")
+
+                books = _books_from_game_outcome(outcome)
+                public_money = None
+                if "publicMoney" in market:
+                    pm_array = market.get("publicMoney")
+                    if isinstance(pm_array, list):
+                        for pm in pm_array:
+                            if str(pm.get("position") or "").strip().upper() == position:
+                                public_money = pm
+                                break
+                if not public_money:
+                    public_money = outcome.get("publicMoney")
+
+                row = {
+                    "league": config.league_id,
+                    "event_id": event_id or None,
+                    "market_id": market_id or None,
+                    "outcome_id": outcome_id or None,
+                    "proposition": proposition or None,
+                    "position": position or None,
+                    "line": line,
+                    "market": canonical_market,
+                    "market_raw": market_raw or proposition or None,
+                    "market_type": market_type or None,
+                    "scope": scope,
+                    "period_label": market.get("periodLabel"),
+                    "periods": market.get("periods"),
+                    "include_overtime": market.get("includeOvertime"),
+                    "is_active": market.get("isActive"),
+                    "team": team,
+                    "team_raw": team_raw,
+                    "matchup": event_info.get("matchup"),
+                    "matchup_raw": event_info.get("matchup_raw"),
+                    "books": books,
+                    "public_money": public_money,
+                    "stats": outcome.get("stats") or {},
+                }
+                rows.append(row)
+
+    return {
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "league": config.league_id,
+        "source_url": source_url,
+        "source_method": "api",
+        "record_count": len(rows),
+        "primary_record_array": "records",
+        "records": rows,
+        "context": {
+            "events": events_context,
+            "teams": teams_context,
+            "insights": insights_context,
+        },
+        "data_contract": {
+            "dataset": "outlier_games",
+            "version": "1.0",
+            "intended_use": "Standalone Outlier games data.",
+            "dedupe_key": "league+event_id+market_id+outcome_id",
         },
     }
 

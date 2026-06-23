@@ -182,6 +182,8 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
                 deadline = time.monotonic() + max(30, timeout_seconds)
                 while time.monotonic() < deadline and not _logged_in(page, league):
                     page.wait_for_timeout(2000)
+                # Wait for token to be injected into localStorage after URL change
+                page.wait_for_timeout(10000)
 
             # Capture context-wide storage (cookies + localStorage across all
             # pages and popups), not just the original tab's URL. Login usually

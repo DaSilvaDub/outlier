@@ -67,6 +67,37 @@ def test_refresh_runs_insights(monkeypatch, capsys):
     assert calls["insights"] == 1
 
 
+def test_refresh_flags_games_error_and_skips_game_cards(monkeypatch, capsys):
+    """A games export that returns status=error must set a non-zero exit code and
+    not rebuild game cards on top of empty data (Finding #1)."""
+    calls = {"game_cards": 0}
+
+    monkeypatch.setattr(refresh_mod, "OutlierApiClient", FakeClient)
+
+    def games_error(client, league):
+        return {
+            "status": "error",
+            "record_count": 0,
+            "enrichment_count": 0,
+            "fetch_errors": [{"step": "markets", "event_id": "e1"}],
+            "fetch_error_count": 1,
+        }
+
+    def game_cards(league):
+        calls["game_cards"] += 1
+        return {"coverage": {"cards_total": 0}}
+
+    monkeypatch.setattr(refresh_mod, "export_games_for_league", games_error)
+    monkeypatch.setattr(refresh_mod, "export_game_cards_for_league", game_cards)
+
+    result = refresh_mod.main(["--league", "MLB", "--games"])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "MLB games: error" in captured.out
+    assert calls["game_cards"] == 0
+
+
 def test_refresh_cards_only_does_not_require_api_client(monkeypatch, capsys):
     def boom(*args, **kwargs):
         raise AssertionError("API client must not be constructed for --cards only")

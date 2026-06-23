@@ -7,10 +7,82 @@ import pytest
 from outlier_scrapers.api import AuthRequiredError, OutlierApiError
 from outlier_scrapers.line_movement import (
     StalePropsError,
+    build_line_movement_payload,
     export_line_movement_for_league,
     normalize_ev_records,
     normalize_market_detail,
 )
+
+
+def _game_market_detail(market_id="gm1"):
+    """Games market-detail payload: team sides (HOME/AWAY) and odds as a list."""
+    return {
+        "market": {
+            "eventId": "e1",
+            "marketId": market_id,
+            "leagueId": "MLB",
+            "marketType": "GAMELINE",
+            "proposition": "MONEYLINE",
+            "label": "Moneyline",
+            "isActive": True,
+            "outcomes": [
+                {
+                    "outcomeId": f"{market_id}-home",
+                    "position": "HOME",
+                    "odds": [{"book": "DraftKings", "american": -150, "decimal": 1.67}],
+                    "primary": True,
+                },
+                {
+                    "outcomeId": f"{market_id}-away",
+                    "position": "AWAY",
+                    "odds": [{"book": "DraftKings", "american": 130, "decimal": 2.3}],
+                    "primary": True,
+                },
+            ],
+            "evOutcomes": [
+                {
+                    "outcomeId": f"{market_id}-home",
+                    "calculatedEV": {
+                        "AVERAGE": {"noVigOdds": {"american": "-145", "decimal": 1.69}, "ev": 0.05, "kelly": 0.02}
+                    },
+                    "deVigOdds": {"american": "-145", "decimal": 1.69},
+                    "vig": 0.02,
+                    "width": 0.03,
+                    "books": {"DRAFTKINGS": {"american": "-150", "decimal": 1.67, "book": {"name": "DraftKings"}}},
+                }
+            ],
+        },
+        "marketHistory": {
+            "marketMovements": [
+                {
+                    "updated": "2026-06-20T10:00:00Z",
+                    "movementTypes": ["ODDS"],
+                    "value": {
+                        "HOME": {"odds": "-150", "decimalOdds": 1.67},
+                        "AWAY": {"odds": "130", "decimalOdds": 2.3},
+                    },
+                }
+            ]
+        },
+    }
+
+
+def test_build_line_movement_payload_games_keeps_team_sides():
+    """In games mode, moneyline/spread (HOME/AWAY/DRAW) sides must survive in
+    both the movement records and the EV records (Finding #1)."""
+    result = build_line_movement_payload(
+        league="MLB",
+        market_payloads=[_game_market_detail()],
+        props_context={},
+        source_url_template="t",
+        props_latest="x",
+        source="games",
+    )
+    sides = {r["side"] for r in result["records"]}
+    assert {"HOME", "AWAY"} <= sides
+    home = next(r for r in result["records"] if r["side"] == "HOME")
+    assert home["current_odds"] == -150
+    assert "HOME" in {r["side"] for r in result["ev_records"]}
 
 
 def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
@@ -652,3 +724,47 @@ def test_export_line_movement_auth_error_writes_no_success_artifacts(tmp_path, m
         export_line_movement_for_league(FakeClient({"m1": AuthRequiredError("denied")}), "MLB")
 
     assert not list((tmp_path / "data").glob("**/*line_movement_latest.json"))
+
+
+def test_main_error_path_writes_status_without_nameerror(tmp_path, monkeypatch):
+    """A failing export must return 1 and write the status report; the except
+    blocks previously raised a secondary NameError on bare ``source`` (Finding #3)."""
+    import outlier_scrapers.line_movement as lm
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(lm, "OutlierApiClient", lambda *a, **k: object())
+
+    def boom(*a, **k):
+        raise FileNotFoundError("missing props")
+
+    monkeypatch.setattr(lm, "export_line_movement_for_league", boom)
+
+    rc = lm.main(["--league", "MLB", "--source", "games"])
+
+    assert rc == 1
+    reports = list(tmp_path.rglob("games_line_movement_status_latest.json"))
+    assert reports, "status report must be written"
+    data = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert data["status"] == "error"
+
+
+def test_main_auth_error_path_writes_status_without_nameerror(tmp_path, monkeypatch):
+    """AuthRequiredError path must also avoid the bare ``source`` NameError."""
+    import outlier_scrapers.line_movement as lm
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(lm, "OutlierApiClient", lambda *a, **k: object())
+
+    def boom(*a, **k):
+        raise AuthRequiredError("denied")
+
+    monkeypatch.setattr(lm, "export_line_movement_for_league", boom)
+
+    rc = lm.main(["--league", "MLB", "--source", "games"])
+
+    assert rc == 1
+    reports = list(tmp_path.rglob("games_line_movement_status_latest.json"))
+    assert reports, "status report must be written"
+    assert json.loads(reports[0].read_text(encoding="utf-8"))["status"] == "auth_required"

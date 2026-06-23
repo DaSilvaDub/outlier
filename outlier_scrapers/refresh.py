@@ -4,8 +4,9 @@ import argparse
 import sys
 
 from .api import OutlierApiClient
-from .cards import export_cards_for_league
+from .cards import export_cards_for_league, export_game_cards_for_league
 from .discover import summarize_league, write_discovery_report
+from .games import export_games_for_league
 from .insights import export_insights_for_league
 from .line_movement import export_line_movement_for_league
 from .props import export_props_for_league
@@ -21,26 +22,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--insights", action="store_true")
     parser.add_argument("--line-movement", action="store_true")
     parser.add_argument("--cards", action="store_true")
+    parser.add_argument("--games", action="store_true")
+    parser.add_argument("--game-line-movement", "--games-with-detail", action="store_true", dest="game_line_movement")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    
+
     if args.all:
         args.props = True
         args.insights = True
         args.line_movement = True
         args.cards = True
 
-    if not args.discover and not args.props and not args.insights and not args.line_movement and not args.cards:
-        print("Nothing requested. Use --all, or explicit flags like --props, --line-movement, --cards.")
+    if not args.discover and not args.props and not args.insights and not args.line_movement and not args.cards and not args.games and not args.game_line_movement:
+        print("Nothing requested. Use --all, or explicit flags like --props, --line-movement, --cards, --games.")
         return 2
 
     # Cards are built from local *_latest.json files and need no API session.
     # Only construct the client when a feed that actually fetches is requested,
     # so `refresh --cards` can rebuild the board offline with a stale session.
-    needs_api = args.discover or args.props or args.insights or args.line_movement
+    needs_api = args.discover or args.props or args.insights or args.line_movement or args.games or args.game_line_movement
     client = None
     if needs_api:
         try:
@@ -104,6 +107,39 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 print(f"{league.upper()} cards: failed ({str(exc)[:200]})")
                 exit_code = 1
+
+        if args.games:
+            try:
+                status = export_games_for_league(client, league)
+                if status.get("status") == "error":
+                    print(
+                        f"{league.upper()} games: error "
+                        f"({status.get('fetch_error_count', 0)} fetch errors, {status['record_count']} records); "
+                        f"skipping game cards"
+                    )
+                    exit_code = 1
+                    continue
+                suffix = " [partial]" if status.get("status") == "partial" else ""
+                print(f"{league.upper()} games: exported {status['record_count']} records{suffix}")
+                g_status = export_game_cards_for_league(league)
+                print(f"{league.upper()} game cards: exported {g_status['coverage']['cards_total']} cards")
+            except Exception as exc:
+                print(f"{league.upper()} games: failed ({str(exc)[:200]})")
+                exit_code = 1
+
+        if args.game_line_movement:
+            try:
+                status = export_line_movement_for_league(client, league, source="games")
+                print(f"{league.upper()} game line movement: exported {status['record_count']} records")
+                g_status = export_game_cards_for_league(league)
+                print(f"{league.upper()} game cards (rebuilt): exported {g_status['coverage']['cards_total']} cards")
+            except FileNotFoundError as exc:
+                print(f"{league.upper()} game line movement: missing input ({exc}). Run with --games first.")
+                exit_code = 1
+            except Exception as exc:
+                print(f"{league.upper()} game line movement: failed ({str(exc)[:200]})")
+                exit_code = 1
+
     return exit_code
 
 

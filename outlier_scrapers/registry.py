@@ -21,9 +21,16 @@ class SportConfig:
     def insights_route(self) -> str:
         return f"/{self.app_route}/trending/insights"
 
+    @property
+    def games_route(self) -> str:
+        return f"/{self.app_route}/games"
+
 
 def _compact(value: object) -> str:
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+GAME_MARKET_TYPES = ("GAMELINE", "PLAYER_PROP", "TEAM_PROP", "GAME_PROP")
 
 
 WNBA_TEAM_ALIASES = {
@@ -177,6 +184,13 @@ BASKETBALL_MARKET_ALIASES = {
     "DEFENSIVEREBOUNDS": "DREB",
     "DOUBLEDOUBLE": "DD",
     "TRIPLEDOUBLE": "TD",
+    "MONEYLINE": "ML",
+    "SPREAD": "SPREAD",
+    "TOTAL": "TOTAL",
+    "MONEYLINE_THREE_WAY": "ML_3WAY",
+    "MONEYLINETHREEWAY": "ML_3WAY",
+    "WINNING_MARGIN": "MARGIN",
+    "WINNINGMARGIN": "MARGIN",
 }
 
 
@@ -229,6 +243,10 @@ MLB_MARKET_ALIASES = {
     "MONEYLINE": "ML",
     "SPREAD": "SPREAD",
     "TOTAL": "TOTAL",
+    "MONEYLINE_THREE_WAY": "ML_3WAY",
+    "MONEYLINETHREEWAY": "ML_3WAY",
+    "WINNING_MARGIN": "MARGIN",
+    "WINNINGMARGIN": "MARGIN",
 }
 
 
