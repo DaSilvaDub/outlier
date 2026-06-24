@@ -1,9 +1,9 @@
 # AI Research Desk — Daily Betting Guide Runbook
 
-**Purpose:** Turn ChatGPT, Gemini, and Claude into a research desk layered on top of the Outlier pipeline. The pipeline supplies the numeric edge (EV board + signal board at `market_id` grain, multi-book odds, publicMoney, injuries, matchup). The three models add late news, situational context, and an independent cross-check, then produce one consolidated daily guide.
+**Purpose:** Turn ChatGPT, Gemini, and Claude into a research desk layered on top of the Outlier pipeline. The pipeline supplies the numeric edge (EV board + signal board at `market_id` grain, multi-book odds, publicMoney, injuries, matchup) **and the bet sizing**. The three models add late news, situational context, and an independent cross-check, then produce one consolidated daily guide.
 
-**Mode:** Manual paste. **Output:** Full guide (singles, props, SGP/parlays, stand-downs, unit sizing).
-**As-of discipline:** Every model sees a timestamped pack and is told to reason *only* from it. Nothing is valid without the line/price it was taken at.
+**Mode:** Manual paste. **Output:** Full guide (singles, props, SGP/parlays as candidates, stand-downs, unit sizing).
+**Core discipline:** Two rule modes (see §2a). *Reasoning* passes use the pack only. *Research* passes may use the web but may never invent or update a betting line — every finding ties back to a quoted `market_id` + line/price from the pack. Sizing is computed by the pipeline, never by a model.
 
 ---
 
@@ -11,11 +11,11 @@
 
 | Model | Role | Why |
 |---|---|---|
-| **ChatGPT** (o-series reasoning + Deep Research) | Stress-tester + per-game news | Strong structured decomposition; good at "is this edge real or an artifact?" Deep Research pulls late injury/lineup/weather news per game. |
-| **Gemini** (Pro + Deep Research) | Wide scanner | Largest context — ingest the full pack + raw odds; broad multi-source web sweep across the whole slate. |
-| **Claude** (extended thinking) | Synthesizer + red-team | Calibrated uncertainty; resolves conflicts; writes the final guide. |
+| **ChatGPT** (o-series reasoning + Deep Research) | Stress-tester (A, pack-only) + per-game news (C, web) | Strong structured decomposition; good at "is this edge real or an artifact?" Deep Research pulls late injury/lineup/weather news per game. |
+| **Gemini** (Pro + Deep Research) | Wide scanner (B, web) | Largest context — ingest the full pack + raw odds; broad multi-source web sweep across the whole slate. |
+| **Claude** (extended thinking) | Synthesizer + red-team (D pack-only, E synthesis) | Calibrated uncertainty; runs the provenance/validation pass; writes the final guide. |
 
-**Key principle:** the desk's job is *as much about killing bad pipeline cards as confirming good ones*. A stand-down is a win. Consensus across models is a filter, not proof — weight independent **information** (deep-research news) above **opinion**.
+**Key principle:** the desk's job is *as much about killing bad pipeline cards as confirming good ones*. A stand-down is a win. Consensus across models is a filter, not proof — weight independent **sourced information** (deep-research news) above **opinion**.
 
 ---
 
@@ -25,13 +25,13 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 
 | When | Step | Tool |
 |---|---|---|
-| **T‑180 min** | Run pipeline → produce today's EV/signal cards. Build the **briefing pack** (§2). | Pipeline + export script |
+| **T‑180 min** | Run pipeline → produce today's EV/signal cards **with sizing fields** (§4). Build the **briefing pack** (§2). | Pipeline + export script |
 | **T‑170** | Kick off **both** Deep Research jobs first (they take 5–15 min): Gemini wide-scan (Prompt B), ChatGPT per-game (Prompt C). | Gemini + ChatGPT web |
 | **T‑160** | While they run, paste **Prompt A** (reasoning stress-test) into ChatGPT o-series and **Prompt D** (reasoning pass) into Claude. | ChatGPT + Claude |
 | **T‑140** | Collect all four structured outputs (A–D). | — |
 | **T‑130** | Paste **Prompt E** (synthesis) + the four outputs into Claude → **final guide**. | Claude |
-| **T‑30** | **Line re-check:** compare current odds vs the pack's `as_of` lines. Kill any play where the value is gone (line moved through your number → CLV already taken). | Pipeline / book |
-| Post-slate | Log results + grade each model and the pipeline (§5). | Calibration log |
+| **T‑30** | **Line re-check / kill pass** against the §4 stale-line kill criteria. | Pipeline / book |
+| Post-slate | Log results — **plays AND stand-downs/fades** — and grade each model + the pipeline (§5). | Calibration log |
 
 > Deep Research is a **pre-slate** tool (latency 5–15 min). Not for live in-game.
 
@@ -39,37 +39,68 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 
 ## 2. Briefing-pack spec (what the export script emits)
 
-The export reads the day's pipeline output and writes a dated folder `packs/YYYY-MM-DD/` with:
+The export reads the day's pipeline output and writes a dated folder `packs/YYYY-MM-DD/` with the files below.
 
-### 2a. `briefing.md` — the master pack (paste into Gemini + Claude)
-Header block (mandatory):
+### 2a. Rules by role — paste at the top of EVERY pack file and prompt
+
 ```
 SLATE: <sport> <date>   AS_OF: <ISO timestamp, local + UTC>
-RULES FOR MODEL:
-- Reason ONLY from data in this pack. Do NOT invent or recall odds/lines.
-- Every verdict must quote the exact line/price it applies to.
-- If you need info not in this pack, list it under "NEEDS" — do not guess.
+
+REASONING PASSES (A, D):
+- Use this pack ONLY. Do not use memory or the web.
+- Never invent or recall odds/lines. Every verdict quotes the exact market_id + line/price from the pack.
+- If you need info not in the pack, list it under NEEDS — do not guess.
 - Flag any edge that looks like a data artifact (stale line, injury already priced, wrong side of a key number).
+
+RESEARCH PASSES (B, C):
+- You MAY use current web sources (last 24h).
+- Do NOT invent, quote, or update any betting line/price. The pack's lines are the only lines.
+- Tie every finding back to a quoted market_id + line/price from the pack.
+- Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.
 ```
-Body:
-- **Top EV cards** (capped to N, default 15): `market_id`, game, market, side, pipeline line/price, best book, model fair value, edge %, edge source tag.
-- **Top signal cards** (capped to N): `market_id`, signal type (sharp/steam/reverse-line-move), publicMoney %, money vs bet %, line move since open.
+
+### 2b. `candidates.csv` — the shortlist (paste into ChatGPT for Prompt A; Prompt C reads the per-game dossiers)
+One row per `market_id` on the EV or signal board. Columns (identity + sizing fully anchored so props and alt lines can't be confused):
+```
+sport, event_id, market_id, market_type, player_id, selection, line, price, decimal_price, book, as_of,
+model_prob, push_prob, implied_prob, edge_pct, kelly_025_units, max_units, recommended_units_pre_news,
+outlier_ev_pct, outlier_kelly_pct,
+line_open, line_now, public_money_pct, money_pct, injury_flags, research_leverage, source_timestamps
+```
+This is the canonical, complete column list — the export header must match it exactly (no extra, no missing).
+- `price` = American odds (display); `decimal_price` = same price in decimal form, the value the sizing formula uses (§4). Source the decimal book price from the normalized `ev_records` (`book_decimal_odds`); never derive the bet price from de-vig/fair odds.
+- `selection` = the exact side/outcome (e.g. `HOME -1.5`, `Player X Over 5.5 K`), so alternate lines never collide.
+- `push_prob` = pipeline's probability the bet pushes (0 for no-push markets — moneylines, half-point lines, run line ±1.5). For push-capable **whole-number** spreads/totals where no real push probability exists yet, the row is **sizing-ineligible** (units empty) rather than sized with `push_prob=0`, which would mis-size it. See §4.
+- `model_prob` / `implied_prob` / `edge_pct` and the three `*_units` fields are **computed by the pipeline** (see §4). Models read them; they never recompute sizing.
+- `outlier_ev_pct` / `outlier_kelly_pct` = Outlier's own EV% and Kelly% for the side (pipeline cross-check, not used for our sizing) — lets the reasoning models compare our computed edge against the source's.
+- `research_leverage` (low/med/high) = how much an unknown (weather, lineup, starter, rest) could move the number — used to prioritize Prompt C (§2d).
+
+Cap to the top ~25 by combined EV+signal rank so it fits context. **Never dump the whole slate.**
+
+### 2c. `briefing.md` — the master pack (paste into Gemini B + Claude D)
+Header = §2a rules. Body:
+- **Top EV cards** (capped to N, default 15): identity per §2b, model fair value, `edge_pct`, `recommended_units_pre_news`, edge source tag.
+- **Top signal cards** (capped to N): signal type (sharp/steam/reverse-line-move), `public_money_pct`, money vs bet %, line move since open.
 - **Key injuries / status** per game (from injuries endpoint), with timestamp.
 - **Notable line moves** since open.
 - **Slate index**: every game + first lock time.
 
-### 2b. `candidates.csv` — the shortlist (paste into ChatGPT for A & C)
-One row per `market_id` on the EV or signal board, columns:
-`market_id, game, market, side, line, price, book, model_fair, edge_pct, edge_source, public_money_pct, money_pct, line_open, line_now, injury_flags`
+### 2d. `dossiers/<game>.md` — per-game deep-research briefs (for ChatGPT Prompt C)
+One short file per game: teams, time, the `market_id`s in play, current pipeline lines, and the open questions (auto-selected by sport from §2f). 
+**Prioritization:** run Prompt C on **every** WNBA game (small slates). For MLB (large slates), cap by **`research_leverage`, not raw edge** — a small edge on a weather-sensitive total or a game with an unconfirmed starter deserves research more than a larger but stable moneyline edge.
 
-Cap to the top ~25 by combined EV+signal rank so it fits context. **Never dump the whole slate.**
+### 2e. Source tiers (used by B, C, and the synthesis override rule)
+```
+TIER 1 (authoritative — can override a pick): official team injury report, confirmed lineup card /
+        starting-pitcher confirmation, league transaction wire, NWS/official weather, official umpire assignment.
+TIER 2 (credible — can override Tier 3 + opinion): established beat reporters, official club channels, reputable injury insiders.
+TIER 3 (weak — cannot create or kill a play on its own): aggregators, model blurbs, betting-content sites, unsourced rumor.
+```
+Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. Tier 3 may only lower confidence — never create or kill a play by itself.
 
-### 2c. `dossiers/<game>.md` — per-game deep-research briefs (for ChatGPT Prompt C)
-One short file per game with: teams, time, the specific `market_id`s in play, current pipeline lines, and the open questions the news pass should answer. The export auto-selects the question set by sport from the bank in **§2d**.
+### 2f. Sport-specific question banks (auto-inserted into each dossier + research prompts)
 
-### 2d. Sport-specific question banks (auto-inserted into each dossier + deep-research prompts)
-
-**MLB** — ask/resolve, each with source + timestamp:
+**MLB** — each answer needs source + tier + timestamp:
 - **Starters:** both confirmed SPs, days rest, recent form, pitch-count limit / opener or bullpen game.
 - **Bullpen:** who threw the last 1–2 days, closer availability, gassed pen.
 - **Lineup:** posted lineup card, key bats in/out, platoon/handedness edge, regulars resting (day-after-night, getaway day).
@@ -77,7 +108,7 @@ One short file per game with: teams, time, the specific `market_id`s in play, cu
 - **Umpire:** home-plate ump strike-zone tendency (tight/wide → totals & K props).
 - *Market types in play:* full game, **F5 (first 5)**, run line, total, **NRFI/YRFI**, strikeout props, H+R+RBI.
 
-**WNBA** — ask/resolve, each with source + timestamp:
+**WNBA** — each answer needs source + tier + timestamp:
 - **Availability:** injury report status (out/quest/prob), load management, rest decisions.
 - **Lineup/rotation:** confirmed starters, any rotation change, minutes restriction returning from injury.
 - **Schedule/fatigue:** back-to-back, travel/time-zone, schedule density.
@@ -85,119 +116,145 @@ One short file per game with: teams, time, the specific `market_id`s in play, cu
 - **Game script:** pace matchup, blowout risk (→ star minutes capped → prop **unders**), foul-trouble tendencies.
 - *Market types in play:* spread, total, player points/reb/ast, **PRA**, 3PM, alt lines.
 
-> `candidates.csv` carries a `sport` and `market_type` column so each market routes to the right question set. WNBA slates are small (run Prompt C on every game); MLB slates are large (cap Prompt C to the top games by EV/signal rank).
-
-**Anchoring rules baked into the pack** (repeat in every file header): only provided odds; quote the line; flag artifacts; list unknowns under NEEDS.
-
 ---
 
 ## 3. The five prompt templates
 
-> Paste the relevant pack section *above* each prompt. All ask for **structured output** so synthesis is mechanical.
+> Paste the §2a rule block + the relevant pack section *above* each prompt. All ask for **structured output** so synthesis is mechanical.
 
-### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`)
+### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`) — PACK-ONLY
 ```
-You are a sharp betting analyst. Below is a shortlist of markets my quant model flagged as +EV, with the model's fair value and the current line. Reason ONLY from this data; never invent odds.
+You are a sharp betting analyst. Below is a shortlist of markets my quant model flagged, with model probability, edge, and pipeline-computed unit sizing. Use this data ONLY — no web, no memory. Never invent odds.
 
 For EACH market_id, return:
 - verdict: BET | LEAN | PASS | FADE
-- side & the exact line/price it applies to
+- selection & the exact line/price it applies to (copy from the row)
 - confidence: 1–5 (qualitative, separate from the model's numeric edge)
-- edge_source_check: is the model's edge plausibly real, or an artifact? Pick one: REAL / STALE_LINE / ALREADY_PRICED / KEY_NUMBER_WRONG_SIDE / UNCLEAR
+- edge_source_check: REAL / STALE_LINE / ALREADY_PRICED / KEY_NUMBER_WRONG_SIDE / UNCLEAR
 - key_factors: ≤2 lines
 - needs: any info not in the pack that would change the verdict
 
-Output as a markdown table, one row per market_id. End with the 3 strongest BETs and any FADEs where the model is likely wrong.
+Output a markdown table, one row per market_id. End with the 3 strongest BETs and any FADEs where the model is likely wrong. Do not suggest unit sizes — those are fixed by the pipeline.
 ```
 
-### Prompt B — Gemini wide-scan Deep Research (input: full `briefing.md`)
+### Prompt B — Gemini wide-scan Deep Research (input: full `briefing.md`) — WEB ALLOWED
 ```
 Deep research task. Here is today's slate with my model's flagged markets (as-of timestamp in header). Each game is tagged MLB or WNBA — use the matching question set:
 - MLB: confirmed starters + days rest, bullpen availability, posted lineup, wind/temp/roof/park, home-plate umpire zone.
-- WNBA: injury report status + load management, confirmed starters/minutes limits, back-to-back/travel, usage shift if a star sits, pace & blowout risk.
-Search current sources (last 24h) and include sharp-vs-public reporting where available.
+- WNBA: injury status + load management, confirmed starters/minutes limits, back-to-back/travel, usage shift if a star sits, pace & blowout risk.
+Search current sources (last 24h). Do NOT invent, quote, or update any betting line — the pack's lines are the only lines.
 
 For EACH game return:
-- news items: bullet, each with source + timestamp
-- impact: which market_id(s) it affects and direction
-- verdict vs my model: CONFIRMS / CONTRADICTS / NEUTRAL, with one line why
-Only report what you can source. Do not invent odds or restate my lines as facts. Flag anything my as-of data (timestamp in header) likely missed.
+- news items: each as { claim | source name | source tier (1/2/3 per the pack) | timestamp }
+- impact: which market_id(s) it affects and direction, tied to the quoted pack line
+- verdict vs my model: CONFIRMS / CONTRADICTS / NEUTRAL, one line why
+Only report what you can source. Flag anything my as-of data likely missed.
 ```
 
-### Prompt C — ChatGPT per-game Deep Research (input: one `dossiers/<game>.md` at a time, top games only)
+### Prompt C — ChatGPT per-game Deep Research (input: one `dossiers/<game>.md`, top-leverage games) — WEB ALLOWED
 ```
-Deep research on this single game. Answer the open questions in the brief using current sources (last 24h). For each answer give source + timestamp. Then state, for each listed market_id, whether the news CONFIRMS / CONTRADICTS / is NEUTRAL to a bet at the quoted line, and why. Do not invent odds.
-```
-
-### Prompt D — Claude reasoning pass (input: `briefing.md`)
-```
-Act as a calibrated, skeptical betting analyst. From the pack only, independently evaluate the top EV and signal cards. For each market_id give: verdict (BET/LEAN/PASS/FADE), the line it applies to, confidence 1–5, and the single biggest reason you might be WRONG. Separately, list any card that looks like a data artifact and should be stood down. Be honest about uncertainty; prefer PASS to a forced lean.
+Deep research on this single game. Answer the brief's open questions using current sources (last 24h). Each answer: { claim | source name | source tier (1/2/3) | timestamp }. Then for each listed market_id state CONFIRMS / CONTRADICTS / NEUTRAL to a bet at the quoted pack line, and why. Do NOT invent or update any line/price.
 ```
 
-### Prompt E — Claude synthesis → final guide (input: outputs A + B + C + D)
+### Prompt D — Claude reasoning pass (input: `briefing.md`) — PACK-ONLY
 ```
-You are the head of the desk. Below are four analyses of today's slate: two reasoning passes (A, D) and two deep-research news passes (B, C). Build the final guide.
+Act as a calibrated, skeptical betting analyst. From the pack ONLY (no web, no memory), independently evaluate the top EV and signal cards. For each market_id give: verdict (BET/LEAN/PASS/FADE), the line it applies to, confidence 1–5, and the single biggest reason you might be WRONG. Separately list any card that looks like a data artifact and should be stood down. Prefer PASS to a forced lean. Do not propose unit sizes.
+```
 
-Rules:
-- Weight independent NEWS (B, C) above opinion (A, D). News that contradicts a pick overrides agreement between reasoners.
-- A play needs: positive model edge AND no contradicting news AND at least one reasoner BET/LEAN.
-- Anything contradicted by sourced news or flagged as an artifact → STAND-DOWN with reason.
-- Size with fractional Kelly (default ¼-Kelly) using the model edge; cap any single play at <X> units. Round to ½-unit.
+### Prompt E — Claude synthesis → final guide (input: outputs A + B + C + D) — VALIDATION FIRST
+```
+You are the head of the desk. Below are four analyses: two pack-only reasoning passes (A, D) and two web research passes (B, C). Build the final guide.
 
-Output the final guide in the schema in §4. Include an AGREE/DISAGREE matrix (market_id × A/B/C/D verdict) so I can see where the desk split.
+STEP 1 — VALIDATION PASS (do this before any recommendation):
+- Keep a claim ONLY if it is supported by EITHER the pack OR a sourced B/C item. Discard everything else.
+- Discard any play whose cited line/price does not EXACTLY match the pack.
+- News may override opinion only if it is Tier 1–2, sourced, and timestamped (per §2e). Tier 3 can only lower confidence.
+
+STEP 2 — BUILD:
+- A play needs: positive model edge AND no contradicting Tier 1–2 news AND ≥1 reasoner BET/LEAN.
+- Anything contradicted by **Tier 1–2 sourced** news (Tier 3 cannot kill a play) or flagged as an artifact → STAND-DOWN with reason.
+- SIZING IS FIXED: use the pipeline's recommended_units_pre_news. You MAY downgrade units (e.g. soft news, low confidence) but MUST NOT increase above it, and never above max_units.
+- SGP/parlays: list as CANDIDATES ONLY (no units) unless the pack provides ALL THREE: `sgp_recommended_units_pre_news` + a book combined price + `sgp_correlation_rationale`. Do not multiply leg prices yourself.
+
+Output the §4 schema, plus an AGREE/DISAGREE matrix (market_id × A/B/C/D).
 ```
 
 ---
 
-## 4. Final-guide output schema
+## 4. Final-guide output schema + deterministic sizing
 
 ```
 DATE / AS-OF / first-lock time
 
-A. SINGLES (straight bets)
-   market_id | game | side @ line (book) | model edge% | confidence | units | one-line rationale | news support (B/C)
-
+A. SINGLES
+   market_id | event_id | selection @ line (book) | edge% | confidence | units (≤ pipeline) | rationale | news support {tier, source, ts}
 B. PROPS
-   same columns; note correlation if used in a parlay below
-
-C. SGP / PARLAYS  (only +EV correlated legs)
-   legs (market_ids) | why correlated | combined price | units | note
-   — only build when legs are positively correlated AND each leg is independently non-negative
-     (e.g. game total OVER + that game's pace/usage prop). Avoid book-shaded random parlays.
-
-D. STAND-DOWNS  (the discipline section)
-   market_id | what the pipeline said | why we're passing/fading (artifact or contradicting news)
-
+   same columns; player_id + selection mandatory so alt lines don't collide
+C. SGP / PARLAYS — CANDIDATES ONLY (no units)
+   legs (market_ids) | sgp_correlation_rationale (from pack) | book combined price (from pack) | note
+   — becomes a firm play (with units) ONLY if the pack emits ALL THREE: `sgp_recommended_units_pre_news`
+     (needs a parlay-level model probability) + the book's combined price + `sgp_correlation_rationale`.
+     Missing any one → stays a candidate.
+D. STAND-DOWNS
+   market_id | what the pipeline said | why we're passing/fading (artifact / contradicting Tier 1–2 news)
 E. AGREE/DISAGREE MATRIX
-   market_id × {ChatGPT-A, Gemini-B, ChatGPT-C, Claude-D} verdicts → where the desk split
-
+   market_id × {ChatGPT-A, Gemini-B, ChatGPT-C, Claude-D}
 F. WATCH / NEEDS
-   open line-move triggers and unresolved unknowns to recheck at T-30
+   open kill-triggers and unresolved unknowns to recheck at T-30
 ```
 
-**Staking:** fractional Kelly on the model edge (default ¼-Kelly), single-play cap, ½-unit rounding. Confidence (qualitative) can downgrade but never upgrade above the Kelly number.
+### Sizing — computed by the pipeline, not the model
+The export emits the final `*_units` fields per row so no model ever does Kelly arithmetic. The formula below is the pipeline's internal reference, not something a model runs.
+```
+b      = decimal_price − 1                      # decimal_price is emitted explicitly (§2b)
+p_win  = model_prob
+p_push = push_prob                              # 0 for no-push markets (ML, runline 1.5, .5 totals)
+p_lose = 1 − p_win − p_push
+
+# Optimal Kelly with pushes (pushes return stake → 0 log-growth):
+#   maximize  p_win·ln(1+f·b) + p_lose·ln(1−f)   →
+full_kelly = (b·p_win − p_lose) / ( b · (p_win + p_lose) )
+# Normalizes over the non-push mass (p_win + p_lose = 1 − p_push).
+# Reduces to the no-push binary case  p_win − p_lose/b  when p_push = 0.
+
+kelly_025_units            = round_to_half( 0.25 · full_kelly · UNIT_BANKROLL )
+max_units                  = hard per-play cap (default 3u)
+recommended_units_pre_news = min( kelly_025_units, max_units )  if edge_pct ≥ MIN_EDGE else 0
+```
+Claude may only **downgrade** `recommended_units_pre_news` (news/confidence), never raise it. A row is **sizing-ineligible** (units empty → reasoning/news only, no stake) when any holds: `model_prob` is missing; OR the market is a push-capable whole-number spread/total and the pipeline has no real `push_prob` for it yet (sizing it with `push_prob=0` would mis-size). Half-point lines, moneylines, and run line ±1.5 are no-push (`push_prob=0`, sizing-eligible). **The model never sees the formula in its prompt — it only reads the emitted units.**
+
+### Stale-line kill criteria (the T‑30 pass) — concrete
+Kill or re-stake a play if any holds at T‑30:
+- **No edge left:** current price has moved to/through model fair value (recomputed `edge_pct` < `MIN_EDGE`, default 2%).
+- **Key number crossed against you:** MLB totals through 7/8/9, run line through 1.5; WNBA spread through 2/3/5/7, total through a whole-number key — re-evaluate, default kill.
+- **Prop line drift:** prop line moved ≥ Y stat units (MLB ≥0.5 K / total bases; WNBA ≥1.0 pts, ≥0.5 reb/ast) → re-price before betting.
+- **Tier 1–2 contradiction:** late scratch, lineup/starter change, weather flip → kill.
+(Thresholds default here but should be emitted per `market_type` by the pipeline.)
 
 ---
 
 ## 5. Calibration log (so the desk improves)
 
-After results settle, append one row per play to `calibration/log.csv`:
+Log **every play AND every stand-down/fade** — that's how you learn whether the desk is killing good bets or correctly avoiding bad ones. Append to `calibration/log.csv`:
 ```
-date, market_id, side, line_taken, price_taken, closing_line, CLV, units, result(W/L/push), pnl,
-chatgpt_verdict, gemini_verdict, claude_verdict, final_verdict, news_overrode(bool)
+date, market_id, event_id, selection, decision(PLAY/STAND_DOWN/FADE), line_taken, price_taken,
+closing_line, CLV, units, result(W/L/push/would_have), pnl,
+chatgpt_verdict, gemini_verdict, claude_verdict, final_verdict, news_tier_overrode, kill_reason
 ```
-Track weekly: **CLV first** (did you beat the close?), then ROI and hit rate. Grade each model's verdicts and the pipeline separately so you learn whose calls to trust on which market types. CLV is the leading indicator; W/L is noisy short-term.
+For stand-downs/fades, grade the **would-have** result + CLV — did avoiding it save or cost you? Track weekly: **CLV first** (did you beat the close, on plays and on the close of things you passed?), then ROI and hit rate. Grade each model and the pipeline separately so you learn whose calls to trust on which market types.
 
 ---
 
 ## 6. Guardrails (built into the flow)
 
-- **Context limits** → pre-rank and cap candidates (§2); never paste the full slate.
-- **Hallucinated/stale odds** → header rules force "quote the line / don't invent"; reject any output that cites a price not in the pack.
-- **Garbage-in rationalization** → the `edge_source_check` field exists to catch the model justifying a stale-line edge.
-- **False consensus** → models share training biases; the synthesis rule weights sourced news over agreement.
-- **Latency** → deep research is pre-slate only; kick both jobs off first.
-- **CLV decay** → T‑30 re-check kills plays where the market already moved through your number.
+- **Reasoning vs research split** → pack-only for A/D; web for B/C but never inventing/updating lines (§2a).
+- **Hard provenance** → Prompt E keeps a claim only with pack OR sourced B/C support; Tier 1–2 is required to *override* (flip/kill) a pick, Tier 3 can only soften. Discards the rest before sizing.
+- **Deterministic sizing** → Kelly units come from the pipeline; models may only downgrade. No LLM arithmetic on stakes.
+- **Identity anchoring** → every row carries event_id, market_id, market_type, player_id, selection, line, price, book, as_of — props/alts can't be confused on paste.
+- **Source quality** → Tier 1–2 only can flip a pick; Tier 3 can only soften.
+- **SGP safety** → parlays stay candidate-only unless the pack emits all three: `sgp_recommended_units_pre_news` + book combined price + `sgp_correlation_rationale`.
+- **Context limits** → pre-rank and cap candidates; never paste the full slate.
+- **CLV decay** → T‑30 kill criteria are explicit thresholds, not vibes.
 - **ToS/privacy** → proprietary pipeline output leaves your machine into 3rd-party models; fine for personal use, just noted.
 - **Bankroll** → fractional Kelly + per-play cap; decision support, not a guarantee.
 
@@ -205,7 +262,7 @@ Track weekly: **CLV first** (did you beat the close?), then ROI and hit rate. Gr
 
 ## 7. Build checklist (what I'd implement next, on GO)
 
-1. **Export script** in the pipeline: read today's EV/signal boards + odds/injuries → write `packs/YYYY-MM-DD/` (briefing.md, candidates.csv, dossiers/). ~The only code that touches your repo.~
-2. **Prompt files** saved as `prompts/A..E.md` for one-click copy.
-3. **Calibration logger**: small script to append closing lines + results and compute CLV.
+1. **Export script** in the pipeline: read today's EV/signal boards + odds/injuries → emit per row `model_prob`, `push_prob`, `implied_prob`, `edge_pct`, `decimal_price`, the three `*_units` fields, and `research_leverage`; for parlays emit `sgp_recommended_units_pre_news` + `sgp_correlation_rationale` + book combined price together (all three or the SGP stays candidate-only) → write `packs/YYYY-MM-DD/` (candidates.csv, briefing.md, dossiers/). The only code that touches your repo.
+2. **Prompt files** saved as `prompts/A..E.md` (with the §2a role block embedded) for one-click copy.
+3. **Calibration logger**: append closing lines + results for plays *and* stand-downs, compute CLV and would-have.
 4. **Optional later:** Chrome-MCP automation to drive the three web UIs; scheduled task to build the pack each morning.
