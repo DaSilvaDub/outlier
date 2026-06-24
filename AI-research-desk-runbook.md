@@ -75,7 +75,7 @@ This is the canonical, complete column list — the export header must match it 
 - `outlier_ev_pct` / `outlier_kelly_pct` = Outlier's own EV% and Kelly% for the side (pipeline cross-check, not used for our sizing) — lets the reasoning models compare our computed edge against the source's.
 - `research_leverage` (low/med/high) = how much an unknown (weather, lineup, starter, rest) could move the number — used to prioritize Prompt C (§2d).
 
-Cap to the top ~25 by combined EV+signal rank so it fits context. **Never dump the whole slate.**
+Cap with **board quotas** so signal coverage is never starved by EV volume: take the top `top_ev_n` Board-A (EV) cards by `rank_value` desc **and** the top `top_signal_n` Board-B (signal) cards by `rank_value` desc (defaults 15 / 10 ≈ 25 total), union them. One row per card, emitted from the card's `headline_side`. **Never dump the whole slate.**
 
 ### 2c. `briefing.md` — the master pack (paste into Gemini B + Claude D)
 Header = §2a rules. Body:
