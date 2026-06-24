@@ -1,0 +1,101 @@
+from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
+
+
+@dataclass(frozen=True)
+class Sizing:
+    decimal_price: float
+    model_prob: float | None
+    push_prob: float
+    implied_prob: float
+    edge_pct: float | None
+    kelly_025_units: float | None
+    max_units: float
+    recommended_units_pre_news: float | None
+
+
+def compute_full_kelly(b: float, p_win: float, p_lose: float) -> float:
+    if b <= 0 or (p_win + p_lose) <= 0:
+        return 0.0
+    return (b * p_win - p_lose) / (b * (p_win + p_lose))
+
+
+def _round_to_half(value: float) -> float:
+    # Use decimal for strict half-up rounding
+    d = Decimal(str(value)) * Decimal("2")
+    rounded = d.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return float(rounded) / 2.0
+
+
+def compute_sizing(
+    decimal_price: float,
+    model_prob: float | None = None,
+    push_prob: float = 0.0,
+    kelly_fraction: float = 0.25,
+    unit_bankroll: float = 100.0,
+    max_units: float = 3.0,
+    min_edge: float = 0.02,
+) -> Sizing:
+    if decimal_price <= 1.0:
+        implied_prob = 1.0 / decimal_price if decimal_price > 0 else 0.0
+        return Sizing(
+            decimal_price=decimal_price,
+            model_prob=model_prob,
+            push_prob=push_prob,
+            implied_prob=implied_prob,
+            edge_pct=None,
+            kelly_025_units=None,
+            max_units=max_units,
+            recommended_units_pre_news=None,
+        )
+
+    implied_prob = 1.0 / decimal_price
+
+    if model_prob is None:
+        return Sizing(
+            decimal_price=decimal_price,
+            model_prob=model_prob,
+            push_prob=push_prob,
+            implied_prob=implied_prob,
+            edge_pct=None,
+            kelly_025_units=None,
+            max_units=max_units,
+            recommended_units_pre_news=None,
+        )
+
+    b = decimal_price - 1.0
+    p_win = model_prob
+    p_lose = 1.0 - p_win - push_prob
+
+    if (p_win + p_lose) <= 0:
+        return Sizing(
+            decimal_price=decimal_price,
+            model_prob=model_prob,
+            push_prob=push_prob,
+            implied_prob=implied_prob,
+            edge_pct=None,
+            kelly_025_units=None,
+            max_units=max_units,
+            recommended_units_pre_news=None,
+        )
+
+    edge_pct = p_win * b - p_lose
+    full_kelly = compute_full_kelly(b, p_win, p_lose)
+
+    kelly_025_units = _round_to_half(kelly_fraction * full_kelly * unit_bankroll)
+
+    if full_kelly <= 0 or edge_pct < min_edge:
+        recommended_units_pre_news = 0.0
+    else:
+        recommended_units_pre_news = min(kelly_025_units, max_units)
+
+    return Sizing(
+        decimal_price=decimal_price,
+        model_prob=model_prob,
+        push_prob=push_prob,
+        implied_prob=implied_prob,
+        edge_pct=edge_pct,
+        kelly_025_units=kelly_025_units,
+        max_units=max_units,
+        recommended_units_pre_news=recommended_units_pre_news,
+    )
