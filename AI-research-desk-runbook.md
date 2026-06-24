@@ -70,7 +70,7 @@ line_open, line_now, public_money_pct, money_pct, injury_flags, research_leverag
 This is the canonical, complete column list — the export header must match it exactly (no extra, no missing).
 - `price` = American odds (display); `decimal_price` = same price in decimal form, the value the sizing formula uses (§4). Source the decimal book price from the normalized `ev_records` (`book_decimal_odds`); never derive the bet price from de-vig/fair odds.
 - `selection` = the exact side/outcome (e.g. `HOME -1.5`, `Player X Over 5.5 K`), so alternate lines never collide.
-- `push_prob` = pipeline's probability the bet pushes (0 for no-push markets — moneylines, half-point lines, run line ±1.5). For push-capable **whole-number** spreads/totals where no real push probability exists yet, the row is **sizing-ineligible** (units empty) rather than sized with `push_prob=0`, which would mis-size it. See §4.
+- `push_prob` = pipeline's probability the bet pushes (0 for no-push markets — moneylines, half-point lines, run line ±1.5). For any push-capable **whole-number** line (spreads, totals, **and integer-result player/team props**) where no real push probability exists yet, the row is **sizing-ineligible** (units empty) rather than sized with `push_prob=0`, which would mis-size it. See §4.
 - `model_prob` / `implied_prob` / `edge_pct` and the three `*_units` fields are **computed by the pipeline** (see §4). Models read them; they never recompute sizing.
 - `outlier_ev_pct` / `outlier_kelly_pct` = Outlier's own EV% and Kelly% for the side (pipeline cross-check, not used for our sizing) — lets the reasoning models compare our computed edge against the source's.
 - `research_leverage` (low/med/high) = how much an unknown (weather, lineup, starter, rest) could move the number — used to prioritize Prompt C (§2d).
@@ -221,7 +221,7 @@ kelly_025_units            = round_to_half( 0.25 · full_kelly · UNIT_BANKROLL 
 max_units                  = hard per-play cap (default 3u)
 recommended_units_pre_news = min( kelly_025_units, max_units )  if edge_pct ≥ MIN_EDGE else 0
 ```
-Claude may only **downgrade** `recommended_units_pre_news` (news/confidence), never raise it. A row is **sizing-ineligible** (units empty → reasoning/news only, no stake) when any holds: `model_prob` is missing; OR the market is a push-capable whole-number spread/total and the pipeline has no real `push_prob` for it yet (sizing it with `push_prob=0` would mis-size). Half-point lines, moneylines, and run line ±1.5 are no-push (`push_prob=0`, sizing-eligible). **The model never sees the formula in its prompt — it only reads the emitted units.**
+Claude may only **downgrade** `recommended_units_pre_news` (news/confidence), never raise it. A row is **sizing-ineligible** (units empty → reasoning/news only, no stake) when any holds: `model_prob` is missing; OR the market is a push-capable whole-number line (spread, total, or integer-result player/team prop) and the pipeline has no real `push_prob` for it yet (sizing it with `push_prob=0` would mis-size). Half-point lines, moneylines, and run line ±1.5 are no-push (`push_prob=0`, sizing-eligible). **The model never sees the formula in its prompt — it only reads the emitted units.**
 
 ### Stale-line kill criteria (the T‑30 pass) — concrete
 Kill or re-stake a play if any holds at T‑30:
