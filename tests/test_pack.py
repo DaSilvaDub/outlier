@@ -432,3 +432,30 @@ def test_briefing_role_block():
     text = build_briefing(rows, "2026-06-24")
     assert "Use this pack ONLY" in text
     assert "first lock: n/a" in text
+
+
+# 18. Selection is human-readable (name + label + side + line), not just the side token.
+def test_selection_human_readable():
+    card = ev_card(side="OVER", line=5.5, player="A. Judge", market="HITS", market_type="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "market_label": "Hits O/U",
+        }
+    ]
+    sel = make_row(card, ev)["selection"]
+    assert "A. Judge" in sel and "OVER" in sel and "5.5" in sel
+    assert sel != "OVER"
+
+
+# 19. Public money / money% read the real card keys (percentage / money).
+def test_public_money_fallback_keys():
+    card = ev_card(market_type="MONEYLINE")
+    card["sides"]["OVER"]["public_money"] = {"position": "OVER", "percentage": 20, "money": 99}
+    row = make_row(card, [])
+    assert row["public_money_pct"] == 20
+    assert row["money_pct"] == 99

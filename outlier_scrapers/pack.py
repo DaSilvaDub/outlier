@@ -203,6 +203,25 @@ def _slug(text: str | None) -> str:
     return "".join(ch if ch.isalnum() else "-" for ch in str(text).lower()).strip("-") or "unknown"
 
 
+def _fmt_line(line: Any) -> str:
+    if line in (None, ""):
+        return ""
+    try:
+        f = float(line)
+    except (ValueError, TypeError):
+        return str(line)
+    return str(int(f)) if f == int(f) else str(f)
+
+
+def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
+    """Human-readable selection, e.g. 'A. Judge HITS Over 5.5' / 'Run Line OVER 8.5'."""
+    parts = [str(p) for p in (name, label, side) if p]
+    fl = _fmt_line(line)
+    if fl:
+        parts.append(fl)
+    return " ".join(parts) if parts else (str(side) if side else "")
+
+
 def build_row(
     card: dict[str, Any],
     ev_records: list[dict[str, Any]],
@@ -242,7 +261,9 @@ def build_row(
     row["market_id"] = market_id
     row["market_type"] = market_type
     row["player_id"] = card.get("player_id")
-    row["selection"] = headline_side
+    name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
+    label = ref.get("market_label") or card.get("market_label") or market_token
+    row["selection"] = build_selection(name, label, headline_side, line)
     row["line"] = line
     row["research_leverage"] = get_research_leverage(market_token, scope, sport)
     row["injury_flags"] = injuries.get(str(event_id), "") if event_id else ""
@@ -252,8 +273,8 @@ def build_row(
     row["line_open"] = movement.get("open_line")
     row["line_now"] = movement.get("current_line")
     public_money = side_view.get("public_money") or {}
-    row["public_money_pct"] = public_money.get("public_money_pct")
-    row["money_pct"] = public_money.get("money_pct")
+    row["public_money_pct"] = public_money.get("public_money_pct") or public_money.get("percentage")
+    row["money_pct"] = public_money.get("money_pct") or public_money.get("money")
 
     if ev_summary:
         row["outlier_ev_pct"] = ev_summary.get("best_ev_pct")
