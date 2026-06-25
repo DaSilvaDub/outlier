@@ -56,15 +56,30 @@ python -m outlier_scrapers.insights --league WNBA --all
 python -m outlier_scrapers.line_movement --league MLB --all
 python -m outlier_scrapers.line_movement --league WNBA --all
 python -m outlier_scrapers.cards --league WNBA
-python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --insights --line-movement --cards
+python -m outlier_scrapers.refresh --league MLB --league WNBA --discover --props --insights --line-movement --cards --games --game-line-movement --game-cards
 ```
 
-`--all` is shorthand for `--props --insights --line-movement --cards`, so the
+`--all` is shorthand for `--props --insights --line-movement --cards --games --game-line-movement --game-cards`, so the
 usual one-command run is:
 
 ```powershell
 python -m outlier_scrapers.refresh --league WNBA --all
 ```
+
+## Daily Auto-Refresh and Headless Auth
+
+To automate the daily pipeline, use the `daily_job` orchestrator. It verifies authentication, spawns a headless browser to re-auth if necessary (listening for emailed OTP codes via IMAP), runs the complete explicitly ordered refresh for all given leagues, and finally builds the combined offline Pack.
+
+```powershell
+python -m outlier_scrapers.daily_job --leagues MLB,WNBA
+```
+
+To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
+
+Example Task Scheduler action:
+- **Program/script**: `C:\path\to\your\venv\Scripts\python.exe`
+- **Add arguments**: `-m outlier_scrapers.daily_job --leagues MLB,WNBA`
+- **Start in**: `C:\Users\dasil\OneDrive\Documents\outlier`
 
 ## Triage cards
 

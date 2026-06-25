@@ -20,3 +20,5 @@ packs/
 # Local credentials for headless auth - never commit.
 .env
 *.env
+
+copilot-worktrees/
