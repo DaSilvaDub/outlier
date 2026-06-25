@@ -17,27 +17,36 @@ from .normalizer import normalize_games
 from .paths import league_paths
 from .registry import get_sport_config, supported_leagues, GAME_MARKET_TYPES
 
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Outlier games data")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
     parser.add_argument("--date", help="Target date in YYYY-MM-DD format (default: today local)")
-    parser.add_argument("--days", type=int, default=1, help="Number of days to process from date (default: 1)")
-    parser.add_argument("--include-final", action="store_true", help="Include final/completed events")
+    parser.add_argument(
+        "--days", type=int, default=1, help="Number of days to process from date (default: 1)"
+    )
+    parser.add_argument(
+        "--include-final", action="store_true", help="Include final/completed events"
+    )
     return parser.parse_args(argv)
 
-def _is_event_in_window(event: dict[str, Any], start_date: datetime.date, days: int, include_final: bool) -> bool:
+
+def _is_event_in_window(
+    event: dict[str, Any], start_date: datetime.date, days: int, include_final: bool
+) -> bool:
     status = str(event.get("status") or "").lower()
     if not include_final and status not in ("pregame", "scheduled"):
         return False
-    
+
     start_time_raw = event.get("scheduledTime")
     if not start_time_raw:
         return False
-        
+
     try:
         dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
         dt_local = dt.astimezone()
@@ -46,6 +55,7 @@ def _is_event_in_window(event: dict[str, Any], start_date: datetime.date, days: 
         return start_date <= event_date <= end_date
     except ValueError:
         return False
+
 
 def export_games_for_league(
     client: OutlierApiClient,
@@ -57,17 +67,17 @@ def export_games_for_league(
 ) -> dict[str, Any]:
     config = get_sport_config(league)
     paths = league_paths(config.league_id)
-    
+
     if target_date is None:
         target_date = datetime.now().astimezone().date()
-        
+
     schedule = client.fetch_schedule(config.league_id)
     events = schedule.get("events")
     if not isinstance(events, list):
         events = []
-        
+
     target_events = [e for e in events if _is_event_in_window(e, target_date, days, include_final)]
-    
+
     events_payloads: list[dict[str, Any]] = []
     seen_team_ids: set[str] = set()
     injuries_by_team: dict[str, list[dict[str, Any]]] = {}
@@ -75,16 +85,20 @@ def export_games_for_league(
     markets_step_errors = 0
 
     def _record_error(step: str, event_id: str, exc: Exception, **extra: Any) -> None:
-        fetch_errors.append(
-            {"step": step, "event_id": event_id, "error": str(exc)[:200], **extra}
-        )
+        fetch_errors.append({"step": step, "event_id": event_id, "error": str(exc)[:200], **extra})
 
     for event in target_events:
         event_id = str(event.get("eventId") or event.get("id") or "")
         if not event_id:
             continue
 
-        event_payload = {"eventId": event_id, "markets": [], "insights": [], "matchup": {}, "injuries": []}
+        event_payload = {
+            "eventId": event_id,
+            "markets": [],
+            "insights": [],
+            "matchup": {},
+            "injuries": [],
+        }
 
         # 1. Matchup
         try:
@@ -124,21 +138,20 @@ def export_games_for_league(
                     # Injury player items carry no teamId of their own, so stamp
                     # it on each one — normalize_games keys context.teams by it.
                     event_payload["injuries"].extend(
-                        {**player, "teamId": team_id}
-                        for player in injuries_by_team[team_id]
+                        {**player, "teamId": team_id} for player in injuries_by_team[team_id]
                     )
 
         events_payloads.append(event_payload)
-        
+
     # Write raw output
     raw_payload = {
         "schedule": schedule,
         "events": events_payloads,
-        "generated_at": datetime.now().astimezone().isoformat()
+        "generated_at": datetime.now().astimezone().isoformat(),
     }
     raw_path = paths.timestamped(paths.raw, "games_raw")
     write_json(raw_path, raw_payload)
-    
+
     # Normalize
     normalized = normalize_games(
         config=config,
@@ -146,11 +159,11 @@ def export_games_for_league(
         events_payloads=events_payloads,
         source_url="api",
     )
-    
+
     latest_path = paths.normalized / f"{config.league_id.lower()}_games_latest.json"
     write_json(latest_path, normalized)
     write_json(paths.timestamped(paths.normalized, "games"), normalized)
-    
+
     # Enrichment file for player cards
     enrichment_map: dict[str, dict[str, Any]] = {}
     for event_data in events_payloads:
@@ -169,21 +182,21 @@ def export_games_for_league(
                                     break
                         if not public_money:
                             public_money = outcome.get("publicMoney")
-                            
+
                         enrichment_map[outcome_id] = {
                             "per_book_odds": outcome.get("odds") or [],
-                            "public_money": public_money
+                            "public_money": public_money,
                         }
-                        
+
     enrichment_payload = {
         "generated_at": normalized["generated_at"],
         "league": config.league_id,
-        "enrichment": enrichment_map
+        "enrichment": enrichment_map,
     }
     enrichment_path = paths.normalized / f"{config.league_id.lower()}_games_enrichment_latest.json"
     write_json(enrichment_path, enrichment_payload)
     write_json(paths.timestamped(paths.normalized, "games_enrichment"), enrichment_payload)
-    
+
     # Status contract mirrors line_movement: ok / partial / error. An empty
     # markets result caused by fetch failures is the core-payload failure and is
     # escalated to error; a genuinely empty slate (no errors) stays ok.
@@ -203,6 +216,7 @@ def export_games_for_league(
         "fetch_error_count": len(fetch_errors),
     }
 
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
@@ -210,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     except AuthRequiredError as exc:
         print(f"auth_required: {exc}")
         return 1
-        
+
     target_date = None
     if args.date:
         try:
@@ -225,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             args.league,
             target_date=target_date,
             days=args.days,
-            include_final=args.include_final
+            include_final=args.include_final,
         )
         print(
             f"{args.league} games [{status['status']}]: exported {status['record_count']} records, "
@@ -235,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:
         print(f"{args.league} games: failed ({e})")
         return 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
