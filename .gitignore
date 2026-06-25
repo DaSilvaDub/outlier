@@ -16,3 +16,7 @@ config/api_request_headers.json
 data/*
 !data/.gitkeep
 packs/ 
+
+# Local credentials for headless auth - never commit.
+.env
+*.env
