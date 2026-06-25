@@ -6,6 +6,9 @@ import sys
 import time
 from typing import Any
 
+from .paths import PROJECT_ROOT
+
+
 from .auth import (
     build_cookie_header,
     extract_access_token,
@@ -17,6 +20,17 @@ from .auth import (
 from .browser_helpers import click_first_visible, is_on_props_page, wait_for_visible
 from .paths import otp_code_file, storage_state_file
 from .registry import supported_leagues
+
+
+def load_environment():
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
 
 # Provenance: login/OTP flow adapted from
 # C:\Users\dasil\Dev\GitHub\nba-props-pipeline\scrapers\outlier\Props_outlier_improved.py
@@ -118,10 +132,7 @@ def _try_credential_autofill(page: Any, *, timeout_seconds: int) -> None:
     code_input = wait_for_visible(page, CODE_SELECTORS, timeout=4000)
     if not code_input:
         return
-    code = (
-        os.getenv("OUTLIER_LOGIN_CODE", "").strip()
-        or os.getenv("OUTLIER_OTP_CODE", "").strip()
-    )
+    code = os.getenv("OUTLIER_LOGIN_CODE", "").strip() or os.getenv("OUTLIER_OTP_CODE", "").strip()
     if not code:
         otp_code_file().unlink(missing_ok=True)
         write_otp_status(
@@ -164,7 +175,13 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=headless)
-        context = browser.new_context()
+
+        # Load existing storage state if available
+        context_kwargs = {}
+        if target.exists() and target.stat().st_size > 0:
+            context_kwargs["storage_state"] = str(target)
+
+        context = browser.new_context(**context_kwargs)
         page = context.new_page()
         try:
             page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
@@ -259,6 +276,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_environment()
     args = parse_args(argv)
     return capture_session(
         league=args.league,

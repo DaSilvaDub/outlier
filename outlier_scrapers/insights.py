@@ -19,7 +19,13 @@ from .normalizer import (
 )
 from .paths import league_paths
 from .props import write_json
-from .registry import SportConfig, get_sport_config, normalize_market, normalize_team, supported_leagues
+from .registry import (
+    SportConfig,
+    get_sport_config,
+    normalize_market,
+    normalize_team,
+    supported_leagues,
+)
 
 
 def _resolve_teams(
@@ -42,9 +48,19 @@ def _resolve_teams(
         matchup_raw = f"{away_norm or away_alias} @ {home_norm or home_alias}"
 
     if team_id and team_id == away_id:
-        team, team_raw, opp, opp_raw = away_norm, str(away_alias or "").strip() or None, home_norm, str(home_alias or "").strip() or None
+        team, team_raw, opp, opp_raw = (
+            away_norm,
+            str(away_alias or "").strip() or None,
+            home_norm,
+            str(home_alias or "").strip() or None,
+        )
     elif team_id and team_id == home_id:
-        team, team_raw, opp, opp_raw = home_norm, str(home_alias or "").strip() or None, away_norm, str(away_alias or "").strip() or None
+        team, team_raw, opp, opp_raw = (
+            home_norm,
+            str(home_alias or "").strip() or None,
+            away_norm,
+            str(away_alias or "").strip() or None,
+        )
     else:
         team = team_raw = opp = opp_raw = None
     return team, team_raw, opp, opp_raw, matchup_raw, event
@@ -198,6 +214,7 @@ def export_insights_for_league(client: OutlierApiClient, league: str) -> dict[st
     exported_at = datetime.now().astimezone().isoformat()
     raw_payload = {
         "exported_at": exported_at,
+        "generated_at": datetime.now().astimezone().isoformat(),
         "league": config.league_id,
         "source": "Outlier authenticated API",
         "insights": insights_payload,
@@ -221,6 +238,7 @@ def export_insights_for_league(client: OutlierApiClient, league: str) -> dict[st
     status = {
         "league": config.league_id,
         "status": "ok",
+        "generated_at": datetime.now().astimezone().isoformat(),
         "raw_latest": str(raw_latest),
         "normalized_latest": str(normalized_latest),
         "record_count": normalized["record_count"],
@@ -234,7 +252,9 @@ def export_insights_for_league(client: OutlierApiClient, league: str) -> dict[st
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export standalone Outlier insights")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
-    parser.add_argument("--all", action="store_true", help="Accepted for clarity; the API exports all insights")
+    parser.add_argument(
+        "--all", action="store_true", help="Accepted for clarity; the API exports all insights"
+    )
     return parser.parse_args(argv)
 
 
@@ -266,7 +286,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.league.upper()}: error")
         return 1
 
-    print(f"{status['league']}: exported {status['record_count']} insights {status['subject_type_counts']}")
+    print(
+        f"{status['league']}: exported {status['record_count']} insights {status['subject_type_counts']}"
+    )
     return 0
 
 

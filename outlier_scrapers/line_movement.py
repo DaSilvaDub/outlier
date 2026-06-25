@@ -31,7 +31,15 @@ DEFAULT_WORKERS = 4
 STALE_PROPS_MAX_AGE_HOURS = 12.0
 DEFAULT_RETRY_403_COOLDOWN_SECONDS = 15.0
 DEFAULT_RETRY_403_WORKERS = 1
-EV_METHOD_PRIORITY = ("AVERAGE", "MULTIPLICATIVE", "ADDITIVE", "SHIN", "POWER", "PROBIT", "WORSTCASE")
+EV_METHOD_PRIORITY = (
+    "AVERAGE",
+    "MULTIPLICATIVE",
+    "ADDITIVE",
+    "SHIN",
+    "POWER",
+    "PROBIT",
+    "WORSTCASE",
+)
 
 
 class StalePropsError(ValueError):
@@ -82,7 +90,9 @@ def _side_for_source(value: Any, proposition: str = "", source: str = "props") -
     return token if (not valid or token in valid) else ""
 
 
-def _ordered_market_ids(props_latest: dict[str, Any], limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]]]:
+def _ordered_market_ids(
+    props_latest: dict[str, Any], limit: int | None = None
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
     records = props_latest.get("records")
     if not isinstance(records, list):
         return [], {}
@@ -139,7 +149,9 @@ def _props_freshness(
     generated_text = generated_at if isinstance(generated_at, str) else None
     parsed = _parse_props_generated_at(generated_text)
     if parsed is None:
-        reason = "missing props generated_at" if not generated_text else "invalid props generated_at"
+        reason = (
+            "missing props generated_at" if not generated_text else "invalid props generated_at"
+        )
         return PropsFreshness(
             generated_at=generated_text,
             age_hours=None,
@@ -245,7 +257,10 @@ def _fetch_market_payloads(
                 fetch_errors.append(_fetch_error(market_id, exc))
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(client.fetch_market, market_id): market_id for market_id in market_ids}
+            futures = {
+                executor.submit(client.fetch_market, market_id): market_id
+                for market_id in market_ids
+            }
             for future in as_completed(futures):
                 market_id = futures[future]
                 try:
@@ -264,7 +279,9 @@ def load_props_market_source(
     now: datetime | None = None,
 ) -> PropsMarketSource:
     config = get_sport_config(league)
-    path = league_paths(config.league_id).normalized / f"{config.league_id.lower()}_props_latest.json"
+    path = (
+        league_paths(config.league_id).normalized / f"{config.league_id.lower()}_props_latest.json"
+    )
     if not path.exists():
         raise FileNotFoundError(
             f"Missing props file {path}. Run python -m outlier_scrapers.props --league {config.league_id} --all first."
@@ -280,7 +297,6 @@ def load_props_market_source(
     )
 
 
-
 def load_games_market_source(
     league: str,
     limit: int | None = None,
@@ -288,12 +304,15 @@ def load_games_market_source(
     now: datetime | None = None,
 ) -> PropsMarketSource:
     config = get_sport_config(league)
-    path = league_paths(config.league_id).normalized / f"{config.league_id.lower()}_games_latest.json"
+    path = (
+        league_paths(config.league_id).normalized / f"{config.league_id.lower()}_games_latest.json"
+    )
     if not path.exists():
         raise FileNotFoundError(
             f"Missing games file {path}. Run python -m outlier_scrapers.refresh --league {config.league_id} --games first."
         )
     import json
+
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     market_ids_set = set()
@@ -322,10 +341,12 @@ def load_games_market_source(
         freshness=freshness,
     )
 
-def load_props_market_ids(league: str, limit: int | None = None) -> tuple[list[str], dict[str, dict[str, Any]], str]:
+
+def load_props_market_ids(
+    league: str, limit: int | None = None
+) -> tuple[list[str], dict[str, dict[str, Any]], str]:
     source = load_props_market_source(league, limit=limit)
     return source.market_ids, source.context, source.path
-
 
 
 def _market_context(
@@ -342,7 +363,9 @@ def _market_context(
     scope = detect_scope(market_label, market_raw)
     canonical_market = None
     if scope == "full_game":
-        canonical_market = normalize_market(config, proposition) or normalize_market(config, market_raw)
+        canonical_market = normalize_market(config, proposition) or normalize_market(
+            config, market_raw
+        )
 
     return {
         "event_id": market.get("eventId") or props_context.get("event_id"),
@@ -368,7 +391,9 @@ def _market_context(
     }
 
 
-def _current_outcomes_by_side(market: dict[str, Any], proposition: str = "", source: str = "props") -> dict[str, dict[str, Any]]:
+def _current_outcomes_by_side(
+    market: dict[str, Any], proposition: str = "", source: str = "props"
+) -> dict[str, dict[str, Any]]:
     outcomes = market.get("outcomes") if isinstance(market.get("outcomes"), list) else []
     by_side: dict[str, dict[str, Any]] = {}
     for outcome in outcomes:
@@ -383,12 +408,16 @@ def _current_outcomes_by_side(market: dict[str, Any], proposition: str = "", sou
         if not side:
             continue
         existing = by_side.get(side)
-        if existing is None or (outcome.get("primary") is True and existing.get("primary") is not True):
+        if existing is None or (
+            outcome.get("primary") is True and existing.get("primary") is not True
+        ):
             by_side[side] = outcome
     return by_side
 
 
-def _history_by_side(payload: dict[str, Any], proposition: str = "", source: str = "props") -> dict[str, list[dict[str, Any]]]:
+def _history_by_side(
+    payload: dict[str, Any], proposition: str = "", source: str = "props"
+) -> dict[str, list[dict[str, Any]]]:
     market_history = payload.get("marketHistory")
     movements = []
     if isinstance(market_history, dict) and isinstance(market_history.get("marketMovements"), list):
@@ -488,7 +517,9 @@ def _current_outcomes_by_id(market: dict[str, Any]) -> dict[str, dict[str, Any]]
         if not outcome_id:
             continue
         existing = by_id.get(outcome_id)
-        if existing is None or (outcome.get("primary") is True and existing.get("primary") is not True):
+        if existing is None or (
+            outcome.get("primary") is True and existing.get("primary") is not True
+        ):
             by_id[outcome_id] = outcome
     return by_id
 
@@ -637,7 +668,9 @@ def normalize_ev_records(
     config = get_sport_config(league)
     market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
     context = _market_context(payload, config, props_context)
-    proposition = context.get("market_raw") or market.get("proposition") or payload.get("proposition") or ""
+    proposition = (
+        context.get("market_raw") or market.get("proposition") or payload.get("proposition") or ""
+    )
     current_by_id = _current_outcomes_by_id(market)
     current_by_side = _current_outcomes_by_side(market, proposition, source)
 
@@ -725,7 +758,9 @@ def normalize_market_detail(
     config = get_sport_config(league)
     market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
     context = _market_context(payload, config, props_context)
-    proposition = context.get("market_raw") or market.get("proposition") or payload.get("proposition") or ""
+    proposition = (
+        context.get("market_raw") or market.get("proposition") or payload.get("proposition") or ""
+    )
     current_by_side = _current_outcomes_by_side(market, proposition, source)
     current_by_id = _current_outcomes_by_id(market)
     ev_by_outcome_id = _ev_outcomes_by_id(market)
@@ -733,7 +768,11 @@ def normalize_market_detail(
     history_by_side = _history_by_side(payload, proposition, source)
 
     all_sides = set(current_by_side.keys()) | {s for s, h in history_by_side.items() if h}
-    sides = sorted([side for side in SIDES if side in all_sides]) if source == "props" else sorted(all_sides)
+    sides = (
+        sorted([side for side in SIDES if side in all_sides])
+        if source == "props"
+        else sorted(all_sides)
+    )
 
     rows: list[dict[str, Any]] = []
     for side in sides:
@@ -803,9 +842,13 @@ def normalize_market_detail(
                 "books": _books_from_outcome(current),
                 "book_count": len(_books_from_outcome(current)),
                 "ev_available": ev_outcome is not None,
-                "ev_outcome_id": str(ev_outcome.get("outcomeId") or "").strip() if ev_outcome else None,
+                "ev_outcome_id": str(ev_outcome.get("outcomeId") or "").strip()
+                if ev_outcome
+                else None,
                 "ev_book_count": len(ev_book_rows),
-                "ev_books": [str(row.get("book") or row.get("book_raw") or "") for row in ev_book_rows],
+                "ev_books": [
+                    str(row.get("book") or row.get("book_raw") or "") for row in ev_book_rows
+                ],
                 **_ev_metric_fields(ev_outcome),
                 "movements": history,
                 "sport_context": {
@@ -903,7 +946,11 @@ def build_line_movement_payload(
 def _status_report_name(source: str) -> str:
     """Status report filename for a feed. Games get a ``games_`` prefix; props
     keep the unprefixed name used by the success path."""
-    return "games_line_movement_status_latest.json" if source == "games" else "line_movement_status_latest.json"
+    return (
+        "games_line_movement_status_latest.json"
+        if source == "games"
+        else "line_movement_status_latest.json"
+    )
 
 
 def export_line_movement_for_league(
@@ -982,9 +1029,7 @@ def export_line_movement_for_league(
         retry_403_residual_errors = len(retry_errors)
 
     fetch_errors = [
-        error
-        for error in first_pass_errors
-        if not (retry_failed_403 and _is_http_403_error(error))
+        error for error in first_pass_errors if not (retry_failed_403 and _is_http_403_error(error))
     ]
     fetch_errors.extend(retry_errors)
     retry_403_summary = {
@@ -996,7 +1041,9 @@ def export_line_movement_for_league(
         "retry_403_workers": retry_403_worker_count if retry_failed_403 else 0,
     }
 
-    market_payloads = [payloads_by_id[market_id] for market_id in market_ids if market_id in payloads_by_id]
+    market_payloads = [
+        payloads_by_id[market_id] for market_id in market_ids if market_id in payloads_by_id
+    ]
 
     exported_at = datetime.now().astimezone().isoformat()
     raw_payload = {
@@ -1010,9 +1057,15 @@ def export_line_movement_for_league(
         "markets": market_payloads,
         "fetch_errors": fetch_errors,
     }
-    prefix = f"{config.league_id.lower()}_{source}_" if source == "games" else f"{config.league_id.lower()}_"
+    prefix = (
+        f"{config.league_id.lower()}_{source}_"
+        if source == "games"
+        else f"{config.league_id.lower()}_"
+    )
     raw_latest = paths.raw / f"{prefix}line_movement_raw_latest.json"
-    raw_archive = paths.timestamped(paths.raw, f"{source}_line_movement_raw" if source == "games" else "line_movement_raw")
+    raw_archive = paths.timestamped(
+        paths.raw, f"{source}_line_movement_raw" if source == "games" else "line_movement_raw"
+    )
     write_json(raw_latest, raw_payload)
     write_json(raw_archive, raw_payload)
 
@@ -1027,7 +1080,9 @@ def export_line_movement_for_league(
         source=source,
     )
     normalized_latest = paths.normalized / f"{prefix}line_movement_latest.json"
-    normalized_archive = paths.timestamped(paths.normalized, f"{source}_line_movement" if source == "games" else "line_movement")
+    normalized_archive = paths.timestamped(
+        paths.normalized, f"{source}_line_movement" if source == "games" else "line_movement"
+    )
     write_json(normalized_latest, normalized)
     write_json(normalized_archive, normalized)
 
@@ -1035,6 +1090,7 @@ def export_line_movement_for_league(
     status = {
         "league": config.league_id,
         "status": status_value,
+        "generated_at": datetime.now().astimezone().isoformat(),
         "raw_latest": str(raw_latest),
         "normalized_latest": str(normalized_latest),
         "props_latest": props_latest,
@@ -1061,10 +1117,19 @@ def export_line_movement_for_league(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export Outlier market-detail line movement")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
-    parser.add_argument("--source", choices=["props", "games"], default="props", help="Source payload to read markets from")
-    parser.add_argument("--all", action="store_true", help="Accepted for clarity; exports all market IDs")
+    parser.add_argument(
+        "--source",
+        choices=["props", "games"],
+        default="props",
+        help="Source payload to read markets from",
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Accepted for clarity; exports all market IDs"
+    )
     parser.add_argument("--limit", type=int, help="Limit unique market IDs for a smoke run")
-    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent market-detail fetches")
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent market-detail fetches"
+    )
     parser.add_argument(
         "--no-retry-failed-403",
         action="store_true",

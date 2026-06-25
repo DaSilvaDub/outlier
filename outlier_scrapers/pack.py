@@ -498,7 +498,19 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
     requested = report.get("markets_requested")
     errors = report.get("fetch_error_count") or 0
     age = report.get("props_age_hours")
+    gen_at = report.get("generated_at")
     reasons: list[str] = []
+
+    if gen_at:
+        try:
+            dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
+            if (datetime.now().astimezone() - dt).total_seconds() > 6 * 3600:
+                reasons.append("stale (>6h old)")
+        except Exception:
+            pass
+    else:
+        reasons.append("stale (missing timestamp)")
+
     if status != "ok":
         reasons.append(f"status={status}")
     if report.get("props_is_stale"):

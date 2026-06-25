@@ -203,6 +203,13 @@ def export_games_for_league(
     record_count = normalized["record_count"]
     if markets_step_errors and record_count == 0:
         status_value = "error"
+        return {
+            "status": status_value,
+            "record_count": record_count,
+            "enrichment_count": len(enrichment_map),
+            "fetch_errors": fetch_errors,
+            "fetch_error_count": len(fetch_errors),
+        }
     elif fetch_errors:
         status_value = "partial"
     else:
@@ -210,6 +217,7 @@ def export_games_for_league(
 
     return {
         "status": status_value,
+        "generated_at": datetime.now().astimezone().isoformat(),
         "record_count": record_count,
         "enrichment_count": len(enrichment_map),
         "fetch_errors": fetch_errors,

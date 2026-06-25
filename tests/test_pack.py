@@ -473,6 +473,22 @@ def test_public_money_fallback_keys():
 def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
     reports = tmp_path / "data" / "MLB" / "reports"
     reports.mkdir(parents=True)
+    from datetime import datetime
+
+    report = {
+        "status": "ok",
+        "markets_fetched": 10,
+        "markets_requested": 10,
+        "props_age_hours": 0.5,
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    from outlier_scrapers.pack import _summarize_lm_status
+
+    ok, line = _summarize_lm_status(report, "MLB props line-movement")
+    assert ok is True
+    assert "OK" in line
+    assert "CAVEAT" not in line
+
     (reports / "games_line_movement_status_latest.json").write_text(
         json.dumps(
             {
@@ -481,6 +497,7 @@ def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
                 "markets_requested": 8,
                 "fetch_error_count": 0,
                 "props_is_stale": False,
+                "generated_at": datetime.now().astimezone().isoformat(),
             }
         )
     )
@@ -493,6 +510,7 @@ def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
                 "fetch_error_count": 3,
                 "props_is_stale": True,
                 "props_age_hours": 67.0,
+                "generated_at": datetime.now().astimezone().isoformat(),
             }
         )
     )
@@ -518,11 +536,56 @@ def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
     assert "Freshness / Coverage" in build_briefing([], "2026-06-24", section)
 
 
+def test_summarize_lm_status_stale_generated_at():
+    from datetime import datetime, timedelta
+    from outlier_scrapers.pack import _summarize_lm_status
+
+    # 7 hours ago
+    stale_dt = datetime.now().astimezone() - timedelta(hours=7)
+
+    report = {
+        "status": "ok",
+        "markets_fetched": 10,
+        "markets_requested": 10,
+        "props_age_hours": 0.5,
+        "generated_at": stale_dt.isoformat(),
+    }
+
+    ok, line = _summarize_lm_status(report, "MLB games line-movement")
+    assert ok is False
+    assert "CAVEAT" in line
+    assert "stale (>6h old)" in line
+
+
+def test_summarize_lm_status_missing_generated_at():
+    from outlier_scrapers.pack import _summarize_lm_status
+
+    report = {
+        "status": "ok",
+        "markets_fetched": 10,
+        "markets_requested": 10,
+        "props_age_hours": 0.5,
+    }
+
+    ok, line = _summarize_lm_status(report, "MLB games line-movement")
+    assert ok is False
+    assert "CAVEAT" in line
+    assert "missing timestamp" in line
+
+
 # 21. All-clean streams produce no UNRELIABLE guidance line.
 def test_freshness_section_all_ok(tmp_path, monkeypatch):
+    from datetime import datetime
+
     reports = tmp_path / "reports"
     reports.mkdir(parents=True)
-    clean = {"status": "ok", "markets_fetched": 8, "markets_requested": 8, "fetch_error_count": 0}
+    clean = {
+        "status": "ok",
+        "markets_fetched": 8,
+        "markets_requested": 8,
+        "fetch_error_count": 0,
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
     (reports / "games_line_movement_status_latest.json").write_text(json.dumps(clean))
     (reports / "line_movement_status_latest.json").write_text(json.dumps(clean))
 

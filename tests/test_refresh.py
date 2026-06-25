@@ -90,7 +90,7 @@ def test_refresh_flags_games_error_and_skips_game_cards(monkeypatch, capsys):
     monkeypatch.setattr(refresh_mod, "export_games_for_league", games_error)
     monkeypatch.setattr(refresh_mod, "export_game_cards_for_league", game_cards)
 
-    result = refresh_mod.main(["--league", "MLB", "--games"])
+    result = refresh_mod.main(["--league", "MLB", "--games", "--game-cards"])
 
     captured = capsys.readouterr()
     assert result == 1
@@ -104,13 +104,72 @@ def test_refresh_cards_only_does_not_require_api_client(monkeypatch, capsys):
 
     monkeypatch.setattr(refresh_mod, "OutlierApiClient", boom)
 
+    calls = {"game_cards": 0}
+
     def fake_cards(league):
         return {"coverage": {"cards_total": 5, "board_a_cards": 2, "board_b_cards": 3}}
 
+    def fake_game_cards(league):
+        calls["game_cards"] += 1
+        return {"coverage": {"cards_total": 5}}
+
     monkeypatch.setattr(refresh_mod, "export_cards_for_league", fake_cards)
+    monkeypatch.setattr(refresh_mod, "export_game_cards_for_league", fake_game_cards)
 
     result = refresh_mod.main(["--league", "WNBA", "--cards"])
 
     captured = capsys.readouterr()
     assert result == 0
     assert "WNBA cards: exported 5 cards (Board A=2, Board B=3)" in captured.out
+    assert calls["game_cards"] == 0
+
+
+def test_refresh_game_cards_only_does_not_require_api_client(monkeypatch, capsys):
+    calls = {"cards": 0}
+
+    def boom(*args, **kwargs):
+        raise AssertionError("API client must not be constructed for --game-cards only")
+
+    monkeypatch.setattr(refresh_mod, "OutlierApiClient", boom)
+
+    def fake_cards(league):
+        calls["cards"] += 1
+        return {"coverage": {"cards_total": 5, "board_a_cards": 2, "board_b_cards": 3}}
+
+    def fake_game_cards(league):
+        return {"coverage": {"cards_total": 8}}
+
+    monkeypatch.setattr(refresh_mod, "export_cards_for_league", fake_cards)
+    monkeypatch.setattr(refresh_mod, "export_game_cards_for_league", fake_game_cards)
+
+    result = refresh_mod.main(["--league", "WNBA", "--game-cards"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WNBA game cards: exported 8 cards" in captured.out
+    assert calls["cards"] == 0
+
+
+def test_refresh_skips_game_cards_when_game_line_movement_fails(monkeypatch, capsys):
+    """A game line-movement export that raises an exception must set the failed flag
+    and skip game cards rebuild (Finding #2)."""
+    calls = {"game_cards": 0}
+
+    monkeypatch.setattr(refresh_mod, "OutlierApiClient", FakeClient)
+
+    def fail_game_lm(client, league, source=None):
+        raise RuntimeError("temporary game LM failure")
+
+    def game_cards(league):
+        calls["game_cards"] += 1
+        return {"coverage": {"cards_total": 0}}
+
+    monkeypatch.setattr(refresh_mod, "export_line_movement_for_league", fail_game_lm)
+    monkeypatch.setattr(refresh_mod, "export_game_cards_for_league", game_cards)
+
+    result = refresh_mod.main(["--league", "MLB", "--game-line-movement", "--game-cards"])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "MLB game line movement: failed" in captured.out
+    assert calls["game_cards"] == 0

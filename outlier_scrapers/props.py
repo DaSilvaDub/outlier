@@ -51,6 +51,7 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
     status = {
         "league": config.league_id,
         "status": "ok",
+        "generated_at": datetime.now().astimezone().isoformat(),
         "raw_latest": str(raw_latest),
         "normalized_latest": str(normalized_latest),
         "record_count": normalized["record_count"],
@@ -62,7 +63,9 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export standalone Outlier props")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
-    parser.add_argument("--all", action="store_true", help="Accepted for compatibility; API exports all")
+    parser.add_argument(
+        "--all", action="store_true", help="Accepted for compatibility; API exports all"
+    )
     return parser.parse_args(argv)
 
 
@@ -100,4 +103,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
