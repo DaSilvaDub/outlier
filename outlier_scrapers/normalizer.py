@@ -166,7 +166,8 @@ def build_schedule_index(
             "away_team_id": str(away_payload.get("teamId") or away_payload.get("id") or "").strip(),
             "home_team_id": str(home_payload.get("teamId") or home_payload.get("id") or "").strip(),
             "starts_at": (
-                event.get("startTime")
+                event.get("scheduledTime")
+                or event.get("startTime")
                 or event.get("startDate")
                 or event.get("date")
                 or event.get("scheduled")
@@ -259,7 +260,9 @@ def _extract_team_context(
 
 def _books_from_outcome(outcome: dict[str, Any]) -> list[dict[str, Any]]:
     book_odds = outcome.get("bookOdds") if isinstance(outcome.get("bookOdds"), dict) else {}
-    ordered_books = outcome.get("books") if isinstance(outcome.get("books"), list) else list(book_odds.keys())
+    ordered_books = (
+        outcome.get("books") if isinstance(outcome.get("books"), list) else list(book_odds.keys())
+    )
     books: list[dict[str, Any]] = []
     for book in ordered_books:
         book_token = str(book or "").strip()
@@ -269,7 +272,13 @@ def _books_from_outcome(outcome: dict[str, Any]) -> list[dict[str, Any]]:
         raw_odds = raw_book.get("odds") if isinstance(raw_book, dict) else None
         if raw_odds in (None, ""):
             continue
-        books.append({"book": normalize_book_label(book_token), "odds": _to_int(raw_odds), "odds_raw": str(raw_odds)})
+        books.append(
+            {
+                "book": normalize_book_label(book_token),
+                "odds": _to_int(raw_odds),
+                "odds_raw": str(raw_odds),
+            }
+        )
     return books
 
 
@@ -431,7 +440,11 @@ def build_normalized_payload(
     source_url: str,
 ) -> dict[str, Any]:
     rows = normalize_player_props(props_payload, schedule_payload, config)
-    pagination = props_payload.get("_page_summary") if isinstance(props_payload.get("_page_summary"), dict) else None
+    pagination = (
+        props_payload.get("_page_summary")
+        if isinstance(props_payload.get("_page_summary"), dict)
+        else None
+    )
     return {
         "generated_at": datetime.now().astimezone().isoformat(),
         "league": config.league_id,
@@ -484,9 +497,12 @@ def normalize_games(
         matchup = event_data.get("matchup")
         if isinstance(matchup, dict):
             events_context[event_id] = {
-                "matchup_type": matchup.get("matchupType"),
-                "team_rankings": matchup.get("teamRankings") or [],
-                "lineups": matchup.get("lineups") or []
+                # Payload key is snake_case ("matchup_type"). The matchup
+                # endpoint does NOT return a "teamRankings" field — it only
+                # provides "lineups", a {home, away} dict each carrying
+                # teamId/alias/status/players (verified live 2026-06-22).
+                "matchup_type": matchup.get("matchup_type"),
+                "lineups": matchup.get("lineups") or {},
             }
 
         insights = event_data.get("insights")
@@ -515,7 +531,9 @@ def normalize_games(
 
             canonical_market = None
             if scope == "full_game":
-                canonical_market = normalize_market(config, proposition) or normalize_market(config, market_raw)
+                canonical_market = normalize_market(config, proposition) or normalize_market(
+                    config, market_raw
+                )
 
             market_id = str(market.get("marketId") or "")
 
@@ -524,7 +542,9 @@ def normalize_games(
                     continue
                 outcome_id = str(outcome.get("outcomeId") or outcome.get("id") or "")
 
-                position = str(outcome.get("position") or outcome.get("label") or "").strip().upper()
+                position = (
+                    str(outcome.get("position") or outcome.get("label") or "").strip().upper()
+                )
                 line = _to_float(outcome.get("line"))
 
                 team, team_raw = None, None
@@ -611,4 +631,3 @@ def normalize_games(
             "dedupe_key": "league+event_id+market_id+outcome_id",
         },
     }
-

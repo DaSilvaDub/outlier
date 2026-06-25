@@ -67,12 +67,14 @@ def test_best_american_price_reads_normalized_book_odds_key():
     row = {"books": [{"book": "DraftKings", "odds": -150}, {"book": "FanDuel", "odds": -140}]}
     assert _best_american_price(row) == -140  # max (least juice)
 
+
 def test_game_sides():
     assert set(game_sides("SPREAD")) == {"HOME", "AWAY"}
     assert set(game_sides("MONEYLINE")) == {"HOME", "AWAY"}
     assert set(game_sides("MONEYLINE_THREE_WAY")) == {"HOME", "AWAY", "DRAW"}
     assert set(game_sides("TOTAL")) == {"OVER", "UNDER"}
     assert game_sides("WINNING_MARGIN") == ()
+
 
 def test_normalize_games_preserves_nway_margin():
     config = get_sport_config("MLB")
@@ -100,18 +102,21 @@ def test_normalize_games_preserves_nway_margin():
                         {"id": "o2", "position": "Home by 2+"},
                         {"id": "o3", "position": "Away by 1"},
                         {"id": "o4", "position": "Away by 2+"},
-                    ]
+                    ],
                 }
-            ]
+            ],
         }
     ]
-    res = normalize_games(config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api")
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
     records = res["records"]
     assert len(records) == 4
     for r in records:
         assert r["market_id"] == "m1"
         assert r["proposition"] == "WINNING_MARGIN"
         assert r["position"] in ["HOME BY 1", "HOME BY 2+", "AWAY BY 1", "AWAY BY 2+"]
+
 
 def test_normalize_games_team_prop_resolution():
     config = get_sport_config("MLB")
@@ -136,7 +141,7 @@ def test_normalize_games_team_prop_resolution():
                     "teamId": "h1",
                     "outcomes": [
                         {"id": "o1", "position": "OVER", "line": 4.5},
-                    ]
+                    ],
                 },
                 {
                     "marketId": "m2",
@@ -145,18 +150,21 @@ def test_normalize_games_team_prop_resolution():
                     "label": "Red Sox Total Points",
                     "outcomes": [
                         {"id": "o2", "position": "OVER", "line": 3.5},
-                    ]
-                }
-            ]
+                    ],
+                },
+            ],
         }
     ]
-    res = normalize_games(config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api")
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
     records = res["records"]
     assert len(records) == 2
     r1 = next(r for r in records if r["market_id"] == "m1")
     r2 = next(r for r in records if r["market_id"] == "m2")
     assert "Yankees" in r1["team_raw"] or r1["team"] == "NYY"
     assert "Red Sox" in r2["team_raw"] or r2["team"] == "BOS"
+
 
 def test_scope_metadata_preserved():
     config = get_sport_config("MLB")
@@ -170,15 +178,18 @@ def test_scope_metadata_preserved():
                     "marketType": "GAMELINE",
                     "proposition": "SPREAD",
                     "label": "1st Half Spread",
-                    "outcomes": [{"id": "o1", "position": "Home"}]
+                    "outcomes": [{"id": "o1", "position": "Home"}],
                 }
-            ]
+            ],
         }
     ]
-    res = normalize_games(config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api")
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
     records = res["records"]
     assert len(records) == 1
     assert records[0]["scope"] == "first_half"
+
 
 def test_build_game_cards_payload_generates_sides(monkeypatch):
     from outlier_scrapers.cards import build_game_cards_payload
@@ -197,7 +208,7 @@ def test_build_game_cards_payload_generates_sides(monkeypatch):
                 "line": -1.5,
                 "best_odds": 150,
                 "books": [{"book": "DraftKings", "american": 150}],
-                "public_money": {"position": "HOME", "percentage": 60, "money": 55}
+                "public_money": {"position": "HOME", "percentage": 60, "money": 55},
             },
             {
                 "league": "MLB",
@@ -209,21 +220,21 @@ def test_build_game_cards_payload_generates_sides(monkeypatch):
                 "line": 1.5,
                 "best_odds": -170,
                 "books": [{"book": "DraftKings", "american": -170}],
-                "public_money": {"position": "AWAY", "percentage": 40, "money": 45}
-            }
+                "public_money": {"position": "AWAY", "percentage": 40, "money": 45},
+            },
         ],
-        "context": {}
+        "context": {},
     }
-    
+
     def mock_load_latest(lg, name):
         if name == "games":
             return games_payload
         return None
-        
+
     monkeypatch.setattr("outlier_scrapers.cards.load_latest", mock_load_latest)
-    
+
     payload = build_game_cards_payload("MLB")
-    
+
     assert len(payload["board_b"]) == 1
     card = payload["board_b"][0]
     assert card["card_id"] == "m_spread"
@@ -286,8 +297,16 @@ class FakeGamesClient:
                         "proposition": "MONEYLINE",
                         "label": "Moneyline",
                         "outcomes": [
-                            {"id": "o_home", "position": "HOME", "odds": [{"book": "DraftKings", "american": -150}]},
-                            {"id": "o_away", "position": "AWAY", "odds": [{"book": "DraftKings", "american": 130}]},
+                            {
+                                "id": "o_home",
+                                "position": "HOME",
+                                "odds": [{"book": "DraftKings", "american": -150}],
+                            },
+                            {
+                                "id": "o_away",
+                                "position": "AWAY",
+                                "odds": [{"book": "DraftKings", "american": 130}],
+                            },
                         ],
                     }
                 ]
@@ -432,3 +451,104 @@ def test_prop_group_key_shape_unchanged():
 
     ident = {"player": "Aaron Judge", "player_id": "p1", "market": "H", "scope": "full_game"}
     assert _group_key(ident) == "p1|H|full_game"
+
+
+# --------------------------------------------------------------------------- #
+# Matchup + injuries context (live-verified field shapes 2026-06-22)
+# --------------------------------------------------------------------------- #
+
+
+def test_normalize_games_matchup_and_injuries_context():
+    """matchup_type is snake_case in the payload (not matchupType), there is no
+    teamRankings field, and injury players carry no teamId of their own. Verify
+    the normalizer reads matchup_type, keeps lineups, drops team_rankings, and
+    keys injuries by the stamped teamId."""
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "id": "e1",
+                "status": "scheduled",
+                "home": {"id": "h1", "teamId": "h1", "name": "Yankees"},
+                "away": {"id": "a1", "teamId": "a1", "name": "Red Sox"},
+            }
+        ]
+    }
+    events_payloads = [
+        {
+            "eventId": "e1",
+            "matchup": {
+                "matchup_type": "BasketballMatchup",
+                "lineups": {"home": {"teamId": "h1"}, "away": {"teamId": "a1"}},
+            },
+            "injuries": [
+                {
+                    "playerId": "p1",
+                    "lastName": "Judge",
+                    "teamId": "h1",
+                    "injury": {"status": "OUT"},
+                },
+            ],
+            "markets": [],
+        }
+    ]
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
+    ctx = res["context"]
+    assert ctx["events"]["e1"]["matchup_type"] == "BasketballMatchup"
+    assert "team_rankings" not in ctx["events"]["e1"]
+    assert ctx["events"]["e1"]["lineups"]["home"]["teamId"] == "h1"
+    assert ctx["teams"]["h1"]["injuries"][0]["playerId"] == "p1"
+
+
+def test_schedule_index_reads_scheduled_time():
+    """Schedule events expose the lock time as ``scheduledTime`` (startTime is
+    absent live); event_starts_at depends on it for the pack's date filtering."""
+    from outlier_scrapers.normalizer import build_schedule_index
+
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "id": "e1",
+                "eventId": "e1",
+                "scheduledTime": "2026-06-23T01:38:00+00:00",
+                "home": {"id": "h1", "name": "Yankees"},
+                "away": {"id": "a1", "name": "Red Sox"},
+            }
+        ]
+    }
+    idx = build_schedule_index(schedule, config)
+    assert idx["e1"]["starts_at"] == "2026-06-23T01:38:00+00:00"
+
+
+def test_games_export_stamps_injury_team_id(tmp_path, monkeypatch):
+    """End-to-end: the injuries endpoint returns players with no teamId, so
+    export_games_for_league must stamp it for context.teams to populate."""
+    import json
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.games import export_games_for_league
+    from outlier_scrapers.paths import league_paths
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+
+    class InjuryClient(FakeGamesClient):
+        def fetch_event_matchup(self, event_id):
+            return {"matchup_type": "BasketballMatchup", "lineups": {"home": {"teamId": "h1"}}}
+
+        def fetch_team_injuries(self, league_id, team_id):
+            return {
+                "players": [{"playerId": "p1", "lastName": "Judge", "injury": {"status": "OUT"}}]
+            }
+
+    client = InjuryClient()
+    client.fetch_schedule("MLB")  # prime target_date
+    export_games_for_league(client, "MLB", target_date=client.target_date)
+
+    latest = league_paths("MLB").normalized / "mlb_games_latest.json"
+    data = json.loads(latest.read_text(encoding="utf-8"))
+    teams_ctx = data["context"]["teams"]
+    assert "h1" in teams_ctx
+    assert teams_ctx["h1"]["injuries"][0]["playerId"] == "p1"
+    assert teams_ctx["h1"]["injuries"][0]["teamId"] == "h1"  # stamped upstream

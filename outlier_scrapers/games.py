@@ -121,7 +121,12 @@ def export_games_for_league(
                         _record_error("injuries", event_id, e, team_id=team_id)
 
                 if team_id in injuries_by_team:
-                    event_payload["injuries"].extend(injuries_by_team[team_id])
+                    # Injury player items carry no teamId of their own, so stamp
+                    # it on each one — normalize_games keys context.teams by it.
+                    event_payload["injuries"].extend(
+                        {**player, "teamId": team_id}
+                        for player in injuries_by_team[team_id]
+                    )
 
         events_payloads.append(event_payload)
         
