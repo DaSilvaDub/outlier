@@ -459,3 +459,10 @@ def test_public_money_fallback_keys():
     row = make_row(card, [])
     assert row["public_money_pct"] == 20
     assert row["money_pct"] == 99
+
+    # Valid 0% must be preserved, not treated as missing.
+    card0 = ev_card(market_type="MONEYLINE")
+    card0["sides"]["OVER"]["public_money"] = {"percentage": 0, "money": 0}
+    row0 = make_row(card0, [])
+    assert row0["public_money_pct"] == 0
+    assert row0["money_pct"] == 0

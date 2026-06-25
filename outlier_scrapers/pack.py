@@ -203,6 +203,14 @@ def _slug(text: str | None) -> str:
     return "".join(ch if ch.isalnum() else "-" for ch in str(text).lower()).strip("-") or "unknown"
 
 
+def _coalesce(*values: Any) -> Any:
+    """First value that is not None (preserves valid zeroes, unlike ``or``)."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def _fmt_line(line: Any) -> str:
     if line in (None, ""):
         return ""
@@ -273,8 +281,10 @@ def build_row(
     row["line_open"] = movement.get("open_line")
     row["line_now"] = movement.get("current_line")
     public_money = side_view.get("public_money") or {}
-    row["public_money_pct"] = public_money.get("public_money_pct") or public_money.get("percentage")
-    row["money_pct"] = public_money.get("money_pct") or public_money.get("money")
+    row["public_money_pct"] = _coalesce(
+        public_money.get("public_money_pct"), public_money.get("percentage")
+    )
+    row["money_pct"] = _coalesce(public_money.get("money_pct"), public_money.get("money"))
 
     if ev_summary:
         row["outlier_ev_pct"] = ev_summary.get("best_ev_pct")
