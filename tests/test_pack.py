@@ -7,6 +7,7 @@ from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     american_to_decimal,
     build_briefing,
+    build_freshness_section,
     build_injuries,
     build_pack,
     build_row,
@@ -466,3 +467,70 @@ def test_public_money_fallback_keys():
     row0 = make_row(card0, [])
     assert row0["public_money_pct"] == 0
     assert row0["money_pct"] == 0
+
+
+# 20. Freshness/coverage banner flags a stale/partial stream and an OK stream.
+def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
+    reports = tmp_path / "data" / "MLB" / "reports"
+    reports.mkdir(parents=True)
+    (reports / "games_line_movement_status_latest.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "markets_fetched": 8,
+                "markets_requested": 8,
+                "fetch_error_count": 0,
+                "props_is_stale": False,
+            }
+        )
+    )
+    (reports / "line_movement_status_latest.json").write_text(
+        json.dumps(
+            {
+                "status": "partial",
+                "markets_fetched": 42,
+                "markets_requested": 890,
+                "fetch_error_count": 3,
+                "props_is_stale": True,
+                "props_age_hours": 67.0,
+            }
+        )
+    )
+
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=reports,
+        )
+
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+    section = build_freshness_section(["MLB"])
+    text = "\n".join(section)
+    assert "### Freshness / Coverage" in text
+    assert "MLB games line-movement: OK" in text
+    assert "MLB props line-movement: CAVEAT" in text
+    assert "stale" in text and "UNRELIABLE" in text
+    # And it embeds into the briefing.
+    assert "Freshness / Coverage" in build_briefing([], "2026-06-24", section)
+
+
+# 21. All-clean streams produce no UNRELIABLE guidance line.
+def test_freshness_section_all_ok(tmp_path, monkeypatch):
+    reports = tmp_path / "reports"
+    reports.mkdir(parents=True)
+    clean = {"status": "ok", "markets_fetched": 8, "markets_requested": 8, "fetch_error_count": 0}
+    (reports / "games_line_movement_status_latest.json").write_text(json.dumps(clean))
+    (reports / "line_movement_status_latest.json").write_text(json.dumps(clean))
+
+    def fake_lp(lg):
+        return P.LeaguePaths(
+            league=lg.upper(), root=tmp_path, raw=tmp_path, normalized=tmp_path, reports=reports
+        )
+
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+    text = "\n".join(build_freshness_section(["WNBA"]))
+    assert "CAVEAT" not in text and "UNRELIABLE" not in text

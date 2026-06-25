@@ -486,8 +486,72 @@ ROLE_BLOCK = [
 ]
 
 
-def build_briefing(rows: list[dict[str, Any]], target_date: str) -> str:
-    lines = [f"SLATE: {target_date}", ""] + ROLE_BLOCK + ["", "### Top EV cards"]
+FRESH_COVERAGE_WARN = 0.9
+
+
+def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[bool, str]:
+    """One freshness line per line-movement status report. Returns (is_ok, line)."""
+    if report is None:
+        return False, f"- {label}: NO STATUS (not run / missing report)"
+    status = report.get("status") or "unknown"
+    fetched = report.get("markets_fetched")
+    requested = report.get("markets_requested")
+    errors = report.get("fetch_error_count") or 0
+    age = report.get("props_age_hours")
+    reasons: list[str] = []
+    if status != "ok":
+        reasons.append(f"status={status}")
+    if report.get("props_is_stale"):
+        age_txt = f"{round(age, 1)}h" if isinstance(age, (int, float)) else "?h"
+        reasons.append(f"props {age_txt} stale")
+    if errors:
+        reasons.append(f"{errors} fetch errors")
+    if (
+        isinstance(fetched, int)
+        and isinstance(requested, int)
+        and requested
+        and fetched / requested < FRESH_COVERAGE_WARN
+    ):
+        reasons.append(f"{fetched}/{requested} markets")
+    if not reasons:
+        cov = f" ({fetched}/{requested})" if requested else ""
+        return True, f"- {label}: OK{cov}"
+    return False, f"- {label}: CAVEAT — " + "; ".join(reasons)
+
+
+def build_freshness_section(leagues: Sequence[str]) -> list[str]:
+    """Freshness/coverage banner from the line-movement status reports, so a stale,
+    partial, or interrupted refresh can never be silently presented as current."""
+    lines = ["### Freshness / Coverage"]
+    all_ok = True
+    for raw in leagues:
+        lg = raw.strip().upper()
+        if not lg:
+            continue
+        reports = paths.league_paths(lg).reports
+        for stream, fname in (
+            ("games line-movement", "games_line_movement_status_latest.json"),
+            ("props line-movement", "line_movement_status_latest.json"),
+        ):
+            ok, line = _summarize_lm_status(load_json(reports / fname), f"{lg} {stream}")
+            all_ok = all_ok and ok
+            lines.append(line)
+    if not all_ok:
+        lines.append(
+            "Any CAVEAT stream: treat its line-movement/signal as UNRELIABLE — soften or stand "
+            "down conclusions that lean on movement/steam/signal rank. Current odds may still be "
+            "fresh from the props/games fetch."
+        )
+    return lines
+
+
+def build_briefing(
+    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None
+) -> str:
+    lines = [f"SLATE: {target_date}", ""]
+    if freshness_lines:
+        lines += freshness_lines + [""]
+    lines += ROLE_BLOCK + ["", "### Top EV cards"]
     for r in rows:
         if r["_board"] == "board_a":
             lines.append(
@@ -512,14 +576,18 @@ def build_briefing(rows: list[dict[str, Any]], target_date: str) -> str:
     return "\n".join(lines)
 
 
-def write_pack(rows: list[dict[str, Any]], out_dir: Path) -> None:
+def write_pack(
+    rows: list[dict[str, Any]], out_dir: Path, freshness_lines: list[str] | None = None
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
-    (out_dir / "briefing.md").write_text(build_briefing(rows, out_dir.name), encoding="utf-8")
+    (out_dir / "briefing.md").write_text(
+        build_briefing(rows, out_dir.name, freshness_lines), encoding="utf-8"
+    )
 
     dossiers_dir = out_dir / "dossiers"
     dossiers_dir.mkdir(exist_ok=True)
@@ -593,8 +661,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     leagues = args.leagues.split(",")
     final_rows, target_date = build_pack(leagues, args.date, args.top_ev_n, args.top_signal_n)
+    freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
-    write_pack(final_rows, out_dir)
+    write_pack(final_rows, out_dir, freshness)
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
 
 
