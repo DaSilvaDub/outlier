@@ -63,11 +63,75 @@ def test_otp_fetcher_redacts_code(caplog, tmp_path):
             assert "123456" not in log_text
 
 
-def test_run_explicit_refresh_failure():
-    # Verify it aborts if a step fails
-    with patch("outlier_scrapers.refresh.main", return_value=1):
-        success = daily_job.run_explicit_refresh(["MLB"])
-        assert success is False
+def test_run_explicit_refresh_failure(monkeypatch):
+    monkeypatch.setattr("outlier_scrapers.refresh.main", lambda _: 1)
+
+    assert not daily_job.run_explicit_refresh(["MLB"])
+
+
+def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    mock_run_pack_called = False
+    mock_reasoning_called = False
+    mock_reasoning_args = []
+
+    def mock_run_pack(leagues):
+        nonlocal mock_run_pack_called
+        mock_run_pack_called = True
+        return Path("/mock/pack/2026-06-27")
+
+    def mock_run_reasoning(pack_dir, *, force=False, refresh_if_stale=False, client=None):
+        nonlocal mock_reasoning_called, mock_reasoning_args
+        mock_reasoning_called = True
+        mock_reasoning_args = {"pack_dir": pack_dir, "refresh_if_stale": refresh_if_stale}
+        return 0
+
+    monkeypatch.setattr(
+        "outlier_scrapers.daily_job.run_explicit_refresh",
+        lambda leagues, cards_only=False, game_cards_only=False: True,
+    )
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", mock_run_pack)
+    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
+    monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
+
+    import outlier_scrapers.reasoning
+
+    monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", mock_run_reasoning)
+
+    exit_code = daily_job.main(["--run-reasoning"])
+
+    assert exit_code == 0
+    assert mock_run_pack_called
+    assert mock_reasoning_called
+    assert mock_reasoning_args["pack_dir"].name == "2026-06-27"
+    assert mock_reasoning_args["refresh_if_stale"] is True
+
+
+def test_daily_job_reasoning_failure_returns_1(monkeypatch):
+    from pathlib import Path
+
+    def mock_run_pack(leagues):
+        return Path("/mock/pack/2026-06-27")
+
+    def mock_run_reasoning(*args, **kwargs):
+        return 1
+
+    monkeypatch.setattr(
+        "outlier_scrapers.daily_job.run_explicit_refresh",
+        lambda leagues, cards_only=False, game_cards_only=False: True,
+    )
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", mock_run_pack)
+    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
+    monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
+
+    import outlier_scrapers.reasoning
+
+    monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", mock_run_reasoning)
+
+    exit_code = daily_job.main(["--run-reasoning"])
+
+    assert exit_code == 1
 
 
 def test_orchestrate_login_removes_stale_status(tmp_path):

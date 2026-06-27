@@ -663,7 +663,7 @@ def build_pack(
     return final_rows, target_date
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
     parser.add_argument("--leagues", default="MLB,WNBA")
     parser.add_argument("--date")
@@ -677,6 +677,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     write_pack(final_rows, out_dir, freshness)
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
+    return out_dir
 
 
 if __name__ == "__main__":

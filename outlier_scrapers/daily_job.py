@@ -7,25 +7,16 @@ import subprocess
 import sys
 import time
 
-import os
 
 from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
+from .environment import load_environment
 from .paths import otp_status_file, PROJECT_ROOT
+from pathlib import Path
 from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
 
 logger = logging.getLogger(__name__)
-
-
-def load_environment():
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
 
 def perform_auth_check(leagues: list[str]) -> bool:
@@ -136,21 +127,23 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
     return True
 
 
-def run_pack(leagues: list[str]) -> bool:
+def run_pack(leagues: list[str]) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
     try:
-        pack.main(args)
-        return True
+        return pack.main(args)
     except Exception as e:
         logger.error(f"Failed to build pack: {e}")
-        return False
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Daily Outlier Orchestration Job")
     parser.add_argument("--leagues", default="MLB,WNBA", help="Comma-separated leagues")
+    parser.add_argument(
+        "--run-reasoning", action="store_true", help="Run the reasoning pipeline after packing."
+    )
     args = parser.parse_args(argv)
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
@@ -166,9 +159,20 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Refresh pipeline failed. Aborting.")
         return 1
 
-    if not run_pack(leagues):
+    pack_dir = run_pack(leagues)
+    if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
         return 1
+
+    if args.run_reasoning:
+        logger.info("Running reasoning pipeline...")
+        from .reasoning import run_reasoning
+
+        # Run in-process with the internal staleness flag and exact pack directory date
+        exit_code = run_reasoning(pack_dir, refresh_if_stale=True)
+        if exit_code != 0:
+            logger.error("Reasoning runner failed.")
+            return 1
 
     logger.info("Daily job completed successfully.")
     return 0

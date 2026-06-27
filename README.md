@@ -74,6 +74,12 @@ To automate the daily pipeline, use the `daily_job` orchestrator. It verifies au
 python -m outlier_scrapers.daily_job --leagues MLB,WNBA
 ```
 
+You can append `--run-reasoning` to automatically execute the reasoning pass after packing, which evaluates the candidate edges using the configured OpenAI models.
+
+```powershell
+python -m outlier_scrapers.daily_job --leagues MLB,WNBA --run-reasoning
+```
+
 To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
 
 Example Task Scheduler action:

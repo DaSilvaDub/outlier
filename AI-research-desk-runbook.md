@@ -2,7 +2,7 @@
 
 **Purpose:** Turn ChatGPT, Gemini, and Claude into a research desk layered on top of the Outlier pipeline. The pipeline supplies the numeric edge (EV board + signal board at `market_id` grain, multi-book odds, publicMoney, injuries, matchup) **and the bet sizing**. The three models add late news, situational context, and an independent cross-check, then produce one consolidated daily guide.
 
-**Mode:** Manual paste. **Output:** Full guide (singles, props, SGP/parlays as candidates, stand-downs, unit sizing).
+**Mode:** Hybrid (automated reasoning + manual research paste). **Output:** Full guide (singles, props, SGP/parlays as candidates, stand-downs, unit sizing).
 **Core discipline:** Two rule modes (see §2a). *Reasoning* passes use the pack only. *Research* passes may use the web but may never invent or update a betting line — every finding ties back to a quoted `market_id` + line/price from the pack. Sizing is computed by the pipeline, never by a model.
 
 ---
@@ -19,7 +19,7 @@
 
 ---
 
-## 1. Daily sequence (manual paste)
+## 1. Daily sequence (hybrid)
 
 Times are relative to the **first market lock** of the slate (e.g. first pitch / tip-off).
 
@@ -27,7 +27,7 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 |---|---|---|
 | **T‑180 min** | Run pipeline → produce today's EV/signal cards **with sizing fields** (§4). Build the **briefing pack** (§2). | Pipeline + export script |
 | **T‑170** | Kick off **both** Deep Research jobs first (they take 5–15 min): Gemini wide-scan (Prompt B), ChatGPT per-game (Prompt C). | Gemini + ChatGPT web |
-| **T‑160** | While they run, paste **Prompt A** (reasoning stress-test) into ChatGPT o-series and **Prompt D** (reasoning pass) into Claude. | ChatGPT + Claude |
+| **T‑160** | While they run, the pipeline automatically executes **Prompt A** (reasoning stress-test) via API. Paste **Prompt D** (reasoning pass) into Claude. | Python script + Claude |
 | **T‑140** | Collect all four structured outputs (A–D). | — |
 | **T‑130** | Paste **Prompt E** (synthesis) + the four outputs into Claude → **final guide**. | Claude |
 | **T‑30** | **Line re-check / kill pass** against the §4 stale-line kill criteria. | Pipeline / book |
@@ -59,7 +59,7 @@ RESEARCH PASSES (B, C):
 - Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.
 ```
 
-### 2b. `candidates.csv` — the shortlist (paste into ChatGPT for Prompt A; Prompt C reads the per-game dossiers)
+### 2b. `candidates.csv` — the shortlist (auto-read by Prompt A; Prompt C reads the per-game dossiers)
 One row per `market_id` on the EV or signal board. Columns (identity + sizing fully anchored so props and alt lines can't be confused):
 ```
 sport, event_id, market_id, market_type, player_id, selection, line, price, decimal_price, book, as_of,
@@ -123,20 +123,8 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 
 > Paste the §2a rule block + the relevant pack section *above* each prompt. All ask for **structured output** so synthesis is mechanical.
 
-### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`) — PACK-ONLY
-```
-You are a sharp betting analyst. Below is a shortlist of markets my quant model flagged, with model probability, edge, and pipeline-computed unit sizing. Use this data ONLY — no web, no memory. Never invent odds.
-
-For EACH market_id, return:
-- verdict: BET | LEAN | PASS | FADE
-- selection & the exact line/price it applies to (copy from the row)
-- confidence: 1–5 (qualitative, separate from the model's numeric edge)
-- edge_source_check: REAL / STALE_LINE / ALREADY_PRICED / KEY_NUMBER_WRONG_SIDE / UNCLEAR
-- key_factors: ≤2 lines
-- needs: any info not in the pack that would change the verdict
-
-Output a markdown table, one row per market_id. End with the 3 strongest BETs and any FADEs where the model is likely wrong. Do not suggest unit sizes — those are fixed by the pipeline.
-```
+### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`) — PACK-ONLY (Automated)
+[See prompts/A.md](prompts/A.md)
 
 ### Prompt B — Gemini wide-scan Deep Research (input: full `briefing.md`) — WEB ALLOWED
 ```

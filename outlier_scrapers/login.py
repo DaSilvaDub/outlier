@@ -6,8 +6,6 @@ import sys
 import time
 from typing import Any
 
-from .paths import PROJECT_ROOT
-
 
 from .auth import (
     build_cookie_header,
@@ -18,18 +16,9 @@ from .auth import (
     write_session_metadata,
 )
 from .browser_helpers import click_first_visible, is_on_props_page, wait_for_visible
+from .environment import load_environment
 from .paths import otp_code_file, storage_state_file
 from .registry import supported_leagues
-
-
-def load_environment():
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
 
 
 # Provenance: login/OTP flow adapted from
