@@ -74,11 +74,35 @@ To automate the daily pipeline, use the `daily_job` orchestrator. It verifies au
 python -m outlier_scrapers.daily_job --leagues MLB,WNBA
 ```
 
-You can append `--run-reasoning` to automatically execute the reasoning pass after packing, which evaluates the candidate edges using the configured OpenAI models.
+You can append `--run-reasoning` to opt into the paid Prompt A reasoning pass after
+packing. It uses the OpenAI Responses API with the fixed model `gpt-5.5`,
+`reasoning.effort="xhigh"`, no web tools, and `store=False`.
 
 ```powershell
 python -m outlier_scrapers.daily_job --leagues MLB,WNBA --run-reasoning
 ```
+
+The reasoning runner requires `OPENAI_API_KEY` in the process environment or the
+ignored project-root `.env`. API billing is separate from a ChatGPT subscription.
+Never commit, print, or copy the key into prompts, logs, packs, or temporary source
+trees.
+
+The result is written to `packs/YYYY-MM-DD/chatgpt_a.md`. Daily-job runs compare a
+request hash covering the candidates, Prompt A, role rules, model, and effort; an
+unchanged request reuses the existing output without another API charge. A changed
+request replaces the old analysis. Pack generation remains available if reasoning
+fails, but the requested daily job returns a nonzero exit code.
+
+Prompt A can also be run independently. Existing output is preserved unless
+`--force` is supplied:
+
+```powershell
+python -m outlier_scrapers.reasoning --date YYYY-MM-DD
+python -m outlier_scrapers.reasoning --date YYYY-MM-DD --force
+```
+
+`xhigh` reasoning can be slower and more expensive than lower-effort calls. Check
+API billing and project limits before enabling it in a scheduled task.
 
 To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
 

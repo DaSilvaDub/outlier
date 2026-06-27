@@ -90,60 +90,90 @@ def _try_credential_autofill(page: Any, *, timeout_seconds: int) -> None:
     """Best-effort autofill when OUTLIER_EMAIL/OUTLIER_PASSWORD are set."""
     email = os.getenv("OUTLIER_EMAIL", "").strip()
     password = os.getenv("OUTLIER_PASSWORD", "").strip()
+    print(f"DEBUG: Starting credential autofill for {email}...")
     if not email:
+        print("DEBUG: No email configured, exiting autofill.")
         return
 
-    email_input = wait_for_visible(page, EMAIL_SELECTORS, timeout=4000)
+    email_input = wait_for_visible(page, EMAIL_SELECTORS, timeout=10000)
     if email_input:
+        print("DEBUG: Found email input, filling email...")
         try:
             email_input.click()
             email_input.fill(email)
-        except Exception:
+            print("DEBUG: Email filled successfully.")
+        except Exception as e:
+            print(f"DEBUG: Exception filling email: {e}")
             return
+    else:
+        print("DEBUG: Email input not found.")
 
     password_input = wait_for_visible(page, PASSWORD_SELECTORS, timeout=2500)
-    if not password_input and click_first_visible(page, CONTINUE_SELECTORS, timeout=2500):
-        password_input = wait_for_visible(page, PASSWORD_SELECTORS, timeout=5000)
+    if not password_input:
+        print("DEBUG: Password input not found initially. Clicking continue button...")
+        if click_first_visible(page, CONTINUE_SELECTORS, timeout=2500):
+            print("DEBUG: Clicked continue button. Waiting for password input...")
+            password_input = wait_for_visible(page, PASSWORD_SELECTORS, timeout=5000)
+        else:
+            print("DEBUG: Click continue button failed or button not found.")
 
     if password_input and password:
+        print("DEBUG: Found password input, filling password...")
         try:
             password_input.click()
             password_input.fill(password)
-        except Exception:
+            print("DEBUG: Password filled. Clicking login submit...")
+        except Exception as e:
+            print(f"DEBUG: Exception filling password: {e}")
             pass
         if not click_first_visible(page, SUBMIT_SELECTORS, timeout=3000):
+            print("DEBUG: Submit button not found/clickable. Pressing Enter...")
             try:
                 password_input.press("Enter")
-            except Exception:
+            except Exception as e:
+                print(f"DEBUG: Exception pressing Enter on password: {e}")
                 pass
+    else:
+        print("DEBUG: Skipping password input (not found or password not configured).")
 
     # Emailed one-time code path: prefer OUTLIER_OTP_CODE / otp_code.txt.
+    print("DEBUG: Waiting for OTP code input...")
     code_input = wait_for_visible(page, CODE_SELECTORS, timeout=4000)
     if not code_input:
+        print("DEBUG: OTP code input not found, returning from autofill.")
         return
+    print("DEBUG: Found OTP code input.")
     code = os.getenv("OUTLIER_LOGIN_CODE", "").strip() or os.getenv("OUTLIER_OTP_CODE", "").strip()
     if not code:
         otp_code_file().unlink(missing_ok=True)
+        print("DEBUG: No OTP code in env. Writing waiting_for_code status...")
         write_otp_status(
             "waiting_for_code",
             code_file=str(otp_code_file()),
             timeout_seconds=timeout_seconds,
         )
         deadline = time.monotonic() + max(30, timeout_seconds)
+        print(f"DEBUG: Polling otp_code.txt for up to {max(30, timeout_seconds)} seconds...")
         while time.monotonic() < deadline and not code:
             code = read_otp_code()
             if code:
+                print("DEBUG: Read OTP code from file.")
                 break
             page.wait_for_timeout(2000)
     if not code:
+        print("DEBUG: Timeout waiting for OTP code from file.")
         return
     try:
+        print(f"DEBUG: Submitting OTP code: {code}")
         write_otp_status("submitting_code")
         code_input.click()
         code_input.fill(code)
         if not click_first_visible(page, CODE_SUBMIT_SELECTORS, timeout=3000):
+            print("DEBUG: Code submit button not found/clickable. Pressing Enter...")
             code_input.press("Enter")
-    except Exception:
+        print("DEBUG: OTP code submitted.")
+    except Exception as e:
+        print(f"DEBUG: Exception submitting OTP code: {e}")
         pass
 
 
@@ -173,7 +203,7 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
         try:
-            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            page.goto(LOGIN_URL, wait_until="networkidle", timeout=30000)
             _try_credential_autofill(page, timeout_seconds=timeout_seconds)
 
             if interactive and not headless:
@@ -187,6 +217,10 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
                 # Non-interactive (or headless): poll until login completes.
                 deadline = time.monotonic() + max(30, timeout_seconds)
                 while time.monotonic() < deadline and not _logged_in(page, league):
+                    try:
+                        page.screenshot(path=str(PROJECT_ROOT / "scratch" / "login_waiting.png"))
+                    except Exception:
+                        pass
                     page.wait_for_timeout(2000)
                 # Wait for token to be injected into localStorage after URL change
                 page.wait_for_timeout(10000)

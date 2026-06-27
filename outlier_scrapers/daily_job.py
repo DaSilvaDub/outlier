@@ -35,7 +35,7 @@ def perform_auth_check(leagues: list[str]) -> bool:
         raise
 
 
-def tail_otp_status_and_fetch(attempt_timestamp: float, timeout: int = 150) -> bool:
+def tail_otp_status_and_fetch(attempt_timestamp: float, timeout: int = 350) -> bool:
     deadline = time.time() + timeout
     status_file = otp_status_file()
 
@@ -84,7 +84,7 @@ def orchestrate_login() -> bool:
             logger.warning(f"Could not remove stale otp_status.json: {e}")
 
     logger.info("Starting headless login process...")
-    cmd = [sys.executable, "-m", "outlier_scrapers.login", "--headless", "--timeout", "150"]
+    cmd = [sys.executable, "-m", "outlier_scrapers.login", "--headless", "--timeout", "350"]
 
     # We spawn login and let it run
     # while we monitor otp_status.json in the current process

@@ -11,7 +11,7 @@
 
 | Model | Role | Why |
 |---|---|---|
-| **ChatGPT** (o-series reasoning + Deep Research) | Stress-tester (A, pack-only) + per-game news (C, web) | Strong structured decomposition; good at "is this edge real or an artifact?" Deep Research pulls late injury/lineup/weather news per game. |
+| **ChatGPT** (GPT-5.5 xhigh API + Deep Research) | Automated stress-tester (A, pack-only) + per-game news (C, web) | Prompt A uses fixed `gpt-5.5`/`xhigh` without web tools; Deep Research pulls late injury/lineup/weather news per game. |
 | **Gemini** (Pro + Deep Research) | Wide scanner (B, web) | Largest context — ingest the full pack + raw odds; broad multi-source web sweep across the whole slate. |
 | **Claude** (extended thinking) | Synthesizer + red-team (D pack-only, E synthesis) | Calibrated uncertainty; runs the provenance/validation pass; writes the final guide. |
 
@@ -27,7 +27,7 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 |---|---|---|
 | **T‑180 min** | Run pipeline → produce today's EV/signal cards **with sizing fields** (§4). Build the **briefing pack** (§2). | Pipeline + export script |
 | **T‑170** | Kick off **both** Deep Research jobs first (they take 5–15 min): Gemini wide-scan (Prompt B), ChatGPT per-game (Prompt C). | Gemini + ChatGPT web |
-| **T‑160** | While they run, the pipeline automatically executes **Prompt A** (reasoning stress-test) via API. Paste **Prompt D** (reasoning pass) into Claude. | Python script + Claude |
+| **T‑160** | While they run, execute **Prompt A** through `daily_job --run-reasoning` (paid, opt-in). Paste **Prompt D** into Claude. | GPT-5.5 xhigh API + Claude |
 | **T‑140** | Collect all four structured outputs (A–D). | — |
 | **T‑130** | Paste **Prompt E** (synthesis) + the four outputs into Claude → **final guide**. | Claude |
 | **T‑30** | **Line re-check / kill pass** against the §4 stale-line kill criteria. | Pipeline / book |
@@ -125,6 +125,14 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 
 ### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`) — PACK-ONLY (Automated)
 [See prompts/A.md](prompts/A.md)
+
+Run it independently with `python -m outlier_scrapers.reasoning --date YYYY-MM-DD`
+or append `--run-reasoning` to the daily job. The fixed API configuration is
+`gpt-5.5` with `reasoning.effort="xhigh"`, no web tools, and `store=False`.
+Output is `packs/YYYY-MM-DD/chatgpt_a.md`. The daily job skips an identical
+request by hash; standalone runs preserve existing output unless `--force` is
+provided. This is paid API usage and requires `OPENAI_API_KEY` plus available API
+quota; ChatGPT subscription billing does not fund API calls.
 
 ### Prompt B — Gemini wide-scan Deep Research (input: full `briefing.md`) — WEB ALLOWED
 ```
@@ -249,9 +257,9 @@ For stand-downs/fades, grade the **would-have** result + CLV — did avoiding it
 
 ---
 
-## 7. Build checklist (what I'd implement next, on GO)
+## 7. Implementation status and remaining work
 
-1. **Export script** in the pipeline: read today's EV/signal boards + odds/injuries → emit per row `model_prob`, `push_prob`, `implied_prob`, `edge_pct`, `decimal_price`, the three `*_units` fields, and `research_leverage`; for parlays emit `sgp_recommended_units_pre_news` + `sgp_correlation_rationale` + book combined price together (all three or the SGP stays candidate-only) → write `packs/YYYY-MM-DD/` (candidates.csv, briefing.md, dossiers/). The only code that touches your repo.
-2. **Prompt files** saved as `prompts/A..E.md` (with the §2a role block embedded) for one-click copy.
-3. **Calibration logger**: append closing lines + results for plays *and* stand-downs, compute CLV and would-have.
-4. **Optional later:** Chrome-MCP automation to drive the three web UIs; scheduled task to build the pack each morning.
+1. **Implemented:** pack export writes `candidates.csv`, `briefing.md`, and dossiers under `packs/YYYY-MM-DD/`.
+2. **Implemented:** Prompt A lives in `prompts/A.md` and can run through the GPT-5.5 xhigh Responses API with hash-based caching.
+3. **Still manual:** Gemini B, ChatGPT Deep Research C, Claude D, and Claude synthesis E.
+4. **Optional later:** calibration logging for plays and stand-downs, plus UI automation for the remaining research passes.

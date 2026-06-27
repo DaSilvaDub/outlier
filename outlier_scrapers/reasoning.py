@@ -72,7 +72,7 @@ def call_openai_responses_api(
         load_environment()
         if not os.getenv("OPENAI_API_KEY"):
             raise ReasoningError("OPENAI_API_KEY is not set.")
-        client = openai.OpenAI(timeout=600.0, max_retries=1)
+        client = openai.OpenAI(timeout=600.0, max_retries=5)
 
     full_prompt = prompt_text + "\n\nData:\n" + raw_csv_bytes.decode("utf-8")
 

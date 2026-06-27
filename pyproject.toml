@@ -7,6 +7,9 @@ dependencies = [
     "openai>=2.43,<3",
 ]
 
+[tool.setuptools]
+packages = ["outlier_scrapers"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
