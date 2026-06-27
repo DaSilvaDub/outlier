@@ -690,6 +690,70 @@ def test_export_line_movement_mop_up_retries_residual_403_for_bounded_rounds(
     assert sleeps == [2.5, 2.5, 2.5]
 
 
+def test_export_line_movement_mop_up_stops_at_round_cap_when_still_failing(
+    tmp_path, monkeypatch
+):
+    from outlier_scrapers import line_movement as line_movement_mod
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(line_movement_mod.time, "sleep", lambda *_: None)
+    _write_props_latest_multi(tmp_path)
+    persistent_403 = OutlierApiError("HTTP 403 for market m2")
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            # first pass + 3 retry rounds, all 403, never recovers
+            "m2": [persistent_403, persistent_403, persistent_403, persistent_403],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=0,
+        retry_403_max_rounds=3,
+    )
+
+    assert status["status"] == "partial"
+    assert status["retry_403_rounds_attempted"] == 3  # capped, no 4th retry attempt
+    assert status["retry_403_recovered"] == 0
+    assert status["retry_403_residual_errors"] == 1
+    assert client.calls["m2"] == 4  # 1 first pass + 3 retry rounds, then stop
+
+
+def test_export_line_movement_mop_up_disabled_via_zero_max_rounds(tmp_path, monkeypatch):
+    from outlier_scrapers import line_movement as line_movement_mod
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    sleeps: list[float] = []
+    monkeypatch.setattr(line_movement_mod.time, "sleep", sleeps.append)
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [OutlierApiError("HTTP 403 for market m2")],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=15,  # nonzero, to prove no cooldown sleep fires
+        retry_403_max_rounds=0,
+    )
+
+    assert status["status"] == "partial"
+    assert status["retry_403_rounds_attempted"] == 0
+    assert status["retry_403_residual_errors"] == 1
+    assert status["retry_403_recovered"] == 0
+    assert client.calls["m2"] == 1  # first pass only, no retry attempt
+    assert sleeps == []  # loop body never ran, so cooldown never slept
+
+
 def test_export_line_movement_mop_up_stops_when_403_becomes_404(tmp_path, monkeypatch):
     from outlier_scrapers import paths as paths_mod
 
