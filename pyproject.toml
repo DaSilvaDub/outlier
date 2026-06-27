@@ -5,7 +5,12 @@ description = "Standalone Outlier multi-sport discovery and props scraper."
 requires-python = ">=3.11"
 dependencies = [
     "openai>=2.43,<3",
+    "anthropic>=0.112.0,<1",
+    "google-genai>=2.10.0,<3",
 ]
+
+[tool.setuptools]
+packages = ["outlier_scrapers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
