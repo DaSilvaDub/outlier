@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outlier Board — 2026-06-26</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--panel2:#1c232d;--line:#2a3340;--txt:#e6edf3;
+--muted:#8b97a7;--accent:#3fb950;--accent2:#58a6ff;--warn:#d29922;--bad:#f85149;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);
+font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
+header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px}
+h1{font-size:22px;margin:0;letter-spacing:.3px}
+h1 .dot{color:var(--accent)}
+.sub{color:var(--muted);font-size:13px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.kpi .v{font-size:24px;font-weight:700}
+.kpi .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+.kpi .l b,.chip b{color:var(--accent2)}
+.chips{margin-top:6px}.chip{display:inline-block;background:var(--panel2);
+border:1px solid var(--line);border-radius:20px;padding:2px 10px;margin:2px 4px 2px 0;font-size:12px}
+.banner{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:14px 0}
+.banner .h{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px}
+.fz{display:inline-block;font-size:12px;padding:3px 9px;border-radius:6px;margin:3px 6px 3px 0;border:1px solid var(--line)}
+.fz.ok{background:rgba(63,185,80,.10);color:#7ee787;border-color:rgba(63,185,80,.3)}
+.fz.caveat{background:rgba(210,153,34,.12);color:#e3b341;border-color:rgba(210,153,34,.35)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.panel h2{font-size:14px;margin:0 0 12px;letter-spacing:.3px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:22px 0 10px}
+.toolbar .f{margin-left:auto}
+button.filt{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+border-radius:7px;padding:6px 14px;cursor:pointer;font-size:13px}
+button.filt.on{background:var(--accent2);color:#06121f;border-color:var(--accent2);font-weight:600}
+input#q{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+border-radius:7px;padding:6px 12px;font-size:13px;min-width:200px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;
+letter-spacing:.5px;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
+thead th:hover{color:var(--txt)}
+tbody td{padding:9px 10px;border-bottom:1px solid #20262f;vertical-align:middle}
+tbody tr:hover{background:#1a212b}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+td.sel{font-weight:600;max-width:280px}
+td.edge{font-weight:700;color:#7ee787}
+.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px}
+.tag.mlb{background:rgba(88,166,255,.15);color:#79c0ff}
+.tag.wnba{background:rgba(219,109,182,.15);color:#f0a3d6}
+.badge{font-size:11px;padding:2px 8px;border-radius:5px;text-transform:uppercase;font-weight:700}
+.badge.ok{background:rgba(63,185,80,.15);color:#7ee787}
+.badge.warn{background:rgba(210,153,34,.15);color:#e3b341}
+.move{color:#e3b341;font-size:12px}.muted{color:var(--muted)}
+.svgbar{fill:var(--accent2)}.svglbl{fill:var(--muted);font-size:12px}.svgval{fill:var(--txt);font-size:12px;font-weight:600}
+footer{margin-top:30px;color:var(--muted);font-size:12px;text-align:center}
+</style></head>
+<body><div class="wrap">
+<header>
+  <h1><span class="dot">●</span> OUTLIER BOARD <span class="sub">— slate 2026-06-26</span></h1>
+  <div class="sub">generated 2026-06-27 01:55 · auto-rebuilt daily</div>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><div class="v">25</div><div class="l">Candidates</div>
+    <div class="chips"><span class='chip'>MLB: <b>24</b></span> <span class='chip'>WNBA: <b>1</b></span></div></div>
+  <div class="kpi"><div class="v">42.5u</div><div class="l">Total units staked</div></div>
+  <div class="kpi"><div class="v">14.8%</div><div class="l">Avg edge (EV rows)</div></div>
+  <div class="kpi"><div class="v">27.6%</div><div class="l">Top edge</div></div>
+</div>
+
+<div class="banner">
+  <div class="h">Freshness / Coverage</div>
+  <span class='fz ok'>MLB games line-movement: OK (1089/1089)</span><span class='fz caveat'>MLB props line-movement: CAVEAT — status=partial; 53 fetch errors</span><span class='fz ok'>WNBA games line-movement: OK (24/24)</span><span class='fz ok'>WNBA props line-movement: OK (479/479)</span>
+</div>
+
+<div class="grid2">
+  <div class="panel"><h2>Edge distribution</h2><svg viewBox='0 0 490 160' width='100%' role='img'><text x='62' y='22' text-anchor='end' class='svglbl'>&lt;5%</text><rect x='70' y='8' width='0' height='18' rx='3' class='svgbar'></rect><text x='76' y='22' class='svgval'>0</text><text x='62' y='52' text-anchor='end' class='svglbl'>5–10%</text><rect x='70' y='38' width='36' height='18' rx='3' class='svgbar'></rect><text x='112' y='52' class='svgval'>1</text><text x='62' y='82' text-anchor='end' class='svglbl'>10–15%</text><rect x='70' y='68' width='360' height='18' rx='3' class='svgbar'></rect><text x='436' y='82' class='svgval'>10</text><text x='62' y='112' text-anchor='end' class='svglbl'>15–20%</text><rect x='70' y='98' width='72' height='18' rx='3' class='svgbar'></rect><text x='148' y='112' class='svgval'>2</text><text x='62' y='142' text-anchor='end' class='svglbl'>20%+</text><rect x='70' y='128' width='72' height='18' rx='3' class='svgbar'></rect><text x='148' y='142' class='svgval'>2</text></svg></div>
+  <div class="panel"><h2>Units staked · last packs</h2><svg viewBox='0 0 490 100' width='100%' role='img'><text x='62' y='22' text-anchor='end' class='svglbl'>06-24</text><rect x='70' y='8' width='24' height='18' rx='3' class='svgbar'></rect><text x='100' y='22' class='svgval'>3u</text><text x='62' y='52' text-anchor='end' class='svglbl'>06-25</text><rect x='70' y='38' width='360' height='18' rx='3' class='svgbar'></rect><text x='436' y='52' class='svgval'>43.5u</text><text x='62' y='82' text-anchor='end' class='svglbl'>06-26</text><rect x='70' y='68' width='351' height='18' rx='3' class='svgbar'></rect><text x='427' y='82' class='svgval'>42.5u</text></svg></div>
+</div>
+
+<div class="panel" style="margin-top:16px">
+  <h2>Feed status &amp; coverage</h2>
+  <table><thead><tr><th>League</th><th>Status</th><th>Props mkts</th>
+  <th>Movement recs</th><th>Board A / B</th><th>Skew</th></tr></thead>
+  <tbody><tr><td>MLB</td><td><span class='badge ok'>ok</span></td><td>5776</td><td>9524</td><td>47 / 5729</td><td>0.25h</td></tr><tr><td>WNBA</td><td><span class='badge ok'>ok</span></td><td>479</td><td>837</td><td>0 / 479</td><td>0.05h</td></tr></tbody></table>
+</div>
+
+<div class="toolbar">
+  <button class="filt on" data-s="ALL">All</button>
+  <button class="filt" data-s="MLB">MLB</button>
+  <button class="filt" data-s="WNBA">WNBA</button>
+  <input id="q" placeholder="filter player / market…">
+</div>
+
+<table id="board"><thead><tr>
+  <th data-c="0">Sport</th><th data-c="1">Selection</th><th data-c="2">Market</th>
+  <th data-c="3" class="num">Line</th><th data-c="4" class="num">Price</th>
+  <th data-c="5">Book</th><th data-c="6" class="num">Edge</th>
+  <th data-c="7" class="num">Units</th><th data-c="8">Line move</th><th data-c="9">Lev</th>
+</tr></thead><tbody><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Willson Contreras - Home Runs OVER 0.5</td><td>PLAYER_PROP</td><td class='num'>0.5</td><td class='num'>+496</td><td>DraftKings</td><td class='num edge' data-sort='27.6231'>27.6%</td><td class='num' data-sort='1.50'>1.5</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Payton Tolle - Outs OVER 17.5</td><td>PLAYER_PROP</td><td class='num'>17.5</td><td class='num'>+142</td><td>Prophetx</td><td class='num edge' data-sort='20.3980'>20.4%</td><td class='num' data-sort='3.00'>3</td><td><span class='move'>17.5→15.5 ▼</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Joc Pederson - Bases OVER 0.5</td><td>PLAYER_PROP</td><td class='num'>0.5</td><td class='num'>+105</td><td>BetMGM</td><td class='num edge' data-sort='18.8655'>18.9%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Will Warren - Strikeouts UNDER 4.5</td><td>PLAYER_PROP</td><td class='num'>4.5</td><td class='num'>+150</td><td>Prophetx</td><td class='num edge' data-sort='17.3709'>17.4%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>4.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Paul Goldschmidt - Bases OVER 1.5</td><td>PLAYER_PROP</td><td class='num'>1.5</td><td class='num'>+120</td><td>Thescorebet</td><td class='num edge' data-sort='14.7368'>14.7%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>1.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Nathan Lukes - Bases OVER 1.5</td><td>PLAYER_PROP</td><td class='num'>1.5</td><td class='num'>+176</td><td>DraftKings</td><td class='num edge' data-sort='14.5228'>14.5%</td><td class='num' data-sort='2.00'>2</td><td><span class='move'>0.5→1.5 ▲</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Owen Caissie - Bases UNDER 0.5</td><td>PLAYER_PROP</td><td class='num'>0.5</td><td class='num'>+125</td><td>Thescorebet</td><td class='num edge' data-sort='14.1626'>14.2%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Nathan Eovaldi - Hits Allowed OVER 5.5</td><td>PLAYER_PROP</td><td class='num'>5.5</td><td class='num'>-107</td><td>Prophetx</td><td class='num edge' data-sort='13.8456'>13.8%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>5.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Vladimir Guerrero Jr. - Bases UNDER 1.5</td><td>PLAYER_PROP</td><td class='num'>1.5</td><td class='num'>-135</td><td>Fanatics</td><td class='num edge' data-sort='13.4211'>13.4%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>1.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Luis Castillo - Strikeouts UNDER 4.5</td><td>PLAYER_PROP</td><td class='num'>4.5</td><td class='num'>+107</td><td>Prophetx</td><td class='num edge' data-sort='12.4795'>12.5%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>4.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Kody Clemens - Bases OVER 1.5</td><td>PLAYER_PROP</td><td class='num'>1.5</td><td class='num'>+110</td><td>BetMGM</td><td class='num edge' data-sort='12.3256'>12.3%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>1.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Otto Lopez - Bases OVER 1.5</td><td>PLAYER_PROP</td><td class='num'>1.5</td><td class='num'>+110</td><td>BetMGM</td><td class='num edge' data-sort='12.3256'>12.3%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>1.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Taj Bradley - Strikeouts UNDER 6.5</td><td>PLAYER_PROP</td><td class='num'>6.5</td><td class='num'>-118</td><td>DraftKings</td><td class='num edge' data-sort='10.8475'>10.8%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>6.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Luis Castillo - Hits Allowed UNDER 4.5</td><td>PLAYER_PROP</td><td class='num'>4.5</td><td class='num'>-125</td><td>BetMGM</td><td class='num edge' data-sort='10.7692'>10.8%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>4.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Ben Rice - Home Runs UNDER 0.5</td><td>PLAYER_PROP</td><td class='num'>0.5</td><td class='num'>-470</td><td>Prophetx</td><td class='num edge' data-sort='8.8888'>8.9%</td><td class='num' data-sort='3.00'>3</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Pete Crow-Armstrong TB OVER 0.5</td><td>TB</td><td class='num'>0.5</td><td class='num'>-125</td><td>PRIZEPICKS</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='move'>1.5→0.5 ▼</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Andrés Chaparro TB UNDER 1.5</td><td>TB</td><td class='num'>1.5</td><td class='num'>-220</td><td>HARDROCK</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>1.5</span></td><td>MED</td></tr><tr data-sport='WNBA'><td><span class='tag wnba'>WNBA</span></td><td class='sel'>Bridget Carleton AST UNDER 2.5</td><td>AST</td><td class='num'>2.5</td><td class='num'>-140</td><td>FANDUEL</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>2.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Masyn Winn TB OVER 0.5</td><td>TB</td><td class='num'>0.5</td><td class='num'>-180</td><td>PRIZEPICKS</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='move'>1.5→0.5 ▼</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Billy Cook HR UNDER 0.5</td><td>HR</td><td class='num'>0.5</td><td class='num'>-2000</td><td>NOVIG</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Jared Triolo HR UNDER 0.5</td><td>HR</td><td class='num'>0.5</td><td class='num'>-2800</td><td>NOVIG</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Billy Cook 2B UNDER 0.5</td><td>2B</td><td class='num'>0.5</td><td class='num'>-750</td><td>DRAFTKINGS</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Petey Halpin HR UNDER 0.5</td><td>HR</td><td class='num'>0.5</td><td class='num'>-1600</td><td>PROPHETX</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Cooper Pratt HR UNDER 0.5</td><td>HR</td><td class='num'>0.5</td><td class='num'>-2000</td><td>PROPHETX</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr><tr data-sport='MLB'><td><span class='tag mlb'>MLB</span></td><td class='sel'>Andrés Chaparro HR UNDER 0.5</td><td>HR</td><td class='num'>0.5</td><td class='num'>-1000</td><td>PROPHETX</td><td class='num edge' data-sort='-999'>—</td><td class='num' data-sort='-1'>—</td><td><span class='muted'>0.5</span></td><td>MED</td></tr></tbody></table>
+
+<footer>Outlier pipeline · self-contained snapshot · re-run
+<code>python scripts/build_dashboard.py</code> to refresh manually.</footer>
+</div>
+<script>
+const tb=document.querySelector('#board tbody');
+const rows=()=>Array.from(tb.querySelectorAll('tr'));
+// filter by sport
+let sport='ALL';
+document.querySelectorAll('.filt').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.filt').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');sport=b.dataset.s;apply();});
+const q=document.getElementById('q');q.oninput=apply;
+function apply(){const t=q.value.toLowerCase();rows().forEach(r=>{
+  const okS=sport==='ALL'||r.dataset.sport===sport;
+  const okT=!t||r.textContent.toLowerCase().includes(t);
+  r.style.display=(okS&&okT)?'':'none';});}
+// sort
+let sortDir={};
+document.querySelectorAll('#board thead th').forEach(th=>th.onclick=()=>{
+  const c=+th.dataset.c;const dir=sortDir[c]=!sortDir[c];
+  const rs=rows();rs.sort((a,b)=>{
+    let x=cell(a,c),y=cell(b,c);
+    const nx=parseFloat(x),ny=parseFloat(y);
+    if(!isNaN(nx)&&!isNaN(ny)){x=nx;y=ny;}
+    if(x<y)return dir?-1:1;if(x>y)return dir?1:-1;return 0;});
+  rs.forEach(r=>tb.appendChild(r));});
+function cell(r,c){const td=r.children[c];
+  return td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();}
+</script>
+</body></html>
