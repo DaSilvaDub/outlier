@@ -106,9 +106,11 @@ Line movement reads market IDs from the latest normalized props file. Refresh
 props first for the current slate, or use `--require-fresh-props` to stop before
 fetching if that props file is stale.
 
-Persistent HTTP `403` market-detail failures get a cooldown mop-up pass by
-default. Use `--retry-403-cooldown-seconds`, `--retry-403-workers`, or
-`--no-retry-failed-403` to tune or disable that recovery.
+Persistent HTTP `403` market-detail failures get up to three cooldown mop-up
+rounds by default. Use `--retry-403-max-rounds`,
+`--retry-403-cooldown-seconds`, `--retry-403-workers`, or
+`--no-retry-failed-403` to tune or disable that recovery. Only residual 403s
+advance to the next round; terminal errors such as 404s remain fetch errors.
 
 When Outlier returns `market.evOutcomes`, line movement also normalizes EV
 candidates into the `ev_records` secondary array and surfaces EV counts in the

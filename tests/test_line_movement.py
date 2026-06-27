@@ -651,6 +651,83 @@ def test_export_line_movement_mop_up_recovers_first_pass_403(tmp_path, monkeypat
     assert {row["market_id"] for row in normalized["records"]} == {"m1", "m2"}
 
 
+def test_export_line_movement_mop_up_retries_residual_403_for_bounded_rounds(
+    tmp_path, monkeypatch
+):
+    from outlier_scrapers import line_movement as line_movement_mod
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    sleeps: list[float] = []
+    monkeypatch.setattr(line_movement_mod.time, "sleep", sleeps.append)
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [
+                OutlierApiError("HTTP 403 for market m2"),
+                OutlierApiError("HTTP 403 for market m2"),
+                OutlierApiError("HTTP 403 for market m2"),
+                _market_detail(market_id="m2"),
+            ],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=2.5,
+        retry_403_max_rounds=3,
+    )
+
+    assert status["status"] == "ok"
+    assert status["retry_403_recovered"] == 1
+    assert status["retry_403_residual_errors"] == 0
+    assert status["retry_403_max_rounds"] == 3
+    assert status["retry_403_rounds_attempted"] == 3
+    assert client.calls["m2"] == 4
+    assert sleeps == [2.5, 2.5, 2.5]
+
+
+def test_export_line_movement_mop_up_stops_when_403_becomes_404(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_props_latest_multi(tmp_path)
+    client = SequenceClient(
+        {
+            "m1": [_market_detail(market_id="m1")],
+            "m2": [
+                OutlierApiError("HTTP 403 for market m2"),
+                OutlierApiError("HTTP 404 for market m2"),
+            ],
+        }
+    )
+
+    status = export_line_movement_for_league(
+        client,
+        "MLB",
+        workers=2,
+        retry_403_cooldown_seconds=0,
+    )
+
+    assert status["status"] == "partial"
+    assert status["retry_403_recovered"] == 0
+    assert status["retry_403_residual_errors"] == 1
+    assert status["retry_403_rounds_attempted"] == 1
+    assert client.calls["m2"] == 2
+    normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
+    assert normalized["fetch_errors"] == [
+        {
+            "market_id": "m2",
+            "status": "error",
+            "error": "HTTP 404 for market m2",
+            "http_status": 404,
+        }
+    ]
+
+
 def test_export_line_movement_can_disable_403_mop_up(tmp_path, monkeypatch):
     from outlier_scrapers import paths as paths_mod
 

@@ -9,7 +9,7 @@ import time
 
 import os
 
-from .api import OutlierApiClient, AuthRequiredError
+from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
 from .paths import otp_status_file, PROJECT_ROOT
 from .otp_fetcher import fetch_and_write_otp
 from . import refresh
@@ -36,7 +36,7 @@ def perform_auth_check(leagues: list[str]) -> bool:
         # Make a lightweight request to verify
         client.fetch_schedule(league)
         return True
-    except (AuthRequiredError, FileNotFoundError, ValueError) as exc:
+    except (AuthRequiredError, OutlierApiError, FileNotFoundError, ValueError) as exc:
         logger.info(f"Auth check determined reauth is needed: {exc}")
         return False
     except Exception as exc:

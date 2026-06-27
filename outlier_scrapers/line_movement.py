@@ -31,6 +31,7 @@ DEFAULT_WORKERS = 4
 STALE_PROPS_MAX_AGE_HOURS = 12.0
 DEFAULT_RETRY_403_COOLDOWN_SECONDS = 15.0
 DEFAULT_RETRY_403_WORKERS = 1
+DEFAULT_RETRY_403_MAX_ROUNDS = 3
 EV_METHOD_PRIORITY = (
     "AVERAGE",
     "MULTIPLICATIVE",
@@ -965,6 +966,7 @@ def export_line_movement_for_league(
     retry_failed_403: bool = True,
     retry_403_cooldown_seconds: float = DEFAULT_RETRY_403_COOLDOWN_SECONDS,
     retry_403_workers: int = DEFAULT_RETRY_403_WORKERS,
+    retry_403_max_rounds: int = DEFAULT_RETRY_403_MAX_ROUNDS,
 ) -> dict[str, Any]:
     config = get_sport_config(league)
     paths = league_paths(config.league_id).ensure()
@@ -1015,17 +1017,54 @@ def export_line_movement_for_league(
     retry_403_recovered = 0
     retry_403_residual_errors = 0
     retry_403_worker_count = max(1, int(retry_403_workers or 1))
+    retry_403_round_limit = max(0, int(retry_403_max_rounds or 0))
+    retry_403_rounds_attempted = 0
     retry_errors: list[dict[str, Any]] = []
     if retry_failed_403 and retry_403_market_ids:
-        if retry_403_cooldown_seconds > 0:
-            time.sleep(retry_403_cooldown_seconds)
-        retry_payloads, retry_errors = _fetch_market_payloads(
-            client,
-            retry_403_market_ids,
-            workers=retry_403_worker_count,
-        )
-        payloads_by_id.update(retry_payloads)
-        retry_403_recovered = len(retry_payloads)
+        pending_market_ids = retry_403_market_ids
+        last_403_errors = {
+            str(error["market_id"]): error
+            for error in first_pass_errors
+            if error.get("market_id") and _is_http_403_error(error)
+        }
+        terminal_retry_errors: list[dict[str, Any]] = []
+
+        for _ in range(retry_403_round_limit):
+            if not pending_market_ids:
+                break
+            if retry_403_cooldown_seconds > 0:
+                time.sleep(retry_403_cooldown_seconds)
+
+            retry_payloads, round_errors = _fetch_market_payloads(
+                client,
+                pending_market_ids,
+                workers=retry_403_worker_count,
+            )
+            retry_403_rounds_attempted += 1
+            payloads_by_id.update(retry_payloads)
+
+            errors_by_market_id = {
+                str(error["market_id"]): error
+                for error in round_errors
+                if error.get("market_id")
+            }
+            next_pending_market_ids: list[str] = []
+            for market_id in pending_market_ids:
+                error = errors_by_market_id.get(market_id)
+                if error is None:
+                    continue
+                if _is_http_403_error(error):
+                    next_pending_market_ids.append(market_id)
+                    last_403_errors[market_id] = error
+                else:
+                    # A retry can reveal a terminal condition such as an expired
+                    # market (404). Preserve it, but do not retry it as a 403.
+                    terminal_retry_errors.append(error)
+            pending_market_ids = next_pending_market_ids
+
+        terminal_retry_errors.extend(last_403_errors[market_id] for market_id in pending_market_ids)
+        retry_errors = terminal_retry_errors
+        retry_403_recovered = retry_403_count - len(retry_errors)
         retry_403_residual_errors = len(retry_errors)
 
     fetch_errors = [
@@ -1039,6 +1078,8 @@ def export_line_movement_for_league(
         "retry_403_residual_errors": retry_403_residual_errors,
         "retry_403_cooldown_seconds": retry_403_cooldown_seconds if retry_failed_403 else 0,
         "retry_403_workers": retry_403_worker_count if retry_failed_403 else 0,
+        "retry_403_max_rounds": retry_403_round_limit if retry_failed_403 else 0,
+        "retry_403_rounds_attempted": retry_403_rounds_attempted,
     }
 
     market_payloads = [
@@ -1145,7 +1186,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--retry-403-workers",
         type=int,
         default=DEFAULT_RETRY_403_WORKERS,
-        help="Workers for the HTTP 403 mop-up retry pass",
+        help="Workers for each HTTP 403 mop-up retry round",
+    )
+    parser.add_argument(
+        "--retry-403-max-rounds",
+        type=int,
+        default=DEFAULT_RETRY_403_MAX_ROUNDS,
+        help="Maximum cooldown-and-retry rounds for residual HTTP 403 failures",
     )
     parser.add_argument(
         "--require-fresh-props",
@@ -1166,6 +1213,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.retry_403_workers <= 0:
         print("--retry-403-workers must be a positive integer")
         return 2
+    if args.retry_403_max_rounds <= 0:
+        print("--retry-403-max-rounds must be a positive integer")
+        return 2
     if args.retry_403_cooldown_seconds < 0:
         print("--retry-403-cooldown-seconds must be non-negative")
         return 2
@@ -1182,6 +1232,7 @@ def main(argv: list[str] | None = None) -> int:
             retry_failed_403=not args.no_retry_failed_403,
             retry_403_cooldown_seconds=args.retry_403_cooldown_seconds,
             retry_403_workers=args.retry_403_workers,
+            retry_403_max_rounds=args.retry_403_max_rounds,
         )
     except StalePropsError:
         print(f"{args.league.upper()}: stale_props")
