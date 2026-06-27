@@ -20,5 +20,6 @@ packs/
 # Local credentials for headless auth - never commit.
 .env
 *.env
+*.egg-info/
 
 copilot-worktrees/
