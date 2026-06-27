@@ -140,6 +140,14 @@ For EACH game return:
 Only report what you can source. Flag anything my as-of data likely missed.
 ```
 
+Run it independently with:
+
+```powershell
+python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
+```
+
+Requires `GEMINI_API_KEY` (paid). This is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI product).
+
 ### Prompt C — ChatGPT per-game Deep Research (input: one `dossiers/<game>.md`, top-leverage games) — WEB ALLOWED
 ```
 Deep research on this single game. Answer the brief's open questions using current sources (last 24h). Each answer: { claim | source name | source tier (1/2/3) | timestamp }. Then for each listed market_id state CONFIRMS / CONTRADICTS / NEUTRAL to a bet at the quoted pack line, and why. Do NOT invent or update any line/price.
@@ -149,6 +157,14 @@ Deep research on this single game. Answer the brief's open questions using curre
 ```
 Act as a calibrated, skeptical betting analyst. From the pack ONLY (no web, no memory), independently evaluate the top EV and signal cards. For each market_id give: verdict (BET/LEAN/PASS/FADE), the line it applies to, confidence 1–5, and the single biggest reason you might be WRONG. Separately list any card that looks like a data artifact and should be stood down. Prefer PASS to a forced lean. Do not propose unit sizes.
 ```
+
+Run it independently with:
+
+```powershell
+python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD
+```
+
+Requires `ANTHROPIC_API_KEY` (paid).
 
 ### Prompt E — Claude synthesis → final guide (input: outputs A + B + C + D) — VALIDATION FIRST
 ```
@@ -167,6 +183,14 @@ STEP 2 — BUILD:
 
 Output the §4 schema, plus an AGREE/DISAGREE matrix (market_id × A/B/C/D).
 ```
+
+Run it independently with:
+
+```powershell
+python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
+```
+
+Requires `ANTHROPIC_API_KEY` (paid). Note the dependency order: E requires outputs from A (via daily job or OpenAI), B, and D to exist first for the date. Prompt C (if present) is still a manual paste.
 
 ---
 

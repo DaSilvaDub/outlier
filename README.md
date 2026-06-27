@@ -80,6 +80,16 @@ You can append `--run-reasoning` to automatically execute the reasoning pass aft
 python -m outlier_scrapers.daily_job --leagues MLB,WNBA --run-reasoning
 ```
 
+The new standalone runners for Prompts B (Gemini), D (Claude reasoning), and E (Claude synthesis) can also be invoked directly:
+
+```powershell
+python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
+python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD
+python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
+```
+
+These require the matching environment variables (`GEMINI_API_KEY` for B; `ANTHROPIC_API_KEY` for D/E) and consume paid API quota. Prompt E (synthesis) requires the outputs of A, B, and D to already exist for the date. See the runbook for full details and caveats: Prompt B is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI); Prompt C remains a manual Deep Research paste.
+
 To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
 
 Example Task Scheduler action:
