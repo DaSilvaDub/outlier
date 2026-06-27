@@ -23,3 +23,7 @@ packs/
 *.egg-info/
 
 copilot-worktrees/
+
+# Local tooling and throwaway debug/scratch work (screenshots, debug scripts).
+.codex/
+scratch/
