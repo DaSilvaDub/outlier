@@ -9,6 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
+import time
 
 import openai
 
@@ -72,30 +73,42 @@ def call_openai_responses_api(
         load_environment()
         if not os.getenv("OPENAI_API_KEY"):
             raise ReasoningError("OPENAI_API_KEY is not set.")
-        client = openai.OpenAI(timeout=600.0, max_retries=5)
+        client = openai.OpenAI(timeout=600.0, max_retries=10)
 
     full_prompt = prompt_text + "\n\nData:\n" + raw_csv_bytes.decode("utf-8")
 
-    try:
-        response = client.responses.create(
-            model=MODEL,
-            reasoning={"effort": EFFORT},
-            max_output_tokens=32_000,
-            store=False,
-            instructions="\n".join(role_block),
-            input=[{"role": "user", "content": full_prompt}],
-        )
-        if not response.output_text or not response.output_text.strip():
-            raise ReasoningError("Received empty or whitespace-only response from API")
-        return response.output_text
-    except openai.APIError as e:
-        req_id = getattr(e, "request_id", None)
-        status = getattr(e, "status_code", None)
-        raise ReasoningError(
-            f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
-        )
-    except Exception as e:
-        raise ReasoningError(f"API call failed: type={type(e).__name__}")
+    max_custom_retries = 10
+    for attempt in range(max_custom_retries):
+        try:
+            response = client.responses.create(
+                model=MODEL,
+                reasoning={"effort": EFFORT},
+                max_output_tokens=32_000,
+                store=False,
+                instructions="\n".join(role_block),
+                input=[{"role": "user", "content": full_prompt}],
+            )
+            if not response.output_text or not response.output_text.strip():
+                raise ReasoningError("Received empty or whitespace-only response from API")
+            return response.output_text
+        except openai.RateLimitError as e:
+            if attempt < max_custom_retries - 1:
+                logger.warning(f"OpenAI API rate limited, retrying in 30s...")
+                time.sleep(30)
+                continue
+            req_id = getattr(e, "request_id", None)
+            status = getattr(e, "status_code", None)
+            raise ReasoningError(
+                f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
+            )
+        except openai.APIError as e:
+            req_id = getattr(e, "request_id", None)
+            status = getattr(e, "status_code", None)
+            raise ReasoningError(
+                f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
+            )
+        except Exception as e:
+            raise ReasoningError(f"API call failed: type={type(e).__name__}")
 
 
 def run_reasoning(

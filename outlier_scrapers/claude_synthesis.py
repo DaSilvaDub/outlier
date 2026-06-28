@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 MODEL = CLAUDE_MODEL
 EFFORT = "high"
-MAX_TOKENS = 32_000
+MAX_TOKENS = 8192
 OUT_NAME = "claude_e.md"
 PROMPT_FILE = "E.md"
 
@@ -69,8 +69,6 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "adaptive"},
-            output_config={"effort": EFFORT},
             system="\n".join(role_block),
             messages=[{"role": "user", "content": user_content}],
         ) as stream:

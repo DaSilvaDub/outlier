@@ -15,6 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
+import time
 
 from google import genai
 from google.genai import types
@@ -47,17 +48,23 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
         tools=[types.Tool(google_search=types.GoogleSearch())],
         max_output_tokens=MAX_TOKENS,
     )
-    try:
-        response = client.models.generate_content(
-            model=MODEL, contents=full_prompt, config=config
-        )
-    except Exception as e:
-        raise rc.RunnerError(f"API call failed: type={type(e).__name__}")
-
-    text = getattr(response, "text", None) or ""
-    if not text.strip():
-        raise rc.RunnerError("Received empty or whitespace-only response from API")
-    return text
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=MODEL, contents=full_prompt, config=config
+            )
+            text = getattr(response, "text", None) or ""
+            if not text.strip():
+                raise rc.RunnerError("Received empty or whitespace-only response from API")
+            return text
+        except Exception as e:
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                if attempt < max_retries - 1:
+                    logger.warning(f"Gemini API rate limited, retrying in {2 ** attempt}s...")
+                    time.sleep(2 ** attempt)
+                    continue
+            raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
 
 
 def run_gemini_b(

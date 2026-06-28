@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 MODEL = CLAUDE_MODEL
 EFFORT = "high"
-MAX_TOKENS = 32_000
+MAX_TOKENS = 8192
 OUT_NAME = "claude_d.md"
 PROMPT_FILE = "D.md"
 
@@ -44,16 +44,16 @@ def call_claude(prompt_text: str, role_block: list[str], raw_csv_bytes: bytes, c
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "adaptive"},
-            output_config={"effort": EFFORT},
             system="\n".join(role_block),
             messages=[{"role": "user", "content": full_prompt}],
         ) as stream:
             message = stream.get_final_message()
     except anthropic.APIError as e:
+        error_body = e.response.text if hasattr(e, 'response') else str(e)
         raise rc.RunnerError(
             f"API call failed: type={type(e).__name__} "
-            f"status={getattr(e, 'status_code', None)} request_id={getattr(e, 'request_id', None)}"
+            f"status={getattr(e, 'status_code', None)} request_id={getattr(e, 'request_id', None)} "
+            f"details={error_body}"
         )
     except Exception as e:
         raise rc.RunnerError(f"API call failed: type={type(e).__name__}")

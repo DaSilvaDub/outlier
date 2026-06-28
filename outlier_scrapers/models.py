@@ -25,4 +25,4 @@ GEMINI_MODEL = "gemini-3.1-pro-preview"
 # --- Anthropic Claude (Prompts D/E — synthesizer / red-team) -------------
 # Exact model string from the Anthropic model catalog. Do NOT append a date
 # suffix (e.g. "-20251101") — the bare alias is complete as-is.
-CLAUDE_MODEL = "claude-opus-4-8"
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
