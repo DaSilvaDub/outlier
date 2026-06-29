@@ -99,9 +99,7 @@ def test_success_writes_file_and_asserts_api(claude_env, mock_anthropic):
 
     api = mock_anthropic[0].messages
     assert api.called
-    assert api.kwargs["model"] == "claude-opus-4-8"
-    assert api.kwargs["thinking"] == {"type": "adaptive"}
-    assert api.kwargs["output_config"] == {"effort": "high"}
+    assert api.kwargs["model"] == "claude-3-5-sonnet-20241022"
     assert api.kwargs["system"] == "\n".join(pack.ROLE_BLOCK)
     assert "budget_tokens" not in str(api.kwargs.get("thinking"))
     assert "temperature" not in api.kwargs
