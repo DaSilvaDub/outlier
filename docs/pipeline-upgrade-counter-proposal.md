@@ -2,10 +2,39 @@
 
 **Re:** codex "Trustworthy Daily Pipeline Upgrade" plan (worktree `a318709`)
 **Author:** independent review (Claude)
-**Date:** 2026-06-29 · **Rev:** v2 (corrected after review)
-**Verdict:** Adopt the three-tier sequencing and clean-HEAD approach **after** the corrections in §2.
+**Date:** 2026-06-29 · **Rev:** v3 (build environment corrected)
+**Verdict:** Adopt the three-tier sequencing and clean-HEAD approach **after** the corrections in §2. Build baseline and worktree location are fixed in §0.
 
+> **v3 changelog:** added §0 (verified build baseline + worktree topology) after the failed OneDrive-worktree attempt; corrected the clean-HEAD target from `a318709` to `master @ ad30323` (which already contains a318709); listed cleanup of the orphan `ai-runners` repo and phantom worktree registration.
 > **v2 changelog:** corrected the retry claim (§2.2), the selection-dedup root cause (§2.3), the scope of the Claude-model fix (§2.4), reclassified model retirement as a separate defect not the June-28 cause (§2.1), recorded the verified test baseline (§5), fixed the quota algorithm to be implementation-complete (§3.1), and added the ruff dependency caveat (§6).
+
+---
+
+## 0. Build environment & worktree topology (verified 2026-06-29)
+
+**Build baseline = `master @ ad30323`**, not `a318709`. `git merge-base --is-ancestor` confirms `master` already contains `a318709` (chain: `a318709` → `da23703` Add multi-agent sync system → `ad30323`). All Tier work targets `master`.
+
+**Worktrees must live OUTSIDE OneDrive.** The healthy worktrees already exist under `C:\Users\dasil\.codex\worktrees\…` (local, non-synced):
+- Plan target `a318709`: e.g. `…\.codex\worktrees\3316\outlier` (and 17bc/33b2/dad6).
+- **`5716` read-only reference** = `C:\Users\dasil\.codex\worktrees\5716\outlier` @ `2aff065`.
+
+**Do not create worktrees inside `C:\…\OneDrive\…`.** The attempt to add `OneDrive\Documents\outlier-worktrees\ai-runners` failed repeatedly because that path is a OneDrive reparse point (`dar--l`) and sync corrupts the worktree's `.git` gitfile reference. This is the worktree-specific face of the known OneDrive quirk.
+
+**Cleanup left by the failed attempt (gated — needs GO):**
+1. Orphan repo `OneDrive\Documents\outlier-worktrees\ai-runners` — a standalone `git init` with `origin` set but **zero commits**. Nothing to save; delete the folder.
+2. Locked **phantom worktree** registration `…\outlier-worktrees\ai-runners-dummy` → branch `ai-runners-wt` (folder absent). Unlock + remove, then prune.
+3. Stray branches `ai-runners-wt{,2,3}` if present.
+
+```powershell
+cd "C:\Users\dasil\OneDrive\Documents\outlier"
+git worktree unlock "C:/Users/dasil/OneDrive/Documents/outlier-worktrees/ai-runners-dummy"
+git worktree remove --force "C:/Users/dasil/OneDrive/Documents/outlier-worktrees/ai-runners-dummy"
+git worktree prune -v
+Remove-Item -Recurse -Force "C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners"
+git branch -D ai-runners-wt ai-runners-wt2 ai-runners-wt3   # ignore "not found"
+# New worktree, OUTSIDE OneDrive:
+git worktree add -b ai-runners "C:\Users\dasil\outlier-wt\ai-runners" master
+```
 
 ---
 
@@ -83,7 +112,7 @@ Both failing tests already encode the intended target — runtime config lags th
 ---
 
 ## 6. Clean-HEAD + tooling caveats
-- Reimplement on **current HEAD**; use `5716` as **read-only reference only** (it is dirty + uses incompatible provider config). This removes the largest execution risk.
+- Reimplement on **`master @ ad30323`** in a **non-OneDrive worktree** (§0); use `…\.codex\worktrees\5716\outlier` (@ `2aff065`) as **read-only reference only** (dirty + incompatible provider config). This removes the largest execution risk.
 - Keep the **Claude preflight optional** so it can never block the local-default path.
 - **ruff is configured (`[tool.ruff]`) but not a declared dependency** (absent from `pyproject` `dependencies` and `requirements.txt`). Either add it as a dev dependency or keep the `ruff` gate **conditional** (skip cleanly when not installed). Do not make a green-suite acceptance criterion depend on an undeclared tool.
 
