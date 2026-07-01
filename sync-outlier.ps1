@@ -104,7 +104,7 @@ if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
 #    Also materialize the sync tooling itself so every tree gets the latest bootstrap.
 Write-Info "Materializing key files (pack, daily, tests, prompts, sync tooling)..."
-git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 SYNC.md 2>&1 | Out-Null
+git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 SYNC.md 2>&1 | Out-Null
 
 # 5. Touch the files (helps OneDrive Files-On-Demand hydrate the content for this view)
 try {
@@ -163,7 +163,7 @@ if ($SyncAllWorktrees) {
         git -C $wtPath fetch origin --prune --tags 2>&1 | Out-Null
         # Non-destructive for the files we care about (the ones that were invisible before).
         # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
-        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 SYNC.md 2>&1 | Out-Null
+        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 SYNC.md 2>&1 | Out-Null
         try {
           $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
         } catch {}
