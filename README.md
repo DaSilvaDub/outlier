@@ -104,15 +104,33 @@ python -m outlier_scrapers.reasoning --date YYYY-MM-DD --force
 `xhigh` reasoning can be slower and more expensive than lower-effort calls. Check
 API billing and project limits before enabling it in a scheduled task.
 
-The new standalone runners for Prompts B (Gemini), D (Claude reasoning), and E (Claude synthesis) can also be invoked directly:
+The standalone runners for Prompts B/C (Gemini), D (Claude reasoning), and E (Claude synthesis) can also be invoked directly:
 
 ```powershell
 python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
+python -m outlier_scrapers.c_research --date YYYY-MM-DD
 python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD
 python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
 ```
 
-These require the matching environment variables (`GEMINI_API_KEY` for B; `ANTHROPIC_API_KEY` for D/E) and consume paid API quota. Prompt E (synthesis) requires the outputs of A, B, and D to already exist for the date. See the runbook for full details and caveats: Prompt B is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI); Prompt C remains a manual Deep Research paste.
+These require the matching environment variables (`GEMINI_API_KEY` for B/C;
+`ANTHROPIC_API_KEY` for D/E) and consume paid API quota. Prompt E (synthesis) requires
+the outputs of A, B, and D to already exist for the date and includes C when present.
+Prompts B and C are single Google-Search-grounded generation passes, not the full
+multi-step Gemini Deep Research UI. Prompt C validates every emitted market ID,
+selection, line, and price against `candidates.csv` before writing `chatgpt_c.md`.
+
+### Paid AI Research Desk Orchestration
+
+After a pack is produced (by `daily_job` or `pack`), run the paid desk phases with:
+
+```powershell
+python -m outlier_scrapers.run_desk --date YYYY-MM-DD
+```
+
+This invokes A/B/C/D/E in dependency order, refreshes stale hashes, preserves prior output
+when a refresh fails, and writes `reasoning_status.json`. It does not fabricate a local report
+when paid synthesis is unavailable; use the pack directly for a separately reviewed fallback.
 
 To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
 
