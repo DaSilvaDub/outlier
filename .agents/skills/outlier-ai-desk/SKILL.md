@@ -1,7 +1,7 @@
 ---
 name: outlier-ai-desk
 description: >-
-  Orchestrates the full AI Research Desk for a daily Outlier pack (A/B/D/E runners).
+  Orchestrates the full AI Research Desk for a daily Outlier pack (A/B/C/D/E runners).
   Ensures a pack exists, reads front-matter to detect staleness and uses --force when needed,
   invokes the provider runners (OpenAI A, Gemini B, Claude D/E) only when keys are available,
   produces FULL/PARTIAL/DATA_ONLY status where FULL requires a complete final report (E or fallback),
@@ -13,7 +13,7 @@ description: >-
 
 ## Purpose
 Complete the automated + hybrid reasoning layer on top of the scrape/pack pipeline.
-`daily_job` produces the data pack. This skill drives the multi-model "desk" (Prompts A/B/D/E), handles paid API steps idempotently, reports structured status, and **always** yields a usable betting report even if one or more external models are unavailable.
+`daily_job` produces the data pack. This skill drives the multi-model "desk" (Prompts A/B/C/D/E), handles paid API steps idempotently, reports structured status, and **always** yields a usable betting report even if one or more external models are unavailable.
 
 Use this instead of manually running separate `gemini_research`, `claude_reasoning`, `claude_synthesis`, and `reasoning` commands. It is the canonical way to finish a slate after packing.
 
@@ -31,9 +31,9 @@ Use this instead of manually running separate `gemini_research`, `claude_reasoni
 - A pack for the target date exists under `packs/YYYY-MM-DD/` (with at minimum `briefing.md` + `candidates.csv`).
 - For full desk: the relevant keys must be in env or `.env`:
   - `OPENAI_API_KEY` (Prompt A)
-  - `GEMINI_API_KEY` (Prompt B)
+  - `GEMINI_API_KEY` (Prompts B and C)
   - `ANTHROPIC_API_KEY` (Prompts D and E)
-- The individual runners (`outlier_scrapers.reasoning`, `.gemini_research`, `.claude_reasoning`, `.claude_synthesis`) and `runner_common` are already implemented and tested.
+- The individual runners (`outlier_scrapers.reasoning`, `.gemini_research`, `.c_research`, `.claude_reasoning`, `.claude_synthesis`) and `runner_common` are already implemented and tested.
 
 ## Workflow
 
@@ -59,13 +59,13 @@ Required for full E synthesis:
 - B: `gemini_b.md` (web-grounded, Gemini on briefing)
 - D: `claude_d.md` (pack-only, Claude)
 
-Optional:
-- C: `chatgpt_c.md` (per-game manual paste — skip or include if present)
+Optional for E, but run by default:
+- C: `chatgpt_c.md` (automated grounded injury/lineup research; E includes it when present)
 
 E (synthesis) is the final paid step that produces `claude_e.md`. E **requires** briefing.md + chatgpt_a.md + gemini_b.md + claude_d.md to all be present (see `claude_synthesis.gather_inputs()`). It cannot run on a partial set.
 
 Strategy inside this skill (the agent implements the decision logic):
-- For each of A/B/D:
+- For each of A/B/C/D:
   - If the output file exists, read its YAML front-matter `request_sha256` (using the same logic as `runner_common.extract_yaml_request_hash`).
   - Re-compute the current request hash from the live pack inputs (briefing/candidates + ROLE_BLOCK + prompt + model).
   - If hashes match → treat as fresh cached, skip the API call.
@@ -85,6 +85,7 @@ Use the CLI entry points. **The agent (not the CLI) decides whether a refresh is
 # Example: agent read front-matter, detected mismatch or missing file → use --force
 python -m outlier_scrapers.reasoning --date YYYY-MM-DD --force
 python -m outlier_scrapers.gemini_research --date YYYY-MM-DD --force
+python -m outlier_scrapers.c_research --date YYYY-MM-DD --force
 python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD --force
 
 # Fresh / cached case (hashes matched) — no --force
@@ -95,7 +96,8 @@ python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
 ```
 
 The skill implementation (or you driving it) should:
-- Run A/B/D in parallel where safe (they are independent after pack).
+- Run independent phases concurrently only where provider quotas make that safe; B and C
+  share the Gemini quota.
 - **Only invoke E after A + B + D + briefing.md are all confirmed present and their content is valid.** `claude_synthesis.gather_inputs()` (and therefore the CLI) **requires** all three reasoning outputs plus the briefing; partial subsets will cause E to fail. Do not attempt E until the required inputs validate.
 - When the agent itself has detected a hash mismatch, pass `--force` on the CLI for that runner. Do not rely on the CLI's internal no-op logic.
 - Pass `--force` on explicit user request even without a detected mismatch.
@@ -120,6 +122,7 @@ Minimal schema (allow-listed keys only):
   "components": {
     "A": { "status": "success" | "cached" | "skipped-no-key" | "forced-refresh" | "failed", "file": "chatgpt_a.md", "request_sha256": "..." },
     "B": { ... },
+    "C": { ... },
     "D": { ... },
     "E": { "status": "...", "file": "claude_e.md" }
   },
@@ -203,7 +206,7 @@ Return:
 ```
 
 ## Integration with Existing Tools
-- `daily_job --run-reasoning` still only guarantees Prompt A. Call this skill afterwards (or extend daily_job in a future change) to get B/D/E + final report.
+- `daily_job --run-reasoning` still only guarantees Prompt A. Call this skill afterwards (or extend daily_job in a future change) to get B/C/D/E + final report.
 - `synthesize-outlier-pack` is the fallback engine when this orchestrator cannot obtain full desk outputs.
 - Individual runners remain directly callable for debugging or one-off re-runs.
 - `reasoning_status.json` is the single source of truth for "what did the desk actually produce today?"
