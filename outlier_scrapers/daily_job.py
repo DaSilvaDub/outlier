@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         if profile == "openai":
             run_steps = ["A"]
         elif profile == "full":
-            run_steps = ["A", "B", "D", "E"]
+            run_steps = ["A", "B", "C", "D", "E"]
 
         if run_steps or profile == "local":
             logger.info("Running analysis desk (profile=%s)...", profile)

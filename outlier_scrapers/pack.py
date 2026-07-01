@@ -203,7 +203,12 @@ def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
             core = f"{name_s} {label_s}".strip()
     else:
         core = " ".join(p for p in (name_s, label_s) if p)
-    parts = [core, side_s] if core and side_s else ([core] if core else ([side_s] if side_s else []))
+    # Append side only if not already present in core (prevents "Foo OVER OVER 1.5").
+    # This keeps display dedup while preserving verbatim spirit for research quotes.
+    parts = [core] if core else []
+    if side_s:
+        if side_s.lower() not in (core or "").lower():
+            parts.append(side_s)
     fl = _fmt_line(line)
     if fl:
         parts.append(fl)
@@ -299,6 +304,14 @@ def build_row(
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
     row["_slug"] = _slug(card.get("matchup") or ref.get("matchup"))
+
+    # Preserve any _raw_* or other upstream passthrough fields from card/ref/ev (AGENTS.md).
+    for src in (card, ref, (ev_summary or {})):
+        if isinstance(src, dict):
+            for k, v in src.items():
+                if k.startswith("_") and k not in row:
+                    row[k] = v
+
     return row
 
 def _local_date(iso_ts: str | None) -> str | None:
@@ -361,9 +374,11 @@ def select_date(
     return kept, target
 
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
-    for r in rows:
-        if "_stream" not in r:
-            r["_stream"] = "props"
+    # Immutability: do not mutate caller's rows. Create new objects (AGENTS.md).
+    rows = [
+        ({**r, "_stream": "props"} if "_stream" not in r else r)
+        for r in rows
+    ]
     board_a = [r for r in rows if r.get("_board") == "board_a"]
     board_b = [r for r in rows if r.get("_board") == "board_b"]
     def _key(r: dict[str, Any]) -> tuple[float, str]:
