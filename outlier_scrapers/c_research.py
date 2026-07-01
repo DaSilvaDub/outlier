@@ -52,8 +52,11 @@ def _candidate_index(raw_bytes: bytes) -> dict[str, dict[str, str]]:
     return {row["market_id"]: row for row in rows if row.get("market_id")}
 
 
-def validate_output(output_text: str, candidates: dict[str, dict[str, str]]) -> None:
-    """Reject output that is unstructured or changes an authoritative quote."""
+def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pack_date_str: str) -> None:
+    """Reject output that is unstructured, changes an authoritative quote, or has out-of-bounds dates.
+    
+    Assumes the model never emits " | " inside a field value (this is prompt-enforced).
+    """
     stripped = output_text.strip()
     if stripped == NO_FINDINGS:
         return
@@ -92,6 +95,23 @@ def validate_output(output_text: str, candidates: dict[str, dict[str, str]]) -> 
         for field in ("claim", "source_name", "source_timestamp"):
             if not fields[field].strip():
                 raise rc.RunnerError(f"Prompt C output line {line_number} has an empty {field}")
+        
+        try:
+            from datetime import datetime, timedelta
+            pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
+            from dateutil import parser as date_parser
+            ts = date_parser.parse(fields["source_timestamp"]).date()
+            if not (pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)):
+                raise rc.RunnerError(
+                    f"Prompt C output line {line_number} timestamp '{fields['source_timestamp']}' "
+                    f"is outside the valid window for pack date {pack_date_str}"
+                )
+        except ValueError:
+            pass # pack_date_str wasn't YYYY-MM-DD
+        except Exception as e:
+            if isinstance(e, rc.RunnerError):
+                raise
+            raise rc.RunnerError(f"Prompt C output line {line_number} has unparseable timestamp: {fields['source_timestamp']}")
 
 
 def run_c_research(
@@ -136,7 +156,7 @@ def run_c_research(
         )
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)
-        validate_output(output_text, candidates)
+        validate_output(output_text, candidates, pack_dir.name)
 
         front_matter = (
             "---\n"
