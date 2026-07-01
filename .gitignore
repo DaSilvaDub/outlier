@@ -27,3 +27,5 @@ copilot-worktrees/
 # Local tooling and throwaway debug/scratch work (screenshots, debug scripts).
 .codex/
 scratch/
+
+.tmp.driveupload/
