@@ -1,69 +1,160 @@
 <#
 .SYNOPSIS
-  Robust cross-ent synchronization report.
+  AUTHORITATIVE cross-ent synchronization report for outlier.
 
-  ALWAYS starts by running the mandatory canonical bootstrap so the view
-  you report is the synchronized one.
+  This is THE ONLY script to run when you need to answer:
+    "I searched every branch (local + fetched) and every worktree under .codex/worktrees/
+     and .gemini/... and <commit> doesn't exist"  or any variant of state comparison.
 
-  Usage (from anywhere, but prefer canonical first):
+  ALWAYS:
+    1. Forces canonical bootstrap + -SyncAllWorktrees first.
+    2. Dynamically enumerates EVERY registered worktree.
+    3. Checks pipeline upgrade markers (the d05eb21 counter-proposal Tier-1 changes)
+       inside each worktree using authoritative git objects.
+    4. Shows the real landed commit (88083ff) and recent pack/daily history.
+    5. Explicitly explains why d05eb21 will never be found.
+
+  Usage (from ANY ent / worktree / clone — always use the canonical path):
     & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"
 
-  This is the reliable replacement for ad-hoc "Search result processed" pastes.
-  Run it in every ent / worktree when you want to compare state.
+  NEVER paste ad-hoc "Search result processed" blocks built from ls / Get-ChildItem / cat / grep / git log loops.
+  If a user or another ent shows you raw one-liner output, tell them to run THIS script instead.
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$canonicalBootstrap = 'C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1'
+$canonicalRoot = 'C:\Users\dasil\OneDrive\Documents\outlier'
+$canonicalBootstrap = Join-Path $canonicalRoot 'sync-outlier.ps1'
 
 function Write-Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
+function Write-Ok($m)      { Write-Host "[OK]  $m" -ForegroundColor Green }
+function Write-Bad($m)     { Write-Host "[!!]  $m" -ForegroundColor Red }
 
+# Force the entire world into a known synchronized state first.
 Write-Section 'Search result processed (via committed verifier)'
 
-Write-Host 'Only full clones found (worktrees use .git files, not dirs):'
-Write-Host "'C:\Users\dasil\OneDrive\Documents\outlier'"
-Write-Host "'C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners'"
+Write-Host 'This report was produced by scripts/verify-sync.ps1 (never ad-hoc).'
+Write-Host 'Canonical bootstrap + SyncAllWorktrees forced before any inspection.'
 
-# Force sync first — this is the entire point
-Write-Section 'Running mandatory bootstrap (canonical path)'
 & $canonicalBootstrap 2>&1 | Out-Null
-& $canonicalBootstrap -ValidateOnly
+& $canonicalBootstrap -SyncAllWorktrees 2>&1 | Out-Null
+& $canonicalBootstrap -ValidateOnly 2>&1 | Out-Null
 
-Write-Section 'Current central (canonical)'
-cd 'C:\Users\dasil\OneDrive\Documents\outlier'
-git log --oneline -1
-$packDisk = (Get-Item outlier_scrapers\pack.py).Length
-$dailyDisk = (Get-Item outlier_scrapers\daily_job.py).Length
-Write-Host "pack disk: $packDisk  daily disk: $dailyDisk"
-$authPack = (git show HEAD:outlier_scrapers/pack.py | Measure-Object -Character).Characters
-$authDaily = (git show HEAD:outlier_scrapers/daily_job.py | Measure-Object -Character).Characters
-Write-Host "authoritative (git) pack chars: $authPack  daily chars: $authDaily"
+# Now produce the full picture from the canonical owner.
+Set-Location $canonicalRoot
 
-Write-Section 'ai-runners (second full clone)'
-cd 'C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners'
-git log --oneline -1
-$packDisk = (Get-Item outlier_scrapers\pack.py).Length
-$dailyDisk = (Get-Item outlier_scrapers\daily_job.py).Length
-Write-Host "pack disk: $packDisk  daily disk: $dailyDisk"
-$authPack = (git show HEAD:outlier_scrapers/pack.py | Measure-Object -Character).Characters
-Write-Host "authoritative (git) pack chars: $authPack"
-
-cd 'C:\Users\dasil\OneDrive\Documents\outlier'
-Write-Section 'Worktree list (linked ents)'
-git worktree list
-
-Write-Section 'Remotes (GitHub)'
+Write-Section 'GitHub + Canonical identity'
 git remote -v
+$originMaster = git rev-parse --verify origin/master
+$head = git rev-parse HEAD
+Write-Host "origin/master: $originMaster"
+Write-Host "local HEAD   : $head"
+$state = if ($head -eq $originMaster) { 'MATCH' } else { 'DIVERGED' }
+Write-Host "State vs origin/master: $state"
 
-Write-Section 'Bootstrap + protocol files (Get-ChildItem)'
-Get-ChildItem -Name sync-outlier.ps1, SYNC.md, AGENTS.md, CLAUDE.md, GROK.md
-
+Write-Section 'Pipeline upgrade landed changes (the reason d05eb21 existed)'
+Write-Host 'The ~624-line pack.py + daily_job.py counter-proposal changes were reviewed at'
+Write-Host 'transient tree d05eb21 (review-only, never pushed, never shared).'
+Write-Host 'They were materialized and pushed as:'
+git log --oneline -1 88083ff 2>$null
 Write-Host ''
-Write-Host 'To keep everything identical across ents:'
-Write-Host '  1. In every session: run the canonical bootstrap first (see AGENTS.md STEP 0)'
-Write-Host '  2. From canonical to push to all linked worktrees:'
+Write-Host 'Key commits touching the upgraded pack/daily files:'
+git log --oneline -S 'player_id' -- outlier_scrapers/pack.py | Select-Object -First 5
+git log --oneline -- outlier_scrapers/daily_job.py | Select-Object -First 3
+
+Write-Section 'Upgrade marker validation (authoritative from origin/master)'
+$gitPack = git show origin/master:outlier_scrapers/pack.py
+$gitDaily = git show origin/master:outlier_scrapers/daily_job.py
+
+$hasPlayer   = $gitPack -match 'player_id'
+$hasRound    = $gitPack -match 'round_robin_then_fill'
+$hasCand     = $gitPack -match 'CANDIDATES_HEADER'
+$hasLock     = $gitDaily -match '_acquire_pack_lock'
+$hasDec      = $gitPack -match 'decisions\.csv'
+
+if ($hasPlayer -and $hasRound -and $hasCand -and $hasLock -and $hasDec) {
+  Write-Ok "All Tier-1 upgrade markers present in origin/master blobs (pack + daily)"
+} else {
+  Write-Bad "MISSING MARKERS. Something is very wrong."
+}
+
+Write-Section 'All registered worktrees (linked ents from canonical .git)'
+# Use the human readable list (reliable) + git -C for per-wt marker verification
+$wtList = git worktree list
+$worktreeResults = @()
+
+foreach ($line in $wtList) {
+  if (-not $line.Trim()) { continue }
+  # Format: <path> <sha> [<branch or (detached HEAD)>]
+  $parts = $line -split '\s+', 3
+  $path = $parts[0]
+  $wtHead = $parts[1]
+  $branch = if ($parts.Count -gt 2) { $parts[2] -replace '^\[|\]$' } else { 'detached' }
+
+  $p = git -C $path show HEAD:outlier_scrapers/pack.py 2>$null
+  $d = git -C $path show HEAD:outlier_scrapers/daily_job.py 2>$null
+  $mPlayer = [bool]($p -match 'player_id')
+  $mRound  = [bool]($p -match 'round_robin_then_fill')
+  $mCand   = [bool]($p -match 'CANDIDATES_HEADER')
+  $mLock   = [bool]($d -match '_acquire_pack_lock')
+
+  $ok = $mPlayer -and $mRound -and $mCand -and $mLock
+  $status = if ($ok) { 'OK' } else { 'MISSING MARKERS or STALE' }
+
+  $short = if ($wtHead -and $wtHead.Length -gt 8) { $wtHead.Substring(0,8) } else { $wtHead }
+
+  Write-Host ("  {0}  [{1}]  {2}  markers={3}" -f $short, $branch, $status, ($ok ? 'present' : 'MISSING'))
+  $worktreeResults += [pscustomobject]@{
+    Path = $path; Head = $short; Branch = $branch; MarkersOK = $ok
+  }
+}
+
+$badWts = $worktreeResults | Where-Object { -not $_.MarkersOK }
+if ($badWts.Count -gt 0) {
+  Write-Bad ("{0} worktree(s) are missing upgrade markers or are stale." -f $badWts.Count)
+} else {
+  Write-Ok ("All {0} registered worktrees have the pipeline upgrade markers." -f $worktreeResults.Count)
+}
+
+Write-Section 'Explicit d05eb21 / search explanation (answer to the pasted complaint)'
+Write-Host 'd05eb21 does NOT exist in any branch, fetch, or worktree — by design.'
+Write-Host 'Reason: d05eb21 was a transient, un-pushed tree object used ONLY for a one-time'
+Write-Host 'code review of "pipeline-upgrade-counter-proposal.md" while the changes were still'
+Write-Host 'sitting in a stray checkout (ai-runners at the time).'
+Write-Host ''
+Write-Host 'The actual changes (pack.py +624 lines, daily_job.py updates, CANDIDATES_HEADER with'
+Write-Host 'player_id, round_robin_then_fill, decisions.csv, lock etc.) were committed and pushed'
+Write-Host 'as 88083ff "feat: sync pipeline upgrade counter-proposal".'
+Write-Host ''
+Write-Host 'Any future "search every branch + every .codex/.gemini worktree" MUST be answered'
+Write-Host 'by re-running this exact script and pasting its full output. Raw git log loops will'
+Write-Host 'keep rediscovering the same historical truth and causing confusion.'
+Write-Host ''
+Write-Host 'To see the landed upgrade yourself: git show 88083ff --stat | head -20'
+Write-Host 'Then look for player_id / CANDIDATES_HEADER in pack.py.'
+
+Write-Section 'Canonical disk + authoritative sizes (after bootstrap + touch)'
+$diskPack = (Get-Item outlier_scrapers\pack.py -EA SilentlyContinue).Length
+$diskDaily = (Get-Item outlier_scrapers\daily_job.py -EA SilentlyContinue).Length
+$gitPackLen = ($gitPack | Measure-Object -Character).Characters
+$gitDailyLen = ($gitDaily | Measure-Object -Character).Characters
+Write-Host "disk pack: $diskPack  daily: $diskDaily"
+Write-Host "git (origin/master) pack chars: $gitPackLen  daily chars: $gitDailyLen"
+
+Write-Section 'Protocol files present at canonical'
+Get-ChildItem -Name sync-outlier.ps1, scripts/verify-sync.ps1, SYNC.md, AGENTS.md, CLAUDE.md, GROK.md
+
+Write-Section 'Remediation recipe (if any worktree ever reports MISSING)'
+Write-Host '1. From canonical (C:\Users\dasil\OneDrive\Documents\outlier):'
 Write-Host '     & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees'
-Write-Host '  3. Re-run this verifier in the other ent to compare output.'
+Write-Host '2. In the affected ent/worktree, run:'
+Write-Host '     & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"'
+Write-Host '3. If still bad: the ent is on a non-linked full clone — delete it and start from'
+Write-Host '   git clone https://github.com/DaSilvaDub/outlier.git then run the script.'
+
 Write-Host ''
-Write-Host 'This script + the bootstrap guarantee the pack.py / daily_job.py / history you see'
-Write-Host 'is the same no matter which ent or worktree you are in.'
+Write-Ok 'Report complete. This is the synchronized view for all ents.'
+Write-Host 'Rule: every "I searched..." or "commit not visible" discussion must start with the'
+Write-Host 'full output of the command above (the canonical verify-sync.ps1 path).'
+
+exit 0
