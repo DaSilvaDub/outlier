@@ -1,24 +1,27 @@
 <#
 .SYNOPSIS
-  MANDATORY bootstrap for all agents (Grok, Claude, Codex, Gemini, etc.).
-  Run at the VERY START of EVERY session in this repo.
+  MANDATORY bootstrap for all agents (Grok, Claude, Codex, Gemini/antigravity, etc.).
+  Run at the VERY START of EVERY session in this repo. NO EXCEPTIONS.
 
-  Goal: NO MATTER which "ent", worktree, or clone you are in, you end up on the
-  exact same source (including the pack.py +624 / daily_job changes from d05eb21
-  lineage, sync commits 88083ff etc.).
+  Goal: NO MATTER which "ent", worktree, clone, or harness you are in, you ALWAYS
+  see the exact same source — pack.py + daily_job.py (the d05eb21 counter-proposal
+  Tier-1 changes materialized at 88083ff and later), tests, prompts/C.md, and all history.
 
-  GitHub (https://github.com/DaSilvaDub/outlier.git) is the cross-ent SSOT.
-  Linked worktrees share the canonical .git. Stray full clones must be slaved to GitHub.
+  GitHub is the cross-ent SSOT. Canonical owns the .git. Linked worktrees share objects.
+  Use this to make "commit not found anywhere" or "closest commit doesn't touch pack.py"
+  impossible.
 
-  Usage (from anywhere):
+  Usage:
     & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
     & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+    & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees   # from canonical: align every registered worktree
 #>
 
 [CmdletBinding()]
 param(
   [switch]$ValidateOnly,
-  [switch]$Force
+  [switch]$Force,
+  [switch]$SyncAllWorktrees
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,8 +102,9 @@ if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
 }
 
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
-Write-Info "Materializing key files (pack, daily, tests, prompts)..."
-git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md 2>&1 | Out-Null
+#    Also materialize the sync tooling itself so every tree gets the latest bootstrap.
+Write-Info "Materializing key files (pack, daily, tests, prompts, sync tooling)..."
+git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 SYNC.md 2>&1 | Out-Null
 
 # 5. Touch the files (helps OneDrive Files-On-Demand hydrate the content for this view)
 try {
@@ -137,8 +141,46 @@ if (-not ($hasPlayerId -and $hasRank -and $hasLock -and $hasWriteDecisions)) {
 
 Write-Info "Sync complete. Every ent that runs this (or equivalent fetch+reset from GitHub) will see identical pack.py + daily_job.py + history (d05eb21 lineage via 88083ff+)."
 
+# 8. Optional: from canonical, force-align every linked worktree (materialize critical files from origin/master).
+#    Safe for feature branches (e.g. codex/* , gemini fix-*): only updates the key files via checkout from origin/master,
+#    does not move HEAD or change branch. Master/detached worktrees also get the files synced.
+#    This is the practical hammer against "d05eb21 only visible in one tree".
+if ($SyncAllWorktrees) {
+  Write-Info "=== SyncAllWorktrees: materializing core files (pack, daily, sync tooling) from origin/master into all registered worktrees ==="
+  $porcelain = git worktree list --porcelain 2>$null
+  $currentWt = $here
+  $aligned = 0
+  $lines = $porcelain -split "`n"
+  $wtPath = $null
+  foreach ($line in $lines) {
+    if ($line -match '^worktree (.+)') {
+      $wtPath = $matches[1]
+    } elseif ($line -match '^HEAD ' -and $wtPath) {
+      $normWt = ($wtPath -replace '\\','/').TrimEnd('/')
+      $normHere = ($currentWt -replace '\\','/').TrimEnd('/')
+      if ($normWt -ne $normHere) {
+        Write-Info "Aligning worktree: $wtPath"
+        git -C $wtPath fetch origin --prune --tags 2>&1 | Out-Null
+        # Non-destructive for the files we care about (the ones that were invisible before).
+        # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
+        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 SYNC.md 2>&1 | Out-Null
+        try {
+          $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
+        } catch {}
+        $newHead = git -C $wtPath rev-parse --short HEAD 2>$null
+        Write-Info "  -> files updated from origin/master (HEAD remains $newHead)"
+        $aligned++
+      }
+      $wtPath = $null
+    }
+  }
+  Write-Info "SyncAllWorktrees complete. Materialized into $aligned additional worktree(s)."
+  Write-Info "Note: feature worktrees keep their branch; run bootstrap inside them for any local reset needs."
+}
+
 # OneDrive note
 Write-Warn "If disk size looks wrong vs git: ensure the outlier folder is 'Always keep on this device' in OneDrive settings, or re-run git checkout -- <file> after a short wait."
 
 git log --oneline -1 | Write-Info
+Write-Info "To align EVERYTHING from canonical in future: & '...\sync-outlier.ps1' -SyncAllWorktrees"
 exit 0

@@ -105,11 +105,71 @@ In Explorer: right-click the `outlier` folder (and .codex / .gemini worktree par
 
 This has been the root cause of "file size different", "Python can't see it", and "commit exists in git log but checkout shows old pack.py".
 
+## Global Harness Prompt Template (paste this at the top of every ent's system instructions)
+
+```
+You are working in the outlier repo. MULTI-ENT SYNC IS MANDATORY.
+
+STEP 0 (ABSOLUTE FIRST, before reading files, git log, or planning):
+Execute exactly:
+& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
+# or for gate:
+& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+
+Report the *full* console output. You may only continue when the output shows VALIDATE: OK, recent HEAD match, and all pipeline upgrade markers (player_id / CANDIDATES_HEADER / round_robin / decisions.csv / locks). If not OK, re-run and/or escalate.
+
+This is the only way to guarantee you see the same pack.py + daily_job.py (~624 line changes) and history as every other agent (Grok/Claude/Codex/Gemini/...).
+See repo AGENTS.md + SYNC.md for details and -SyncAllWorktrees.
+```
+
+## For Linked Worktrees (Codex / Gemini on this box) + Safe alignment for feature branches
+
+They share the canonical .git. After a successful sync + push from canonical or any:
+
+```powershell
+cd C:\Users\dasil\.codex\worktrees\XXXX\outlier   # or gemini equivalent
+& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
+```
+
+**From canonical, align / materialize all registered worktrees in one shot (recommended after any push of core changes):**
+
+```powershell
+cd C:\Users\dasil\OneDrive\Documents\outlier
+& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees
+```
+
+The -SyncAllWorktrees uses safe `checkout origin/master -- <files>` so feature branches (codex/prompt-*, gemini fix-*) keep their HEAD/branch but receive the blessed versions of pack.py, daily_job.py, the sync script, etc.
+
+## If "d05eb21 (or the pack changes) doesn't exist" ever happens again
+
+1. Run the canonical bootstrap (or -ValidateOnly). It will set GitHub remote + hard reset + materialize.
+2. `git remote -v` — must show the github url for origin.
+3. From canonical: `& "...\sync-outlier.ps1" -SyncAllWorktrees` (fastest way to push the state to all local linked worktrees).
+4. `git fetch origin; git reset --hard origin/master; git checkout -- outlier_scrapers/pack.py ... sync-outlier.ps1 SYNC.md`
+5. If still wrong for a full clone like ai-runners: cd into it and run the bootstrap line (it self-slaves via GitHub).
+6. Update the global instructions for that ent with the exact bootstrap + "report output" rule from the template in this file.
+
+## OneDrive Mitigation (do this now)
+
+In Explorer: right-click the `outlier` folder (and .codex / .gemini worktree parents if possible) → OneDrive → "Always keep on this device".
+
+This has been the root cause of "file size different", "Python can't see it", and "commit exists in git log but checkout shows old pack.py".
+
+## Recurrence Prevention (make "d05eb21 invisible" impossible)
+
+- All development of changes that touch pack.py / daily_job / the C profile go through GitHub PRs or direct pushes from canonical after bootstrap.
+- New worktrees created only on canonical, immediately bootstrapped.
+- Every global agent/system prompt for this repo *starts* with the template above.
+- Canonical owner periodically (or before handing off) runs `-SyncAllWorktrees`.
+- Cloud or remote ents always clone from the github URL then bootstrap.
+- The bootstrap materializes the sync files themselves.
+- Only 2 full clones (canonical + ai-runners). ai-runners is kept slaved by running the script inside it.
+
 ## Long-Term (to make the problem impossible)
 
 - Move canonical off OneDrive to `C:\Users\dasil\dev\outlier` (or fast local disk).
 - Update all global agent configs + this doc.
 - Make every skill / command for this project start by invoking the bootstrap + validate.
 
-Last updated: 2026-07-01 (GitHub is primary; bootstrap hardened with marker validation + git-show authoritative checks; worktree alignment + ai-runners slaved).
+Last updated: 2026-07-01 (re-applied: -SyncAllWorktrees with safe non-destructive file materialize for branches; STEP 0 enforcement in AGENTS/CLAUDE/GROK.md; global template; self-materialization of tooling; recurrence checklist. GitHub + canonical + bootstrap = synchronized no matter the ent).
 
