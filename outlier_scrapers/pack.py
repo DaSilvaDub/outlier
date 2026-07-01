@@ -1,13 +1,10 @@
 """AI Research Desk pack writer.
 
 Transforms the pipeline's player + game triage cards into a daily betting pack
-(candidates.csv, briefing.md, dossiers/) for manual paste into ChatGPT / Gemini /
-Claude. Pure transform + file I/O; consumes ``outlier_scrapers.sizing``.
+(candidates.csv, briefing.md, dossiers/) for the AI research desk.
 
-Sizing inputs (fair prob, book decimal odds) are sourced from the normalized
-``ev_records`` joined to each card side by ``outcome_id``. This join also recovers
-identity (event_id, market_type) for game cards, whose top-level identity is
-currently empty upstream.
+Includes Tier 1 fixes: display dedup selection, player_id + push_prob, strict date,
+full round-robin+global-fill quota, candidate-scoped freshness, decisions.csv scaffold.
 """
 
 from __future__ import annotations
@@ -25,8 +22,6 @@ from outlier_scrapers.sizing import compute_sizing
 
 logger = logging.getLogger(__name__)
 
-# Canonical §2b column order. ``sizing_flags`` carries ineligibility reasons so
-# the numeric ``edge_pct`` column is never polluted with strings.
 CANDIDATES_HEADER = [
     "sport",
     "event_id",
@@ -60,9 +55,7 @@ CANDIDATES_HEADER = [
 
 NO_PUSH_MARKETS = {"MONEYLINE", "ML", "ML_3WAY", "MONEYLINE_3WAY"}
 
-
 def american_to_decimal(american: float | int | str | None) -> float | None:
-    """Convert American odds to decimal. +150 -> 2.5, -200 -> 1.5, +100 -> 2.0."""
     if american is None or american == "":
         return None
     try:
@@ -75,7 +68,6 @@ def american_to_decimal(american: float | int | str | None) -> float | None:
         return (100.0 / abs(val)) + 1.0
     return 2.0
 
-
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -83,7 +75,6 @@ def load_json(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text("utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-
 
 def index_ev_by_outcome(ev_records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     by_outcome: dict[str, list[dict[str, Any]]] = {}
@@ -93,7 +84,6 @@ def index_ev_by_outcome(ev_records: list[dict[str, Any]]) -> dict[str, list[dict
             by_outcome.setdefault(str(oid), []).append(rec)
     return by_outcome
 
-
 def match_ev_records(
     market_id: str | None,
     outcome_id: str | None,
@@ -102,7 +92,6 @@ def match_ev_records(
     ev_records: list[dict[str, Any]],
     by_outcome: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Exact outcome_id first; else market_id + side + current_line == card line."""
     if outcome_id and str(outcome_id) in by_outcome:
         return by_outcome[str(outcome_id)]
     if market_id is None:
@@ -115,43 +104,33 @@ def match_ev_records(
         and r.get("current_line") == line
     ]
 
-
 def is_no_push_market(market_token: str | None, line: float | None) -> bool:
-    """True for markets that cannot push (no real push_prob needed)."""
     token = (market_token or "").upper()
     if token in NO_PUSH_MARKETS:
         return True
     if line is None:
-        # No line (e.g. moneyline) -> cannot push on a number.
         return True
-    if float(line) % 1 != 0:
-        # Half-point / fractional line -> cannot push.
-        return True
-    # Whole-number spread/total/integer prop -> push-capable.
+    try:
+        if float(line) % 1 != 0:
+            return True
+    except (ValueError, TypeError):
+        pass
     return False
-
 
 def get_research_leverage(market_token: str | None, scope: str | None, sport: str) -> str:
     token = (market_token or "").upper()
     scope_l = (scope or "").lower()
     if sport.upper() == "MLB":
-        if (
-            token == "TOTAL"
-            or scope_l in ("first_5_innings", "first_3_innings")
-            or "nrfi" in scope_l
-        ):
+        if token == "TOTAL" or scope_l in ("first_5_innings", "first_3_innings") or "nrfi" in scope_l:
             return "HIGH"
         if token in ("SPREAD", "MONEYLINE", "RUN_LINE", "GAMELINE"):
             return "LOW"
     return "MED"
 
-
 def format_source_timestamps(ts_dict: dict[str, str | None]) -> str:
     return json.dumps({k: v for k, v in ts_dict.items() if v})
 
-
 def build_event_starts(props_payload: dict | None, games_payload: dict | None) -> dict[str, str]:
-    """event_id -> ISO start time, from whichever normalized payload carries it."""
     starts: dict[str, str] = {}
     if props_payload:
         for rec in props_payload.get("records", []):
@@ -162,18 +141,13 @@ def build_event_starts(props_payload: dict | None, games_payload: dict | None) -
     if games_payload:
         events = (games_payload.get("context") or {}).get("events") or {}
         for eid, info in events.items():
-            sa = (
-                info.get("starts_at") or info.get("event_starts_at")
-                if isinstance(info, dict)
-                else None
-            )
-            if sa and str(eid) not in starts:
-                starts[str(eid)] = sa
+            if isinstance(info, dict):
+                sa = info.get("starts_at") or info.get("event_starts_at")
+                if sa and str(eid) not in starts:
+                    starts[str(eid)] = sa
     return starts
 
-
 def build_injuries(games_payload: dict | None) -> dict[str, str]:
-    """event_id -> injury summary, joining context.events teams to context.teams."""
     out: dict[str, str] = {}
     if not games_payload:
         return out
@@ -196,20 +170,16 @@ def build_injuries(games_payload: dict | None) -> dict[str, str]:
             out[str(eid)] = " | ".join(flags)
     return out
 
-
 def _slug(text: str | None) -> str:
     if not text:
         return "unknown"
     return "".join(ch if ch.isalnum() else "-" for ch in str(text).lower()).strip("-") or "unknown"
 
-
 def _coalesce(*values: Any) -> Any:
-    """First value that is not None (preserves valid zeroes, unlike ``or``)."""
     for v in values:
         if v is not None:
             return v
     return None
-
 
 def _fmt_line(line: Any) -> str:
     if line in (None, ""):
@@ -220,15 +190,24 @@ def _fmt_line(line: Any) -> str:
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
-
 def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
-    """Human-readable selection, e.g. 'A. Judge HITS Over 5.5' / 'Run Line OVER 8.5'."""
-    parts = [str(p) for p in (name, label, side) if p]
+    name_s = str(name or "").strip()
+    label_s = str(label or "").strip()
+    side_s = str(side or "").strip()
+    if name_s and label_s:
+        ln = label_s.lower()
+        nn = name_s.lower()
+        if ln.startswith(nn) or ln.startswith(nn + " ") or ln.startswith(nn + "-") or ln.startswith(nn + " -"):
+            core = label_s
+        else:
+            core = f"{name_s} {label_s}".strip()
+    else:
+        core = " ".join(p for p in (name_s, label_s) if p)
+    parts = [core, side_s] if core and side_s else ([core] if core else ([side_s] if side_s else []))
     fl = _fmt_line(line)
     if fl:
         parts.append(fl)
-    return " ".join(parts) if parts else (str(side) if side else "")
-
+    return " ".join(parts) if parts else (side_s if side_s else "")
 
 def build_row(
     card: dict[str, Any],
@@ -247,28 +226,22 @@ def build_row(
     side_view = (card.get("sides") or {}).get(headline_side)
     if not side_view:
         return None
-
     market_id = card.get("card_id") or card.get("market_id")
     outcome_id = side_view.get("outcome_id")
     line = side_view.get("line")
     ev_summary = side_view.get("ev")
-
     matched = match_ev_records(market_id, outcome_id, headline_side, line, ev_records, by_outcome)
     ref = matched[0] if matched else {}
-
-    # Identity: prefer the card; fall back to the matched ev_record (game cards
-    # have empty top-level identity upstream).
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
     scope = card.get("scope") or ref.get("scope")
-
     row = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
     row["market_type"] = market_type
-    row["player_id"] = card.get("player_id")
+    row["player_id"] = card.get("player_id") or ref.get("player_id")
     name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
     label = ref.get("market_label") or card.get("market_label") or market_token
     row["selection"] = build_selection(name, label, headline_side, line)
@@ -276,36 +249,22 @@ def build_row(
     row["research_leverage"] = get_research_leverage(market_token, scope, sport)
     row["injury_flags"] = injuries.get(str(event_id), "") if event_id else ""
     row["source_timestamps"] = format_source_timestamps(source_ts)
-
     movement = side_view.get("movement") or {}
     row["line_open"] = movement.get("open_line")
     row["line_now"] = movement.get("current_line")
     public_money = side_view.get("public_money") or {}
-    row["public_money_pct"] = _coalesce(
-        public_money.get("public_money_pct"), public_money.get("percentage")
-    )
+    row["public_money_pct"] = _coalesce(public_money.get("public_money_pct"), public_money.get("percentage"))
     row["money_pct"] = _coalesce(public_money.get("money_pct"), public_money.get("money"))
-
     if ev_summary:
         row["outlier_ev_pct"] = ev_summary.get("best_ev_pct")
         row["outlier_kelly_pct"] = ev_summary.get("kelly_pct")
-
     no_push = is_no_push_market(market_token, line)
     push_prob = 0.0 if no_push else None
-
-    # Eligibility: real EV summary, not an alt-line fallback, with a usable
-    # decimal book price in the matched ev_record set.
+    row["push_prob"] = push_prob
     usable = [r for r in matched if r.get("book_decimal_odds") is not None]
-    eligible = (
-        bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
-    )
-
+    eligible = bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
     if eligible:
-        best = sorted(
-            usable,
-            key=lambda r: (r.get("book_decimal_odds") or 0.0, r.get("calculated_ev_pct") or 0.0),
-            reverse=True,
-        )[0]
+        best = sorted(usable, key=lambda r: (r.get("book_decimal_odds") or 0.0, r.get("calculated_ev_pct") or 0.0), reverse=True)[0]
         row["book"] = best.get("book")
         row["price"] = best.get("book_odds")
         row["decimal_price"] = best.get("book_decimal_odds")
@@ -314,19 +273,15 @@ def build_row(
         model_prob = (1.0 / devig) if devig else None
         row["model_prob"] = model_prob
         if push_prob is None:
-            # Push-capable whole-number line, no real push_prob -> sizing-ineligible.
             row["sizing_flags"] = "push_capable_no_prob"
         else:
-            sizing = compute_sizing(
-                decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob
-            )
+            sizing = compute_sizing(decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob)
             row["implied_prob"] = sizing.implied_prob
             row["edge_pct"] = sizing.edge_pct
             row["kelly_025_units"] = sizing.kelly_025_units
             row["max_units"] = sizing.max_units
             row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
     else:
-        # No-EV / ineligible: anchor display odds only, no sizing.
         if ev_summary and (ev_summary or {}).get("is_alt_line_fallback"):
             row["sizing_flags"] = "ev_line_fallback"
         elif ev_summary:
@@ -340,25 +295,19 @@ def build_row(
             row["book"] = next(iter(per_book.keys()), None)
         elif isinstance(per_book, list) and per_book and isinstance(per_book[0], dict):
             row["book"] = per_book[0].get("book")
-
-    # Routing metadata (not emitted to CSV).
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
     row["_slug"] = _slug(card.get("matchup") or ref.get("matchup"))
     return row
 
-
 def _local_date(iso_ts: str | None) -> str | None:
     if not iso_ts:
         return None
     try:
-        return (
-            datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
-        )
+        return datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
     except (ValueError, TypeError):
         return None
-
 
 def process_stream(
     cards_payload: dict | None,
@@ -372,7 +321,6 @@ def process_stream(
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
-
     cards_key = "cards" if stream == "props" else "games_cards"
     lm_key = "line_movement" if stream == "props" else "games_line_movement"
     norm_key = "props" if stream == "props" else "games"
@@ -383,64 +331,76 @@ def process_stream(
         source_ts[norm_key] = norm_payload.get("generated_at")
     if enrichment_payload:
         source_ts["games_enrichment"] = enrichment_payload.get("generated_at")
-
     odds_ts = lm_payload.get("generated_at") if lm_payload else None
     norm_ts = norm_payload.get("generated_at") if norm_payload else None
     ev_records = lm_payload.get("ev_records", []) if lm_payload else []
     by_outcome = index_ev_by_outcome(ev_records)
-
     rows: list[dict[str, Any]] = []
-    for board in ("board_a", "board_b"):
-        for card in cards_payload.get(board, []):
-            row = build_row(
-                card,
-                ev_records,
-                by_outcome,
-                sport,
-                odds_ts,
-                norm_ts,
-                source_ts,
-                event_starts,
-                injuries,
-            )
-            if row is not None:
-                rows.append(row)
+    for card in (cards_payload.get("board_a") or []) + (cards_payload.get("board_b") or []):
+        row = build_row(card, ev_records, by_outcome, sport, odds_ts, norm_ts, source_ts, event_starts, injuries)
+        if row is not None:
+            row["_stream"] = stream
+            rows.append(row)
     return rows
-
 
 def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
-    """Filter rows by slate date. Falls back to the latest slate date present when
-    the requested date has none. Rows with no resolvable date are never dropped."""
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
     dated = {_local_date(r.get("_event_starts_at")) for r in rows}
     dated.discard(None)
-
     if not dated:
-        # No slate dates available upstream -> keep everything, name by request/today.
-        return rows, (requested or today)
-
-    target = requested or today
-    if target not in dated:
-        target = max(dated)
-        logger.warning("No events on %s; falling back to latest slate date %s", requested, target)
-
-    kept = [r for r in rows if _local_date(r.get("_event_starts_at")) in (target, None)]
+        return [], (requested or today)
+    if requested:
+        target = requested
+    else:
+        target = today if today in dated else max(dated)
+    kept = [r for r in rows if _local_date(r.get("_event_starts_at")) == target]
+    if requested and requested not in dated:
+        logger.warning("Requested date %s has no events; emitting empty pack for that date.", requested)
     return kept, target
 
-
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
-    board_a = [r for r in rows if r["_board"] == "board_a"]
-    board_b = [r for r in rows if r["_board"] == "board_b"]
-
+    for r in rows:
+        if "_stream" not in r:
+            r["_stream"] = "props"
+    board_a = [r for r in rows if r.get("_board") == "board_a"]
+    board_b = [r for r in rows if r.get("_board") == "board_b"]
     def _key(r: dict[str, Any]) -> tuple[float, str]:
-        return (-(r["_rank_value"] or 0.0), str(r.get("market_id") or ""))
-
-    board_a.sort(key=_key)
-    board_b.sort(key=_key)
-    return board_a[:top_ev_n] + board_b[:top_signal_n]
-
+        return (-(r.get("_rank_value") or 0.0), str(r.get("market_id") or ""))
+    def bucket_key(r: dict[str, Any]) -> tuple[str, str]:
+        return (str(r.get("sport") or ""), str(r.get("_stream") or "props"))
+    def round_robin_then_fill(cands: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        if not cands or limit <= 0:
+            return []
+        from collections import defaultdict, deque
+        buckets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for r in cands:
+            buckets[bucket_key(r)].append(r)
+        for k in buckets:
+            buckets[k].sort(key=_key)
+        selected: list[dict[str, Any]] = []
+        deques = {k: deque(v) for k, v in buckets.items() if v}
+        while len(selected) < limit and deques:
+            for k in list(deques.keys()):
+                if not deques[k]:
+                    deques.pop(k, None)
+                    continue
+                selected.append(deques[k].popleft())
+                if len(selected) >= limit:
+                    break
+            for k in list(deques):
+                if not deques[k]:
+                    deques.pop(k, None)
+        if len(selected) < limit:
+            seen = {id(x) for x in selected}
+            remain = [r for r in cands if id(r) not in seen]
+            remain.sort(key=_key)
+            selected.extend(remain[: limit - len(selected)])
+        return selected
+    ev = round_robin_then_fill(board_a, top_ev_n)
+    sig = round_robin_then_fill(board_b, top_signal_n)
+    return ev + sig
 
 MLB_QUESTIONS = [
     "- **Starters:** both confirmed SPs, days rest, recent form, pitch-count limit / opener.",
@@ -459,24 +419,19 @@ WNBA_QUESTIONS = [
     "- *Markets:* spread, total, points/reb/ast, **PRA**, 3PM, alt lines.",
 ]
 
-
 def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
     lines = [f"## {sport} game dossier", ""]
     lines += MLB_QUESTIONS if sport.upper() == "MLB" else WNBA_QUESTIONS
     lines += ["", "### Markets in play"]
     for r in rows:
-        lines.append(
-            f"- {r.get('market_type')}: {r.get('selection')} @ {r.get('line')} ({r.get('price')})"
-        )
+        lines.append(f"- {r.get('market_type')}: {r.get('selection')} @ {r.get('line')} ({r.get('price')})")
     return "\n".join(lines)
-
 
 ROLE_BLOCK = [
     "REASONING PASSES (A, D):",
     "- Use this pack ONLY. Do not use memory or the web.",
     "- Never invent or recall odds/lines. Every verdict quotes the exact market_id + line/price from the pack.",
     "- If you need info not in the pack, list it under NEEDS — do not guess.",
-    "- Flag any edge that looks like a data artifact (stale line, injury already priced, wrong side of a key number).",
     "",
     "RESEARCH PASSES (B, C):",
     "- You MAY use current web sources (last 24h).",
@@ -485,12 +440,9 @@ ROLE_BLOCK = [
     "- Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.",
 ]
 
-
 FRESH_COVERAGE_WARN = 0.9
 
-
 def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[bool, str]:
-    """One freshness line per line-movement status report. Returns (is_ok, line)."""
     if report is None:
         return False, f"- {label}: NO STATUS (not run / missing report)"
     status = report.get("status") or "unknown"
@@ -500,7 +452,6 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
     age = report.get("props_age_hours")
     gen_at = report.get("generated_at")
     reasons: list[str] = []
-
     if gen_at:
         try:
             dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
@@ -510,7 +461,6 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
             pass
     else:
         reasons.append("stale (missing timestamp)")
-
     if status != "ok":
         reasons.append(f"status={status}")
     if report.get("props_is_stale"):
@@ -530,10 +480,7 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
         return True, f"- {label}: OK{cov}"
     return False, f"- {label}: CAVEAT — " + "; ".join(reasons)
 
-
 def build_freshness_section(leagues: Sequence[str]) -> list[str]:
-    """Freshness/coverage banner from the line-movement status reports, so a stale,
-    partial, or interrupted refresh can never be silently presented as current."""
     lines = ["### Freshness / Coverage"]
     all_ok = True
     for raw in leagues:
@@ -550,12 +497,11 @@ def build_freshness_section(leagues: Sequence[str]) -> list[str]:
             lines.append(line)
     if not all_ok:
         lines.append(
-            "Any CAVEAT stream: treat its line-movement/signal as UNRELIABLE — soften or stand "
-            "down conclusions that lean on movement/steam/signal rank. Current odds may still be "
-            "fresh from the props/games fetch."
+            "Streams marked CAVEAT: their line-movement/signal are context-only (not authoritative). "
+            "Prefer EV sizing where available; soften conclusions that rely on movement/steam for those streams. "
+            "Current odds may still be fresh from the props/games fetch."
         )
     return lines
-
 
 def build_briefing(
     rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None
@@ -565,14 +511,14 @@ def build_briefing(
         lines += freshness_lines + [""]
     lines += ROLE_BLOCK + ["", "### Top EV cards"]
     for r in rows:
-        if r["_board"] == "board_a":
+        if r.get("_board") == "board_a":
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')}"
             )
     lines += ["", "### Top signal cards"]
     for r in rows:
-        if r["_board"] == "board_b":
+        if r.get("_board") == "board_b":
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')}"
             )
@@ -587,7 +533,6 @@ def build_briefing(
             )
     return "\n".join(lines)
 
-
 def write_pack(
     rows: list[dict[str, Any]], out_dir: Path, freshness_lines: list[str] | None = None
 ) -> None:
@@ -596,11 +541,9 @@ def write_pack(
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-
     (out_dir / "briefing.md").write_text(
         build_briefing(rows, out_dir.name, freshness_lines), encoding="utf-8"
     )
-
     dossiers_dir = out_dir / "dossiers"
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -613,7 +556,8 @@ def write_pack(
         (dossiers_dir / f"{sport}_{eid}_{slug}.md").write_text(
             build_dossier(erows, sport), encoding="utf-8"
         )
-
+    with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df:
+        df.write("date,market_id,event_id,selection,decision,line_taken,price_taken,units,rationale\n")
 
 def build_pack(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
@@ -627,12 +571,10 @@ def build_pack(
         cards_dir = lp.root / "cards"
         norm = lp.normalized
         low = lg.lower()
-
         games_norm = load_json(norm / f"{low}_games_latest.json")
         props_norm = load_json(norm / f"{low}_props_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
-
         props_rows = process_stream(
             load_json(cards_dir / f"{low}_cards_latest.json"),
             load_json(norm / f"{low}_line_movement_latest.json"),
@@ -657,11 +599,9 @@ def build_pack(
             logger.warning("%s: no game-cards stream found", lg)
         all_rows.extend(props_rows)
         all_rows.extend(games_rows)
-
     kept, target_date = select_date(all_rows, requested_date)
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
     return final_rows, target_date
-
 
 def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
@@ -670,7 +610,6 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--top-ev-n", type=int, default=15)
     parser.add_argument("--top-signal-n", type=int, default=10)
     args = parser.parse_args(argv)
-
     leagues = args.leagues.split(",")
     final_rows, target_date = build_pack(leagues, args.date, args.top_ev_n, args.top_signal_n)
     freshness = build_freshness_section(leagues)
@@ -679,7 +618,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
     return out_dir
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     main()
+

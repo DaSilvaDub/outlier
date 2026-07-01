@@ -1,30 +1,14 @@
-Research the game and market context in the supplied Outlier pack.
+Deep research task. Narrow focus: collect CURRENT (last 24h) injury reports, availability, load management, rest, confirmed lineups/rotations/starters, and usage impacts. Each game tagged MLB or WNBA — apply matching lens.
 
-Use the pack's slate date and as-of timestamp as the time anchor. Look for news published in
-the 24 hours leading up to game time; do not substitute the current calendar date when reviewing
-an older pack.
+MLB: SP confirmations + days rest, bullpen usage, posted lineup (bats in/out), platoon.
+WNBA: injury status (out/quest/prob), load management, rotation/minutes, back-to-back/travel, star-absence usage shift.
 
-Focus only on:
+Input contains the pack's markets with exact market_id, selection, line, price.
 
-- MLB: confirmed starting pitchers, pitcher rest, bullpen usage, posted lineups, players in/out,
-  and platoon implications.
-- WNBA: injury status, availability, load management, rotations/minutes, back-to-backs/travel,
-  and usage changes caused by absences.
-
-The briefing and authoritative candidates.csv are supplied below. Treat each candidates.csv
-market_id, selection, line, and price as immutable.
-
-Output rules:
-
-- Report sourced information only.
-- Emit exactly one record per finding and affected market. If one finding affects multiple
-  markets, repeat it once for each market.
-- Every record must use this exact pipe-delimited form on one line:
-  FINDING | market_id=<exact> | selection=<exact> | line=<exact> | price=<exact> |
-  verdict=<CONFIRMS|CONTRADICTS|NEUTRAL> | claim=<text> | source_name=<text> |
-  source_tier=<1|2|3> | source_timestamp=<timestamp>
-- Copy market_id, selection, line, and price verbatim from candidates.csv. Never invent, update,
-  normalize, or reformat them.
-- Do not use the pipe character inside a field value. Do not add headings or prose outside the
-  records.
-- If there are no sourced findings, output exactly: NO_SOURCED_FINDINGS
+Rules (enforced):
+- Do NOT invent, quote, or update any betting line/price/selection. Quote the pack lines verbatim.
+- Tie EVERY finding directly to one or more quoted market_id + exact line/price from the pack.
+- Format news: { claim | source name | source tier (1/2/3) | timestamp }
+- For each affected market_id: state impact on the side at the quoted pack line, then verdict CONFIRMS / CONTRADICTS / NEUTRAL (one line why) vs betting at that exact line.
+- Report only sourced items. Flag anything the pack's as-of likely missed.
+- Never alter a quoted line, price or market_id.
