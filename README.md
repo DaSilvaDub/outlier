@@ -120,17 +120,16 @@ Prompts B and C are single Google-Search-grounded generation passes, not the ful
 multi-step Gemini Deep Research UI. Prompt C validates every emitted market ID,
 selection, line, and price against `candidates.csv` before writing `chatgpt_c.md`.
 
-### Paid AI Research Desk Orchestration
+### Full AI Research Desk Orchestration
 
-After a pack is produced (by `daily_job` or `pack`), run the paid desk phases with:
+After a pack is produced (by `daily_job` or `pack`), use the canonical `outlier-ai-desk` agent/skill to run the complete desk:
 
-```powershell
-python -m outlier_scrapers.run_desk --date YYYY-MM-DD
-```
+- Invokes A/B/C/D/E runners (only when their keys are present and hashes indicate a change is needed)
+- Writes `reasoning_status.json` (FULL / PARTIAL / DATA_ONLY)
+- Always guarantees a final betting report (uses successful `claude_e.md` or falls back to local pack synthesis)
+- Runs `pytest` before completion
 
-This invokes A/B/C/D/E in dependency order, refreshes stale hashes, preserves prior output
-when a refresh fails, and writes `reasoning_status.json`. It does not fabricate a local report
-when paid synthesis is unavailable; use the pack directly for a separately reviewed fallback.
+The skill lives at `.agents/skills/outlier-ai-desk/SKILL.md`. It is the recommended way to finish a slate instead of calling the individual runners by hand. When paid models are unavailable or rate-limited, it transparently falls back to the `synthesize-outlier-pack` logic so you still get a usable report.
 
 To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a basic task that executes the script within the project virtual environment. Do not hardcode secrets in the task; rely on the user's persisted environment variables or the `.env` file in the project root.
 
