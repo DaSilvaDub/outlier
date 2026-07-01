@@ -91,7 +91,7 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     client = mock_openai[0]
     # Check client timeout and retries
     assert client.client_kwargs.get("timeout") == 600.0
-    assert client.client_kwargs.get("max_retries") == 5
+    assert client.client_kwargs.get("max_retries") == 10
 
     api = client.responses
     assert api.called
