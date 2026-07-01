@@ -104,21 +104,27 @@ python -m outlier_scrapers.reasoning --date YYYY-MM-DD --force
 `xhigh` reasoning can be slower and more expensive than lower-effort calls. Check
 API billing and project limits before enabling it in a scheduled task.
 
-The new standalone runners for Prompts B (Gemini), D (Claude reasoning), and E (Claude synthesis) can also be invoked directly:
+The standalone runners for Prompts B/C (Gemini), D (Claude reasoning), and E (Claude synthesis) can also be invoked directly:
 
 ```powershell
 python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
+python -m outlier_scrapers.c_research --date YYYY-MM-DD
 python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD
 python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
 ```
 
-These require the matching environment variables (`GEMINI_API_KEY` for B; `ANTHROPIC_API_KEY` for D/E) and consume paid API quota. Prompt E (synthesis) requires the outputs of A, B, and D to already exist for the date. See the runbook for full details and caveats: Prompt B is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI); Prompt C remains a manual Deep Research paste.
+These require the matching environment variables (`GEMINI_API_KEY` for B/C;
+`ANTHROPIC_API_KEY` for D/E) and consume paid API quota. Prompt E (synthesis) requires
+the outputs of A, B, and D to already exist for the date and includes C when present.
+Prompts B and C are single Google-Search-grounded generation passes, not the full
+multi-step Gemini Deep Research UI. Prompt C validates every emitted market ID,
+selection, line, and price against `candidates.csv` before writing `chatgpt_c.md`.
 
 ### Full AI Research Desk Orchestration
 
 After a pack is produced (by `daily_job` or `pack`), use the canonical `outlier-ai-desk` agent/skill to run the complete desk:
 
-- Invokes A/B/D/E runners (only when their keys are present and hashes indicate a change is needed)
+- Invokes A/B/C/D/E runners (only when their keys are present and hashes indicate a change is needed)
 - Writes `reasoning_status.json` (FULL / PARTIAL / DATA_ONLY)
 - Always guarantees a final betting report (uses successful `claude_e.md` or falls back to local pack synthesis)
 - Runs `pytest` before completion

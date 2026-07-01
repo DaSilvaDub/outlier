@@ -26,7 +26,7 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 | When | Step | Tool |
 |---|---|---|
 | **T‑180 min** | Run pipeline → produce today's EV/signal cards **with sizing fields** (§4). Build the **briefing pack** (§2). | Pipeline + export script |
-| **T‑170** | Kick off **both** Deep Research jobs first (they take 5–15 min): Gemini wide-scan (Prompt B), ChatGPT per-game (Prompt C). | Gemini + ChatGPT web |
+| **T‑170** | Kick off both grounded research passes: Gemini wide-scan (Prompt B) and injury/lineup research (Prompt C). | Gemini + Google Search |
 | **T‑160** | While they run, execute **Prompt A** through `daily_job --run-reasoning` (paid, opt-in). Paste **Prompt D** into Claude. | GPT-5.5 xhigh API + Claude |
 | **T‑140** | Collect all four structured outputs (A–D). | — |
 | **T‑130** | Paste **Prompt E** (synthesis) + the four outputs into Claude → **final guide**. | Claude |
@@ -59,7 +59,7 @@ RESEARCH PASSES (B, C):
 - Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.
 ```
 
-### 2b. `candidates.csv` — the shortlist (auto-read by Prompt A; Prompt C reads the per-game dossiers)
+### 2b. `candidates.csv` — the shortlist (auto-read by Prompts A and C)
 One row per `market_id` on the EV or signal board. Columns (identity + sizing fully anchored so props and alt lines can't be confused):
 ```
 sport, event_id, market_id, market_type, player_id, selection, line, price, decimal_price, book, as_of,
@@ -78,7 +78,7 @@ This is the canonical, complete column list — the export header must match it 
 
 Cap with **board quotas** so signal coverage is never starved by EV volume: take the top `top_ev_n` Board-A (EV) cards by `rank_value` desc **and** the top `top_signal_n` Board-B (signal) cards by `rank_value` desc (defaults 15 / 10 ≈ 25 total), union them. One row per card, emitted from the card's `headline_side`. **Never dump the whole slate.**
 
-### 2c. `briefing.md` — the master pack (paste into Gemini B + Claude D)
+### 2c. `briefing.md` — the master pack (read by Gemini B/C + Claude D)
 Header = §2a rules. Body:
 - **Top EV cards** (capped to N, default 15): identity per §2b, model fair value, `edge_pct`, `recommended_units_pre_news`, edge source tag.
 - **Top signal cards** (capped to N): signal type (sharp/steam/reverse-line-move), `public_money_pct`, money vs bet %, line move since open.
@@ -86,9 +86,12 @@ Header = §2a rules. Body:
 - **Notable line moves** since open.
 - **Slate index**: every game + first lock time.
 
-### 2d. `dossiers/<game>.md` — per-game deep-research briefs (for ChatGPT Prompt C)
+### 2d. `dossiers/<game>.md` — per-game review briefs (for manual escalation)
 One short file per game: teams, time, the `market_id`s in play, current pipeline lines, and the open questions (auto-selected by sport from §2f). 
-**Prioritization:** run Prompt C on **every** WNBA game (small slates). For MLB (large slates), cap by **`research_leverage`, not raw edge** — a small edge on a weather-sensitive total or a game with an unconfirmed starter deserves research more than a larger but stable moneyline edge.
+Prompt C now reads the complete capped candidates ledger. Use dossiers for manual follow-up,
+prioritized by **`research_leverage`, not raw edge** — a small edge on a weather-sensitive
+total or a game with an unconfirmed starter deserves review more than a larger but stable
+moneyline edge.
 
 ### 2e. Source tiers (used by B, C, and the synthesis override rule)
 ```
@@ -156,10 +159,22 @@ python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
 
 Requires `GEMINI_API_KEY` (paid). This is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI product).
 
-### Prompt C — ChatGPT per-game Deep Research (input: one `dossiers/<game>.md`, top-leverage games) — WEB ALLOWED
+### Prompt C — Gemini injury/lineup research (input: `briefing.md` + `candidates.csv`) — WEB ALLOWED
 ```
-Deep research on this single game. Answer the brief's open questions using current sources (last 24h). Each answer: { claim | source name | source tier (1/2/3) | timestamp }. Then for each listed market_id state CONFIRMS / CONTRADICTS / NEUTRAL to a bet at the quoted pack line, and why. Do NOT invent or update any line/price.
+Research current injury, availability, lineup, rotation, starter, rest, and usage context.
+Anchor the 24-hour research window to the pack's slate date/as-of timestamp. Emit one
+structured finding per affected market. Copy market_id, selection, line, and price exactly
+from candidates.csv; the runner rejects altered or unknown quotes before writing output.
 ```
+
+Run it independently with:
+
+```powershell
+python -m outlier_scrapers.c_research --date YYYY-MM-DD
+```
+
+Requires `GEMINI_API_KEY` (paid). This is a single Google-Search-grounded generation
+pass, not the full multi-step Gemini Deep Research UI product.
 
 ### Prompt D — Claude reasoning pass (input: `briefing.md`) — PACK-ONLY
 ```
@@ -198,7 +213,9 @@ Run it independently with:
 python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
 ```
 
-Requires `ANTHROPIC_API_KEY` (paid). Note the dependency order: E requires outputs from A (via daily job or OpenAI), B, and D to exist first for the date. Prompt C (if present) is still a manual paste.
+Requires `ANTHROPIC_API_KEY` (paid). Note the dependency order: E requires outputs from
+A (via daily job or OpenAI), B, and D to exist first for the date. The automated Prompt C
+output is optional and included when present.
 
 ---
 
