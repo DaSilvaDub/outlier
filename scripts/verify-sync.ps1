@@ -26,6 +26,15 @@ $ErrorActionPreference = 'Stop'
 $canonicalRoot = 'C:\Users\dasil\OneDrive\Documents\outlier'
 $canonicalBootstrap = Join-Path $canonicalRoot 'sync-outlier.ps1'
 
+# Guard against the exact anti-pattern that keeps causing "d05eb21 not found" confusion
+$inv = $MyInvocation.Line
+if ($inv -match 'Select-String|Out-String|Select -First| \| ' -or $Host.UI.RawUI.WindowSize.Width -lt 200) {
+    Write-Host '!!! FORBIDDEN: This verify-sync.ps1 was invoked with piping, Select-String, Out-String, Select -First, or truncation.' -ForegroundColor Red
+    Write-Host '!!! Every "I searched every branch/worktree" or status report MUST be the complete, unfiltered output of a direct call.' -ForegroundColor Red
+    Write-Host '!!! Correct:  & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"'
+    Write-Host '!!! Then paste EVERY line. No pipes. No filters. No -First.'
+}
+
 function Write-Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Write-Ok($m)      { Write-Host "[OK]  $m" -ForegroundColor Green }
 function Write-Bad($m)     { Write-Host "[!!]  $m" -ForegroundColor Red }
@@ -91,12 +100,23 @@ foreach ($line in $wtList) {
   $wtHead = $parts[1]
   $branch = if ($parts.Count -gt 2) { $parts[2] -replace '^\[|\]$' } else { 'detached' }
 
-  $p = git -C $path show HEAD:outlier_scrapers/pack.py 2>$null
-  $d = git -C $path show HEAD:outlier_scrapers/daily_job.py 2>$null
-  $mPlayer = [bool]($p -match 'player_id')
-  $mRound  = [bool]($p -match 'round_robin_then_fill')
-  $mCand   = [bool]($p -match 'CANDIDATES_HEADER')
-  $mLock   = [bool]($d -match '_acquire_pack_lock')
+  # Use index (:file) + disk file as source of truth for "materialized content" after SyncAll.
+  # git show HEAD: would reflect the *commit* the worktree is checked out to (often old 90ca8c3 for feature ents).
+  # We care that the working files + index have the upgrade even if HEAD is intentionally left on old tip.
+  $pIdx = git -C $path show :outlier_scrapers/pack.py 2>$null
+  $dIdx = git -C $path show :outlier_scrapers/daily_job.py 2>$null
+  if (-not $pIdx) {
+    $packPath = Join-Path $path 'outlier_scrapers\pack.py'
+    $pIdx = Get-Content -Raw $packPath -EA SilentlyContinue
+  }
+  if (-not $dIdx) {
+    $dailyPath = Join-Path $path 'outlier_scrapers\daily_job.py'
+    $dIdx = Get-Content -Raw $dailyPath -EA SilentlyContinue
+  }
+  $mPlayer = [bool]($pIdx -match 'player_id')
+  $mRound  = [bool]($pIdx -match 'round_robin_then_fill')
+  $mCand   = [bool]($pIdx -match 'CANDIDATES_HEADER')
+  $mLock   = [bool]($dIdx -match '_acquire_pack_lock')
 
   $ok = $mPlayer -and $mRound -and $mCand -and $mLock
   $status = if ($ok) { 'OK' } else { 'MISSING MARKERS or STALE' }
@@ -114,6 +134,29 @@ if ($badWts.Count -gt 0) {
   Write-Bad ("{0} worktree(s) are missing upgrade markers or are stale." -f $badWts.Count)
 } else {
   Write-Ok ("All {0} registered worktrees have the pipeline upgrade markers." -f $worktreeResults.Count)
+}
+
+# Dedicated section for known full clones (independent .git). These are the source of many
+# "commit not found" problems because they can lag independently of linked worktrees.
+Write-Section 'Known full clones (separate .git, e.g. ai-runners)'
+$knownFullClones = @('C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners')
+foreach ($fc in $knownFullClones) {
+  if (Test-Path (Join-Path $fc '.git')) {
+    $fcHead = (git -C $fc rev-parse --short HEAD 2>$null)
+    $fcOrigin = (git -C $fc rev-parse --short origin/master 2>$null)
+    $fcPack = git -C $fc show origin/master:outlier_scrapers/pack.py 2>$null   # from origin for truth
+    $fcDaily = git -C $fc show origin/master:outlier_scrapers/daily_job.py 2>$null
+    $mP = [bool]($fcPack -match 'player_id')
+    $mR = [bool]($fcPack -match 'round_robin_then_fill')
+    $mC = [bool]($fcPack -match 'CANDIDATES_HEADER')
+    $mL = [bool]($fcDaily -match '_acquire_pack_lock')
+    $ok = $mP -and $mR -and $mC -and $mL
+    $status = if ($ok) { 'OK' } else { 'MISSING' }
+    Write-Host ("  ai-runners: HEAD={0} origin/master={1} markers={2}" -f $fcHead, $fcOrigin, $status)
+    if ($fcHead -ne $fcOrigin) { Write-Warn "  ai-runners is not at origin/master tip; re-run report-sync from canonical." }
+  } else {
+    Write-Host "  ai-runners: not present at expected path"
+  }
 }
 
 Write-Section 'Explicit d05eb21 / search explanation (answer to the pasted complaint)'

@@ -9,25 +9,31 @@ You are working in the outlier repo (https://github.com/DaSilvaDub/outlier.git).
 
 STEP 0 (ABSOLUTE FIRST ACTION — before reading any files, git log, planning, or running commands):
 
-Execute EXACTLY this (use the full canonical path even from worktrees or other clones):
+NO MATTER which ent (Grok/Claude/Codex/Gemini), which starting CWD (worktree, ai-runners full clone, or stray dir), or how the harness launches you:
 
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-# Preferred verification gate:
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+ALWAYS execute EXACTLY (full canonical path; do not use a local ./report-sync or relative path):
 
-Report the *full* console output (every [sync] line).
+& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+
+# Thin wrapper -> canonical bootstrap + -SyncAllWorktrees (which now also hard-resets ai-runners) + full verify report.
+# Never pipe | Select-String | Out-String | Select -First | grep etc. The guard will flag it.
+
+cd 'C:\Users\dasil\OneDrive\Documents\outlier' first if you like, then the command above.
+Report the *full* untruncated console output (every line from [sync] through the final Rule).
 
 You may only continue when the output contains:
 - "VALIDATE: OK"
 - "State vs origin/master: MATCH"
-- "Upgrade markers present" (player_id, round_robin_then_fill / rank_rows, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
-- Recent HEAD (e.g. b2c79d4 or later)
-- "This report was produced by scripts/verify-sync.ps1" when a search of branches/worktrees is needed
+- "Upgrade markers present" (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
+- Current canonical HEAD matches origin/master
+- "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
 
-For ANY question about "does commit X exist", "search every branch + every .codex/.gemini worktree", or state comparison:
-- ALWAYS run: & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"
+For ANY question about "does commit X exist", "I searched every branch + .codex/.gemini worktree", "closest commit is d756cb4", "d05eb21 not found", sizes, or state:
+- Run & "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"  (or the scripts/verify... directly)
 - Paste its ENTIRE output.
-- NEVER build reports from raw git log / Get-ChildItem / Select-String / ls / cat / grep loops.
+- NEVER build your own report with git log / rev-parse / Get-ChildItem / Select-String loops. Those are why the original problem existed.
+
+After any -SyncAllWorktrees you (or another ent) run, immediately follow with the full report-sync and paste it.
 
 See checked-in SYNC.md, AGENTS.md, and docs/ENT-SYNC-GLOBAL-PROMPT.md.
 

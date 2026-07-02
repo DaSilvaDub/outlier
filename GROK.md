@@ -3,18 +3,20 @@
 You are agent `grok` in this repo. Multiple AI agents share this codebase.
 
 **STEP 0 — DO THIS FIRST, BEFORE READING AGENTS.md OR ANY CODE OR LOGS:**
+**Use the canonical path no matter the ent or CWD you landed in.**
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-# Preferred for verification:
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
 ```
 
-Paste the complete [sync] output into your first response. Proceed only if you see:
+(This does bootstrap + -SyncAllWorktrees (including ai-runners full clone) + the complete standardized report with d05eb21 explanation.)
+
+Paste the *entire* output. Proceed only if you see:
+- "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)"
 - VALIDATE: OK
-- State vs origin/master: MATCH (or close after fetch)
-- All upgrade markers present (player_id, CANDIDATES_HEADER, round_robin_then_fill, decisions.csv, lock functions)
-- Recent HEAD (the one that has the pack.py + daily_job changes)
+- State vs origin/master: MATCH
+- All upgrade markers present (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
+- Current HEAD on canonical == origin/master
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 

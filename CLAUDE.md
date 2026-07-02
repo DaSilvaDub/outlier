@@ -3,18 +3,17 @@
 You are agent **`claude`** in this repo. Multiple AI agents share this codebase.
 
 **STEP 0 — DO THIS FIRST, BEFORE READING AGENTS.md OR ANY CODE OR LOGS:**
+**Canonical path, every ent, every start dir:**
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-# Preferred for verification:
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
 ```
 
-Paste the complete [sync] output into your first response. Proceed only if you see:
-- VALIDATE: OK
-- State vs origin/master: MATCH (or close after fetch)
-- All upgrade markers present (player_id, CANDIDATES_HEADER, round_robin_then_fill, decisions.csv, lock functions)
-- Recent HEAD (the one that has the pack.py + daily_job changes)
+Runs full bootstrap + SyncAll (now covers ai-runners) + authoritative report (includes explicit d05eb21 section).
+
+Paste the ENTIRE output. Only continue when it shows the "produced by scripts/verify-sync.ps1" header + VALIDATE: OK + MATCH + all markers (player_id etc).
+
+For any branch/worktree/commit search questions: re-run the report-sync and paste full (never ad-hoc git commands).
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
@@ -25,4 +24,4 @@ Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and no
 
 All project rules, scope constraints, and technical gotchas live in `AGENTS.md` + SYNC.md.
 
-**Global harness note**: When configuring the Claude agent for this repo, the system prompt / pre-instructions *must* contain the exact STEP 0 bootstrap commands above + "report the output and only continue on VALIDATE OK". This is what prevents d05eb21-style "the commit/changes don't exist in my tree" across ents.
+**Global harness note**: The system prompt / pre-instructions for *every* harness (Claude, Codex, Gemini, Grok, ...) *must* contain the exact block from docs/ENT-SYNC-GLOBAL-PROMPT.md (the report-sync.ps1 + "paste full output + use only for state questions" rules). This is what prevents d05eb21-style "the commit/changes don't exist in my tree" no matter the ent.

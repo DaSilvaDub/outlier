@@ -39,6 +39,18 @@ Set-Location $repoRoot
 $here = (Get-Location).Path
 Write-Info "Repo root: $here"
 
+$aiRunnersPath = 'C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners'
+if ($here -eq $aiRunnersPath -or $here -like '*outlier-worktrees*ai-runners*') {
+  Write-Info "NOTE: Running inside the ai-runners full clone. This is a secondary tracking clone. Canonical (C:\Users\dasil\OneDrive\Documents\outlier) + GitHub remain SSOT. Always prefer invoking report-sync via the canonical path."
+}
+
+# Known sibling full clones (separate .git directories, not linked worktrees).
+# These must be force-reset to origin/master during -SyncAllWorktrees from canonical
+# so that ai-runners (and future full clones) never drift from GitHub SSOT.
+$knownFullClones = @(
+  $aiRunnersPath
+)
+
 # 1. Ensure we have a real GitHub remote (cross-ent glue). Prefer "origin".
 $githubUrl = 'https://github.com/DaSilvaDub/outlier.git'
 $originUrl = (git remote get-url origin 2>$null) -or ''
@@ -104,7 +116,7 @@ if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
 #    Also materialize the sync tooling itself so every tree gets the latest bootstrap.
 Write-Info "Materializing key files (pack, daily, tests, prompts, sync tooling)..."
-git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
 
 # 5. Touch the files (helps OneDrive Files-On-Demand hydrate the content for this view)
 try {
@@ -163,7 +175,7 @@ if ($SyncAllWorktrees) {
         git -C $wtPath fetch origin --prune --tags 2>&1 | Out-Null
         # Non-destructive for the files we care about (the ones that were invisible before).
         # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
-        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
         try {
           $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
         } catch {}
@@ -176,6 +188,27 @@ if ($SyncAllWorktrees) {
   }
   Write-Info "SyncAllWorktrees complete. Materialized into $aligned additional worktree(s)."
   Write-Info "Note: feature worktrees keep their branch; run bootstrap inside them for any local reset needs."
+
+  # Align known full clones (ai-runners etc.). These have independent .git so must be
+  # hard-reset to the SSOT. This eliminates the case where ai-runners lags and ad-hoc
+  # searches inside it find "d05eb21 not present".
+  foreach ($fc in $knownFullClones) {
+    if (Test-Path (Join-Path $fc '.git')) {
+      Write-Info "Aligning full clone: $fc"
+      git -C $fc fetch origin --prune --tags 2>&1 | Out-Null
+      git -C $fc reset --hard origin/master 2>&1 | Out-Null
+      git -C $fc checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+      try {
+        $null = Get-Content -Raw (Join-Path $fc 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
+      } catch {}
+      $fcHead = git -C $fc rev-parse --short HEAD 2>$null
+      Write-Info "  -> full clone reset to origin/master (HEAD now $fcHead)"
+      $aligned++
+    }
+  }
+  if ($aligned -gt 0) {
+    Write-Info "(includes full clones; total actions: $aligned)"
+  }
 }
 
 # OneDrive note

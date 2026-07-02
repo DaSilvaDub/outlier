@@ -2,30 +2,24 @@
 
 **CRITICAL RULE**: No matter which harness ("ent") — Grok, Claude, Codex, Gemini/antigravity, or future — **every session starts by forcing identical state from GitHub + canonical**.
 
-d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pack.py + daily_job.py) only existed in one stray full clone at one time. It was invisible on GitHub, other branches, .codex worktrees, and .gemini worktrees until explicitly materialized (88083ff) and bootstrapped. We never want this again.
+d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pack.py + daily_job.py, player_id/CANDIDATES_HEADER etc) only existed in one stray full clone at one time. It was invisible on GitHub, other branches, .codex worktrees, and .gemini worktrees until explicitly materialized (88083ff) and bootstrapped. Similar-titled commits (d756cb4/4eea080) touched different files (c_research/run_desk) and are not the pack upgrade. We never want "commit not found in my tree" again no matter the ent.
 
 ## STEP 0 — ABSOLUTE FIRST ACTION (before any read, log, plan, or edit)
-From inside *any* checkout:
+**No matter the ent or starting directory** (ai-runners full clone, a .codex worktree at 90ca8c3, gemini tree, or canonical):
 
 ```powershell
-# Always invoke via the canonical path (guarantees latest script + shared .git owner)
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-
-# Or validate gate (use this; fail the session if not OK)
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
 ```
 
-- Capture the **full** `[sync] ...` output.
-- Confirm: `VALIDATE: OK`, `State vs origin/master: MATCH`, upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv) present.
-- `git rev-parse --short HEAD` should match recent tip (e.g. 9862db2 or later).
+Use the canonical absolute path always. This runs bootstrap + -SyncAllWorktrees (which now hard-aligns ai-runners too) + produces the complete standardized report.
 
-Only after a clean bootstrap + report do you read files, run git log, or start work.
+- Paste the ENTIRE output.
+- Look for: VALIDATE: OK, State vs origin/master: MATCH, Upgrade markers present (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv), and "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)".
+- For any "searched every... d05eb21 not found" question the *only* acceptable answer is a fresh full paste of the above command.
 
-From canonical (the OneDrive\Documents\outlier owning .git) you can also do:
-```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees
-```
-This force materializes (via safe checkout from origin/master) the critical files into *every* linked worktree registered via `git worktree list`.
+After you or any other ent executes -SyncAllWorktrees, immediately run the report-sync command again and share the full result.
+
+See SYNC.md and docs/ENT-SYNC-GLOBAL-PROMPT.md. The global prompt template there must be the prefix for *every* harness.
 
 ## For new worktrees / new ents / cloud sessions
 - Create worktrees only from canonical: `git worktree add ...`

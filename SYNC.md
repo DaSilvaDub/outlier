@@ -17,29 +17,27 @@ The commit d05eb21 (and its materialization 88083ff etc.) and all follow-ups mus
 
 **Rule**: GitHub is the arbiter. If two ents disagree, the one that did `git fetch origin; git reset --hard origin/master` from GitHub wins.
 
-## MANDATORY First Action — Every Session, Every Ent
+## MANDATORY First Action — Every Session, Every Ent (no exceptions)
 
-From inside any checkout (worktree or clone):
+**STEP 0 from ANY directory / ent / harness**:
 
 ```powershell
-# Preferred: use the committed bootstrap (updated to be GitHub-first + marker validation)
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-
-# Or with validation gate (agents can call this and fail the session if not OK)
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
 ```
 
-The script:
-- Forces origin -> GitHub.
-- `fetch --prune`.
-- `reset --hard origin/master` (or checkout -B).
-- Materializes the critical files that were the source of the original bug.
-- Touches files to help OneDrive hydrate.
-- Reports **authoritative sizes from git show** (immune to FS lies) + disk view.
-- **Hard-validates** the upgrade markers (player_id in header, round_robin_then_fill, _acquire_pack_lock, decisions.csv, CANDIDATES_HEADER).
-- If markers missing → you will see a warning / non-zero from -ValidateOnly.
+Always use the *canonical full path*. Do not rely on CWD, local copy in ai-runners, or relative ./report-sync.ps1.
 
-Run this **before** reading any code or running any scraper / test.
+This single command:
+- cds to canonical internally where needed
+- runs the bootstrap (GitHub remote, fetch --prune, reset/checkout to origin/master)
+- runs -SyncAllWorktrees (now also force-resets the ai-runners full clone + materializes sync scripts)
+- produces the authoritative report with marker validation, worktree list, full clone status, and the baked-in d05eb21 explanation
+
+Then paste the *entire* output. Only proceed if you see VALIDATE: OK + MATCH + all markers.
+
+For state/search questions ("commit not found", "searched all worktrees") you MUST use report-sync.ps1 (or scripts/verify-sync.ps1) and paste full. Ad-hoc git log / Get-ChildItem inside a 90ca8c3 worktree or lagged ai-runners clone is forbidden and will be rejected.
+
+See also docs/ENT-SYNC-GLOBAL-PROMPT.md (the block to inject into every harness).
 
 ## For Linked Worktrees (Codex / Gemini on this box)
 
