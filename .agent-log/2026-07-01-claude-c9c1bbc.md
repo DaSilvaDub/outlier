@@ -9,4 +9,6 @@
 - .agent-log/2026-07-01-claude-64181af.md
 - .agent-log/2026-07-01-unknown-1a8b93c.md
 - .agent-log/2026-07-01-unknown-7946c0f.md
+- .agent-log/2026-07-01-unknown-88083ff.md
 - .gitignore
+- docs/reviews/pipeline-upgrade-counter-proposal-d05eb21-review.md

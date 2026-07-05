@@ -29,4 +29,7 @@ copilot-worktrees/
 .codex/
 scratch/
 
+# AI agent session logs / introspection (noise across ents, not part of source)
+.agent-log/
+
 .tmp.driveupload/

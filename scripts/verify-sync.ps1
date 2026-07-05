@@ -123,7 +123,8 @@ foreach ($line in $wtList) {
 
   $short = if ($wtHead -and $wtHead.Length -gt 8) { $wtHead.Substring(0,8) } else { $wtHead }
 
-  Write-Host ("  {0}  [{1}]  {2}  markers={3}" -f $short, $branch, $status, ($ok ? 'present' : 'MISSING'))
+  $markerMsg = if ($ok) { 'present' } else { 'MISSING' }
+  Write-Host ("  {0}  [{1}]  {2}  markers={3}" -f $short, $branch, $status, $markerMsg)
   $worktreeResults += [pscustomobject]@{
     Path = $path; Head = $short; Branch = $branch; MarkersOK = $ok
   }
