@@ -10,6 +10,6 @@ For EACH market_id, return:
 
 House rules:
 - HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk. If one appears in the shortlist, verdict PASS with edge_source_check UNCLEAR and note "house-excluded market".
-- Avoid plus-money longshots: default to PASS on any play priced +150 or longer (e.g. a Hits Over at +181) — do not force a BET/LEAN on longshot prices.
+- Plus-money longshots priced +150 or longer (e.g. a Hits Over at +181) are filtered from the pack. If one appears, verdict PASS and note "house-excluded longshot" — never BET/LEAN a longshot price.
 
 Output a markdown table, one row per market_id. End with the 3 strongest BETs and any FADEs where the model is likely wrong. Do not suggest unit sizes — those are fixed by the pipeline.

@@ -13,6 +13,7 @@ from outlier_scrapers.pack import (
     build_row,
     index_ev_by_outcome,
     is_excluded_market,
+    is_longshot_price,
     is_no_push_market,
     rank_rows,
     select_date,
@@ -600,6 +601,53 @@ def test_is_excluded_market():
     assert is_excluded_market("bb", None) is True
     assert is_excluded_market("HITS", "HITS") is False
     assert is_excluded_market(None, None) is False
+
+
+# 24. House rule: plus-money longshots (+150 or longer) are hard-filtered.
+def test_longshot_price_dropped_ev_path():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 181,
+            "book_decimal_odds": 2.81,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    assert make_row(card, ev) is None
+
+
+def test_longshot_price_dropped_display_path():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "m3",
+        "sides": {"OVER": {"outcome_id": "o3", "best_odds": "+181"}},
+        "board": "B",
+    }
+    assert make_row(card, []) is None
+
+
+def test_non_longshot_prices_kept():
+    # -110 favourite and modest plus-money both stay; missing price stays.
+    assert make_row(ev_card(market_type="MONEYLINE"), []) is not None  # best_odds -110
+    card = {
+        "headline_side": "OVER",
+        "card_id": "m4",
+        "sides": {"OVER": {"outcome_id": "o4", "best_odds": "+130"}},
+        "board": "B",
+    }
+    assert make_row(card, []) is not None
+
+
+def test_is_longshot_price():
+    assert is_longshot_price("+181") is True
+    assert is_longshot_price(150) is True  # boundary: +150 or longer is out
+    assert is_longshot_price(149) is False
+    assert is_longshot_price("-105") is False
+    assert is_longshot_price(None) is False
+    assert is_longshot_price("") is False
 
 
 # 23. Briefing carries the house rules (market exclusions + longshot avoidance).

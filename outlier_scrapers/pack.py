@@ -64,8 +64,8 @@ EXCLUDED_MARKETS = {
     "BB", "WALKS",
 }
 
-# House rule: avoid plus-money longshots (e.g. a Hits Over at +181).
-# Surfaced to the analysts via the briefing ROLE_BLOCK; not a hard filter.
+# House rule: plus-money longshots (e.g. a Hits Over at +181) are hard-filtered
+# from packs. Any candidate priced at +LONGSHOT_AMERICAN_PRICE or longer is dropped.
 LONGSHOT_AMERICAN_PRICE = 150
 
 def american_to_decimal(american: float | int | str | None) -> float | None:
@@ -122,6 +122,15 @@ def is_excluded_market(market_token: str | None, market_type: str | None) -> boo
         if tok and str(tok).strip().upper() in EXCLUDED_MARKETS:
             return True
     return False
+
+def is_longshot_price(price: Any) -> bool:
+    if price in (None, ""):
+        return False
+    try:
+        val = float(str(price).replace("+", ""))
+    except (ValueError, TypeError):
+        return False
+    return val >= LONGSHOT_AMERICAN_PRICE
 
 def is_no_push_market(market_token: str | None, line: float | None) -> bool:
     token = (market_token or "").upper()
@@ -321,6 +330,8 @@ def build_row(
             row["book"] = next(iter(per_book.keys()), None)
         elif isinstance(per_book, list) and per_book and isinstance(per_book[0], dict):
             row["book"] = per_book[0].get("book")
+    if is_longshot_price(row.get("price")):
+        return None
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
@@ -467,8 +478,8 @@ ROLE_BLOCK = [
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
     " If one appears in the pack, treat it as a data error and stand it down.",
-    f"- Avoid plus-money longshots: default to PASS on any play priced +{LONGSHOT_AMERICAN_PRICE}"
-    " or longer (e.g. a Hits Over at +181) unless Tier 1-2 sourced news gives exceptional justification.",
+    f"- Plus-money longshots priced +{LONGSHOT_AMERICAN_PRICE} or longer (e.g. a Hits Over at +181)"
+    " are filtered from this pack. If one appears, treat it as a data error and stand it down.",
     "",
     "REASONING PASSES (A, D):",
     "- Use this pack ONLY. Do not use memory or the web.",

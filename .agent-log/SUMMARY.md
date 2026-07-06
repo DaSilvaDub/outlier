@@ -5,7 +5,8 @@ _Last updated: 2026-07-06 by claude_
 ## Current state
 - HOUSE RULES added (2026-07-06): HR / HRR (H+R+RBI) / BB (walks) markets are hard-excluded
   in `pack.py` (`EXCLUDED_MARKETS` + `is_excluded_market`, dropped in `build_row`); plus-money
-  longshots (+150 or longer, e.g. a Hits Over at +181) default to PASS via the briefing
+  longshots (+150 or longer, e.g. a Hits Over at +181) are also HARD-FILTERED in `build_row`
+  (`is_longshot_price` / `LONGSHOT_AMERICAN_PRICE`), with stand-down language in the briefing
   ROLE_BLOCK and prompts A/D/E. `BBA` (pitcher walks allowed) is NOT excluded.
 - Prompt C is automated as a grounded Gemini injury/lineup pass on branch
   `codex/prompt-c-research` (`2bf8ffd`), based on canonical `master` history.
