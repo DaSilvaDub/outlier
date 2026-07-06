@@ -6,6 +6,7 @@ STEP 1 — VALIDATION PASS (do this before any recommendation):
 - News may override opinion only if it is Tier 1–2, sourced, and timestamped (per §2e). Tier 3 can only lower confidence.
 
 STEP 2 — BUILD:
+- HOUSE RULES: no plays in HR / HRR (H+R+RBI) / BB (walks) markets — they are excluded from the desk; STAND-DOWN any that leaked into the pack. Avoid plus-money longshots: no play priced +150 or longer (e.g. a Hits Over at +181) unless Tier 1–2 sourced news gives exceptional justification.
 - A play needs: positive model edge AND no contradicting Tier 1–2 news AND ≥1 reasoner BET/LEAN.
 - Anything contradicted by **Tier 1–2 sourced** news (Tier 3 cannot kill a play) or flagged as an artifact → STAND-DOWN with reason.
 - SIZING IS FIXED: use the pipeline's recommended_units_pre_news. You MAY downgrade units (e.g. soft news, low confidence) but MUST NOT increase above it, and never above max_units.

@@ -12,6 +12,7 @@ from outlier_scrapers.pack import (
     build_pack,
     build_row,
     index_ev_by_outcome,
+    is_excluded_market,
     is_no_push_market,
     rank_rows,
     select_date,
@@ -571,6 +572,42 @@ def test_summarize_lm_status_missing_generated_at():
     assert ok is False
     assert "CAVEAT" in line
     assert "missing timestamp" in line
+
+
+# 22. House rule: HR / HRR (H+R+RBI) / BB (walks) markets are excluded entirely,
+#     matching both normalized short codes and raw proposition tokens.
+def test_excluded_markets_dropped():
+    for token in ("HR", "HRR", "BB", "HOME_RUNS", "HITS_RUNS_RBIS", "HITSRUNSRBIS", "WALKS"):
+        card = ev_card(market=token, market_type=token)
+        assert make_row(card, []) is None, f"{token} should be excluded from the pack"
+
+
+def test_excluded_market_matches_market_type_fallback():
+    # Exclusion applies via market_type when the market token is missing, any case.
+    card = ev_card(market=None, market_type="hr")
+    assert make_row(card, []) is None
+
+
+def test_non_excluded_markets_kept():
+    # HITS is fine; BBA (walks allowed, pitcher) is a different market and stays.
+    assert make_row(ev_card(market="HITS", market_type="HITS"), []) is not None
+    assert make_row(ev_card(market="BBA", market_type="BBA"), []) is not None
+
+
+def test_is_excluded_market():
+    assert is_excluded_market("HR", None) is True
+    assert is_excluded_market(None, "HRR") is True
+    assert is_excluded_market("bb", None) is True
+    assert is_excluded_market("HITS", "HITS") is False
+    assert is_excluded_market(None, None) is False
+
+
+# 23. Briefing carries the house rules (market exclusions + longshot avoidance).
+def test_briefing_house_rules():
+    text = build_briefing([], "2026-06-24")
+    assert "HOUSE RULES" in text
+    assert "HR / HRR" in text and "BB" in text
+    assert "+150" in text and "longshot" in text.lower()
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.

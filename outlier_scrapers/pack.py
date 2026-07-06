@@ -55,6 +55,19 @@ CANDIDATES_HEADER = [
 
 NO_PUSH_MARKETS = {"MONEYLINE", "ML", "ML_3WAY", "MONEYLINE_3WAY"}
 
+# House rule: HR / HRR (H+R+RBI) / BB (walks) prop markets are excluded from
+# packs entirely (low hit-rate longshot markets). Covers both the normalized
+# short codes (registry.py) and the raw proposition tokens.
+EXCLUDED_MARKETS = {
+    "HR", "HOME_RUNS",
+    "HRR", "HITSRUNSRBIS", "HITS_RUNS_RBIS",
+    "BB", "WALKS",
+}
+
+# House rule: avoid plus-money longshots (e.g. a Hits Over at +181).
+# Surfaced to the analysts via the briefing ROLE_BLOCK; not a hard filter.
+LONGSHOT_AMERICAN_PRICE = 150
+
 def american_to_decimal(american: float | int | str | None) -> float | None:
     if american is None or american == "":
         return None
@@ -103,6 +116,12 @@ def match_ev_records(
         and r.get("side") == headline_side
         and r.get("current_line") == line
     ]
+
+def is_excluded_market(market_token: str | None, market_type: str | None) -> bool:
+    for tok in (market_token, market_type):
+        if tok and str(tok).strip().upper() in EXCLUDED_MARKETS:
+            return True
+    return False
 
 def is_no_push_market(market_token: str | None, line: float | None) -> bool:
     token = (market_token or "").upper()
@@ -240,6 +259,8 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
+    if is_excluded_market(market_token, market_type):
+        return None
     scope = card.get("scope") or ref.get("scope")
     row = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
@@ -443,6 +464,12 @@ def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
     return "\n".join(lines)
 
 ROLE_BLOCK = [
+    "HOUSE RULES (all passes):",
+    "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
+    " If one appears in the pack, treat it as a data error and stand it down.",
+    f"- Avoid plus-money longshots: default to PASS on any play priced +{LONGSHOT_AMERICAN_PRICE}"
+    " or longer (e.g. a Hits Over at +181) unless Tier 1-2 sourced news gives exceptional justification.",
+    "",
     "REASONING PASSES (A, D):",
     "- Use this pack ONLY. Do not use memory or the web.",
     "- Never invent or recall odds/lines. Every verdict quotes the exact market_id + line/price from the pack.",
