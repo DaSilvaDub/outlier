@@ -20,24 +20,33 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import paths
+from outlier_scrapers import (
+    c_research,
+    claude_reasoning,
+    claude_synthesis,
+    gemini_research,
+    paths,
+    reasoning,
+)
 from outlier_scrapers import runner_common as rc
-
-from outlier_scrapers import reasoning
-from outlier_scrapers import gemini_research
-from outlier_scrapers import c_research
-from outlier_scrapers import claude_reasoning
-from outlier_scrapers import claude_synthesis
+from outlier_scrapers.environment import load_environment
 
 logger = logging.getLogger(__name__)
 
-PHASES = ["A", "B", "C", "D", "E"]
+PHASES = ("A", "B", "C", "D", "E")
 PHASE_OUTPUTS = {
     "A": "chatgpt_a.md",
     "B": "gemini_b.md",
     "C": "chatgpt_c.md",
     "D": "claude_d.md",
     "E": "claude_e.md",
+}
+PHASE_KEYS = {
+    "A": "OPENAI_API_KEY",
+    "B": "GEMINI_API_KEY",
+    "C": "GEMINI_API_KEY",
+    "D": "ANTHROPIC_API_KEY",
+    "E": "ANTHROPIC_API_KEY",
 }
 PHASE_RUNNERS = {
     "A": reasoning.run_reasoning,
@@ -46,68 +55,77 @@ PHASE_RUNNERS = {
     "D": claude_reasoning.run_claude_d,
     "E": claude_synthesis.run_claude_e,
 }
+SUCCESS_STATES = {"success", "cached", "forced-refresh"}
+STATUS_NAME = "reasoning_status.json"
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def write_status(pack_dir: Path, status: dict) -> None:
-    status_path = pack_dir / "reasoning_status.json"
-    tmp = status_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(status, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, status_path)
-    logger.info("Wrote %s", status_path)
-
-
-def _extract_request_sha(p: Path) -> str | None:
-    if not p.exists():
-        return None
+def _request_hash(path: Path) -> str:
+    if not path.exists():
+        return ""
     try:
-        txt = p.read_text(encoding="utf-8")
-        if not txt.startswith("---\n"):
-            return None
-        end = txt.find("\n---\n", 4)
-        if end == -1:
-            return None
-        for line in txt[4:end].splitlines():
-            if "request_sha256:" in line:
-                return line.split(":", 1)[1].strip().strip("'\"")
-    except Exception:
-        return None
-    return None
+        return rc.extract_yaml_request_hash(path.read_text(encoding="utf-8")) or ""
+    except OSError:
+        return ""
 
 
-def _phase_has_key(phase: str) -> bool:
-    if phase in ("A",):
-        return bool(os.getenv("OPENAI_API_KEY"))
-    if phase in ("B", "C"):
-        return bool(os.getenv("GEMINI_API_KEY"))
-    if phase in ("D", "E"):
-        return bool(os.getenv("ANTHROPIC_API_KEY"))
-    return True
+def _restore_on_failure(path: Path, previous: bytes | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    rc.atomic_write(path.parent, path.name, "", previous.decode("utf-8"))
 
 
-def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> tuple[int, str]:
+def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, str]:
     if phase not in PHASE_RUNNERS:
-        return 1, "failed"
-    if not _phase_has_key(phase):
-        return 1, "skipped-no-key"
+        return {"status": "failed", "file": "", "request_sha256": ""}
+
+    output = pack_dir / PHASE_OUTPUTS[phase]
+    previous = output.read_bytes() if output.exists() else None
+    previous_hash = _request_hash(output)
+
+    if force and not os.getenv(PHASE_KEYS[phase]):
+        return {
+            "status": "skipped-no-key",
+            "file": PHASE_OUTPUTS[phase],
+            "request_sha256": previous_hash,
+        }
+
     try:
-        out = pack_dir / PHASE_OUTPUTS[phase]
-        prev_sha = _extract_request_sha(out)
-        rc_code = PHASE_RUNNERS[phase](pack_dir, force=force, refresh_if_stale=not force)
-        new_sha = _extract_request_sha(out)
-        if rc_code == 0:
-            if prev_sha and new_sha and prev_sha == new_sha:
-                return 0, "cached"
-            if force:
-                return 0, "forced-refresh"
-            return 0, "success"
-        return rc_code, "failed"
+        exit_code = PHASE_RUNNERS[phase](
+            pack_dir, force=force, refresh_if_stale=not force
+        )
     except Exception:
-        logger.exception("phase %s error", phase)
-        return 1, "failed"
+        logger.exception("Phase %s failed", phase)
+        exit_code = 1
+
+    if exit_code == 0 and not output.exists():
+        exit_code = 1
+
+    if exit_code != 0:
+        _restore_on_failure(output, previous)
+        status = "skipped-no-key" if not os.getenv(PHASE_KEYS[phase]) else "failed"
+        return {
+            "status": status,
+            "file": PHASE_OUTPUTS[phase],
+            "request_sha256": _request_hash(output) or previous_hash,
+        }
+
+    current_hash = _request_hash(output)
+    if previous_hash and current_hash == previous_hash:
+        status = "cached"
+    elif force:
+        status = "forced-refresh"
+    else:
+        status = "success"
+    return {
+        "status": status,
+        "file": PHASE_OUTPUTS[phase],
+        "request_sha256": current_hash,
+    }
 
 
 def local_synthesize_inputs(pack_dir: Path) -> str:
@@ -116,10 +134,15 @@ def local_synthesize_inputs(pack_dir: Path) -> str:
     for fname in ("briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md"):
         p = pack_dir / fname
         if p.exists():
-            parts.append(f"\n\n===== {fname.upper().replace('.MD','')} =====\n" + p.read_text(encoding="utf-8"))
+            parts.append(
+                f"\n\n===== {fname.upper().replace('.MD', '')} =====\n"
+                + p.read_text(encoding="utf-8")
+            )
     c = pack_dir / "chatgpt_c.md"
     if c.exists():
-        parts.append("\n\n===== CHATGPT_C (optional) =====\n" + c.read_text(encoding="utf-8"))
+        parts.append(
+            "\n\n===== CHATGPT_C (optional) =====\n" + c.read_text(encoding="utf-8")
+        )
     return (
         "---\nmodel: local-synthesis-fallback\n"
         f"timestamp: {_now_iso()}\n---\n\n"
@@ -166,7 +189,6 @@ def produce_manual_betting_report(pack_dir: Path) -> Path:
     for label, txt in [("A", a_text), ("B", b_text), ("D", d_text)]:
         if txt:
             lines += [f"## {label}", txt[:1500], ""]
-    # Simple candidates section quoting exact ids/lines
     lines += ["## Candidates (quoted)", ""]
     for r in rows[:10]:
         mid = r.get("market_id", "")
@@ -179,13 +201,18 @@ def produce_manual_betting_report(pack_dir: Path) -> Path:
     return outp
 
 
-def _inputs_for_e_present(pack_dir: Path) -> bool:
-    needed = ["briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md"]
-    return all((pack_dir / n).exists() for n in needed)
+def _write_status(pack_dir: Path, payload: dict) -> None:
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    rc.atomic_write(pack_dir, STATUS_NAME, "", json.dumps(payload, indent=2, sort_keys=True))
+
+
+def write_status(pack_dir: Path, status: dict) -> None:
+    """Public alias used by older callers."""
+    _write_status(pack_dir, status)
 
 
 def _has_final_report(pack_dir: Path) -> tuple[bool, str, Path | None]:
-    e = pack_dir / "claude_e.md"
+    e = pack_dir / PHASE_OUTPUTS["E"]
     if e.exists():
         return True, "claude_e", e
     m = pack_dir / "manual_betting_report.md"
@@ -194,32 +221,20 @@ def _has_final_report(pack_dir: Path) -> tuple[bool, str, Path | None]:
     return False, "", None
 
 
-def _compute_overall(components: dict, has_final: bool) -> str:
-    a_ok = components.get("A", {}).get("status") in ("success", "cached", "forced-refresh")
-    b_ok = components.get("B", {}).get("status") in ("success", "cached", "forced-refresh")
-    d_ok = components.get("D", {}).get("status") in ("success", "cached", "forced-refresh")
-    if a_ok and b_ok and d_ok and has_final:
-        return "FULL"
-    if (a_ok or b_ok or d_ok) and has_final:
-        return "PARTIAL"
-    return "DATA_ONLY"
-
-
 def orchestrate_desk(
     pack_dir: Path,
     *,
     steps: Sequence[str] | None = None,
     force: bool = False,
-    allow_local_synth: bool = True,
+    allow_local_synth: bool = False,
 ) -> int:
-    if not pack_dir.exists() or not ((pack_dir / "candidates.csv").exists() or (pack_dir / "briefing.md").exists()):
-        logger.error("Pack directory %s is missing required briefing.md or candidates.csv. Run pack first.", pack_dir)
-        status = {"date": pack_dir.name, "generated_at": _now_iso(), "overall": "DATA_ONLY",
-                  "components": {}, "final_report": {}, "notes": ["missing pack inputs"]}
-        write_status(pack_dir, status)
+    load_environment()
+    selected = PHASES if steps is None else steps
+    requested = tuple(step.upper() for step in selected)
+    unknown = [step for step in requested if step not in PHASES]
+    if unknown:
+        logger.error("Unknown desk phase(s): %s", ",".join(unknown))
         return 1
-
-    requested = [s for s in (steps or PHASES) if s in PHASES]
 
     status = {
         "date": pack_dir.name,
@@ -229,88 +244,88 @@ def orchestrate_desk(
         "final_report": {},
         "notes": [],
     }
-    write_status(pack_dir, status)
 
-    comp = {}
+    if not (pack_dir / "briefing.md").exists() or not (pack_dir / "candidates.csv").exists():
+        status["overall"] = "DATA_ONLY"
+        status["notes"].append("missing briefing.md or candidates.csv")
+        _write_status(pack_dir, status)
+        return 1
 
-    # A, B, C (Prompt C style injury/lineup), D
-    for ph in [p for p in requested if p in ("A", "B", "C", "D")]:
-        logger.info("=== Phase %s ===", ph)
-        out_file = pack_dir / PHASE_OUTPUTS[ph]
-        prev = _extract_request_sha(out_file)
-        ec, tok = run_phase(ph, pack_dir, force=force)
-        cur = _extract_request_sha(out_file)
-        comp[ph] = {
-            "status": tok,
-            "file": PHASE_OUTPUTS[ph],
-            "request_sha256": cur or prev or "",
-        }
-        if tok == "failed":
-            status["notes"].append(f"{ph} failed")
-        status["components"] = comp
-        write_status(pack_dir, status)
+    components: dict[str, dict[str, str]] = {}
+    for phase in ("A", "B", "C", "D"):
+        if phase in requested:
+            components[phase] = run_phase(phase, pack_dir, force=force)
 
-    # E (gated on A/B/D; C optional)
     if "E" in requested:
-        logger.info("=== Phase E ===")
-        if not _inputs_for_e_present(pack_dir):
-            logger.warning("E gated: missing one or more of briefing/A/B/D outputs")
-            comp["E"] = {"status": "failed", "file": "claude_e.md", "request_sha256": ""}
-            status["notes"].append("E inputs incomplete")
+        required = ("briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md")
+        if all((pack_dir / name).exists() for name in required):
+            components["E"] = run_phase("E", pack_dir, force=force)
+            if (
+                allow_local_synth
+                and components["E"].get("status") not in SUCCESS_STATES
+            ):
+                try:
+                    content = local_synthesize_inputs(pack_dir)
+                    fm = "---\nmodel: local-synthesis-fallback\n---\n\n"
+                    rc.atomic_write(pack_dir, PHASE_OUTPUTS["E"], fm, content)
+                    components["E"]["status"] = "success"
+                    components["E"]["used_local_fallback"] = True
+                except Exception as ex:
+                    status["notes"].append(f"local concat failed: {ex}")
         else:
-            has_key = _phase_has_key("E")
-            if has_key and not force:
-                ec, tok = run_phase("E", pack_dir, force=False)
-            else:
-                if not has_key:
-                    tok = "skipped-no-key"
-                    ec = 1
-                else:
-                    ec, tok = run_phase("E", pack_dir, force=True)
+            components["E"] = {
+                "status": "gated-missing-input",
+                "file": PHASE_OUTPUTS["E"],
+                "request_sha256": "",
+            }
+            status["notes"].append("E inputs incomplete")
 
-            if ec == 0:
-                comp["E"] = {"status": tok or "success", "file": "claude_e.md", "request_sha256": _extract_request_sha(pack_dir/"claude_e.md") or ""}
-            else:
-                comp["E"] = {"status": tok or "failed", "file": "claude_e.md", "request_sha256": ""}
-                if allow_local_synth:
-                    try:
-                        content = local_synthesize_inputs(pack_dir)
-                        fm = "---\nmodel: local-synthesis-fallback\n---\n\n"
-                        rc.atomic_write(pack_dir, "claude_e.md", fm, content)
-                        comp["E"]["status"] = "success"
-                        comp["E"]["used_local_fallback"] = True
-                    except Exception as ex:
-                        status["notes"].append(f"local concat failed: {ex}")
+    status["components"] = components
 
-        status["components"] = comp
-        write_status(pack_dir, status)
-
-    # Always guarantee a final betting report
     has_final, source, fpath = _has_final_report(pack_dir)
     if not has_final and allow_local_synth:
         try:
             fpath = produce_manual_betting_report(pack_dir)
             has_final = True
             source = "local_synthesis"
-            if "E" in comp:
-                comp["E"]["used_local_fallback"] = True
             status["notes"].append("produced manual_betting_report.md via local synthesis")
         except Exception as ex:
             status["notes"].append(f"manual report synthesis failed: {ex}")
 
-    status["components"] = comp
+    e_usable = (
+        components.get("E", {}).get("status") in SUCCESS_STATES
+        if "E" in requested
+        else (pack_dir / PHASE_OUTPUTS["E"]).exists()
+    )
+    required_usable = all(
+        (
+            components.get(phase, {}).get("status") in SUCCESS_STATES
+            if phase in requested
+            else (pack_dir / PHASE_OUTPUTS[phase]).exists()
+        )
+        for phase in ("A", "B", "D")
+    )
+
     if has_final and fpath:
-        status["final_report"] = {
-            "source": source,
-            "file": str(fpath.name),
-        }
+        status["final_report"] = {"source": source, "file": str(fpath.name)}
 
-    overall = _compute_overall(comp, has_final)
-    status["overall"] = overall
+    if e_usable and required_usable:
+        status["overall"] = "FULL"
+        if not status["final_report"]:
+            status["final_report"] = {"source": "claude_e", "file": PHASE_OUTPUTS["E"]}
+        exit_code = 0
+    elif e_usable or has_final:
+        status["overall"] = "PARTIAL"
+        if not status["final_report"] and fpath:
+            status["final_report"] = {"source": source, "file": str(fpath.name)}
+        exit_code = 0
+    else:
+        status["overall"] = "DATA_ONLY"
+        exit_code = 1
+
     status["generated_at"] = _now_iso()
-    write_status(pack_dir, status)
-
-    return 0 if overall in ("FULL", "PARTIAL") else 1
+    _write_status(pack_dir, status)
+    return exit_code
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -320,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Force re-run of steps (bypass hash check).")
     parser.add_argument(
         "--steps",
-        default="A,B,C,D,E",
+        default=",".join(PHASES),
         help="Comma-separated subset of A,B,C,D,E. Default: A,B,C,D,E",
     )
     parser.add_argument(
