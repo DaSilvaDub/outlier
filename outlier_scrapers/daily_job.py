@@ -100,6 +100,31 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
                 return False
     return True
 
+def check_freshness(leagues: list[str]) -> bool:
+    from . import paths
+    logger.info("Checking data freshness before building pack...")
+    for lg in leagues:
+        reports = paths.league_paths(lg).reports
+        for fname in ("games_line_movement_status_latest.json", "line_movement_status_latest.json"):
+            status_file = reports / fname
+            if not status_file.exists():
+                logger.error(f"Missing status file: {status_file}")
+                return False
+            try:
+                data = json.loads(status_file.read_text(encoding="utf-8"))
+                gen_at = data.get("generated_at")
+                if not gen_at:
+                    logger.error(f"Missing generated_at in {status_file}")
+                    return False
+                dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
+                if (datetime.now().astimezone() - dt).total_seconds() > 6 * 3600:
+                    logger.error(f"Stale data (>6h old) in {status_file}: {gen_at}")
+                    return False
+            except Exception as e:
+                logger.error(f"Error checking freshness for {status_file}: {e}")
+                return False
+    return True
+
 def run_pack(leagues: list[str]) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
@@ -158,6 +183,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if not run_explicit_refresh(leagues):
         logger.error("Refresh pipeline failed. Aborting.")
+        return 1
+
+    if not check_freshness(leagues):
+        logger.error("Freshness check failed. Aborting pipeline before pack build.")
         return 1
 
     pack_dir = run_pack(leagues)

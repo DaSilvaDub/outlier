@@ -420,6 +420,37 @@ def select_date(
         logger.warning("Requested date %s has no events; emitting empty pack for that date.", requested)
     return kept, target
 
+def _parse_start(ts: Any) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.astimezone()
+
+def drop_locked_events(
+    rows: list[dict[str, Any]], now: datetime | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """House rule: never pack in-play markets.
+
+    Once an event locks, its markets go live: alt-line ladders re-center on the
+    in-game state, settled lines 404 off the API, and EV disappears — numbers
+    that read downstream as corrupt pregame lines (see slate 2026-07-06). Rows
+    without a parseable start time are kept, matching select_date's undated
+    policy. Returns (kept, dropped) as new lists; rows are not mutated.
+    """
+    now = now or datetime.now().astimezone()
+    kept: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for row in rows:
+        start = _parse_start(row.get("_event_starts_at"))
+        if start is not None and start <= now:
+            dropped.append(row)
+        else:
+            kept.append(row)
+    return kept, dropped
+
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
     # Immutability: do not mutate caller's rows. Create new objects (AGENTS.md).
     rows = [
@@ -495,6 +526,10 @@ ROLE_BLOCK = [
     " If one appears in the pack, treat it as a data error and stand it down.",
     f"- Plus-money longshots priced +{LONGSHOT_AMERICAN_PRICE} or longer (e.g. a Hits Over at +181)"
     " are filtered from this pack. If one appears, treat it as a data error and stand it down.",
+    "- Lines are PREGAME-only: candidates whose event already started (first lock in the past)"
+    " are filtered from this pack. If a card's as_of/source timestamps fall at or after its"
+    " event's first lock, its lines are LIVE/in-play — treat the whole event as a data error"
+    " and stand it down.",
     "",
     "REASONING PASSES (A, D):",
     "- Use this pack ONLY. Do not use memory or the web.",
@@ -668,6 +703,13 @@ def build_pack(
         all_rows.extend(props_rows)
         all_rows.extend(games_rows)
     kept, target_date = select_date(all_rows, requested_date)
+    kept, locked = drop_locked_events(kept)
+    if locked:
+        logger.warning(
+            "Dropped %d in-play candidate(s) — event already started, live lines are never packed: %s",
+            len(locked),
+            sorted({str(r.get("market_id")) for r in locked}),
+        )
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
     return final_rows, target_date
 

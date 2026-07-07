@@ -658,6 +658,85 @@ def test_briefing_house_rules():
     assert "+150" in text and "longshot" in text.lower()
 
 
+# 24. In-play guard: rows whose event already started are dropped from packs.
+def test_drop_locked_events():
+    from datetime import datetime, timezone
+
+    from outlier_scrapers.pack import drop_locked_events
+
+    now = datetime(2026, 7, 7, 3, 29, tzinfo=timezone.utc)  # 79 min after first lock
+    rows = [
+        {"_event_starts_at": "2026-07-07T02:10:00+00:00", "market_id": "live"},
+        {"_event_starts_at": "2026-07-07T23:10:00Z", "market_id": "pregame"},
+        {"_event_starts_at": None, "market_id": "undated"},
+        {"_event_starts_at": "not-a-timestamp", "market_id": "junk"},
+    ]
+    kept, dropped = drop_locked_events(rows, now=now)
+    # undated/unparseable rows are kept, matching select_date's undated policy
+    assert {r["market_id"] for r in kept} == {"pregame", "undated", "junk"}
+    assert {r["market_id"] for r in dropped} == {"live"}
+
+
+def test_drop_locked_events_boundary_is_locked():
+    from datetime import datetime, timezone
+
+    from outlier_scrapers.pack import drop_locked_events
+
+    now = datetime(2026, 7, 7, 2, 10, tzinfo=timezone.utc)
+    rows = [{"_event_starts_at": "2026-07-07T02:10:00+00:00", "market_id": "at_lock"}]
+    kept, dropped = drop_locked_events(rows, now=now)
+    assert kept == [] and len(dropped) == 1  # exactly at first lock counts as live
+
+
+# 25. build_pack applies the in-play guard end-to-end.
+def test_build_pack_drops_started_events(tmp_path, monkeypatch):
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    for lg in ("MLB", "WNBA"):
+        _league_fixture(tmp_path / "data" / lg, lg)
+    # Stamp the player-prop event EP with a start time far in the past: those
+    # rows now carry live/in-play lines and must never reach the pack.
+    for lg in ("MLB", "WNBA"):
+        props_path = tmp_path / "data" / lg / "normalized" / f"{lg.lower()}_props_latest.json"
+        props_path.write_text(
+            json.dumps(
+                {
+                    "generated_at": "PN",
+                    "records": [
+                        {
+                            "event_id": "EP",
+                            "market_id": "p1",
+                            "sport_context": {"event_starts_at": "2020-01-01T00:00:00+00:00"},
+                        }
+                    ],
+                }
+            )
+        )
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    rows, _target = build_pack(["MLB", "WNBA"], None, 15, 10)
+    ids = {r["market_id"] for r in rows}
+    assert "p1" not in ids  # started event dropped
+    assert "gm1" in ids  # undated game row kept
+
+
+# 26. Briefing states the pregame-only / live-line house rule.
+def test_briefing_pregame_house_rule():
+    text = build_briefing([], "2026-07-06")
+    lowered = text.lower()
+    assert "pregame" in lowered
+    assert "live" in lowered or "in-play" in lowered
+    assert "first lock" in lowered
+
+
 # 21. All-clean streams produce no UNRELIABLE guidance line.
 def test_freshness_section_all_ok(tmp_path, monkeypatch):
     from datetime import datetime
