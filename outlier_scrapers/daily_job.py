@@ -17,6 +17,7 @@ from .paths import otp_status_file, PROJECT_ROOT
 from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
+from . import run_desk
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,6 @@ def main(argv: list[str] | None = None) -> int:
         if not empty_pack and (run_steps or profile == "local"):
             logger.info("Running analysis desk (profile=%s)...", profile)
             try:
-                from . import run_desk
                 if profile == "local":
                     desk_code = run_desk.orchestrate_desk(pack_dir, steps=["E"], force=False, allow_local_synth=True)
                 else:

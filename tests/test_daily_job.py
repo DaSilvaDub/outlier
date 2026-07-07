@@ -46,9 +46,8 @@ def test_daily_job_orchestrates_login_and_refresh(tmp_path):
         patch("outlier_scrapers.daily_job._acquire_pack_lock", return_value=tmp_path / ".lock"),
         patch("outlier_scrapers.daily_job._release_pack_lock", return_value=None),
         patch("outlier_scrapers.daily_job._atomic_write_manifest", return_value=None),
-        patch("outlier_scrapers.daily_job.run_desk", create=True) as mock_rd,
+        patch("outlier_scrapers.daily_job.run_desk.orchestrate_desk", return_value=0),
     ):
-        mock_rd.orchestrate_desk.return_value = 0
         result = daily_job.main(["--leagues", "MLB"])
         assert result == 0
 
@@ -94,13 +93,12 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
 
-    import outlier_scrapers.run_desk as rd
     calls = {}
     def fake_desk(pack_dir, **kw):
         calls["called"] = True
         calls["steps"] = kw.get("steps")
         return 0
-    monkeypatch.setattr(rd, "orchestrate_desk", fake_desk)
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_desk.orchestrate_desk", fake_desk)
 
     import outlier_scrapers.reasoning
     monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", lambda *a,**k: 0)
@@ -123,11 +121,10 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
 
-    import outlier_scrapers.run_desk as rd
     def fake_desk_fail(*a, **k):
         (fake_pack / "reasoning_status.json").write_text('{"overall": "failed"}')
         return 1
-    monkeypatch.setattr(rd, "orchestrate_desk", fake_desk_fail)
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_desk.orchestrate_desk", fake_desk_fail)
 
     exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 1
@@ -208,8 +205,6 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     manifest = {}
     monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data))
 
-    import outlier_scrapers.run_desk as run_desk
-
     desk_called = False
 
     def fail_if_called(*_args, **_kwargs):
@@ -217,7 +212,9 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
         desk_called = True
         raise AssertionError("desk must not run for an empty pack")
 
-    monkeypatch.setattr(run_desk, "orchestrate_desk", fail_if_called)
+    monkeypatch.setattr(
+        "outlier_scrapers.daily_job.run_desk.orchestrate_desk", fail_if_called
+    )
 
     assert daily_job.main(["--analysis-profile", "full"]) == 0
     assert not desk_called
