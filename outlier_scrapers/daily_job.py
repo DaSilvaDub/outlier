@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
@@ -18,6 +19,9 @@ from . import refresh
 from . import pack
 
 logger = logging.getLogger(__name__)
+
+FRESHNESS_MAX_AGE = timedelta(hours=6)
+FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 def perform_auth_check(leagues: list[str]) -> bool:
     try:
@@ -100,8 +104,13 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
                 return False
     return True
 
-def check_freshness(leagues: list[str]) -> bool:
+def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     from . import paths
+
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    now = now.astimezone(timezone.utc)
     logger.info("Checking data freshness before building pack...")
     for lg in leagues:
         reports = paths.league_paths(lg).reports
@@ -116,8 +125,15 @@ def check_freshness(leagues: list[str]) -> bool:
                 if not gen_at:
                     logger.error(f"Missing generated_at in {status_file}")
                     return False
-                dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
-                if (datetime.now().astimezone() - dt).total_seconds() > 6 * 3600:
+                dt = datetime.fromisoformat(str(gen_at).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    logger.error(f"Timezone missing from generated_at in {status_file}: {gen_at}")
+                    return False
+                age = now - dt.astimezone(timezone.utc)
+                if age < -FRESHNESS_FUTURE_TOLERANCE:
+                    logger.error(f"Future-dated data in {status_file}: {gen_at}")
+                    return False
+                if age > FRESHNESS_MAX_AGE:
                     logger.error(f"Stale data (>6h old) in {status_file}: {gen_at}")
                     return False
             except Exception as e:
@@ -132,6 +148,17 @@ def run_pack(leagues: list[str]) -> Path | None:
         return pack.main(args)
     except Exception as e:
         logger.error(f"Failed to build pack: {e}")
+        return None
+
+def _count_pack_rows(pack_dir: Path) -> int | None:
+    candidates = pack_dir / "candidates.csv"
+    if not candidates.exists():
+        return None
+    try:
+        with candidates.open(newline="", encoding="utf-8") as handle:
+            return max(0, sum(1 for _row in csv.reader(handle)) - 1)
+    except OSError as exc:
+        logger.error("Could not count pack candidates in %s: %s", candidates, exc)
         return None
 
 def _acquire_pack_lock(pack_dir: Path) -> Path | None:
@@ -204,13 +231,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.run_reasoning and profile == "local":
             profile = "openai"
 
+        pack_rows = _count_pack_rows(pack_dir)
+        empty_pack = pack_rows == 0
+        if empty_pack:
+            logger.warning("Pack is empty after safety filters; skipping all analysis desk passes.")
+
         run_steps = []
         if profile == "openai":
             run_steps = ["A"]
         elif profile == "full":
             run_steps = ["A", "B", "C", "D", "E"]
 
-        if run_steps or profile == "local":
+        if not empty_pack and (run_steps or profile == "local"):
             logger.info("Running analysis desk (profile=%s)...", profile)
             try:
                 from . import run_desk
@@ -224,15 +256,13 @@ def main(argv: list[str] | None = None) -> int:
                 logger.error("Desk orchestration error: %s", e)
 
         status_path = pack_dir / "reasoning_status.json"
-        overall = "ok"
-        if status_path.exists():
+        overall = "ok" if empty_pack else "degraded"
+        if not empty_pack and status_path.exists():
             try:
                 st = json.loads(status_path.read_text(encoding="utf-8"))
                 overall = st.get("overall", "ok")
             except Exception:
                 overall = "degraded"
-        elif (pack_dir / "briefing.md").exists() or (pack_dir / "candidates.csv").exists():
-            overall = "degraded"
 
         manifest = {
             "run_id": f"{pack_dir.name}-{int(time.time())}",
@@ -240,16 +270,9 @@ def main(argv: list[str] | None = None) -> int:
             "leagues": leagues,
             "profile": profile,
             "overall": overall,
-            "pack_rows": None,
+            "pack_rows": pack_rows,
             "status_file": str(status_path) if status_path.exists() else None,
         }
-        try:
-            cand = pack_dir / "candidates.csv"
-            if cand.exists():
-                with open(cand, encoding="utf-8") as f:
-                    manifest["pack_rows"] = max(0, len(f.readlines()) - 1)
-        except Exception:
-            pass
         _atomic_write_manifest(pack_dir, manifest)
 
         final_code = 0 if overall in ("ok", "degraded", "partial") else 1

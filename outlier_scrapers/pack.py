@@ -427,25 +427,26 @@ def _parse_start(ts: Any) -> datetime | None:
         parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    return parsed if parsed.tzinfo else parsed.astimezone()
+    return parsed if parsed.tzinfo else None
 
 def drop_locked_events(
     rows: list[dict[str, Any]], now: datetime | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """House rule: never pack in-play markets.
+    """House rule: only pack markets proven to be pregame.
 
     Once an event locks, its markets go live: alt-line ladders re-center on the
     in-game state, settled lines 404 off the API, and EV disappears — numbers
     that read downstream as corrupt pregame lines (see slate 2026-07-06). Rows
-    without a parseable start time are kept, matching select_date's undated
-    policy. Returns (kept, dropped) as new lists; rows are not mutated.
+    without a parseable start time are also dropped because their pregame state
+    cannot be verified. Returns (kept, dropped) as new lists; rows are not
+    mutated.
     """
     now = now or datetime.now().astimezone()
     kept: list[dict[str, Any]] = []
     dropped: list[dict[str, Any]] = []
     for row in rows:
         start = _parse_start(row.get("_event_starts_at"))
-        if start is not None and start <= now:
+        if start is None or start <= now:
             dropped.append(row)
         else:
             kept.append(row)
@@ -542,6 +543,19 @@ ROLE_BLOCK = [
     "- Tie every finding back to a quoted market_id + line/price from the pack.",
     "- Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.",
 ]
+
+DERIVED_PACK_OUTPUTS = (
+    "chatgpt_a.md",
+    "gemini_b.md",
+    "chatgpt_c.md",
+    "claude_d.md",
+    "claude_e.md",
+    "daily_betting_report.md",
+    "manual_betting_report.md",
+    "mlb_betting_report.md",
+    "reasoning_status.json",
+    "manifest.json",
+)
 
 FRESH_COVERAGE_WARN = 0.9
 
@@ -640,6 +654,12 @@ def write_pack(
     rows: list[dict[str, Any]], out_dir: Path, freshness_lines: list[str] | None = None
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    for name in DERIVED_PACK_OUTPUTS:
+        (out_dir / name).unlink(missing_ok=True)
+    dossiers_dir = out_dir / "dossiers"
+    if dossiers_dir.exists():
+        for stale_dossier in dossiers_dir.glob("*.md"):
+            stale_dossier.unlink()
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
@@ -647,7 +667,6 @@ def write_pack(
     (out_dir / "briefing.md").write_text(
         build_briefing(rows, out_dir.name, freshness_lines), encoding="utf-8"
     )
-    dossiers_dir = out_dir / "dossiers"
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:
@@ -705,10 +724,14 @@ def build_pack(
     kept, target_date = select_date(all_rows, requested_date)
     kept, locked = drop_locked_events(kept)
     if locked:
+        locked_ids = sorted({str(r.get("market_id")) for r in locked})
+        sample = locked_ids[:10]
         logger.warning(
-            "Dropped %d in-play candidate(s) — event already started, live lines are never packed: %s",
+            "Dropped %d non-pregame candidate(s) — event started or start time is invalid; "
+            "market sample=%s%s",
             len(locked),
-            sorted({str(r.get("market_id")) for r in locked}),
+            sample,
+            " ..." if len(locked_ids) > len(sample) else "",
         )
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
     return final_rows, target_date

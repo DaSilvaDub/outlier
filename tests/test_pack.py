@@ -341,7 +341,13 @@ def _league_fixture(root, lg):
         ],
         "board_b": [],
         "context": {
-            "events": {"EG": {"home_team_id": "T1", "away_team_id": "T2"}},
+            "events": {
+                "EG": {
+                    "home_team_id": "T1",
+                    "away_team_id": "T2",
+                    "starts_at": "2099-07-07T23:10:00+00:00",
+                }
+            },
             "teams": {"T1": {"injuries": [{"player": "Hurt Guy"}]}},
         },
     }
@@ -370,7 +376,17 @@ def _league_fixture(root, lg):
         json.dumps(games_lm)
     )
     (root / "normalized" / f"{low}_props_latest.json").write_text(
-        json.dumps({"generated_at": "PN", "records": []})
+        json.dumps(
+            {
+                "generated_at": "PN",
+                "records": [
+                    {
+                        "event_id": "EP",
+                        "sport_context": {"event_starts_at": "2099-07-07T23:10:00+00:00"},
+                    }
+                ],
+            }
+        )
     )
     (root / "normalized" / f"{low}_games_latest.json").write_text(
         json.dumps({"generated_at": "GN", "context": game_cards["context"]})
@@ -670,11 +686,11 @@ def test_drop_locked_events():
         {"_event_starts_at": "2026-07-07T23:10:00Z", "market_id": "pregame"},
         {"_event_starts_at": None, "market_id": "undated"},
         {"_event_starts_at": "not-a-timestamp", "market_id": "junk"},
+        {"_event_starts_at": "2026-07-07T23:10:00", "market_id": "naive"},
     ]
     kept, dropped = drop_locked_events(rows, now=now)
-    # undated/unparseable rows are kept, matching select_date's undated policy
-    assert {r["market_id"] for r in kept} == {"pregame", "undated", "junk"}
-    assert {r["market_id"] for r in dropped} == {"live"}
+    assert {r["market_id"] for r in kept} == {"pregame"}
+    assert {r["market_id"] for r in dropped} == {"live", "undated", "junk", "naive"}
 
 
 def test_drop_locked_events_boundary_is_locked():
@@ -725,7 +741,7 @@ def test_build_pack_drops_started_events(tmp_path, monkeypatch):
     rows, _target = build_pack(["MLB", "WNBA"], None, 15, 10)
     ids = {r["market_id"] for r in rows}
     assert "p1" not in ids  # started event dropped
-    assert "gm1" in ids  # undated game row kept
+    assert "gm1" in ids  # independently verified future game remains
 
 
 # 26. Briefing states the pregame-only / live-line house rule.
@@ -735,6 +751,25 @@ def test_briefing_pregame_house_rule():
     assert "pregame" in lowered
     assert "live" in lowered or "in-play" in lowered
     assert "first lock" in lowered
+
+
+def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
+    out_dir = tmp_path / "packs" / "2026-07-06"
+    dossiers = out_dir / "dossiers"
+    dossiers.mkdir(parents=True)
+    (out_dir / "reasoning_status.json").write_text('{"overall":"FULL"}')
+    (out_dir / "manual_betting_report.md").write_text("stale live recommendations")
+    (out_dir / "chatgpt_a.md").write_text("stale phase")
+    (dossiers / "stale-event.md").write_text("stale dossier")
+    (out_dir / "keep-me.txt").write_text("unrelated")
+
+    write_pack([], out_dir)
+
+    assert not (out_dir / "reasoning_status.json").exists()
+    assert not (out_dir / "manual_betting_report.md").exists()
+    assert not (out_dir / "chatgpt_a.md").exists()
+    assert not (dossiers / "stale-event.md").exists()
+    assert (out_dir / "keep-me.txt").read_text() == "unrelated"
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.
