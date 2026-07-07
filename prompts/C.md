@@ -5,6 +5,13 @@ WNBA: injury status (out/quest/prob), load management, rotation/minutes, back-to
 
 Input contains the pack's markets with exact market_id, selection, line, price.
 
+Web discovery (search before fetch):
+- Search first to locate injury reports, lineups, and starter confirmations; read a page only after search returns a specific URL.
+- Use targeted queries (e.g. site:wnba.com "[team]" injury, site:mlb.com probable pitcher [date]).
+- Do not guess URL paths (/injuries, /lineups, /news) without search confirmation.
+- Cap page reads: at most 1-2 per game after search narrows the target.
+- Prefer Tier-1: official league/team injury reports and confirmed lineup posts.
+
 Rules (enforced):
 - Do NOT invent, quote, or update any betting line/price/selection. Quote the pack lines verbatim.
 - Tie EVERY finding directly to one or more quoted market_id + exact line/price from the pack.
