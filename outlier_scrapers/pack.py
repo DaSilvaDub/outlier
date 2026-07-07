@@ -542,6 +542,13 @@ ROLE_BLOCK = [
     "- Do NOT invent, quote, or update any betting line/price. The pack's lines are the only lines.",
     "- Tie every finding back to a quoted market_id + line/price from the pack.",
     "- Every news item must carry: claim, source name, SOURCE TIER (see §2e), and timestamp.",
+    "",
+    "WEB DISCOVERY (research passes + manual injury/lineup validation):",
+    "- Search first to locate sources; fetch a page only after search returns a specific URL.",
+    "- Use targeted queries (e.g. site:wnba.com, site:mlb.com, team name + injury report + date).",
+    "- Do not guess URL paths (/injuries, /lineups, /news) without search confirmation.",
+    "- Cap page fetches: at most 1-2 per game after search narrows the target.",
+    "- Prefer Tier-1: official league/team injury reports, confirmed lineups, NWS weather.",
 ]
 
 DERIVED_PACK_OUTPUTS = (
