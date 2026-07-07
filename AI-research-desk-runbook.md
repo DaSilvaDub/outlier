@@ -64,16 +64,20 @@ One row per `market_id` on the EV or signal board. Columns (identity + sizing fu
 ```
 sport, event_id, market_id, market_type, player_id, selection, line, price, decimal_price, book, as_of,
 model_prob, push_prob, implied_prob, edge_pct, kelly_025_units, max_units, recommended_units_pre_news,
-sizing_flags, outlier_ev_pct, outlier_kelly_pct,
+sizing_flags, outlier_ev_pct, outlier_kelly_pct, local_ev_pct, local_kelly_pct,
 line_open, line_now, public_money_pct, money_pct, injury_flags, research_leverage, source_timestamps
 ```
 This is the canonical, complete column list — the export header must match it exactly (no extra, no missing).
 - `price` = American odds (display); `decimal_price` = same price in decimal form, the value the sizing formula uses (§4). Source the decimal book price from the normalized `ev_records` (`book_decimal_odds`); never derive the bet price from de-vig/fair odds.
 - `selection` = the exact side/outcome (e.g. `HOME -1.5`, `Player X Over 5.5 K`), so alternate lines never collide.
 - `push_prob` = pipeline's probability the bet pushes (0 for no-push markets — moneylines, half-point lines, run line ±1.5). For any push-capable **whole-number** line (spreads, totals, **and integer-result player/team props**) where no real push probability exists yet, the row is **sizing-ineligible** (units empty) rather than sized with `push_prob=0`, which would mis-size it. See §4.
-- `model_prob` / `implied_prob` / `edge_pct` and the three `*_units` fields are **computed by the pipeline** (see §4). Models read them; they never recompute sizing.
-- `sizing_flags` = reason a row is sizing-ineligible (`ev_line_fallback`, `no_book_decimal`, `push_capable_no_prob`), so `edge_pct` and the unit fields stay strictly numeric/empty rather than carrying flag strings.
-- `outlier_ev_pct` / `outlier_kelly_pct` = Outlier's own EV% and Kelly% for the side (pipeline cross-check, not used for our sizing) — lets the reasoning models compare our computed edge against the source's.
+- `model_prob` = The computed true probability of the outcome (1.0 / devig_decimal). The desk assumes this is perfectly sharp.
+- `push_prob` = The probability of exactly hitting the number (for whole-number lines).
+- `edge_pct` = Our computed expected value based on price and model_prob (e.g. 0.052 = 5.2% edge).
+- `kelly_025_units` / `max_units` = Sizing recommendations. The desk treats these as hard upper bounds.
+- `sizing_flags` = Operational notes on sizing (e.g. `push_capable_no_prob`, `ev_line_fallback`).
+- `outlier_ev_pct` / `outlier_kelly_pct` = Outlier's native EV% and Kelly% for the side (pipeline cross-check).
+- `local_ev_pct` / `local_kelly_pct` = Locally synthesized EV% and Kelly% when Outlier native EV is missing.
 - `research_leverage` (low/med/high) = how much an unknown (weather, lineup, starter, rest) could move the number — used to prioritize Prompt C (§2d).
 
 Cap with **board quotas** so signal coverage is never starved by EV volume: take the top `top_ev_n` Board-A (EV) cards by `rank_value` desc **and** the top `top_signal_n` Board-B (signal) cards by `rank_value` desc (defaults 15 / 10 ≈ 25 total), union them. One row per card, emitted from the card's `headline_side`. **Never dump the whole slate.**

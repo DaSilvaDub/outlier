@@ -93,7 +93,7 @@ def call_openai_responses_api(
             return response.output_text
         except openai.RateLimitError as e:
             if attempt < max_custom_retries - 1:
-                logger.warning(f"OpenAI API rate limited, retrying in 30s...")
+                logger.warning("OpenAI API rate limited, retrying in 30s...")
                 time.sleep(30)
                 continue
             req_id = getattr(e, "request_id", None)

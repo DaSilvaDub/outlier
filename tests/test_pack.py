@@ -533,7 +533,7 @@ def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
     assert "### Freshness / Coverage" in text
     assert "MLB games line-movement: OK" in text
     assert "MLB props line-movement: CAVEAT" in text
-    assert "stale" in text and "UNRELIABLE" in text
+    assert "stale" in text and "context-only" in text
     # And it embeds into the briefing.
     assert "Freshness / Coverage" in build_briefing([], "2026-06-24", section)
 

@@ -1,7 +1,7 @@
 import pytest
 import anthropic
 
-from outlier_scrapers import pack, claude_synthesis
+from outlier_scrapers import claude_synthesis
 
 
 # Copied from tests/test_claude_reasoning.py to keep this test file self-contained

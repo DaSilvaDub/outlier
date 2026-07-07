@@ -146,7 +146,7 @@ def build_rows(cands: list[dict]) -> list[dict]:
                 "lnow": c.get("line_now", ""),
                 "pub": c.get("public_money_pct", ""),
                 "lev": c.get("research_leverage", ""),
-                "ev": fnum(c.get("outlier_ev_pct")),
+                "ev": fnum(c.get("outlier_ev_pct") or c.get("local_ev_pct")),
             }
         )
     # EV rows first (desc edge), then signal-only rows

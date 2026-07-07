@@ -44,6 +44,8 @@ CANDIDATES_HEADER = [
     "sizing_flags",
     "outlier_ev_pct",
     "outlier_kelly_pct",
+    "local_ev_pct",
+    "local_kelly_pct",
     "line_open",
     "line_now",
     "public_money_pct",
@@ -291,14 +293,23 @@ def build_row(
     row["public_money_pct"] = _coalesce(public_money.get("public_money_pct"), public_money.get("percentage"))
     row["money_pct"] = _coalesce(public_money.get("money_pct"), public_money.get("money"))
     if ev_summary:
-        row["outlier_ev_pct"] = ev_summary.get("best_ev_pct")
-        row["outlier_kelly_pct"] = ev_summary.get("kelly_pct")
+        if ev_summary.get("ev_source") == "LOCAL":
+            row["local_ev_pct"] = ev_summary.get("best_ev_pct")
+            row["local_kelly_pct"] = ev_summary.get("kelly_pct")
+        else:
+            row["outlier_ev_pct"] = ev_summary.get("best_ev_pct")
+            row["outlier_kelly_pct"] = ev_summary.get("kelly_pct")
     no_push = is_no_push_market(market_token, line)
     push_prob = 0.0 if no_push else None
     row["push_prob"] = push_prob
     usable = [r for r in matched if r.get("book_decimal_odds") is not None]
     eligible = bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
     if eligible:
+        best_record_id = ev_summary.get("best_record_id")
+        if best_record_id:
+            usable = [r for r in usable if r.get("record_id") == best_record_id]
+        if not usable:
+            return None
         best = sorted(usable, key=lambda r: (r.get("book_decimal_odds") or 0.0, r.get("calculated_ev_pct") or 0.0), reverse=True)[0]
         row["book"] = best.get("book")
         row["price"] = best.get("book_odds")
@@ -332,6 +343,10 @@ def build_row(
             row["book"] = per_book[0].get("book")
     if is_longshot_price(row.get("price")):
         return None
+    
+    if row.get("decimal_price") is not None and row["decimal_price"] <= 1.20:
+        return None
+        
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
@@ -395,12 +410,12 @@ def select_date(
     dated = {_local_date(r.get("_event_starts_at")) for r in rows}
     dated.discard(None)
     if not dated:
-        return [], (requested or today)
-    if requested:
+        return rows, (requested or today)
+    if requested and requested in dated:
         target = requested
     else:
         target = today if today in dated else max(dated)
-    kept = [r for r in rows if _local_date(r.get("_event_starts_at")) == target]
+    kept = [r for r in rows if _local_date(r.get("_event_starts_at")) in (target, None)]
     if requested and requested not in dated:
         logger.warning("Requested date %s has no events; emitting empty pack for that date.", requested)
     return kept, target

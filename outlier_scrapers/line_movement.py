@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -41,6 +42,27 @@ EV_METHOD_PRIORITY = (
     "PROBIT",
     "WORSTCASE",
 )
+
+VALID_CONSENSUS_BOOKS = {
+    "DRAFTKINGS": "DRAFTKINGS",
+    "FANDUEL": "FANDUEL",
+    "BETMGM": "BETMGM",
+    "BORGATA": "BETMGM",
+    "CAESARS": "CAESARS",
+    "BETRIVERS": "KAMBI",
+    "UNIBET": "KAMBI",
+    "BARSTOOL": "PENN",
+    "ESPNBET": "PENN",
+    "BET365": "BET365",
+    "PINNACLE": "PINNACLE",
+    "CIRCA": "CIRCA",
+    "POINTSBET": "POINTSBET",
+    "FANATICS": "POINTSBET",
+    "HARDROCK": "HARDROCK",
+    "WYNNBET": "WYNNBET",
+    "SUPERBOOK": "SUPERBOOK",
+    "BALLYBET": "BALLYBET",
+}
 
 
 class StalePropsError(ValueError):
@@ -864,6 +886,179 @@ def normalize_market_detail(
     return rows
 
 
+def _build_local_ev_records(
+    *,
+    league: str,
+    payload: dict[str, Any],
+    props_context: dict[str, Any],
+    source: str = "props",
+) -> list[dict[str, Any]]:
+    market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+    outcomes = market.get("outcomes") or []
+    # Identify primary two-way line
+    primary_outcomes = [o for o in outcomes if o.get("primary") is True]
+    if not primary_outcomes:
+        primary_outcomes = [o for o in outcomes if o.get("bookPrimary") is True]
+    if len(primary_outcomes) != 2:
+        return []
+
+    o1, o2 = primary_outcomes
+    
+    odds1 = o1.get("odds") if isinstance(o1.get("odds"), list) else []
+    odds2 = o2.get("odds") if isinstance(o2.get("odds"), list) else []
+
+    # Map books by name
+    books1 = {str(b.get("book") or "").upper(): b for b in odds1}
+    books2 = {str(b.get("book") or "").upper(): b for b in odds2}
+
+    common_books = set(books1.keys()) & set(books2.keys())
+    
+    operator_votes: dict[str, list[tuple[float, float, str]]] = {}
+    target_books: list[dict[str, Any]] = []
+
+    for bname in common_books:
+        b1 = books1[bname]
+        b2 = books2[bname]
+        
+        # Check eligibility
+        if str(b1.get("identifier", {}).get("bookProps", {}).get("exclude_ev", "")).lower() == "true":
+            continue
+        if str(b2.get("identifier", {}).get("bookProps", {}).get("exclude_ev", "")).lower() == "true":
+            continue
+
+        normalized_book = normalize_book_label(bname)
+        if normalized_book.upper() not in VALID_CONSENSUS_BOOKS:
+            continue
+        
+        operator = VALID_CONSENSUS_BOOKS[normalized_book.upper()]
+        
+        p1 = implied_probability(b1.get("american"))
+        p2 = implied_probability(b2.get("american"))
+        
+        if p1 is None or p2 is None:
+            continue
+            
+        overround = p1 + p2
+        if not (1.0 < overround <= 1.15):
+            continue
+            
+        fair1 = p1 / overround
+        fair2 = p2 / overround
+        
+        operator_votes.setdefault(operator, []).append((fair1, fair2, bname))
+        target_books.append({"bname": bname, "normalized": normalized_book, "operator": operator, "o1": b1, "o2": b2, "fair1": fair1, "fair2": fair2})
+
+    if len(operator_votes) < 3:
+        return []
+
+    # Calculate single reference vote per operator
+    op_refs: dict[str, tuple[float, float]] = {}
+    for op, votes in operator_votes.items():
+        avg_f1 = sum(v[0] for v in votes) / len(votes)
+        avg_f2 = sum(v[1] for v in votes) / len(votes)
+        op_refs[op] = (avg_f1, avg_f2)
+
+    rows: list[dict[str, Any]] = []
+    
+    market_id = str(market.get("marketId") or "").strip()
+    
+    for tb in target_books:
+        op = tb["operator"]
+        # Leave-one-out consensus
+        other_ops = [ref for o, ref in op_refs.items() if o != op]
+        if not other_ops:
+            continue
+            
+        cons_f1 = sum(ref[0] for ref in other_ops) / len(other_ops)
+        cons_f2 = sum(ref[1] for ref in other_ops) / len(other_ops)
+        
+        for (outcome, book_entry, cons_f) in [(o1, tb["o1"], cons_f1), (o2, tb["o2"], cons_f2)]:
+            dec_odds = _to_float(book_entry.get("decimal"))
+            if not dec_odds:
+                continue
+                
+            devig_decimal = 1.0 / cons_f if cons_f > 0 else 0.0
+            ev = (cons_f * dec_odds) - 1.0
+            kelly = ev / (dec_odds - 1.0) if dec_odds > 1.0 else 0.0
+            if ev <= 0:
+                kelly = 0.0
+                
+            line_val = outcome.get("line")
+            is_push_capable = False
+            if line_val is not None:
+                try:
+                    f_line = float(line_val)
+                    if f_line.is_integer():
+                        is_push_capable = True
+                except (ValueError, TypeError):
+                    pass
+            
+            outcome_id = str(outcome.get("outcomeId") or "")
+            ev_source = "LOCAL"
+            record_id = hashlib.sha256(f"{league}|{market_id}|{outcome_id}|{tb['normalized']}|{ev_source}".encode()).hexdigest()
+            
+            base_row = {
+                "record_id": record_id,
+                "ev_source": ev_source,
+                "sport": get_sport_config(league).league_id,
+                "league": get_sport_config(league).league_id,
+                "market_id": market_id,
+                "outcome_id": outcome_id,
+                "player": props_context.get("player"),
+                "player_raw": props_context.get("player_raw"),
+                "player_id": props_context.get("player_id"),
+                "team": props_context.get("team"),
+                "team_raw": props_context.get("team_raw"),
+                "opponent": props_context.get("opponent"),
+                "opponent_raw": props_context.get("opponent_raw"),
+                "matchup": props_context.get("matchup"),
+                "matchup_raw": props_context.get("matchup_raw"),
+                "market": props_context.get("market"),
+                "market_raw": props_context.get("market_raw"),
+                "market_label": props_context.get("market_label"),
+                "market_type": props_context.get("market_type"),
+                "prop_type": props_context.get("prop_type"),
+                "proposition": props_context.get("proposition"),
+                "scope": props_context.get("scope"),
+                "is_active": props_context.get("is_active"),
+                "current_line": _to_float(line_val),
+                "current_odds": _best_american_price(book_entry),
+                "current_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "book": tb["normalized"],
+                "book_raw": tb["bname"],
+                "book_odds": _best_american_price(book_entry),
+                "book_decimal_odds": dec_odds,
+                "book_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "book_state": book_entry.get("state"),
+                "max_bet": _to_float(book_entry.get("maxBet")),
+                "calculated_ev_method": "LOCAL_PROPORTIONAL",
+                "calculated_ev_pct": ev * 100.0 if not is_push_capable else None,
+                "kelly_pct": kelly * 100.0 if not is_push_capable else None,
+                "devig_decimal": devig_decimal,
+                "devig_odds": devig_decimal, # devig_odds is typically expected to be decimal in the metrics
+                "vig_pct": (cons_f1 + cons_f2 - 1.0) * 100.0,
+                "width_pct": 0.0,
+                "sport_context": {
+                    "market_group_id": market.get("marketGroupId"),
+                    "market_group_sort_order": market.get("marketGroupSortOrder"),
+                    "include_overtime": market.get("includeOvertime"),
+                    "source": "sportsdata/markets/{marketId}",
+                },
+            }
+            rows.append(base_row)
+            
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("matchup_raw") or ""),
+            str(row.get("player_raw") or ""),
+            str(row.get("market_raw") or ""),
+            str(row.get("side") or ""),
+            str(row.get("book") or row.get("book_raw") or ""),
+        ),
+    )
+
+
 def build_line_movement_payload(
     *,
     league: str,
@@ -879,6 +1074,10 @@ def build_line_movement_payload(
     ev_outcome_count = 0
     markets_with_ev: set[str] = set()
     markets_without_records: list[str | None] = []
+    
+    native_ev_count = 0
+    local_ev_count = 0
+
     for payload in market_payloads:
         market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
         market_id = str(market.get("marketId") or "").strip() or None
@@ -887,14 +1086,32 @@ def build_line_movement_payload(
             ev_outcome_count += len(ev_outcomes)
             if market_id:
                 markets_with_ev.add(market_id)
-            ev_rows.extend(
-                normalize_ev_records(
-                    league=league,
-                    payload=payload,
-                    props_context=props_context.get(market_id or "", {}),
-                    source=source,
-                )
+            
+            n_rows = normalize_ev_records(
+                league=league,
+                payload=payload,
+                props_context=props_context.get(market_id or "", {}),
+                source=source,
             )
+            for r in n_rows:
+                r["ev_source"] = "NATIVE"
+                if "record_id" not in r:
+                    r["record_id"] = hashlib.sha256(f"{league}|{market_id}|{r.get('outcome_id')}|{r.get('book')}|NATIVE".encode()).hexdigest()
+            ev_rows.extend(n_rows)
+            native_ev_count += len(n_rows)
+        else:
+            l_rows = _build_local_ev_records(
+                league=league,
+                payload=payload,
+                props_context=props_context.get(market_id or "", {}),
+                source=source,
+            )
+            if l_rows:
+                if market_id:
+                    markets_with_ev.add(market_id)
+                ev_rows.extend(l_rows)
+                local_ev_count += len(l_rows)
+                
         market_rows = normalize_market_detail(
             league=league,
             payload=payload,
@@ -919,6 +1136,8 @@ def build_line_movement_payload(
         "markets_with_ev_count": len(markets_with_ev),
         "ev_outcome_count": ev_outcome_count,
         "ev_record_count": len(ev_rows),
+        "native_ev_count": native_ev_count,
+        "local_ev_count": local_ev_count,
         "fetch_errors": fetch_errors or [],
         "primary_record_array": "records",
         "records": sorted(
@@ -933,7 +1152,7 @@ def build_line_movement_payload(
         "ev_records": ev_rows,
         "data_contract": {
             "dataset": "outlier_line_movement",
-            "version": "1.1",
+            "version": "1.2",
             "intended_use": "Standalone Outlier market-detail line movement for betting triage.",
             "join_key": "league+market_id",
             "row_grain": "one row per market_id+side",

@@ -87,7 +87,7 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
     monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
-    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda l: None)
+    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
 
     import outlier_scrapers.run_desk as rd
@@ -101,7 +101,7 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     import outlier_scrapers.reasoning
     monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", lambda *a,**k: 0)
 
-    exit_code = daily_job.main(["--run-reasoning", "--date", "2026-06-27"])
+    exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 0
     assert calls.get("called")
 
@@ -115,13 +115,16 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
     monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
-    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda l: None)
+    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
 
     import outlier_scrapers.run_desk as rd
-    monkeypatch.setattr(rd, "orchestrate_desk", lambda *a, **k: 1)
+    def fake_desk_fail(*a, **k):
+        (fake_pack / "reasoning_status.json").write_text('{"overall": "failed"}')
+        return 1
+    monkeypatch.setattr(rd, "orchestrate_desk", fake_desk_fail)
 
-    exit_code = daily_job.main(["--run-reasoning", "--date", "2026-06-27"])
+    exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 1
 
 def test_orchestrate_login_removes_stale_status(tmp_path):

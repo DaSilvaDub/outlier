@@ -166,6 +166,8 @@ def _ev(market_id, side, ev_pct, outcome_id):
         "book_odds": -106,
         "max_bet": 250,
         "book_state": "PREMATCH",
+        "ev_source": "NATIVE",
+        "record_id": f"mock_record_{outcome_id}",
     }
 
 

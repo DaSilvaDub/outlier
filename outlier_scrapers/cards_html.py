@@ -87,7 +87,7 @@ function sideBlock(name,sv,hl){
  <td>${num(b.kelly_pct)}</td><td>${b.max_bet==null?'-':b.max_bet}</td><td>${b.book_state||'-'}</td></tr>`;});
  h+=`</table><div class="kv"><span>devig <b>${odds(ev.devig_odds)}</b></span><span>vig <b>${num(ev.vig_pct)}%</b></span><span>width <b>${num(ev.width_pct)}%</b></span></div>`;}
  const px=sv.proxy_market_edge;
- if(px)h+=`<div class="proxy">proxy_market edge ${num(px.edge_pct)}% @ ${px.book} (${odds(px.odds)}) vs fair ${num(px.fair_prob_pct)}% — market signal, not Outlier EV</div>`;
+ if(px)h+=`<div class="proxy">proxy_market edge ${num(px.edge_pct)}% @ ${px.book} (${odds(px.odds)}) vs fair ${num(px.fair_prob_pct)}% — market signal, not EV</div>`;
  (sv.insights||[]).forEach(i=>{h+=`<div class="ins">${i.text||''} <span class="meta">[rel ${num(i.relevancy)}, ${i.last_n_record||''}]</span></div>`;});
  return h+'</div>';
 }
@@ -165,7 +165,7 @@ def render_html(payload: dict[str, Any]) -> str:
   {skew_html}
 </header>
 <div class="controls">
-  <span class="tab on" data-b="A" onclick="setBoard('A')">Board A · Verified EV</span>
+  <span class="tab on" data-b="A" onclick="setBoard('A')">Board A · Quant EV</span>
   <span class="tab" data-b="B" onclick="setBoard('B')">Board B · Signals</span>
   <input id="q" placeholder="filter player / market / matchup">
   <select id="bucket"></select>

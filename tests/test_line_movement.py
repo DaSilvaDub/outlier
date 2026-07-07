@@ -411,7 +411,7 @@ def test_export_line_movement_writes_raw_normalized_and_status(tmp_path, monkeyp
     assert status["ev_outcome_count"] == 0
     assert status["ev_record_count"] == 0
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))
-    assert normalized["data_contract"]["version"] == "1.1"
+    assert normalized["data_contract"]["version"] == "1.2"
     assert normalized["data_contract"]["row_grain"] == "one row per market_id+side"
     assert normalized["data_contract"]["secondary_record_arrays"]["ev_records"].startswith("one row")
     assert normalized["markets_without_records"] == []

@@ -339,7 +339,9 @@ def build_indexes(
         if mid and side:
             idx.movement_by_market.setdefault(str(mid), {})[side] = row
     for row in ev_records:
-        if str(row.get("calculated_ev_method") or "").upper() != EV_METHOD:
+        src = str(row.get("ev_source") or "").upper()
+        meth = str(row.get("calculated_ev_method") or "").upper()
+        if not ((src == "NATIVE" and meth == EV_METHOD) or (src == "LOCAL" and meth == "LOCAL_PROPORTIONAL")):
             continue
         if row.get("calculated_ev_pct") is None:
             continue
@@ -474,7 +476,13 @@ def _ev_for_side(
     else:
         is_fallback = True
 
-    best = max(rows, key=lambda r: r.get("calculated_ev_pct", float("-inf")))
+    best = max(
+        rows,
+        key=lambda r: (
+            r.get("calculated_ev_pct") if r.get("calculated_ev_pct") is not None else float("-inf"),
+            r.get("record_id") or ""
+        )
+    )
     books = sorted(
         (
             {
@@ -500,6 +508,8 @@ def _ev_for_side(
         "devig_odds": best.get("devig_odds"),
         "devig_decimal": best.get("devig_decimal"),
         "outcome_id": best.get("outcome_id"),
+        "best_record_id": best.get("record_id"),
+        "ev_source": best.get("ev_source"),
         "is_alt_line_fallback": is_fallback,
         "ev_book_count": len(books),
         "ev_books": books,
@@ -727,7 +737,10 @@ def _slim_movement(mv: dict[str, Any] | None) -> dict[str, Any] | None:
 def _route_and_rank(card: dict[str, Any]) -> None:
     """Attach board, headline side, rank value, bucket, and conflict flags."""
     sides = card.get("sides", {})
-    ev_sides = {s: v for s, v in sides.items() if v.get("ev")}
+    ev_sides = {
+        s: v for s, v in sides.items()
+        if v.get("ev") and (v["ev"].get("best_ev_pct") or 0.0) > 0.0
+    }
 
     if ev_sides:
         headline = max(
@@ -868,7 +881,7 @@ def build_cards_payload(league: str) -> dict[str, Any]:
             "props_records": len(props),
             "props_markets": len(idx.props_by_market),
             "movement_records": len(movement),
-            "ev_records_average": sum(len(v) for v in idx.ev_by_market.values()),
+            "ev_records_eligible": sum(len(v) for v in idx.ev_by_market.values()),
             "ev_markets": len(idx.ev_by_market),
             "insights_records": len(insights),
             "cards_total": len(cards),
@@ -989,7 +1002,7 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
             "games_records": len(props),
             "games_markets": len(idx.props_by_market),
             "movement_records": len(movement),
-            "ev_records_average": sum(len(v) for v in idx.ev_by_market.values()),
+            "ev_records_eligible": sum(len(v) for v in idx.ev_by_market.values()),
             "ev_markets": len(idx.ev_by_market),
             "cards_total": len(cards),
             "board_a_cards": len(board_a),

@@ -1,7 +1,7 @@
 import pytest
 from google import genai
 
-from outlier_scrapers import pack, gemini_research
+from outlier_scrapers import gemini_research
 
 
 @pytest.fixture
