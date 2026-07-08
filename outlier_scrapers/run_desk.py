@@ -128,6 +128,16 @@ def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, s
     }
 
 
+def _game_totals_context(pack_dir: Path) -> str:
+    totals_bytes, _ = rc.load_game_totals(pack_dir)
+    if not totals_bytes:
+        return ""
+    return (
+        "\n\n===== GAME_TOTALS.CSV (projection board) =====\n"
+        + totals_bytes.decode("utf-8-sig")
+    )
+
+
 def local_synthesize_inputs(pack_dir: Path) -> str:
     """Concat for fallback claude_e slot. C optional."""
     parts = []
@@ -138,6 +148,9 @@ def local_synthesize_inputs(pack_dir: Path) -> str:
                 f"\n\n===== {fname.upper().replace('.MD', '')} =====\n"
                 + p.read_text(encoding="utf-8")
             )
+    totals_ctx = _game_totals_context(pack_dir)
+    if totals_ctx:
+        parts.append(totals_ctx)
     c = pack_dir / "chatgpt_c.md"
     if c.exists():
         parts.append(
@@ -189,7 +202,13 @@ def produce_manual_betting_report(pack_dir: Path) -> Path:
     for label, txt in [("A", a_text), ("B", b_text), ("D", d_text)]:
         if txt:
             lines += [f"## {label}", txt[:1500], ""]
-    lines += ["## Candidates (quoted)", ""]
+    totals_bytes, _ = rc.load_game_totals(pack_dir)
+    lines += ["## Game Totals (projection board)", ""]
+    if totals_bytes:
+        lines.append(totals_bytes.decode("utf-8-sig"))
+    else:
+        lines.append("(game_totals.csv not present in pack)")
+    lines += ["", "## Candidates (quoted)", ""]
     for r in rows[:10]:
         mid = r.get("market_id", "")
         sel = r.get("selection", "")
@@ -236,12 +255,18 @@ def orchestrate_desk(
         logger.error("Unknown desk phase(s): %s", ",".join(unknown))
         return 1
 
+    totals_bytes, totals_hash = rc.load_game_totals(pack_dir)
     status = {
         "date": pack_dir.name,
         "generated_at": _now_iso(),
         "overall": "running",
         "components": {},
         "final_report": {},
+        "game_totals": {
+            "file": rc.GAME_TOTALS_NAME,
+            "present": totals_bytes is not None,
+            "sha256": totals_hash,
+        },
         "notes": [],
     }
 

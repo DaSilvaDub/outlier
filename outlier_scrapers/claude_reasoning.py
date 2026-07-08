@@ -32,14 +32,21 @@ OUT_NAME = "claude_d.md"
 PROMPT_FILE = "D.md"
 
 
-def call_claude(prompt_text: str, role_block: list[str], raw_csv_bytes: bytes, client=None) -> str:
+def call_claude(
+    prompt_text: str,
+    role_block: list[str],
+    raw_csv_bytes: bytes,
+    totals_bytes: bytes | None = None,
+    client=None,
+) -> str:
     if client is None:
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
         client = anthropic.Anthropic(timeout=600.0, max_retries=1)
 
-    full_prompt = prompt_text + "\n\nData:\n" + raw_csv_bytes.decode("utf-8")
+    data_block = rc.build_reasoning_data_block(raw_csv_bytes, totals_bytes)
+    full_prompt = prompt_text + "\n\nData:\n" + data_block
     try:
         with client.messages.stream(
             model=MODEL,
@@ -79,6 +86,7 @@ def run_claude_d(
                 return 0
 
         raw_bytes, candidates_sha256 = rc.validate_candidates(pack_dir)
+        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -91,6 +99,7 @@ def run_claude_d(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "candidates_hash": candidates_sha256,
+                "game_totals_hash": game_totals_sha256,
             }
         )
 
@@ -102,7 +111,9 @@ def run_claude_d(
             out_file.unlink()
 
         logger.info("Calling Claude (Prompt D)...")
-        output_text = call_claude(prompt_text, pack.ROLE_BLOCK, raw_bytes, client=client)
+        output_text = call_claude(
+            prompt_text, pack.ROLE_BLOCK, raw_bytes, totals_bytes, client=client
+        )
 
         front_matter = (
             "---\n"
@@ -110,6 +121,7 @@ def run_claude_d(
             f"effort: {EFFORT}\n"
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"candidates_sha256: {candidates_sha256}\n"
+            f"game_totals_sha256: {game_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"
             "---\n\n"
         )

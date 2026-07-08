@@ -1,8 +1,7 @@
 """Shared scaffolding for the AI research-desk reasoning/research runners.
 
 Holds the provider-agnostic mechanics — request-hash, candidates validation,
-atomic front-matter write — so the per-prompt runner modules stay thin. Keeps
-``reasoning.py`` (Prompt A) untouched; new runners (B, D, E) build on this.
+game_totals context injection, atomic front-matter write — so per-prompt runners stay thin.
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ from pathlib import Path
 
 from outlier_scrapers import pack
 
+GAME_TOTALS_NAME = "game_totals.csv"
+
 
 class RunnerError(Exception):
     """Raised for any recoverable runner failure (-> exit code 1)."""
@@ -27,6 +28,37 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_text(text: str) -> str:
     return sha256_bytes(text.encode("utf-8"))
+
+
+def empty_game_totals_hash() -> str:
+    """Stable hash when game_totals.csv is absent."""
+    return sha256_bytes(b"")
+
+
+def load_game_totals(pack_dir: Path) -> tuple[bytes | None, str]:
+    """Return (raw bytes or None, sha256). Missing file hashes as empty."""
+    path = pack_dir / GAME_TOTALS_NAME
+    if not path.exists():
+        return None, empty_game_totals_hash()
+    raw = path.read_bytes()
+    return raw, sha256_bytes(raw)
+
+
+def append_totals_block(base: str, totals_bytes: bytes | None) -> str:
+    """Append labeled game_totals.csv context when the pack artifact exists."""
+    if not totals_bytes:
+        return base
+    return (
+        base
+        + "\n\n===== GAME_TOTALS.CSV (projection board) =====\n"
+        + totals_bytes.decode("utf-8-sig")
+    )
+
+
+def build_reasoning_data_block(candidates_bytes: bytes, totals_bytes: bytes | None) -> str:
+    """Merge candidates.csv and optional game_totals.csv for reasoning passes."""
+    base = "candidates.csv:\n" + candidates_bytes.decode("utf-8-sig")
+    return append_totals_block(base, totals_bytes)
 
 
 def compute_request_hash(request_data: dict) -> str:

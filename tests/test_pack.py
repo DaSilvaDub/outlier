@@ -408,7 +408,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         _league_fixture(tmp_path / "data" / lg, lg)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, target = build_pack(["MLB", "WNBA"], None, 15, 10)
+    rows, target, games_norm = build_pack(["MLB", "WNBA"], None, 15, 10)
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
     # both streams represented: a player (board_b) and a game (board_a) row exist
@@ -421,8 +421,10 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert isinstance(game_rows[0]["edge_pct"], float)
 
     out_dir = tmp_path / "packs" / target
-    write_pack(rows, out_dir)
+    write_pack(rows, out_dir, games_norm_by_league=games_norm)
     assert (out_dir / "candidates.csv").exists()
+    assert (out_dir / "game_totals.csv").exists()
+    assert (out_dir / "sections" / "game_totals.md").exists()
     briefing = (out_dir / "briefing.md").read_text()
     assert "REASONING PASSES (A, D):" in briefing
     assert "Slate index" in briefing
@@ -738,7 +740,7 @@ def test_build_pack_drops_started_events(tmp_path, monkeypatch):
         )
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, _target = build_pack(["MLB", "WNBA"], None, 15, 10)
+    rows, _target, _games_norm = build_pack(["MLB", "WNBA"], None, 15, 10)
     ids = {r["market_id"] for r in rows}
     assert "p1" not in ids  # started event dropped
     assert "gm1" in ids  # independently verified future game remains
