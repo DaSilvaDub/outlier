@@ -37,7 +37,10 @@ REQUIRED_INPUTS = {
     "prompt_b": "gemini_b.md",
     "prompt_d": "claude_d.md",
 }
-OPTIONAL_INPUTS = {"prompt_c": "chatgpt_c.md"}
+OPTIONAL_INPUTS = {
+    "prompt_c": "chatgpt_c.md",
+    "game_totals": rc.GAME_TOTALS_NAME,
+}
 
 
 def gather_inputs(pack_dir: Path) -> dict[str, str]:

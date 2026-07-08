@@ -657,8 +657,28 @@ def build_briefing(
             )
     return "\n".join(lines)
 
+
+def _format_game_totals_md(totals_rows: list[dict[str, Any]]) -> str:
+    lines = ["# Game totals projection board", ""]
+    if not totals_rows:
+        lines.append("_No eligible totals markets._")
+        return "\n".join(lines)
+    for row in totals_rows:
+        flags = row.get("quality_flags") or ""
+        lines.append(
+            f"- [{row.get('sport')}] {row.get('market_id')}: {row.get('selection')} "
+            f"@ {row.get('line')} ({row.get('price')}) edge={row.get('edge_pct')} "
+            f"actionable={row.get('actionable')} flags={flags}"
+        )
+    return "\n".join(lines)
+
+
 def write_pack(
-    rows: list[dict[str, Any]], out_dir: Path, freshness_lines: list[str] | None = None
+    rows: list[dict[str, Any]],
+    out_dir: Path,
+    freshness_lines: list[str] | None = None,
+    *,
+    games_norm_by_league: dict[str, Any] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in DERIVED_PACK_OUTPUTS:
@@ -688,10 +708,24 @@ def write_pack(
     with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df:
         df.write("date,market_id,event_id,selection,decision,line_taken,price_taken,units,rationale\n")
 
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals
+
+    totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+    sections_dir = out_dir / "sections"
+    sections_dir.mkdir(exist_ok=True)
+    with open(out_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as tf:
+        writer = csv.DictWriter(tf, fieldnames=GAME_TOTALS_HEADER, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(totals_rows)
+    (sections_dir / "game_totals.md").write_text(_format_game_totals_md(totals_rows), encoding="utf-8")
+
 def build_pack(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     all_rows: list[dict[str, Any]] = []
+    games_norm_by_league: dict[str, Any] = {}
     for raw_league in leagues:
         lg = raw_league.strip().upper()
         if not lg:
@@ -701,6 +735,7 @@ def build_pack(
         norm = lp.normalized
         low = lg.lower()
         games_norm = load_json(norm / f"{low}_games_latest.json")
+        games_norm_by_league[lg] = games_norm
         props_norm = load_json(norm / f"{low}_props_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
@@ -741,7 +776,7 @@ def build_pack(
             " ..." if len(locked_ids) > len(sample) else "",
         )
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
-    return final_rows, target_date
+    return final_rows, target_date, games_norm_by_league
 
 def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
@@ -751,10 +786,12 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--top-signal-n", type=int, default=10)
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
-    final_rows, target_date = build_pack(leagues, args.date, args.top_ev_n, args.top_signal_n)
+    final_rows, target_date, games_norm = build_pack(
+        leagues, args.date, args.top_ev_n, args.top_signal_n
+    )
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
-    write_pack(final_rows, out_dir, freshness)
+    write_pack(final_rows, out_dir, freshness, games_norm_by_league=games_norm)
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
     return out_dir
 

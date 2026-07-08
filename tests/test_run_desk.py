@@ -76,6 +76,27 @@ def test_failed_c_refresh_restores_previous_output(desk_pack, monkeypatch):
     assert output.read_bytes() == b"previous"
 
 
+def test_orchestrate_status_includes_game_totals(desk_pack, monkeypatch):
+    for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(key, "test-key")
+
+    def runner_for(phase):
+        def run(pack_dir, **kwargs):
+            _write_output(pack_dir, run_desk.PHASE_OUTPUTS[phase], phase.lower())
+            return 0
+
+        return run
+
+    for phase in run_desk.PHASES:
+        monkeypatch.setitem(run_desk.PHASE_RUNNERS, phase, runner_for(phase))
+
+    (desk_pack / "game_totals.csv").write_text("totals_id,market_id\nx,m1\n", encoding="utf-8")
+    run_desk.orchestrate_desk(desk_pack)
+    status = json.loads((desk_pack / run_desk.STATUS_NAME).read_text(encoding="utf-8"))
+    assert status["game_totals"]["present"] is True
+    assert status["game_totals"]["file"] == "game_totals.csv"
+
+
 def test_default_orchestration_runs_c_and_writes_full_status(desk_pack, monkeypatch):
     for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(key, "test-key")
@@ -96,6 +117,23 @@ def test_default_orchestration_runs_c_and_writes_full_status(desk_pack, monkeypa
     assert set(status["components"]) == set(run_desk.PHASES)
     assert status["components"]["C"]["status"] == "success"
     assert status["final_report"] == {"source": "claude_e", "file": "claude_e.md"}
+
+
+def test_manual_report_includes_game_totals(desk_pack):
+    (desk_pack / "game_totals.csv").write_text(
+        "sport,market_id,edge_pct\nMLB,gm1,0.05\n", encoding="utf-8"
+    )
+    path = run_desk.produce_manual_betting_report(desk_pack)
+    text = path.read_text(encoding="utf-8")
+    assert "## Game Totals (projection board)" in text
+    assert "gm1" in text
+
+
+def test_local_synthesize_includes_game_totals(desk_pack):
+    (desk_pack / "game_totals.csv").write_text("sport,market_id\nMLB,gm1\n", encoding="utf-8")
+    text = run_desk.local_synthesize_inputs(desk_pack)
+    assert "GAME_TOTALS.CSV" in text
+    assert "gm1" in text
 
 
 def test_e_is_gated_when_required_inputs_are_missing(desk_pack, monkeypatch):

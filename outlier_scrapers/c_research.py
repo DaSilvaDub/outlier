@@ -126,6 +126,7 @@ def run_c_research(
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
         briefing_sha256 = rc.sha256_text(briefing_text)
         candidates_bytes, candidates_sha256 = rc.validate_candidates(pack_dir)
+        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
         candidates = _candidate_index(candidates_bytes)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
@@ -139,6 +140,7 @@ def run_c_research(
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,
                 "candidates_hash": candidates_sha256,
+                "game_totals_hash": game_totals_sha256,
             }
         )
 
@@ -148,11 +150,12 @@ def run_c_research(
                 logger.info("Output exists and matches hash. Skipping.")
                 return 0
 
-        research_input = (
+        research_input = rc.append_totals_block(
             "Pack briefing:\n"
             + briefing_text
             + "\n\nAuthoritative candidates.csv:\n"
-            + candidates_bytes.decode("utf-8-sig")
+            + candidates_bytes.decode("utf-8-sig"),
+            totals_bytes,
         )
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)

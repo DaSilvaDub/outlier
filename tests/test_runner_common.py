@@ -55,3 +55,20 @@ def test_atomic_write_writes_front_matter_then_body_and_leaves_no_tmp(tmp_path):
     assert text.startswith("---\n")
     assert text.endswith("BODY")
     assert list(tmp_path.glob("out_tmp_*")) == []
+
+
+def test_load_game_totals_missing_returns_empty_hash(tmp_path):
+    raw, digest = runner_common.load_game_totals(tmp_path)
+    assert raw is None
+    assert digest == runner_common.empty_game_totals_hash()
+
+
+def test_build_reasoning_data_block_includes_totals(tmp_path):
+    (tmp_path / runner_common.GAME_TOTALS_NAME).write_text(
+        "sport,market_id\nMLB,gm1\n", encoding="utf-8"
+    )
+    totals_bytes, _ = runner_common.load_game_totals(tmp_path)
+    block = runner_common.build_reasoning_data_block(b"a,b\n1,2", totals_bytes)
+    assert "candidates.csv:" in block
+    assert "GAME_TOTALS.CSV" in block
+    assert "gm1" in block

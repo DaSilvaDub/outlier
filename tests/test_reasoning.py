@@ -105,6 +105,7 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     user_input = api.kwargs["input"][0]
     assert user_input["role"] == "user"
     assert "Prompt body" in user_input["content"]
+    assert "candidates.csv:" in user_input["content"]
     assert "data,row" in user_input["content"]
 
     out_file = pack_dir / "chatgpt_a.md"
@@ -112,6 +113,7 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     content = out_file.read_text(encoding="utf-8")
     assert content.startswith("---\n")
     assert "request_sha256:" in content
+    assert "game_totals_sha256:" in content
     assert "mocked output" in content
 
 
@@ -286,6 +288,29 @@ def test_refresh_if_stale_reruns_when_model_mismatches(reasoning_env, mock_opena
 
     monkeypatch.setattr(reasoning, "MODEL", "gpt-9.9")
 
+    exit_code = reasoning.run_reasoning(pack_dir, refresh_if_stale=True)
+    assert exit_code == 0
+    assert len(mock_openai) == 2
+
+
+def test_reasoning_injects_game_totals_context(reasoning_env, mock_openai):
+    _, date_str, pack_dir = reasoning_env
+    (pack_dir / "game_totals.csv").write_text(
+        "sport,market_id,selection\nMLB,gm1,Total O/U OVER 8.5\n", encoding="utf-8"
+    )
+    assert reasoning.main(["--date", date_str]) == 0
+    api = mock_openai[-1].responses
+    content = api.kwargs["input"][0]["content"]
+    assert "GAME_TOTALS.CSV" in content
+    assert "gm1" in content
+
+
+def test_refresh_if_stale_reruns_when_game_totals_mismatches(reasoning_env, mock_openai):
+    _, date_str, pack_dir = reasoning_env
+    assert reasoning.main(["--date", date_str]) == 0
+    assert len(mock_openai) == 1
+
+    (pack_dir / "game_totals.csv").write_text("sport,market_id\nMLB,gm1\n", encoding="utf-8")
     exit_code = reasoning.run_reasoning(pack_dir, refresh_if_stale=True)
     assert exit_code == 0
     assert len(mock_openai) == 2

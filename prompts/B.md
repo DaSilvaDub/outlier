@@ -10,6 +10,10 @@ Web discovery (search before fetch):
 - Cap page reads: at most 1-2 per game after search narrows the target.
 - Prefer Tier-1: official league/team injury reports, confirmed lineups, NWS weather.
 
+When the briefing or `game_totals.csv` lists totals for a game, you MUST research total-relevant context:
+- MLB: confirmed starters, bullpen usage, weather/wind, park, home-plate umpire zone.
+- WNBA: injuries/load management, pace matchup, travel/B2B, blowout script.
+
 For EACH game return:
 - news items: each as { claim | source name | source tier (1/2/3 per the pack) | timestamp }
 - impact: which market_id(s) it affects and direction, tied to the quoted pack line

@@ -13,4 +13,12 @@ STEP 2 — BUILD:
 - SIZING IS FIXED: use the pipeline's recommended_units_pre_news. You MAY downgrade units (e.g. soft news, low confidence) but MUST NOT increase above it, and never above max_units.
 - SGP/parlays: list as CANDIDATES ONLY (no units) unless the pack provides ALL THREE: `sgp_recommended_units_pre_news` + a book combined price + `sgp_correlation_rationale`. Do not multiply leg prices yourself.
 
+G. GAME TOTALS O/U (deterministic ledger — do NOT recompute edge or fair_total)
+   totals_id | market_id | selection @ line (best_price) | fair_total | edge% | desk_verdict (BET | LEAN | PASS | STAND-DOWN) | units (≤ pipeline, downgrade only) | news support {tier, source, ts}
+   - Use `game_totals.csv` `actionable`, `edge_pct`, and `quality_flags` as authoritative pipeline state.
+   - desk_verdict PASS or STAND-DOWN does NOT change `actionable` in the CSV — markdown only.
+   - Quote `totals_id`, line, and price exactly; never alter projections.
+
+Move game totals OUT of A. SINGLES (spreads/ML only there).
+
 Output the §4 schema, plus an AGREE/DISAGREE matrix (market_id × A/B/C/D).

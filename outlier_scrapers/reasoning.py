@@ -14,6 +14,7 @@ import time
 import openai
 
 from outlier_scrapers import paths, pack
+from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,11 @@ def validate_pack_dir(pack_dir: Path) -> tuple[bytes, str]:
 
 
 def call_openai_responses_api(
-    prompt_text: str, role_block: list[str], raw_csv_bytes: bytes, client=None
+    prompt_text: str,
+    role_block: list[str],
+    raw_csv_bytes: bytes,
+    totals_bytes: bytes | None = None,
+    client=None,
 ) -> str:
     if client is None:
         load_environment()
@@ -75,7 +80,8 @@ def call_openai_responses_api(
             raise ReasoningError("OPENAI_API_KEY is not set.")
         client = openai.OpenAI(timeout=600.0, max_retries=10)
 
-    full_prompt = prompt_text + "\n\nData:\n" + raw_csv_bytes.decode("utf-8")
+    data_block = rc.build_reasoning_data_block(raw_csv_bytes, totals_bytes)
+    full_prompt = prompt_text + "\n\nData:\n" + data_block
 
     max_custom_retries = 10
     for attempt in range(max_custom_retries):
@@ -130,6 +136,7 @@ def run_reasoning(
                 return 0
 
         raw_bytes, candidates_sha256 = validate_pack_dir(pack_dir)
+        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
 
         prompt_file = paths.PROJECT_ROOT / "prompts" / "A.md"
         if not prompt_file.exists():
@@ -143,6 +150,7 @@ def run_reasoning(
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "candidates_hash": candidates_sha256,
+            "game_totals_hash": game_totals_sha256,
         }
         canonical_json = json.dumps(request_data, sort_keys=True).encode("utf-8")
         request_sha256 = hashlib.sha256(canonical_json).hexdigest()
@@ -160,7 +168,7 @@ def run_reasoning(
 
         logger.info("Calling OpenAI Responses API...")
         output_text = call_openai_responses_api(
-            prompt_text, pack.ROLE_BLOCK, raw_bytes, client=client
+            prompt_text, pack.ROLE_BLOCK, raw_bytes, totals_bytes, client=client
         )
 
         utc_timestamp = datetime.now(timezone.utc).isoformat()
@@ -171,6 +179,7 @@ def run_reasoning(
             f"effort: {EFFORT}\n"
             f"timestamp: {utc_timestamp}\n"
             f"candidates_sha256: {candidates_sha256}\n"
+            f"game_totals_sha256: {game_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"
             "---\n\n"
         )
