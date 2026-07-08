@@ -203,7 +203,7 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
         try:
-            page.goto(LOGIN_URL, wait_until="networkidle", timeout=30000)
+            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
             _try_credential_autofill(page, timeout_seconds=timeout_seconds)
 
             if interactive and not headless:
