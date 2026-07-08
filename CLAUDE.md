@@ -17,10 +17,8 @@ For any branch/worktree/commit search questions: re-run the report-sync and past
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
-1. On session start (after bootstrap): read `.agent-log/SUMMARY.md`, the latest `.agent-log/`
-   entries, and `git log --oneline -15`.
-2. On session end: commit your work with an `Agent: claude` trailer, write a
-   session note in `.agent-log/`, and update `.agent-log/SUMMARY.md`.
+1. On session start (after bootstrap): read `.agent-log/HANDOFF.md` to see where the last agent left off, and `git log --oneline -15`.
+2. On session end: commit your work to your **feature branch** (see AGENTS.md "Feature Branch Workflow"), push it, open a PR to `master` via `gh pr create`, then write a brief handoff summary to `.agent-log/HANDOFF.md` (last commit, PR link, next steps). Direct commits to `master` are allowed only for coordination files (AGENTS.md, CLAUDE.md, .agent-log/).
 
 All project rules, scope constraints, and technical gotchas live in `AGENTS.md` + SYNC.md.
 
