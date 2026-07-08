@@ -24,7 +24,7 @@ param(
   [switch]$SyncAllWorktrees
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 function Write-Info($msg) { Write-Host "[sync] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[sync] $msg" -ForegroundColor Yellow }
@@ -63,7 +63,7 @@ git remote set-url origin $githubUrl 2>$null | Out-Null
 
 # 2. Fetch latest from the single source of truth
 Write-Info "Fetching origin (GitHub)..."
-git fetch origin --prune --tags 2>&1 | Out-Null
+git fetch origin --prune --tags 2>$null | Out-Null
 
 $target = git rev-parse --verify origin/master 2>$null
 if (-not $target) {
@@ -107,16 +107,16 @@ if ($ValidateOnly) {
 # 3. Force the tree to origin/master (what agents want: identical state)
 Write-Info "Resetting to origin/master (force sync)..."
 if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
-  git reset --hard origin/master 2>&1 | Out-Null
+  git reset --hard origin/master 2>$null
 } else {
   Write-Warn "Dirty tree detected. Using checkout -B (safer). Pass -Force to hard reset."
-  git checkout -B master origin/master 2>&1 | Out-Null
+  git checkout -B master origin/master 2>$null
 }
 
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
 #    Also materialize the sync tooling itself so every tree gets the latest bootstrap.
 Write-Info "Materializing key files (pack, daily, tests, prompts, sync tooling)..."
-git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
 
 # 5. Touch the files (helps OneDrive Files-On-Demand hydrate the content for this view)
 try {
@@ -172,10 +172,10 @@ if ($SyncAllWorktrees) {
       $normHere = ($currentWt -replace '\\','/').TrimEnd('/')
       if ($normWt -ne $normHere) {
         Write-Info "Aligning worktree: $wtPath"
-        git -C $wtPath fetch origin --prune --tags 2>&1 | Out-Null
+        git -C $wtPath fetch origin --prune --tags 2>$null
         # Non-destructive for the files we care about (the ones that were invisible before).
         # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
-        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
         try {
           $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
         } catch {}
@@ -195,9 +195,9 @@ if ($SyncAllWorktrees) {
   foreach ($fc in $knownFullClones) {
     if (Test-Path (Join-Path $fc '.git')) {
       Write-Info "Aligning full clone: $fc"
-      git -C $fc fetch origin --prune --tags 2>&1 | Out-Null
-      git -C $fc reset --hard origin/master 2>&1 | Out-Null
-      git -C $fc checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>&1 | Out-Null
+      git -C $fc fetch origin --prune --tags 2>$null
+      git -C $fc reset --hard origin/master 2>$null
+      git -C $fc checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
       try {
         $null = Get-Content -Raw (Join-Path $fc 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
       } catch {}

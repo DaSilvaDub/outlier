@@ -21,7 +21,7 @@
   If a user or another ent shows you raw one-liner output, tell them to run THIS script instead.
 #>
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 $canonicalRoot = 'C:\Users\dasil\OneDrive\Documents\outlier'
 $canonicalBootstrap = Join-Path $canonicalRoot 'sync-outlier.ps1'
