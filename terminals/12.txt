@@ -1,0 +1,15 @@
+---
+pid: 18232
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && python -m pytest tests/test_run_desk.py tests/test_daily_job.py -q 2>&1"
+started_at: 2026-07-07T07:05:52.485Z
+running_for_ms: 86400011 
+---
+..................                                                       [100%]
+18 passed in 17.67s
+
+---
+exit_code: -1
+elapsed_ms: 86400011
+ended_at: 2026-07-08T07:05:52.079Z
+---

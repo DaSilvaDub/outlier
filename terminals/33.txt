@@ -1,0 +1,15 @@
+---
+pid: 28876
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "python -m pytest tests/test_reasoning.py::test_reasoning_injects_game_totals_context tests/test_reasoning.py::test_refresh_if_stale_reruns_when_game_totals_mismatches tests/test_run_desk.py::test_orchestrate_status_includes_game_totals tests/test_run_desk.py::test_manual_report_includes_game_totals tests/test_run_desk.py::test_local_synthesize_includes_game_totals tests/test_runner_common.py -q --tb=short"
+started_at: 2026-07-08T04:27:54.925Z
+running_for_ms: 86400004 
+---
+..............                                                           [100%]
+14 passed in 79.39s (0:01:19)
+
+---
+exit_code: -1
+elapsed_ms: 86400004
+ended_at: 2026-07-09T04:27:57.034Z
+---

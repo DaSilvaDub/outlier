@@ -1,0 +1,17 @@
+{
+  "name": "searchDocumentation",
+  "description": "Search the Confidence documentation using semantic search to learn about experiments, A/B tests, rollouts, feature flags, metrics, surfaces, insights, and other experiment-related topics. Returns the 10 most relevant chunks from the documentation.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "string",
+        "description": "Natural language question or topic to search for in documentation. This uses semantic similarity, so describe what you're looking for in plain language rather than using exact keywords"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

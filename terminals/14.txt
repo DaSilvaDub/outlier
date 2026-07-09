@@ -1,0 +1,41 @@
+---
+pid: 30364
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && python -m pytest tests/test_run_desk.py tests/test_daily_job.py -v 2>&1"
+started_at: 2026-07-07T07:09:12.943Z
+running_for_ms: 86400006 
+---
+============================= test session starts =============================
+platform win32 -- Python 3.13.12, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\dasil\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\dasil\OneDrive\Documents\outlier
+configfile: pyproject.toml
+plugins: anyio-4.13.0
+collecting ... collected 18 items
+
+tests/test_run_desk.py::test_c_is_wired_into_phase_maps PASSED           [  5%]
+tests/test_run_desk.py::test_cached_c_output_counts_as_cached PASSED     [ 11%]
+tests/test_run_desk.py::test_failed_c_refresh_restores_previous_output PASSED [ 16%]
+tests/test_run_desk.py::test_default_orchestration_runs_c_and_writes_full_status PASSED [ 22%]
+tests/test_run_desk.py::test_e_is_gated_when_required_inputs_are_missing PASSED [ 27%]
+tests/test_daily_job.py::test_daily_job_orchestrates_login_and_refresh PASSED [ 33%]
+tests/test_daily_job.py::test_otp_fetcher_redacts_code PASSED            [ 38%]
+tests/test_daily_job.py::test_run_explicit_refresh_failure PASSED        [ 44%]
+tests/test_daily_job.py::test_daily_job_orchestrates_reasoning PASSED    [ 50%]
+tests/test_daily_job.py::test_daily_job_reasoning_failure_returns_1 PASSED [ 55%]
+tests/test_daily_job.py::test_orchestrate_login_removes_stale_status PASSED [ 61%]
+tests/test_daily_job.py::test_check_freshness_accepts_recent_aware_timestamps PASSED [ 66%]
+tests/test_daily_job.py::test_check_freshness_rejects_untrustworthy_timestamps[2026-07-07T05:59:59+00:00] PASSED [ 72%]
+tests/test_daily_job.py::test_check_freshness_rejects_untrustworthy_timestamps[2026-07-07T12:06:00+00:00] PASSED [ 77%]
+tests/test_daily_job.py::test_check_freshness_rejects_untrustworthy_timestamps[2026-07-07T11:50:00] PASSED [ 83%]
+tests/test_daily_job.py::test_check_freshness_rejects_untrustworthy_timestamps[not-a-timestamp] PASSED [ 88%]
+tests/test_daily_job.py::test_check_freshness_rejects_missing_status_file PASSED [ 94%]
+tests/test_daily_job.py::test_daily_job_skips_desk_for_empty_pack PASSED [100%]
+
+============================= 18 passed in 14.54s =============================
+
+---
+exit_code: -1
+elapsed_ms: 86400006
+ended_at: 2026-07-08T07:09:12.569Z
+---

@@ -1,0 +1,12 @@
+---
+pid: 34544
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "python -m pytest \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\\tests\\test_pack.py::test_build_briefing_includes_role_block\" -q --tb=short 2>&1"
+started_at: 2026-07-07T07:18:38.165Z
+running_for_ms: 67095012 
+---
+
+no tests ran in 1.85s
+ERROR: not found: C:\Users\dasil\OneDrive\Documents\outlier\tests\test_pack.py::test_build_briefing_includes_role_block
+(no match in any of [<Module test_pack.py>])
+

@@ -1,0 +1,178 @@
+---
+pid: 22548
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "& \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\\report-sync.ps1\""
+started_at: 2026-07-07T06:45:39.273Z
+running_for_ms: 69075004 
+---
+!!! FORBIDDEN: This verify-sync.ps1 was invoked with piping, Select-String, Out-String, Select -First, or truncation.
+!!! Every "I searched every branch/worktree" or status report MUST be the complete, unfiltered output of a direct call.
+!!! Correct:  & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"
+!!! Then paste EVERY line. No pipes. No filters. No -First.
+
+=== Search result processed (via committed verifier) ===
+This report was produced by scripts/verify-sync.ps1 (never ad-hoc).
+Canonical bootstrap + SyncAllWorktrees forced before any inspection.
+[sync] Repo root: C:\Users\dasil\OneDrive\Documents\outlier
+[sync] Setting origin to GitHub (was 'True').
+[sync] Fetching origin (GitHub)...
+[sync] Resetting to origin/master (force sync)...
+[sync] Dirty tree detected. Using checkout -B (safer). Pass -Force to hard reset.
+[sync] Materializing key files (pack, daily, tests, prompts, sync tooling)...
+[sync] HEAD: 752d3fa
+[sync] git pack chars (origin/master): 29681  |  disk pack bytes: 31195
+[sync] disk daily bytes: 11318
+[sync] Upgrade markers present: player_id, round_robin, lock, decisions.csv
+[sync] Sync complete. Every ent that runs this (or equivalent fetch+reset from GitHub) will see identical pack.py + daily_job.py + history (d05eb21 lineage via 88083ff+).
+[sync] If disk size looks wrong vs git: ensure the outlier folder is 'Always keep on this device' in OneDrive settings, or re-run git checkout -- <file> after a short wait.
+[sync] 
+[sync] To align EVERYTHING from canonical in future: & '...\sync-outlier.ps1' -SyncAllWorktrees
+[sync] Repo root: C:\Users\dasil\OneDrive\Documents\outlier
+[sync] Setting origin to GitHub (was 'True').
+[sync] Fetching origin (GitHub)...
+[sync] Resetting to origin/master (force sync)...
+[sync] Dirty tree detected. Using checkout -B (safer). Pass -Force to hard reset.
+[sync] Materializing key files (pack, daily, tests, prompts, sync tooling)...
+[sync] HEAD: 752d3fa
+[sync] git pack chars (origin/master): 29681  |  disk pack bytes: 31195
+[sync] disk daily bytes: 11318
+[sync] Upgrade markers present: player_id, round_robin, lock, decisions.csv
+[sync] Sync complete. Every ent that runs this (or equivalent fetch+reset from GitHub) will see identical pack.py + daily_job.py + history (d05eb21 lineage via 88083ff+).
+[sync] === SyncAllWorktrees: materializing core files (pack, daily, sync tooling) from origin/master into all registered worktrees ===
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/17bc/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/2e09/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/3316/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/33b2/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/5716/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/5b9b/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/783b/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/8b93/outlier
+[sync]   -> files updated from origin/master (HEAD remains 752d3fa)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/9940/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/d5ad/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/dad6/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/e361/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.codex/worktrees/ff59/outlier
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.gemini/antigravity/worktrees/outlier/fix-nba-insights-scraper
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.gemini/antigravity/worktrees/outlier/fix-prop-fetch-reliability
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] Aligning worktree: C:/Users/dasil/.gemini/antigravity/worktrees/outlier/isolate-test-env-loader
+[sync]   -> files updated from origin/master (HEAD remains 90ca8c3)
+[sync] SyncAllWorktrees complete. Materialized into 16 additional worktree(s).
+[sync] Note: feature worktrees keep their branch; run bootstrap inside them for any local reset needs.
+[sync] Aligning full clone: C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners
+[sync]   -> full clone reset to origin/master (HEAD now 752d3fa)
+[sync] (includes full clones; total actions: 17)
+[sync] If disk size looks wrong vs git: ensure the outlier folder is 'Always keep on this device' in OneDrive settings, or re-run git checkout -- <file> after a short wait.
+[sync] 
+[sync] To align EVERYTHING from canonical in future: & '...\sync-outlier.ps1' -SyncAllWorktrees
+[sync] Repo root: C:\Users\dasil\OneDrive\Documents\outlier
+[sync] Setting origin to GitHub (was 'True').
+[sync] Fetching origin (GitHub)...
+[sync] Current HEAD: 752d3fa984f2a249a1b4786ce3ef222a7fe2bff1
+[sync] origin/master: 752d3fa984f2a249a1b4786ce3ef222a7fe2bff1
+[sync] State vs origin/master: MATCH
+[sync] git (origin/master) pack.py chars: 29681
+[sync] git (origin/master) daily_job.py chars: 10748
+[sync] Upgrade markers: player_id=Includes Tier 1 fixes: display dedup selection, player_id + push_prob, strict date,     "player_id",     row["player_id"] = card.get("player_id") or ref.get("player_id") roundrobin=def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:     def round_robin_then_fill(cands: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:     ev = round_robin_then_fill(board_a, top_ev_n)     sig = round_robin_then_fill(board_b, top_signal_n)     final_rows = rank_rows(kept, top_ev_n, top_signal_n) lock=def _acquire_pack_lock(pack_dir: Path) -> Path | None: def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:     lock_dir = _acquire_pack_lock(pack_dir)         _atomic_write_manifest(pack_dir, manifest) decisions=full round-robin+global-fill quota, candidate-scoped freshness, decisions.csv scaffold.     with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df: CANDIDATES=CANDIDATES_HEADER = [     row = {k: "" for k in CANDIDATES_HEADER}         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
+[sync] VALIDATE: OK - pipeline upgrade (pack + daily changes) is present via GitHub.
+
+=== GitHub + Canonical identity ===
+originhttps://github.com/DaSilvaDub/outlier.git (fetch)
+originhttps://github.com/DaSilvaDub/outlier.git (push)
+origin/master: 752d3fa984f2a249a1b4786ce3ef222a7fe2bff1
+local HEAD   : 752d3fa984f2a249a1b4786ce3ef222a7fe2bff1
+State vs origin/master: MATCH
+
+=== Pipeline upgrade landed changes (the reason d05eb21 existed) ===
+The ~624-line pack.py + daily_job.py counter-proposal changes were reviewed at
+transient tree d05eb21 (review-only, never pushed, never shared).
+They were materialized and pushed as:
+88083ff feat: sync pipeline upgrade counter-proposal (pack.py +624, daily_job.py, tests, prompts/C.md)
+
+Key commits touching the upgraded pack/daily files:
+88083ff feat: sync pipeline upgrade counter-proposal (pack.py +624, daily_job.py, tests, prompts/C.md)
+cc9be5b feat(pack): add daily research-desk pack writer (candidates/briefing/dossiers)
+752d3fa Harden pregame pack safety gates
+2ca6441 Guard packs against live lines and stale data
+7946c0f fix: address HIGH issues from counter-proposal review (d05eb21)
+
+=== Upgrade marker validation (authoritative from origin/master) ===
+[OK]  All Tier-1 upgrade markers present in origin/master blobs (pack + daily)
+
+=== All registered worktrees (linked ents from canonical .git) ===
+  752d3fa  [master]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  752d3fa  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [codex/prompt-c-research-local-base]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [(detached HEAD)]  OK  markers=present
+  90ca8c3  [codex/otp-fetcher-imap-check]  OK  markers=present
+  90ca8c3  [codex/prompt-c-research]  OK  markers=present
+  90ca8c3  [fix-nba-insights-scraper]  OK  markers=present
+  90ca8c3  [fix-prop-fetch-reliability]  OK  markers=present
+  90ca8c3  [isolate-test-env-loader]  OK  markers=present
+[OK]  All 17 registered worktrees have the pipeline upgrade markers.
+
+=== Known full clones (separate .git, e.g. ai-runners) ===
+  ai-runners: HEAD=752d3fa origin/master=752d3fa markers=OK
+
+=== Explicit d05eb21 / search explanation (answer to the pasted complaint) ===
+d05eb21 does NOT exist in any branch, fetch, or worktree - by design.
+Reason: d05eb21 was a transient, un-pushed tree object used ONLY for a one-time
+code review of "pipeline-upgrade-counter-proposal.md" while the changes were still
+sitting in a stray checkout (ai-runners at the time).
+
+The actual changes (pack.py +624 lines, daily_job.py updates, CANDIDATES_HEADER with
+player_id, round_robin_then_fill, decisions.csv, lock etc.) were committed and pushed
+as 88083ff "feat: sync pipeline upgrade counter-proposal".
+
+Any future "search every branch + every .codex/.gemini worktree" MUST be answered
+by re-running this exact script and pasting its full output. Raw git log loops will
+keep rediscovering the same historical truth and causing confusion.
+
+To see the landed upgrade yourself: git show 88083ff --stat | head -20
+Then look for player_id / CANDIDATES_HEADER in pack.py.
+
+=== Canonical disk + authoritative sizes (after bootstrap + touch) ===
+disk pack: 31195  daily: 11318
+git (origin/master) pack chars: 29681  daily chars: 10748
+
+=== Protocol files present at canonical ===
+sync-outlier.ps1
+verify-sync.ps1
+SYNC.md
+AGENTS.md
+CLAUDE.md
+GROK.md
+
+=== Remediation recipe (if any worktree ever reports MISSING) ===
+1. From canonical (C:\Users\dasil\OneDrive\Documents\outlier):
+     & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees
+2. In the affected ent/worktree, run:
+     & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"
+3. If still bad: the ent is on a non-linked full clone - delete it and start from
+   git clone https://github.com/DaSilvaDub/outlier.git then run the script.
+
+[OK]  Report complete. This is the synchronized view for all ents.
+Rule: every "I searched..." or "commit not visible" discussion must start with the
+full output of the command above (the canonical verify-sync.ps1 path).

@@ -1,0 +1,213 @@
+---
+pid: 34152
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && git show 4eea080:outlier_scrapers/run_desk.py | Select-Object -First 200"
+started_at: 2026-07-07T06:24:24.836Z
+running_for_ms: 86400007 
+---
+"""Best-effort A/B/C/D/E research-desk runner.
+
+This module coordinates the paid model runners and records their status. It
+does not manufacture a local betting report; the canonical outlier-ai-desk
+skill owns the pack-only synthesis fallback when paid reasoning is unavailable.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Sequence
+
+from outlier_scrapers import (
+    c_research,
+    claude_reasoning,
+    claude_synthesis,
+    gemini_research,
+    paths,
+    reasoning,
+)
+from outlier_scrapers import runner_common as rc
+from outlier_scrapers.environment import load_environment
+
+logger = logging.getLogger(__name__)
+
+PHASES = ("A", "B", "C", "D", "E")
+PHASE_OUTPUTS = {
+    "A": "chatgpt_a.md",
+    "B": "gemini_b.md",
+    "C": "chatgpt_c.md",
+    "D": "claude_d.md",
+    "E": "claude_e.md",
+}
+PHASE_KEYS = {
+    "A": "OPENAI_API_KEY",
+    "B": "GEMINI_API_KEY",
+    "C": "GEMINI_API_KEY",
+    "D": "ANTHROPIC_API_KEY",
+    "E": "ANTHROPIC_API_KEY",
+}
+PHASE_RUNNERS = {
+    "A": reasoning.run_reasoning,
+    "B": gemini_research.run_gemini_b,
+    "C": c_research.run_c_research,
+    "D": claude_reasoning.run_claude_d,
+    "E": claude_synthesis.run_claude_e,
+}
+SUCCESS_STATES = {"success", "cached", "forced-refresh"}
+STATUS_NAME = "reasoning_status.json"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _request_hash(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return rc.extract_yaml_request_hash(path.read_text(encoding="utf-8")) or ""
+    except OSError:
+        return ""
+
+
+def _restore_on_failure(path: Path, previous: bytes | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+        return
+    rc.atomic_write(path.parent, path.name, "", previous.decode("utf-8"))
+
+
+def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, str]:
+    if phase not in PHASE_RUNNERS:
+        return {"status": "failed", "file": "", "request_sha256": ""}
+
+    output = pack_dir / PHASE_OUTPUTS[phase]
+    previous = output.read_bytes() if output.exists() else None
+    previous_hash = _request_hash(output)
+
+    if force and not os.getenv(PHASE_KEYS[phase]):
+        return {
+            "status": "skipped-no-key",
+            "file": PHASE_OUTPUTS[phase],
+            "request_sha256": previous_hash,
+        }
+
+    try:
+        exit_code = PHASE_RUNNERS[phase](
+            pack_dir, force=force, refresh_if_stale=not force
+        )
+    except Exception:
+        logger.exception("Phase %s failed", phase)
+        exit_code = 1
+
+    if exit_code == 0 and not output.exists():
+        exit_code = 1
+
+    if exit_code != 0:
+        _restore_on_failure(output, previous)
+        status = "skipped-no-key" if not os.getenv(PHASE_KEYS[phase]) else "failed"
+        return {
+            "status": status,
+            "file": PHASE_OUTPUTS[phase],
+            "request_sha256": _request_hash(output) or previous_hash,
+        }
+
+    current_hash = _request_hash(output)
+    if previous_hash and current_hash == previous_hash:
+        status = "cached"
+    elif force:
+        status = "forced-refresh"
+    else:
+        status = "success"
+    return {
+        "status": status,
+        "file": PHASE_OUTPUTS[phase],
+        "request_sha256": current_hash,
+    }
+
+
+def _write_status(pack_dir: Path, payload: dict) -> None:
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    rc.atomic_write(pack_dir, STATUS_NAME, "", json.dumps(payload, indent=2, sort_keys=True))
+
+
+def orchestrate_desk(
+    pack_dir: Path, *, steps: Sequence[str] | None = None, force: bool = False
+) -> int:
+    load_environment()
+    selected = PHASES if steps is None else steps
+    requested = tuple(step.upper() for step in selected)
+    unknown = [step for step in requested if step not in PHASES]
+    if unknown:
+        logger.error("Unknown desk phase(s): %s", ",".join(unknown))
+        return 1
+
+    status = {
+        "date": pack_dir.name,
+        "generated_at": _now_iso(),
+        "overall": "running",
+        "components": {},
+        "final_report": {},
+        "notes": [],
+    }
+
+    if not (pack_dir / "briefing.md").exists() or not (pack_dir / "candidates.csv").exists():
+        status["overall"] = "DATA_ONLY"
+        status["notes"].append("missing briefing.md or candidates.csv")
+        _write_status(pack_dir, status)
+        return 1
+
+    components: dict[str, dict[str, str]] = {}
+    for phase in ("A", "B", "C", "D"):
+        if phase in requested:
+            components[phase] = run_phase(phase, pack_dir, force=force)
+
+    if "E" in requested:
+        required = ("briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md")
+        if all((pack_dir / name).exists() for name in required):
+            components["E"] = run_phase("E", pack_dir, force=force)
+        else:
+            components["E"] = {
+                "status": "gated-missing-input",
+                "file": PHASE_OUTPUTS["E"],
+                "request_sha256": "",
+            }
+            status["notes"].append("E inputs incomplete")
+
+    status["components"] = components
+    e_usable = (
+        components.get("E", {}).get("status") in SUCCESS_STATES
+        if "E" in requested
+        else (pack_dir / PHASE_OUTPUTS["E"]).exists()
+    )
+    required_usable = all(
+        (
+            components.get(phase, {}).get("status") in SUCCESS_STATES
+            if phase in requested
+            else (pack_dir / PHASE_OUTPUTS[phase]).exists()
+        )
+        for phase in ("A", "B", "D")
+    )
+
+    if e_usable and required_usable:
+        status["overall"] = "FULL"
+        status["final_report"] = {"source": "claude_e", "file": PHASE_OUTPUTS["E"]}
+        exit_code = 0
+    elif e_usable:
+        status["overall"] = "PARTIAL"
+        status["final_report"] = {"source": "claude_e", "file": PHASE_OUTPUTS["E"]}
+        exit_code = 0
+    else:
+        status["overall"] = "DATA_ONLY"
+        exit_code = 1
+
+
+---
+exit_code: -1
+elapsed_ms: 86400007
+ended_at: 2026-07-08T06:24:26.166Z
+---

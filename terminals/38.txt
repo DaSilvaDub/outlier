@@ -1,0 +1,15 @@
+---
+pid: 39252
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "python -m pytest tests/test_pack.py::test_end_to_end tests/test_reasoning.py::test_reasoning_injects_game_totals_context tests/test_run_desk.py::test_local_synthesize_includes_game_totals tests/test_game_totals.py -q --tb=short"
+started_at: 2026-07-08T05:10:19.143Z
+running_for_ms: 86400012 
+---
+..............                                                           [100%]
+14 passed in 46.75s
+
+---
+exit_code: -1
+elapsed_ms: 86400012
+ended_at: 2026-07-09T05:10:20.724Z
+---

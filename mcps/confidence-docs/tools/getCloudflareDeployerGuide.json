@@ -1,0 +1,8 @@
+{
+  "name": "getCloudflareDeployerGuide",
+  "description": "Get the Cloudflare deployer guide for deploying the Confidence resolver as a Cloudflare Worker. This provides instructions for setting up flag evaluation at the edge using Cloudflare Workers.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}

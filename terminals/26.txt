@@ -1,0 +1,13 @@
+---
+pid: 14016
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "git -C \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" add -f \"packs/2026-07-07/decisions.csv\" && git -C \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" commit -m \"docs(pack): add 2026-07-07 grok decisions.csv\" -m \"19 PLAY/LEAN/PASS/STAND_DOWN/FADE rows from grok_analysis.md using pre-dawn pack quotes.\" -m \"Agent: grok\" && git -C \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" push -u origin master"
+started_at: 2026-07-08T01:23:11.149Z
+running_for_ms: 2005002  
+---
+[master 724a92b] docs(pack): add 2026-07-07 grok decisions.csv
+ 1 file changed, 20 insertions(+)
+ create mode 100644 packs/2026-07-07/decisions.csv
+branch 'master' set up to track 'origin/master'.
+To https://github.com/DaSilvaDub/outlier.git
+   1d88ef2..724a92b  master -> master

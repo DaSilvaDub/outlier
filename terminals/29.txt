@@ -1,0 +1,15 @@
+---
+pid: 30444
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && python -m pytest tests/test_runner_common.py::test_load_game_totals_missing_returns_empty_hash tests/test_runner_common.py::test_build_reasoning_data_block_includes_totals tests/test_reasoning.py::test_reasoning_injects_game_totals_context tests/test_reasoning.py::test_refresh_if_stale_reruns_when_game_totals_mismatches tests/test_run_desk.py::test_manual_report_includes_game_totals tests/test_run_desk.py::test_local_synthesize_includes_game_totals -q"
+started_at: 2026-07-08T03:50:41.381Z
+running_for_ms: 86400004 
+---
+......                                                                   [100%]
+6 passed in 48.14s
+
+---
+exit_code: -1
+elapsed_ms: 86400004
+ended_at: 2026-07-09T03:50:43.116Z
+---

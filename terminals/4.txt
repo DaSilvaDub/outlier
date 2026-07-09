@@ -1,0 +1,62 @@
+---
+pid: 16420
+cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
+command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && python -m pytest tests/test_run_desk.py tests/test_daily_job.py -v 2>&1"
+started_at: 2026-07-07T06:27:57.181Z
+running_for_ms: 86400012 
+---
+============================= test session starts =============================
+platform win32 -- Python 3.13.12, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\dasil\AppData\Local\Programs\Python\Python313\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\dasil\OneDrive\Documents\outlier
+configfile: pyproject.toml
+plugins: anyio-4.13.0
+collecting ... collected 11 items
+
+tests/test_run_desk.py::test_c_is_wired_into_phase_maps PASSED           [  9%]
+tests/test_run_desk.py::test_cached_c_output_counts_as_cached PASSED     [ 18%]
+tests/test_run_desk.py::test_failed_c_refresh_restores_previous_output PASSED [ 27%]
+tests/test_run_desk.py::test_default_orchestration_runs_c_and_writes_full_status PASSED [ 36%]
+tests/test_run_desk.py::test_e_is_gated_when_required_inputs_are_missing PASSED [ 45%]
+tests/test_daily_job.py::test_daily_job_orchestrates_login_and_refresh FAILED [ 54%]
+tests/test_daily_job.py::test_otp_fetcher_redacts_code PASSED            [ 63%]
+tests/test_daily_job.py::test_run_explicit_refresh_failure PASSED        [ 72%]
+tests/test_daily_job.py::test_daily_job_orchestrates_reasoning PASSED    [ 81%]
+tests/test_daily_job.py::test_daily_job_reasoning_failure_returns_1 PASSED [ 90%]
+tests/test_daily_job.py::test_orchestrate_login_removes_stale_status PASSED [100%]
+
+================================== FAILURES ===================================
+________________ test_daily_job_orchestrates_login_and_refresh ________________
+
+tmp_path = WindowsPath('C:/Users/dasil/AppData/Local/Temp/pytest-of-dasil/pytest-248/test_daily_job_orchestrates_lo0')
+
+    def test_daily_job_orchestrates_login_and_refresh(tmp_path):
+        _require_daily_job()
+        fake_pack = tmp_path / "packs" / "2026-06-29"
+        with (
+            patch("outlier_scrapers.daily_job.perform_auth_check", return_value=False),
+            patch("outlier_scrapers.daily_job.orchestrate_login", return_value=True),
+            patch("outlier_scrapers.daily_job.run_explicit_refresh", return_value=True),
+            patch("outlier_scrapers.daily_job.run_pack", return_value=fake_pack),
+            patch("outlier_scrapers.daily_job._acquire_pack_lock", return_value=tmp_path / ".lock"),
+            patch("outlier_scrapers.daily_job._release_pack_lock", return_value=None),
+            patch("outlier_scrapers.daily_job._atomic_write_manifest", return_value=None),
+            patch("outlier_scrapers.daily_job.run_desk", create=True) as mock_rd,
+        ):
+            mock_rd.orchestrate_desk.return_value = 0
+            result = daily_job.main(["--leagues", "MLB"])
+>           assert result == 0
+E           assert 1 == 0
+
+tests\test_daily_job.py:50: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  outlier_scrapers.daily_job:daily_job.py:222 Desk completed with non-zero (may be partial/degraded).
+=========================== short test summary info ===========================
+FAILED tests/test_daily_job.py::test_daily_job_orchestrates_login_and_refresh
+======================== 1 failed, 10 passed in 54.90s ========================
+
+---
+exit_code: -1
+elapsed_ms: 86400012
+ended_at: 2026-07-08T06:27:57.984Z
+---
