@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 CANDIDATES_HEADER = [
     "sport",
     "event_id",
+    "_event_starts_at",
     "market_id",
     "market_type",
     "player_id",
@@ -467,6 +468,8 @@ def build_row(
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
+    if matchup and team and not row["home_away"]:
+        dq_flags.append("HOME_AWAY_UNRESOLVED")
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
@@ -668,12 +671,16 @@ ROLE_BLOCK = [
     " home_away, matchup, and market_label. Use these verbatim — do NOT infer a player's team,"
     " the opponent, home/away, or what a market means from the event_id hash or a terse code"
     " (e.g. LAS is Los Angeles Sparks not Las Vegas; PT is Pitches Thrown).",
+    "- Render ONLY fields present in the candidate rows. NEVER introduce a player, injury status, or pitcher not in the pack.",
     "- If a row has priced_line set (or a data_quality_flags entry like"
     " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
     "- data_quality_flags may also carry cross_sport_market:<LEAGUE> (the market belongs to"
     " another sport — treat the row as a data artifact and stand it down) or implausible_line /"
     " non_numeric_line (the line is likely corrupt — verify before quoting).",
+    "- Variance taxonomy to anchor evaluation:",
+    "   * High variance: 3PM, hits allowed, total bases, turnovers.",
+    "   * Moderate variance: strikeouts, assists, points.",
     "",
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
