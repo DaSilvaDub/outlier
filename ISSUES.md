@@ -13,9 +13,10 @@ Deferred, larger-scope items surfaced by the same review:
 - [ ] Roster / probable-pitcher reconciliation: player→team is trusted from the Outlier feed
       with no cross-check, so a stale feed value would still pass. Needs an external roster
       source to detect trades/reassignments — out of scope until such an endpoint exists.
-- [ ] Sport↔market-type consistency + line-magnitude sanity guard: an out-of-sport
-      proposition or an implausible line currently normalizes to `market_raw` and flows
-      through unflagged. Add a validation flag (not a hard drop).
-- [ ] Per-market fetch-error visibility: failed line-movement markets vanish beyond an
-      aggregate `fetch_error_count`; surface which markets are missing in the pack.
+- [x] Sport↔market-type consistency + line-magnitude sanity guard: `classify_foreign_market`
+      (registry.py) + `market_validation_flags` (pack.py) now emit non-fatal
+      `cross_sport_market:<LEAGUE>` / `implausible_line` / `non_numeric_line` entries in
+      `data_quality_flags`. Deterministic; never hard-drops or false-flags a valid market.
+- [x] Per-market fetch-error visibility: line-movement status now carries `error_market_ids`
+      and the pack freshness caveat names the missing markets (capped) instead of only a count.
 

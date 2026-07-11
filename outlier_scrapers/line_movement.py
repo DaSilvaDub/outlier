@@ -1359,6 +1359,14 @@ def export_line_movement_for_league(
         "markets_with_records": normalized["markets_with_records"],
         "markets_without_record_count": len(normalized["markets_without_records"]),
         "fetch_error_count": len(fetch_errors),
+        # Which markets are actually missing (post-retry), so downstream consumers
+        # can name them instead of only seeing an aggregate count. Capped to keep
+        # the status report bounded on a large partial slate.
+        "error_market_ids": [
+            str(error.get("market_id"))
+            for error in fetch_errors
+            if error.get("market_id")
+        ][:50],
         "record_count": normalized["record_count"],
         "markets_with_ev_count": normalized["markets_with_ev_count"],
         "ev_outcome_count": normalized["ev_outcome_count"],

@@ -5,6 +5,7 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _summarize_lm_status,
     american_to_decimal,
     build_briefing,
     build_dossier,
@@ -16,6 +17,7 @@ from outlier_scrapers.pack import (
     is_excluded_market,
     is_longshot_price,
     is_no_push_market,
+    market_validation_flags,
     rank_rows,
     select_date,
     write_pack,
@@ -917,3 +919,102 @@ def test_dossier_and_briefing_show_matchup_not_bare_hash():
     # Slate index carries the human matchup alongside the event id.
     assert "Los Angeles Sparks" in briefing
     assert "event ev1" in briefing
+
+
+# --- Data-quality validation flags (ISSUES.md follow-ups #2, #3) -------------
+
+def _dq_card(proposition, line, market_raw=None, market_type="PLAYER_PROP",
+             player_id="p1", **extra):
+    card = {
+        "headline_side": "OVER",
+        "card_id": "d1",
+        "market_id": "d1",
+        "board": "A",
+        "player": "Test Player",
+        "player_id": player_id,
+        "market_type": market_type,
+        "market": None,
+        "proposition": proposition,
+        "market_raw": market_raw or proposition.title(),
+        "team": "ATL",
+        "opponent": "STL",
+        "matchup": "ATL @ STL",
+        "event_id": "ev1",
+        "flags": [],
+        "sides": {
+            "OVER": {"outcome_id": "o1", "line": line, "best_odds": -110,
+                     "ev": {"is_alt_line_fallback": False}}
+        },
+    }
+    card.update(extra)
+    return card
+
+
+def test_cross_sport_market_flagged_not_dropped():
+    # A basketball REBOUNDS proposition on an MLB event is a data artifact.
+    row = make_row(_dq_card("REBOUNDS", 6.5, market_raw="Rebounds"), [])
+    assert row is not None  # flagged, never hard-dropped
+    assert "cross_sport_market:WNBA" in row["data_quality_flags"]
+
+
+def test_valid_market_not_falsely_flagged():
+    # A real, high-but-plausible MLB line (134.5 pitches thrown) must NOT flag.
+    row = make_row(_dq_card("PITCHES_THROWN", 134.5, market_raw="Pitches Thrown"), [])
+    assert row["data_quality_flags"] == ""
+
+
+def test_implausible_player_prop_line_flagged():
+    row = make_row(_dq_card("HITS", 999, market_raw="Hits"), [])
+    assert "implausible_line" in row["data_quality_flags"]
+
+
+def test_market_validation_flags_helper_is_deterministic():
+    card = {"proposition": "REBOUNDS", "market_raw": "Rebounds"}
+    flags = market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", 6.5)
+    assert flags == ["cross_sport_market:WNBA"]
+    # Game/team totals with big lines are not player props -> no implausible flag.
+    assert market_validation_flags("WNBA", {"proposition": "TOTAL"}, {}, "TOTAL",
+                                   "GAMELINE", None, 168.5) == []
+
+
+def test_nan_line_is_flagged_non_numeric():
+    # A NaN line parses without error but compares False everywhere; it must not
+    # slip past the ceiling check unflagged.
+    nan = float("nan")
+    card = {"proposition": "HITS", "market_raw": "Hits"}
+    assert market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", nan) == [
+        "non_numeric_line"
+    ]
+    assert market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", "NaN") == [
+        "non_numeric_line"
+    ]
+
+
+def test_lm_status_names_missing_markets():
+    import datetime
+    report = {
+        "status": "partial",
+        "generated_at": datetime.datetime.now().astimezone().isoformat(),
+        "markets_fetched": 90,
+        "markets_requested": 100,
+        "fetch_error_count": 3,
+        "error_market_ids": ["aaa", "bbb", "ccc"],
+    }
+    ok, msg = _summarize_lm_status(report, "MLB props LM")
+    assert ok is False
+    assert "missing markets: aaa, bbb, ccc" in msg
+
+
+def test_lm_status_caps_and_counts_extra_missing_markets():
+    import datetime
+    ids = [f"m{i}" for i in range(12)]
+    report = {
+        "status": "partial",
+        "generated_at": datetime.datetime.now().astimezone().isoformat(),
+        "markets_fetched": 88,
+        "markets_requested": 100,
+        "fetch_error_count": 12,
+        "error_market_ids": ids,
+    }
+    _, msg = _summarize_lm_status(report, "MLB props LM")
+    assert "(+4 more)" in msg  # 12 total, first 8 shown

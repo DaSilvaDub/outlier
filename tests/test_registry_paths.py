@@ -1,5 +1,6 @@
 from outlier_scrapers.paths import PROJECT_ROOT, league_paths
 from outlier_scrapers.registry import (
+    classify_foreign_market,
     get_sport_config,
     normalize_market,
     normalize_team,
@@ -69,6 +70,21 @@ def test_team_display_name_returns_none_for_unknown():
     wnba = get_sport_config("WNBA")
     assert team_display_name(wnba, "ZZZ") is None
     assert team_display_name(wnba, "") is None
+
+
+def test_classify_foreign_market_flags_cross_sport_artifacts():
+    # A basketball market landing on an MLB event resolves under WNBA, not MLB.
+    assert classify_foreign_market("MLB", "REBOUNDS") == "WNBA"
+    assert classify_foreign_market("WNBA", "STRIKEOUTS") == "MLB"
+
+
+def test_classify_foreign_market_ignores_valid_and_shared_markets():
+    # Valid own-sport markets, shared markets, and truly-unknown values never flag.
+    assert classify_foreign_market("MLB", "PITCHES_THROWN") is None
+    assert classify_foreign_market("MLB", "Pitches Thrown") is None  # raw label form
+    assert classify_foreign_market("MLB", "TOTAL") is None
+    assert classify_foreign_market("WNBA", "POINTS") is None
+    assert classify_foreign_market("MLB", "Mystery Barrel Prop") is None
 
 
 def test_new_full_game_market_aliases():
