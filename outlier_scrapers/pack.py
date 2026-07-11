@@ -681,6 +681,11 @@ ROLE_BLOCK = [
     "- Variance taxonomy to anchor evaluation:",
     "   * High variance: 3PM, hits allowed, total bases, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
+    "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
+    " legs. Do NOT size stacked same-event bets as independent — their outcomes"
+    " are correlated (e.g. two props in one game, or a team side plus that game's"
+    " total). Discount total stake across correlated legs rather than summing"
+    " each leg's recommended_units_pre_news at face value.",
     "",
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."

@@ -690,6 +690,15 @@ def test_briefing_house_rules():
     assert "+150" in text and "longshot" in text.lower()
 
 
+# 23b. Briefing tells the desk that same-event legs are correlated, so stacked
+#      same-game bets are not sized as independent (Round-2 Fix 6).
+def test_briefing_correlation_guidance():
+    text = build_briefing([], "2026-06-24")
+    low = text.lower()
+    assert "correlat" in low  # correlation guidance present
+    assert "event_id" in text or "matchup" in low  # keyed to an existing column
+
+
 # 24. In-play guard: rows whose event already started are dropped from packs.
 def test_drop_locked_events():
     from datetime import datetime, timezone
