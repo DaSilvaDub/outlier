@@ -502,6 +502,81 @@ def test_normalize_games_matchup_and_injuries_context():
     assert ctx["teams"]["h1"]["injuries"][0]["playerId"] == "p1"
 
 
+def test_normalize_games_stamps_home_away_team_id_on_event():
+    """build_injuries joins an event to its teams' injuries via
+    event.home_team_id / event.away_team_id, so normalize_games must stamp those
+    ids onto each event context. Uses empty lineups (as MLB emits) to prove the
+    ids come from the schedule, not from lineups."""
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "id": "e1",
+                "status": "scheduled",
+                "home": {"id": "h1", "teamId": "h1", "name": "Yankees"},
+                "away": {"id": "a1", "teamId": "a1", "name": "Red Sox"},
+            }
+        ]
+    }
+    events_payloads = [
+        {
+            "eventId": "e1",
+            "matchup": {"matchup_type": "BaseballMatchup", "lineups": {}},
+            "markets": [],
+        }
+    ]
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
+    ev = res["context"]["events"]["e1"]
+    assert ev["home_team_id"] == "h1"
+    assert ev["away_team_id"] == "a1"
+
+
+def test_injury_flags_join_end_to_end():
+    """Regression: normalize_games output must let build_injuries populate
+    injury_flags. Uses the real injury schema (firstName/lastName + nested
+    injury.status) and empty lineups (as MLB emits), so the join relies on the
+    schedule-sourced team ids."""
+    from outlier_scrapers.pack import build_injuries
+
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "id": "e1",
+                "status": "scheduled",
+                "home": {"id": "h1", "teamId": "h1", "name": "Yankees"},
+                "away": {"id": "a1", "teamId": "a1", "name": "Red Sox"},
+            }
+        ]
+    }
+    events_payloads = [
+        {
+            "eventId": "e1",
+            "matchup": {"matchup_type": "BaseballMatchup", "lineups": {}},
+            "injuries": [
+                {
+                    "playerId": "p1",
+                    "firstName": "Aaron",
+                    "lastName": "Judge",
+                    "injury": {"status": "OUT", "injury": "Toe"},
+                    "teamId": "h1",
+                }
+            ],
+            "markets": [],
+        }
+    ]
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
+    flags = build_injuries(res)
+    assert "e1" in flags
+    assert "Aaron Judge" in flags["e1"]
+    assert "OUT" in flags["e1"]
+    assert "playerId" not in flags["e1"]  # legible, not a raw dict dump
+
+
 def test_schedule_index_reads_scheduled_time():
     """Schedule events expose the lock time as ``scheduledTime`` (startTime is
     absent live); event_starts_at depends on it for the pack's date filtering."""
