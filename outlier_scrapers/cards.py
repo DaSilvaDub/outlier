@@ -397,12 +397,15 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Best-effort player/market identity from whichever feed rows exist."""
     for row in rows:
         if row and row.get("player"):
+            sctx = row.get("sport_context") or {}
             return {
                 "player": row.get("player"),
                 "player_id": row.get("player_id"),
                 "market": row.get("market") or row.get("market_raw"),
                 "market_raw": row.get("market_raw"),
-                "scope": row.get("scope") or (row.get("sport_context") or {}).get("scope"),
+                "market_label": row.get("market_label") or sctx.get("market_label"),
+                "proposition": row.get("proposition") or sctx.get("proposition"),
+                "scope": row.get("scope") or sctx.get("scope"),
                 "team": row.get("team"),
                 "opponent": row.get("opponent"),
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
@@ -413,13 +416,16 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
     # sides via game_sides() instead of falling back to positional sides.
     for row in rows:
         if row and (row.get("proposition") or row.get("position")):
+            sctx = row.get("sport_context") or {}
             return {
                 "event_id": row.get("event_id"),
                 "proposition": row.get("proposition"),
                 "market": row.get("market") or row.get("market_raw"),
                 "market_raw": row.get("market_raw"),
-                "scope": row.get("scope") or (row.get("sport_context") or {}).get("scope"),
+                "market_label": row.get("market_label") or sctx.get("market_label"),
+                "scope": row.get("scope") or sctx.get("scope"),
                 "team": row.get("team"),
+                "opponent": row.get("opponent"),
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
             }
     return {}

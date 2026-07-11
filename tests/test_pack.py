@@ -7,6 +7,7 @@ from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     american_to_decimal,
     build_briefing,
+    build_dossier,
     build_freshness_section,
     build_injuries,
     build_pack,
@@ -67,6 +68,17 @@ def test_header_canonical_with_flags():
         CANDIDATES_HEADER[CANDIDATES_HEADER.index("recommended_units_pre_news") + 1]
         == "sizing_flags"
     )
+    # data_quality_flags sits right after sizing_flags
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("sizing_flags") + 1]
+        == "data_quality_flags"
+    )
+    # human-readable context columns are surfaced to the desk
+    for col in (
+        "matchup", "team", "team_name", "opponent", "opp_name",
+        "home_away", "market_label", "priced_line",
+    ):
+        assert col in CANDIDATES_HEADER
 
 
 # 2. EV happy path: book_decimal_odds present, no-push -> fully sized.
@@ -798,3 +810,110 @@ def test_freshness_section_all_ok(tmp_path, monkeypatch):
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
     text = "\n".join(build_freshness_section(["WNBA"]))
     assert "CAVEAT" not in text and "UNRELIABLE" not in text
+
+
+# --- Ledger context surfacing (report data-quality fixes) --------------------
+
+def _ctx_card(sport_team, opp, matchup, **extra):
+    """A minimal board-A player card carrying normalizer-resolved context."""
+    card = {
+        "headline_side": "OVER",
+        "card_id": "c1",
+        "market_id": "c1",
+        "board": "A",
+        "player": "Test Player",
+        "market_type": "PLAYER_PROP",
+        "team": sport_team,
+        "opponent": opp,
+        "matchup": matchup,
+        "event_id": "ev1",
+        "flags": [],
+        "sides": {
+            "OVER": {
+                "outcome_id": "o1",
+                "line": 6.5,
+                "best_odds": 110,
+                "ev": {"is_alt_line_fallback": False},
+            }
+        },
+    }
+    card.update(extra)
+    return card
+
+
+def test_context_columns_populated_with_full_names():
+    # WNBA CHI @ LAS with the player on LAS: the desk must see 'Los Angeles Sparks',
+    # not guess 'Las Vegas' from the LAS code.
+    card = _ctx_card(
+        "LAS", "CHI", "CHI @ LAS", market="REB", market_raw="Rebounds",
+        market_label="Test Player - Rebounds",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert row["team"] == "LAS"
+    assert row["team_name"] == "Los Angeles Sparks"
+    assert row["opp_name"] == "Chicago Sky"
+    assert row["home_away"] == "HOME"  # LAS is the home token in 'CHI @ LAS'
+    assert row["matchup"] == "CHI @ LAS"
+    assert "Rebounds" in row["market_label"]
+
+
+def test_market_label_disambiguates_terse_code():
+    # 'PT' reads as basketball points but is Pitches Thrown; market_label spells it out.
+    card = _ctx_card(
+        "ATL", "STL", "ATL @ STL", market="PT", market_raw="Pitches Thrown",
+        market_label="Test Pitcher - Pitches Thrown",
+    )
+    row = make_row(card, [], sport="MLB")
+    assert "Pitches Thrown" in row["market_label"]
+    assert row["home_away"] == "AWAY"  # ATL is the away token in 'ATL @ STL'
+
+
+def test_alt_line_fallback_surfaces_priced_line():
+    # Shown line 9.0 but EV/price derived at 8.5 -> priced_line + annotated flag.
+    card = {
+        "headline_side": "OVER",
+        "card_id": "g1",
+        "market_id": "g1",
+        "board": "A",
+        "market_type": "GAMELINE",
+        "market": "TOTAL",
+        "matchup": "ATH @ CWS",
+        "event_id": "evG",
+        "flags": ["ev_line_fallback"],
+        "sides": {
+            "OVER": {
+                "outcome_id": "oMain",
+                "line": 9.0,
+                "best_odds": -102,
+                "ev": {
+                    "is_alt_line_fallback": True,
+                    "best_record_id": "recAlt",
+                    "best_ev_pct": 0.07,
+                    "ev_source": "OUTLIER",
+                },
+            }
+        },
+    }
+    ev = [{
+        "market_id": "g1", "outcome_id": "oAlt", "side": "OVER",
+        "current_line": 8.5, "record_id": "recAlt", "book": "FD", "book_odds": -110,
+    }]
+    row = make_row(card, ev)
+    assert row["line"] == 9.0  # display line unchanged
+    assert str(row["priced_line"]) == "8.5"
+    assert "ev_line_fallback:priced_at=8.5" in row["data_quality_flags"]
+
+
+def test_dossier_and_briefing_show_matchup_not_bare_hash():
+    card = _ctx_card("LAS", "CHI", "CHI @ LAS", market="REB", market_raw="Rebounds")
+    row = make_row(card, [], sport="WNBA")
+    row["_board"] = "board_a"
+    row["_event_starts_at"] = "2026-07-10T22:00:00Z"
+
+    dossier = build_dossier([row], "WNBA")
+    assert "Los Angeles Sparks" in dossier and "Chicago Sky" in dossier
+
+    briefing = build_briefing([row], "2026-07-10")
+    # Slate index carries the human matchup alongside the event id.
+    assert "Los Angeles Sparks" in briefing
+    assert "event ev1" in briefing
