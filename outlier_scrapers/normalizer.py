@@ -503,6 +503,11 @@ def normalize_games(
                 # teamId/alias/status/players (verified live 2026-06-22).
                 "matchup_type": matchup.get("matchup_type"),
                 "lineups": matchup.get("lineups") or {},
+                # Surface the schedule's team ids so build_injuries can join an
+                # event to its teams' injuries. Sourced from the schedule (not
+                # lineups) because MLB matchups ship empty lineups.
+                "home_team_id": event_info.get("home_team_id"),
+                "away_team_id": event_info.get("away_team_id"),
             }
 
         insights = event_data.get("insights")

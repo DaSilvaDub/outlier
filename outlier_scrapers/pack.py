@@ -208,12 +208,30 @@ def build_injuries(games_payload: dict | None) -> dict[str, str]:
             inj = (teams.get(str(tid)) or {}).get("injuries") if tid else None
             for item in inj or []:
                 if isinstance(item, dict):
-                    flags.append(str(item.get("player") or item.get("description") or item))
+                    formatted = _format_injury(item)
+                    if formatted:
+                        flags.append(formatted)
                 else:
                     flags.append(str(item))
         if flags:
             out[str(eid)] = " | ".join(flags)
     return out
+
+
+def _format_injury(item: dict[str, Any]) -> str:
+    """Render one injury as ``"First Last (Status)"`` from the live schema
+    (firstName/lastName + nested injury.status). Falls back to a legacy
+    ``player``/``description`` field, and never dumps the raw dict."""
+    name = " ".join(
+        part for part in (item.get("firstName"), item.get("lastName")) if part
+    ).strip()
+    if not name:
+        name = str(item.get("player") or item.get("description") or "").strip()
+    injury = item.get("injury")
+    status = injury.get("status") if isinstance(injury, dict) else None
+    if name and status:
+        return f"{name} ({status})"
+    return name
 
 def _slug(text: str | None) -> str:
     if not text:

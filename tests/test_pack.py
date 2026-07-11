@@ -279,6 +279,32 @@ def test_build_injuries():
     assert inj["E1"] == "A. Star"
 
 
+def test_build_injuries_formats_real_injury_schema():
+    """Live injuries carry firstName/lastName and a nested injury.status, not a
+    'player' key. build_injuries must render a legible string, not a dict dump."""
+    games = {
+        "context": {
+            "events": {"E1": {"home_team_id": "T1", "away_team_id": "T2"}},
+            "teams": {
+                "T1": {
+                    "injuries": [
+                        {
+                            "playerId": "p1",
+                            "firstName": "Aaron",
+                            "lastName": "Judge",
+                            "injury": {"status": "OUT", "injury": "Toe"},
+                            "teamId": "T1",
+                        }
+                    ]
+                },
+                "T2": {"injuries": []},
+            },
+        }
+    }
+    inj = build_injuries(games)
+    assert inj["E1"] == "Aaron Judge (OUT)"
+
+
 # 14. Quota ranking never starves board B.
 def test_quota_ranking():
     rows = [{"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"} for i in range(20)]
