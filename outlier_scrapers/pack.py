@@ -297,7 +297,10 @@ def market_validation_flags(
         flags.append(f"cross_sport_market:{foreign}")
     if line not in (None, ""):
         line_val = _to_float(line)
-        if line_val is None:
+        # ``line_val != line_val`` is an import-free NaN test: a NaN line parses
+        # without error but compares False against everything, so it would slip
+        # past the ceiling check unflagged.
+        if line_val is None or line_val != line_val:
             flags.append("non_numeric_line")
         else:
             is_player_prop = str(market_type or "").upper() == "PLAYER_PROP" or bool(player_id)
@@ -744,7 +747,7 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
         error_ids = [str(m) for m in (report.get("error_market_ids") or []) if m]
         if error_ids:
             shown = ", ".join(error_ids[:8])
-            more = f" +{len(error_ids) - 8} more" if len(error_ids) > 8 else ""
+            more = f" (+{len(error_ids) - 8} more)" if len(error_ids) > 8 else ""
             reasons.append(f"{errors} fetch errors [missing markets: {shown}{more}]")
         else:
             reasons.append(f"{errors} fetch errors")

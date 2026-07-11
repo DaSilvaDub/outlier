@@ -977,6 +977,19 @@ def test_market_validation_flags_helper_is_deterministic():
                                    "GAMELINE", None, 168.5) == []
 
 
+def test_nan_line_is_flagged_non_numeric():
+    # A NaN line parses without error but compares False everywhere; it must not
+    # slip past the ceiling check unflagged.
+    nan = float("nan")
+    card = {"proposition": "HITS", "market_raw": "Hits"}
+    assert market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", nan) == [
+        "non_numeric_line"
+    ]
+    assert market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", "NaN") == [
+        "non_numeric_line"
+    ]
+
+
 def test_lm_status_names_missing_markets():
     import datetime
     report = {
@@ -1004,4 +1017,4 @@ def test_lm_status_caps_and_counts_extra_missing_markets():
         "error_market_ids": ids,
     }
     _, msg = _summarize_lm_status(report, "MLB props LM")
-    assert "+4 more" in msg  # 12 total, first 8 shown
+    assert "(+4 more)" in msg  # 12 total, first 8 shown
