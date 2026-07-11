@@ -80,19 +80,45 @@ def extract_yaml_request_hash(content: str) -> str | None:
     return None
 
 
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
 def validate_candidates(pack_dir: Path) -> tuple[bytes, str]:
-    """Validate candidates.csv exists, has the canonical header and >=1 row."""
+    """Validate candidates.csv exists, has the canonical header and >=1 row.
+    Also re-applies the lock filter in case events started since pack build."""
     candidates_file = pack_dir / "candidates.csv"
     if not candidates_file.exists():
         raise RunnerError(f"Candidates file {candidates_file} does not exist.")
-    raw_bytes = candidates_file.read_bytes()
+    
     with open(candidates_file, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
         header = next(reader, None)
         if header != pack.CANDIDATES_HEADER:
             raise RunnerError("candidates.csv header does not match pack.CANDIDATES_HEADER")
-        if len(list(reader)) == 0:
-            raise RunnerError("candidates.csv has no data rows.")
+
+    with open(candidates_file, "r", encoding="utf-8") as f:
+        dict_reader = csv.DictReader(f)
+        rows = list(dict_reader)
+
+    kept, locked = pack.drop_locked_events(rows, now=datetime.now().astimezone())
+    if locked:
+        logger.warning(
+            "Reasoning-time lock filter dropped %d event(s) locked since pack build",
+            len(locked),
+        )
+    
+    if not kept:
+        raise RunnerError("candidates.csv has no data rows after dropping locked events.")
+
+    import io
+    out_io = io.StringIO()
+    writer = csv.DictWriter(out_io, fieldnames=pack.CANDIDATES_HEADER)
+    writer.writeheader()
+    writer.writerows(kept)
+    
+    raw_bytes = out_io.getvalue().encode("utf-8-sig")
     return raw_bytes, sha256_bytes(raw_bytes)
 
 

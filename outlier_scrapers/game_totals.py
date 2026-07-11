@@ -223,6 +223,17 @@ def pick_best_side(p_over: float, over_price: Any, under_price: Any) -> tuple[st
     return "OVER", over_price, over_edge
 
 
+def derive_push_prob(line: float, ladder_p: dict[float, float]) -> float | None:
+    if not _is_integer_line(line):
+        return None
+    p_over_high = ladder_p.get(line + 0.5)
+    p_over_low = ladder_p.get(line - 0.5)
+    if p_over_high is None or p_over_low is None:
+        return None
+    prob = p_over_low - p_over_high
+    return max(0.0, min(1.0, prob))
+
+
 def _totals_id(market_id: str, line: float, side: str) -> str:
     line_s = str(int(line)) if line == int(line) else str(line)
     return f"{market_id}:{line_s}:{side}"
@@ -322,18 +333,18 @@ def build_game_totals(
 
         sides_at_line = ladder.get(headline_line, {})
         over_books, under_books = sides_at_line.get("over", {}), sides_at_line.get("under", {})
-        p_over, book_count, headline_flags = aggregate_line_p_over(over_books, under_books)
+        p_over_headline, book_count, headline_flags = aggregate_line_p_over(over_books, under_books)
         flags.extend(headline_flags)
-        if p_over is None:
+        if p_over_headline is None:
             flags.append("INSUFFICIENT_DATA")
 
         over_price = max(over_books.values()) if over_books else cand.get("price")
         under_price = max(under_books.values()) if under_books else None
         best_side, best_price, edge_pct = (
-            pick_best_side(p_over, over_price, under_price) if p_over is not None else ("OVER", over_price, None)
+            pick_best_side(p_over_headline, over_price, under_price) if p_over_headline is not None else ("OVER", over_price, None)
         )
 
-        p_under = (1.0 - p_over) if p_over is not None else None
+        p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         decimal_price = _american_to_decimal(best_price)
         implied_prob = implied_probability(best_price)
 
@@ -341,8 +352,13 @@ def build_game_totals(
         sizing_flags = ""
         push_blocked = _is_integer_line(headline_line)
         if push_blocked:
-            push_prob = ""
-            sizing_flags = "push_capable_no_prob"
+            derived = derive_push_prob(headline_line, ladder_p)
+            if derived is not None:
+                push_prob = round(derived, 4)
+            else:
+                push_prob = ""
+                sizing_flags = "push_capable_no_prob"
+
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
@@ -350,7 +366,7 @@ def build_game_totals(
         actionable = (
             "true"
             if (
-                p_over is not None
+                p_over_headline is not None
                 and edge_pct is not None
                 and edge_pct >= MIN_EDGE_TOTALS
                 and book_count >= 2
@@ -362,7 +378,7 @@ def build_game_totals(
             )
             else "false"
         )
-        if not quality_flags and actionable == "false" and p_over is not None:
+        if not quality_flags and actionable == "false" and p_over_headline is not None:
             if edge_pct is not None and edge_pct < MIN_EDGE_TOTALS:
                 quality_flags = "BELOW_MIN_EDGE"
             elif fair_total is None:

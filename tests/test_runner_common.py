@@ -32,10 +32,34 @@ def test_validate_candidates_returns_bytes_and_hash(tmp_path):
     with open(f, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(pack.CANDIDATES_HEADER)
-        w.writerow(["data", "row"])
+        row = {k: "" for k in pack.CANDIDATES_HEADER}
+        row["_event_starts_at"] = "2099-12-31T00:00:00Z"
+        row["market_id"] = "data"
+        w.writerow([row[k] for k in pack.CANDIDATES_HEADER])
     raw, digest = runner_common.validate_candidates(tmp_path)
     assert digest == hashlib.sha256(raw).hexdigest()
-    assert b"data,row" in raw
+    assert b"data" in raw
+
+
+def test_validate_candidates_drops_locked_events(tmp_path):
+    f = tmp_path / "candidates.csv"
+    with open(f, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(pack.CANDIDATES_HEADER)
+        # Row 1: future
+        row1 = {k: "" for k in pack.CANDIDATES_HEADER}
+        row1["_event_starts_at"] = "2099-12-31T00:00:00Z"
+        row1["market_id"] = "future_event"
+        w.writerow([row1[k] for k in pack.CANDIDATES_HEADER])
+        # Row 2: past
+        row2 = {k: "" for k in pack.CANDIDATES_HEADER}
+        row2["_event_starts_at"] = "1999-12-31T00:00:00Z"
+        row2["market_id"] = "past_event"
+        w.writerow([row2[k] for k in pack.CANDIDATES_HEADER])
+    
+    raw, digest = runner_common.validate_candidates(tmp_path)
+    assert b"future_event" in raw
+    assert b"past_event" not in raw
 
 
 def test_validate_candidates_rejects_bad_header(tmp_path):

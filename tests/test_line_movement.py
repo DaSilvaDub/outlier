@@ -778,7 +778,7 @@ def test_export_line_movement_mop_up_stops_when_403_becomes_404(tmp_path, monkey
 
     assert status["status"] == "partial"
     assert status["retry_403_recovered"] == 0
-    assert status["retry_403_residual_errors"] == 1
+    assert status["retry_403_residual_errors"] == 0
     assert status["retry_403_rounds_attempted"] == 1
     assert client.calls["m2"] == 2
     normalized = json.loads(Path(status["normalized_latest"]).read_text(encoding="utf-8"))

@@ -1018,3 +1018,18 @@ def test_lm_status_caps_and_counts_extra_missing_markets():
     }
     _, msg = _summarize_lm_status(report, "MLB props LM")
     assert "(+4 more)" in msg  # 12 total, first 8 shown
+# 26. WNBA home-away unresolved flag.
+def test_home_away_unresolved_flag():
+    card = ev_card(market_type="MONEYLINE")
+    # Well-formed matchup where the team EXACTLY matches one of the sides
+    card["matchup"] = "LVA @ NYL"
+    card["team"] = "LVA"
+    row = make_row(card, [])
+    assert row["home_away"] == "AWAY"
+    assert "HOME_AWAY_UNRESOLVED" not in row["data_quality_flags"]
+
+    # Malformed matchup / unresolvable team alias
+    card["team"] = "LV"  # LV instead of LVA
+    row2 = make_row(card, [])
+    assert row2["home_away"] == ""
+    assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]

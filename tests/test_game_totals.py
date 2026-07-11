@@ -138,6 +138,27 @@ def test_build_game_totals_integer_line_push_blocked():
     assert row["actionable"] == "false"
 
 
+def test_build_game_totals_integer_line_with_push_prob():
+    games_norm = {
+        "records": [
+            _norm_record("m3", 7.5, "OVER", [{"book": "DK", "odds": -140}, {"book": "FD", "odds": -140}]),
+            _norm_record("m3", 7.5, "UNDER", [{"book": "DK", "odds": 120}, {"book": "FD", "odds": 120}]),
+            _norm_record("m3", 8.0, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m3", 8.0, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m3", 8.5, "OVER", [{"book": "DK", "odds": 110}, {"book": "FD", "odds": 110}]),
+            _norm_record("m3", 8.5, "UNDER", [{"book": "DK", "odds": -130}, {"book": "FD", "odds": -130}]),
+        ],
+    }
+    candidates = [{"market_id": "m3", "line": 8.0, "market_type": "GAMELINE", "_proposition": "TOTAL"}]
+    rows = build_game_totals(candidates, games_norm, sport="MLB")
+    row = next(r for r in rows if float(r["line"]) == 8.0)
+    assert row["sizing_flags"] == ""
+    assert isinstance(row["push_prob"], float)
+    assert row["push_prob"] > 0
+    assert row["actionable"] == "false"
+
+
+
 def test_build_game_totals_live_event_flag():
     games_norm = {
         "records": [

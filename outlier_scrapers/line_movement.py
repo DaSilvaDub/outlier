@@ -1284,7 +1284,7 @@ def export_line_movement_for_league(
         terminal_retry_errors.extend(last_403_errors[market_id] for market_id in pending_market_ids)
         retry_errors = terminal_retry_errors
         retry_403_recovered = retry_403_count - len(retry_errors)
-        retry_403_residual_errors = len(retry_errors)
+        retry_403_residual_errors = len(pending_market_ids)
 
     fetch_errors = [
         error for error in first_pass_errors if not (retry_failed_403 and _is_http_403_error(error))

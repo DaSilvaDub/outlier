@@ -47,9 +47,13 @@ def _write_candidates(pack_dir, *, line="8.5", price="-110"):
                 "event_id": "e1",
                 "market_id": "m1",
                 "market_type": "TOTAL",
-                "selection": "OVER 8.5",
+                "selection": f"OVER {line}",
                 "line": line,
                 "price": price,
+                "team_name": "A",
+                "opp_name": "B",
+                "matchup": "A @ B",
+                "_event_starts_at": "2099-06-28T19:00:00+00:00",
             }
         )
         writer.writerow(row)
@@ -154,7 +158,7 @@ def test_candidates_change_invalidates_refresh_hash(c_env, monkeypatch):
     assert c_research.run_c_research(pack_dir) == 0
 
     _write_candidates(pack_dir, line="9.0", price="-105")
-    updated = VALID_OUTPUT.replace("line=8.5 | price=-110", "line=9.0 | price=-105")
+    updated = VALID_OUTPUT.replace("line=8.5 | price=-110", "line=9.0 | price=-105").replace("selection=OVER 8.5", "selection=OVER 9.0")
     monkeypatch.setattr(c_research, "call_gemini", lambda *a, **k: updated)
     assert c_research.run_c_research(pack_dir, refresh_if_stale=True) == 0
     assert "line=9.0 | price=-105" in (pack_dir / "chatgpt_c.md").read_text(
