@@ -199,6 +199,52 @@ def test_no_ev_row():
     assert row["model_prob"] == ""
 
 
+# 8b. Stale-line edge gate: RLM + thin_liquidity on an EV-sized row is a
+#     phantom-edge risk (see 2026-07-11 Bonner O10.5: pack recommended 3.0u with
+#     both flags already set). Withhold the unit recommendation and flag it, but
+#     keep edge_pct visible (Round-2 Fix 1).
+def test_stale_line_edge_gate_withholds_units():
+    card = ev_card(
+        market_type="MONEYLINE",
+        market="MONEYLINE",
+        flags=["reverse_line_movement", "thin_liquidity"],
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] == ""  # stake withheld
+    assert "edge_suspect_stale_line" in row["data_quality_flags"]
+    assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
+
+
+# 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
+def test_stale_line_gate_requires_both_flags():
+    card = ev_card(
+        market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"]
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] == 1.0
+    assert "edge_suspect_stale_line" not in row["data_quality_flags"]
+
+
 # 9. american_to_decimal pure helper.
 def test_american_to_decimal():
     assert american_to_decimal(150) == 2.50
