@@ -20,9 +20,21 @@ def claude_env(monkeypatch, tmp_path):
     pack_dir.mkdir(parents=True)
 
     with open(pack_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(pack.CANDIDATES_HEADER)
-        w.writerow(["data", "row"])
+        w = csv.DictWriter(f, fieldnames=pack.CANDIDATES_HEADER)
+        w.writeheader()
+        row = {k: "" for k in pack.CANDIDATES_HEADER}
+        row.update({
+            "sport": "MLB",
+            "event_id": "e1",
+            "market_id": "m1",
+            "selection": "test",
+            "team_name": "A",
+            "opp_name": "B",
+            "matchup": "A @ B",
+            "_event_starts_at": "2099-01-01T12:00:00Z"
+        })
+        w.writerow(row)
+
 
     return tmp_path, date_str, pack_dir
 
@@ -107,7 +119,7 @@ def test_success_writes_file_and_asserts_api(claude_env, mock_anthropic):
     user_msg = api.kwargs["messages"][0]
     assert user_msg["role"] == "user"
     assert "Prompt D body" in user_msg["content"]
-    assert "data,row" in user_msg["content"]
+    assert "test" in user_msg["content"]
 
     out = pack_dir / "claude_d.md"
     assert out.exists()
@@ -155,7 +167,19 @@ def test_refresh_if_stale_reruns_on_candidates_change(claude_env, mock_anthropic
     _, date_str, pack_dir = claude_env
     assert claude_reasoning.main(["--date", date_str]) == 0
     with open(pack_dir / "candidates.csv", "a", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(["another", "row"])
+        w = csv.DictWriter(f, fieldnames=pack.CANDIDATES_HEADER)
+        row = {k: "" for k in pack.CANDIDATES_HEADER}
+        row.update({
+            "sport": "MLB",
+            "event_id": "e2",
+            "market_id": "m2",
+            "selection": "test2",
+            "team_name": "C",
+            "opp_name": "D",
+            "matchup": "C @ D",
+            "_event_starts_at": "2099-01-01T12:00:00Z"
+        })
+        w.writerow(row)
     assert claude_reasoning.run_claude_d(pack_dir, refresh_if_stale=True) == 0
     assert len(mock_anthropic) == 2
 
