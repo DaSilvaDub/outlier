@@ -72,3 +72,18 @@ def test_divide_by_zero_guard():
     assert sizing.recommended_units_pre_news is None
     assert sizing.kelly_025_units is None
     assert sizing.edge_pct is None
+
+
+def test_push_plus_model_over_one_is_ineligible():
+    # push_prob + model_prob > 1 is not a valid probability partition (p_lose < 0)
+    # and must not inflate edge/Kelly -> fall back to null sizing.
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.6, push_prob=0.6)
+    assert sizing.edge_pct is None
+    assert sizing.kelly_025_units is None
+    assert sizing.recommended_units_pre_news is None
+
+
+def test_negative_push_prob_is_ineligible():
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.55, push_prob=-0.2)
+    assert sizing.edge_pct is None
+    assert sizing.recommended_units_pre_news is None
