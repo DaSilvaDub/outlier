@@ -18,7 +18,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from outlier_scrapers import paths
-from outlier_scrapers.registry import get_sport_config, team_display_name
+from outlier_scrapers.registry import (
+    classify_foreign_market,
+    get_sport_config,
+    team_display_name,
+)
 from outlier_scrapers.sizing import compute_sizing
 
 logger = logging.getLogger(__name__)
@@ -265,6 +269,42 @@ def _priced_line_from_ev(ev_records: list[dict[str, Any]], record_id: Any) -> An
             return rec.get("current_line")
     return None
 
+# A single player prop line above this is a data artifact, not a real market
+# (no MLB/WNBA single-player line approaches it). Deliberately generous so a
+# high-but-real line — e.g. a starter's ~130 pitches-thrown — never trips it.
+PLAYER_PROP_LINE_CEILING = 300.0
+
+def market_validation_flags(
+    sport: str,
+    card: dict[str, Any],
+    ref: dict[str, Any],
+    market_token: Any,
+    market_type: Any,
+    player_id: Any,
+    line: Any,
+) -> list[str]:
+    """Non-fatal data-quality flags for a candidate's market/line.
+
+    Deterministic checks only (no hard drops): a cross-sport market artifact and
+    a clearly-impossible line. Returns flag strings for ``data_quality_flags``.
+    """
+    flags: list[str] = []
+    market_value = _coalesce(
+        card.get("proposition"), ref.get("proposition"), card.get("market_raw"), market_token
+    )
+    foreign = classify_foreign_market(sport, market_value)
+    if foreign:
+        flags.append(f"cross_sport_market:{foreign}")
+    if line not in (None, ""):
+        line_val = _to_float(line)
+        if line_val is None:
+            flags.append("non_numeric_line")
+        else:
+            is_player_prop = str(market_type or "").upper() == "PLAYER_PROP" or bool(player_id)
+            if is_player_prop and abs(line_val) > PLAYER_PROP_LINE_CEILING:
+                flags.append("implausible_line")
+    return flags
+
 def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
     name_s = str(name or "").strip()
     label_s = str(label or "").strip()
@@ -421,6 +461,9 @@ def build_row(
             row["priced_line"] = priced
             dq_flags = [f for f in dq_flags if f != "ev_line_fallback"]
             dq_flags.append(f"ev_line_fallback:priced_at={_fmt_line(priced)}")
+    dq_flags += market_validation_flags(
+        sport, card, ref, market_token, market_type, row.get("player_id"), line
+    )
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
@@ -625,6 +668,9 @@ ROLE_BLOCK = [
     "- If a row has priced_line set (or a data_quality_flags entry like"
     " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
+    "- data_quality_flags may also carry cross_sport_market:<LEAGUE> (the market belongs to"
+    " another sport — treat the row as a data artifact and stand it down) or implausible_line /"
+    " non_numeric_line (the line is likely corrupt — verify before quoting).",
     "",
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
@@ -695,7 +741,13 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
         age_txt = f"{round(age, 1)}h" if isinstance(age, (int, float)) else "?h"
         reasons.append(f"props {age_txt} stale")
     if errors:
-        reasons.append(f"{errors} fetch errors")
+        error_ids = [str(m) for m in (report.get("error_market_ids") or []) if m]
+        if error_ids:
+            shown = ", ".join(error_ids[:8])
+            more = f" +{len(error_ids) - 8} more" if len(error_ids) > 8 else ""
+            reasons.append(f"{errors} fetch errors [missing markets: {shown}{more}]")
+        else:
+            reasons.append(f"{errors} fetch errors")
     if (
         isinstance(fetched, int)
         and isinstance(requested, int)

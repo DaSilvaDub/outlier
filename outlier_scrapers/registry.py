@@ -382,6 +382,31 @@ def normalize_market(config: SportConfig, value: object) -> str | None:
     return config.market_aliases.get(token)
 
 
+def classify_foreign_market(league: str, value: object) -> str | None:
+    """Return an enabled league (other than ``league``) whose market taxonomy
+    recognizes ``value`` when ``league`` itself does not.
+
+    This flags a cross-sport market artifact — e.g. a basketball ``REBOUNDS``
+    proposition landing on an MLB event, which ``normalize_market`` leaves as
+    ``None`` for MLB but resolves under WNBA. Returns ``None`` when the value is
+    recognized by ``league`` (shared markets like TOTAL/SPREAD/MONEYLINE always
+    are), unknown everywhere, or the league is unknown. Deterministic; no
+    magnitude/threshold heuristics, so it never false-flags a valid market.
+    """
+    try:
+        config = get_sport_config(league, allow_disabled=True)
+    except ValueError:
+        return None
+    if normalize_market(config, value) is not None:
+        return None
+    for other_league, other_cfg in SPORTS.items():
+        if other_league == config.league_id or not other_cfg.enabled_by_default:
+            continue
+        if normalize_market(other_cfg, value) is not None:
+            return other_league
+    return None
+
+
 def team_display_name(config: SportConfig, value: object) -> str | None:
     """Return the full display name for a team, or None when unknown.
 
