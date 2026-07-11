@@ -488,6 +488,18 @@ def build_row(
     )
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
+    # Stale-line edge gate: reverse line movement (line moved against this side)
+    # plus thin liquidity means the devigged edge is a phantom — the market moved
+    # sharply on prices we can't trust. The RLM/thin flags alone were already
+    # ignored downstream (2026-07-11 Bonner O10.5 shipped 3.0u with both set), so
+    # withhold the stake recommendation itself. edge_pct stays visible.
+    if (
+        row.get("recommended_units_pre_news") not in ("", None)
+        and "reverse_line_movement" in dq_flags
+        and "thin_liquidity" in dq_flags
+    ):
+        dq_flags.append("edge_suspect_stale_line")
+        row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
