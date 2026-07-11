@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from outlier_scrapers import paths
+from outlier_scrapers.registry import get_sport_config, team_display_name
 from outlier_scrapers.sizing import compute_sizing
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,16 @@ CANDIDATES_HEADER = [
     "market_id",
     "market_type",
     "player_id",
+    "matchup",
+    "team",
+    "team_name",
+    "opponent",
+    "opp_name",
+    "home_away",
+    "market_label",
     "selection",
     "line",
+    "priced_line",
     "price",
     "decimal_price",
     "book",
@@ -42,6 +51,7 @@ CANDIDATES_HEADER = [
     "max_units",
     "recommended_units_pre_news",
     "sizing_flags",
+    "data_quality_flags",
     "outlier_ev_pct",
     "outlier_kelly_pct",
     "local_ev_pct",
@@ -220,6 +230,41 @@ def _fmt_line(line: Any) -> str:
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
+def _to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+def _home_away(matchup: Any, team: Any) -> str:
+    """Resolve whether ``team`` is HOME or AWAY within an ``AWAY @ HOME`` matchup.
+
+    Returns "HOME"/"AWAY" when the team code matches one side, else "" (unknown).
+    Comparison is code-level; matchup strings are built from canonical aliases in
+    the normalizer, so an exact token match is reliable.
+    """
+    matchup_s = str(matchup or "").strip()
+    team_s = str(team or "").strip().upper()
+    if not matchup_s or not team_s or " @ " not in matchup_s:
+        return ""
+    away_tok, home_tok = (p.strip().upper() for p in matchup_s.split(" @ ", 1))
+    if team_s == home_tok:
+        return "HOME"
+    if team_s == away_tok:
+        return "AWAY"
+    return ""
+
+def _priced_line_from_ev(ev_records: list[dict[str, Any]], record_id: Any) -> Any:
+    """The line an EV alt-line fallback was actually priced at (``current_line``)."""
+    if not record_id:
+        return None
+    for rec in ev_records:
+        if rec.get("record_id") == record_id:
+            return rec.get("current_line")
+    return None
+
 def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
     name_s = str(name or "").strip()
     label_s = str(label or "").strip()
@@ -282,6 +327,25 @@ def build_row(
     name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
     label = ref.get("market_label") or card.get("market_label") or market_token
     row["selection"] = build_selection(name, label, headline_side, line)
+    # Human-readable context the normalizer already resolved. Surfacing it stops
+    # the reasoning desk from guessing teams/markets off the hash event_id or a
+    # terse code (e.g. LAS vs LVA, PT = Pitches Thrown).
+    matchup = card.get("matchup") or ref.get("matchup")
+    team = card.get("team") or ref.get("team")
+    opponent = card.get("opponent") or ref.get("opponent")
+    try:
+        config = get_sport_config(sport, allow_disabled=True)
+    except ValueError:
+        config = None
+    row["matchup"] = matchup
+    row["team"] = team
+    row["team_name"] = team_display_name(config, team) if (config and team) else None
+    row["opponent"] = opponent
+    row["opp_name"] = team_display_name(config, opponent) if (config and opponent) else None
+    row["home_away"] = _home_away(matchup, team)
+    row["market_label"] = _coalesce(
+        card.get("market_label"), ref.get("market_label"), card.get("market_raw"), market_token
+    )
     row["line"] = line
     row["research_leverage"] = get_research_leverage(market_token, scope, sport)
     row["injury_flags"] = injuries.get(str(event_id), "") if event_id else ""
@@ -343,10 +407,22 @@ def build_row(
             row["book"] = per_book[0].get("book")
     if is_longshot_price(row.get("price")):
         return None
-    
+
     if row.get("decimal_price") is not None and row["decimal_price"] <= 1.20:
         return None
-        
+
+    # Surface card-level quality flags and, for an EV alt-line fallback, the line
+    # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
+    # so the desk sees the mismatch instead of silently trusting the shown line.
+    dq_flags = [str(f) for f in (card.get("flags") or [])]
+    if (ev_summary or {}).get("is_alt_line_fallback"):
+        priced = _priced_line_from_ev(ev_records, ev_summary.get("best_record_id"))
+        if priced is not None and _to_float(priced) != _to_float(line):
+            row["priced_line"] = priced
+            dq_flags = [f for f in dq_flags if f != "ev_line_fallback"]
+            dq_flags.append(f"ev_line_fallback:priced_at={_fmt_line(priced)}")
+    row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
+
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
@@ -513,15 +589,43 @@ WNBA_QUESTIONS = [
     "- *Markets:* spread, total, points/reb/ast, **PRA**, 3PM, alt lines.",
 ]
 
+def _matchup_display(row: dict[str, Any]) -> str:
+    """A human matchup line for a row, preferring full names over codes."""
+    away_name = home_name = None
+    matchup = str(row.get("matchup") or "").strip()
+    ha = row.get("home_away")
+    if ha == "HOME":
+        home_name, away_name = row.get("team_name"), row.get("opp_name")
+    elif ha == "AWAY":
+        away_name, home_name = row.get("team_name"), row.get("opp_name")
+    if away_name and home_name:
+        return f"{away_name} @ {home_name} ({matchup})" if matchup else f"{away_name} @ {home_name}"
+    return matchup or "unknown matchup"
+
+
 def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
-    lines = [f"## {sport} game dossier", ""]
+    matchup = _matchup_display(rows[0]) if rows else "unknown matchup"
+    lines = [f"## {sport} game dossier — {matchup}", ""]
     lines += MLB_QUESTIONS if sport.upper() == "MLB" else WNBA_QUESTIONS
     lines += ["", "### Markets in play"]
     for r in rows:
-        lines.append(f"- {r.get('market_type')}: {r.get('selection')} @ {r.get('line')} ({r.get('price')})")
+        team = r.get("team_name") or r.get("team") or ""
+        ctx = f" [{team}]" if team else ""
+        lines.append(
+            f"- {r.get('market_type')}: {r.get('selection')}{ctx} @ {r.get('line')} ({r.get('price')})"
+        )
     return "\n".join(lines)
 
 ROLE_BLOCK = [
+    "LEDGER CONTEXT (all passes):",
+    "- Each candidate carries authoritative context: team / team_name, opponent / opp_name,"
+    " home_away, matchup, and market_label. Use these verbatim — do NOT infer a player's team,"
+    " the opponent, home/away, or what a market means from the event_id hash or a terse code"
+    " (e.g. LAS is Los Angeles Sparks not Las Vegas; PT is Pitches Thrown).",
+    "- If a row has priced_line set (or a data_quality_flags entry like"
+    " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
+    " line — reconcile to priced_line before quoting an edge and note the mismatch.",
+    "",
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
     " If one appears in the pack, treat it as a data error and stand it down.",
@@ -638,13 +742,15 @@ def build_briefing(
         if r.get("_board") == "board_a":
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
-                f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')}"
+                f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')} "
+                f"| {_matchup_display(r)}"
             )
     lines += ["", "### Top signal cards"]
     for r in rows:
         if r.get("_board") == "board_b":
             lines.append(
-                f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')}"
+                f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
+                f"| {_matchup_display(r)}"
             )
     lines += ["", "### Slate index"]
     seen: set[str] = set()
@@ -653,7 +759,8 @@ def build_briefing(
         if eid and eid not in seen:
             seen.add(eid)
             lines.append(
-                f"- {r.get('sport')} event {eid} | first lock: {r.get('_event_starts_at') or 'n/a'}"
+                f"- {r.get('sport')} {_matchup_display(r)} | event {eid} "
+                f"| first lock: {r.get('_event_starts_at') or 'n/a'}"
             )
     return "\n".join(lines)
 

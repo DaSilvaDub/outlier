@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping
 
 
@@ -12,6 +12,10 @@ class SportConfig:
     team_aliases: Mapping[str, str]
     market_aliases: Mapping[str, str]
     opp_rank_applicable: bool
+    # Canonical alias -> full display name (e.g. "LAS" -> "Los Angeles Sparks").
+    # Surfaced to the reasoning desk so ambiguous codes (LAS vs LVA) are not
+    # guessed. Defaults to empty for leagues without a curated table.
+    team_display: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def props_route(self) -> str:
@@ -139,6 +143,61 @@ MLB_TEAM_ALIASES.update(
 )
 
 
+# Canonical alias -> full display name. Keyed by the canonical 3-letter code that
+# ``normalize_team`` returns, so the disambiguating name that already lives in the
+# alias tables (e.g. "LOSANGELESSPARKS" -> "LAS") is surfaced back downstream.
+WNBA_TEAM_DISPLAY = {
+    "ATL": "Atlanta Dream",
+    "CHI": "Chicago Sky",
+    "CON": "Connecticut Sun",
+    "DAL": "Dallas Wings",
+    "GSV": "Golden State Valkyries",
+    "IND": "Indiana Fever",
+    "LAS": "Los Angeles Sparks",
+    "LVA": "Las Vegas Aces",
+    "MIN": "Minnesota Lynx",
+    "NYL": "New York Liberty",
+    "PHX": "Phoenix Mercury",
+    "SEA": "Seattle Storm",
+    "TOR": "Toronto Tempo",
+    "WAS": "Washington Mystics",
+}
+
+
+MLB_TEAM_DISPLAY = {
+    "ARI": "Arizona Diamondbacks",
+    "ATL": "Atlanta Braves",
+    "BAL": "Baltimore Orioles",
+    "BOS": "Boston Red Sox",
+    "CHC": "Chicago Cubs",
+    "CIN": "Cincinnati Reds",
+    "CLE": "Cleveland Guardians",
+    "COL": "Colorado Rockies",
+    "CWS": "Chicago White Sox",
+    "DET": "Detroit Tigers",
+    "HOU": "Houston Astros",
+    "KC": "Kansas City Royals",
+    "LAA": "Los Angeles Angels",
+    "LAD": "Los Angeles Dodgers",
+    "MIA": "Miami Marlins",
+    "MIL": "Milwaukee Brewers",
+    "MIN": "Minnesota Twins",
+    "NYM": "New York Mets",
+    "NYY": "New York Yankees",
+    "ATH": "Athletics",
+    "PHI": "Philadelphia Phillies",
+    "PIT": "Pittsburgh Pirates",
+    "SD": "San Diego Padres",
+    "SEA": "Seattle Mariners",
+    "SF": "San Francisco Giants",
+    "STL": "St. Louis Cardinals",
+    "TB": "Tampa Bay Rays",
+    "TEX": "Texas Rangers",
+    "TOR": "Toronto Blue Jays",
+    "WSH": "Washington Nationals",
+}
+
+
 BASKETBALL_MARKET_ALIASES = {
     "POINTS": "PTS",
     "PTS": "PTS",
@@ -258,6 +317,7 @@ SPORTS: dict[str, SportConfig] = {
         team_aliases=MLB_TEAM_ALIASES,
         market_aliases=MLB_MARKET_ALIASES,
         opp_rank_applicable=False,
+        team_display=MLB_TEAM_DISPLAY,
     ),
     "WNBA": SportConfig(
         league_id="WNBA",
@@ -265,6 +325,7 @@ SPORTS: dict[str, SportConfig] = {
         enabled_by_default=True,
         team_aliases=WNBA_TEAM_ALIASES,
         market_aliases=BASKETBALL_MARKET_ALIASES,
+        team_display=WNBA_TEAM_DISPLAY,
         # The playerProps API does not return opponent rank for any league
         # (confirmed via discovery 2026-06-20). Treat as not-applicable for the
         # API-only V1; revisit if a d-rank endpoint is found.
@@ -319,3 +380,18 @@ def normalize_market(config: SportConfig, value: object) -> str | None:
     if not token:
         return None
     return config.market_aliases.get(token)
+
+
+def team_display_name(config: SportConfig, value: object) -> str | None:
+    """Return the full display name for a team, or None when unknown.
+
+    Accepts either a canonical alias or any raw value ``normalize_team`` can
+    canonicalize, so callers may pass through a code like ``"LAS"`` or a raw
+    ``"Los Angeles Sparks"`` and get the curated display name back. A miss
+    returns None so callers can fall back to the code itself.
+    """
+    token = _compact(value)
+    if not token:
+        return None
+    alias = config.team_aliases.get(token, token)
+    return config.team_display.get(alias)
