@@ -13,7 +13,7 @@
 | #1 Add retries/backoff to line movement | Full HTTP-403 retry subsystem already exists (`line_movement.py:1230-1302`) | Root-cause surviving 403s; tune existing knobs. Do **not** write new retry code. |
 | #2 Create `drop_locked_events` in `claude_reasoning.py` / `games.py` | Function already exists (`pack.py:554`) and runs at pack build (`pack.py:929`); reasoning stage never re-applies it | Re-apply the **existing** function at reasoning time. ~1 line. |
 | #3 Fix WNBA context in `normalize_games` (`games.py`) | No `normalize_games` exists; opponent/home-away live in `pack.py:245-388` | Fix `_home_away`/matchup parsing in `pack.py`, not `games.py`. |
-| #4 "Basic Poisson/Skellam" push prob in `game_totals.py` | Module is a deterministic market-devig board (`game_totals.py:1-5`); two-way devig cannot recover push mass | Split into a separate design decision. Prefer a deterministic half-point derivation over a scoring model. |
+| #4 "Basic Poisson/Skellam" push prob in `game_totals.py` | Module is a deterministic market-devig board (`game_totals.py:1-5`); two-way devig cannot recover push mass | **E1 confirmed:** derive push mass deterministically from bracketing half-point rungs; modeling (E2) rejected. |
 | #5 Variance taxonomy + anti-hallucination in prompts | `prompts/C.md`, `prompts/D.md` exist; pack already embeds anti-inference guidance (`pack.py:667-685`) | Keep; place taxonomy so it doesn't contradict existing prompt rules. |
 
 ---
@@ -142,37 +142,66 @@ pitcher "Shane Drohan") while rendering HTML.
 
 ---
 
-## Fix E — Push probability for integer totals (SEPARATE DECISION — do not batch)
+## Fix E — Push probability for integer totals (deterministic, half-point derivation)
 
-**Why it's carved out.** `game_totals.py` is a deterministic market-devig board:
-"Reasoning agents consume the output; they never recompute probability or edge"
+**Decision: E1 (deterministic). Confirmed 2026-07-11.** No scoring model is
+introduced; push probability is derived only from prices the book already
+publishes, preserving the module's determinism contract.
+
+**Why deterministic.** `game_totals.py` is a market-devig board: "Reasoning
+agents consume the output; they never recompute probability or edge"
 (`game_totals.py:1-5`). Probabilities come from interpolating a two-way
 over/under ladder (`game_totals.py:192-204`). A two-outcome devig **structurally
 cannot recover push mass**, which is exactly why integer lines carry
-`push_capable_no_prob` (`game_totals.py:342-345`). A Poisson/Skellam model needs
-a projected run/point mean the pipeline doesn't compute, and injecting a modeled
-estimate into a deliberately market-derived file conflicts with the
-"packs stay deterministic, no live/model-derived numbers" house rule.
+`push_capable_no_prob` (`game_totals.py:342-345`). A Poisson/Skellam model would
+need a projected run/point mean the pipeline doesn't compute, and injecting a
+modeled estimate into a market-derived file conflicts with the "packs stay
+deterministic, no live/model-derived numbers" house rule — so it is explicitly
+rejected here (see "Rejected alternative" below).
 
-**Two options — pick before writing code:**
+**Approach.** For an integer line `L`, the push mass is the probability the game
+lands exactly on `L`. Half-point lines cannot push, so their devigged
+probabilities are clean. When the ladder contains the bracketing rungs `L-0.5`
+and `L+0.5`, derive:
 
-- **E1 (preferred, deterministic).** Derive push probability from adjacent
-  half-point ladder rungs when both exist (the mass between `line-0.5` and
-  `line+0.5` cumulative probabilities), falling back to the existing flag
-  otherwise. Stays market-derived; no scoring model. Keeps the module's
-  determinism contract intact.
-- **E2 (modeling).** Introduce a scoring distribution (Poisson for MLB runs,
-  Normal approx for WNBA points). This is a new modeling capability with its own
-  calibration, validation, and ownership — out of scope for a bugfix batch.
+```
+P(push at L) ≈ P(Under L+0.5) - P(Under L-0.5)
+```
 
-**Recommendation:** do E1 or defer. Do not implement E2 inside `game_totals.py`
-without a dedicated design pass.
+i.e. the cumulative-probability gap between the two neighboring half-point
+lines, using the same per-line devig already computed in
+`aggregate_line_p_over` (`game_totals.py:171-189`). The ladder is already built
+as `line -> {over, under}` in `build_market_ladder` (`game_totals.py:146-168`),
+so the neighboring rungs are available without new data.
 
-- **[MODIFY — E1 only]** `outlier_scrapers/game_totals.py` push-prob branch.
+**Fallback.** If either bracketing half-point rung is missing (or its side is
+incomplete), keep the existing `push_capable_no_prob` flag and leave `push_prob`
+empty — never fabricate the number. This makes the feature purely additive: it
+only fills a value where the market already provides enough structure.
 
-**Tests.** `tests/test_game_totals.py` already exists — extend it: an integer
-line with bracketing half-point rungs yields a push prob; without them it keeps
-`push_capable_no_prob`.
+**Wiring.** Replace the current unconditional block at `game_totals.py:340-345`
+(which always blanks `push_prob` and stamps `push_capable_no_prob` on integer
+lines) with the half-point derivation, falling back to today's behavior. When a
+push prob is computed, gate whether it should also unlock `actionable` — an
+integer line with a known push mass is no longer a hard EV dead-end, but confirm
+the EV math accounts for the push before flipping `actionable` (keep it
+conservative; a follow-up can revisit `actionable` once push-aware EV is
+reviewed).
+
+- **[MODIFY]** `outlier_scrapers/game_totals.py` — add a `derive_push_prob(ladder_p_by_side, line)`
+  helper and call it from the integer-line branch (`game_totals.py:340-345`).
+
+**Rejected alternative (E2, modeling).** A Poisson (MLB runs) / Normal-approx
+(WNBA points) scoring distribution was considered and rejected: it is a new
+modeling capability with its own calibration/validation/ownership and breaks the
+deterministic-pack guarantee. Not to be implemented inside `game_totals.py`.
+
+**Tests.** `tests/test_game_totals.py` already exists — extend it:
+- integer line **with** both bracketing half-point rungs → non-empty `push_prob`
+  equal to the half-point cumulative gap; `push_capable_no_prob` cleared.
+- integer line **missing** a bracketing rung → `push_prob` stays empty and
+  `push_capable_no_prob` is retained (fallback path).
+- half-point line → unchanged (no push branch taken).
 
 ---
 
@@ -182,7 +211,7 @@ line with bracketing half-point rungs yields a push prob; without them it keeps
 2. **Fix B** — 403 investigation (read status reports first; may need no code).
 3. **Fix C** — WNBA context in pack.py.
 4. **Fix D** — prompt taxonomy.
-5. **Fix E** — separate decision (E1 or defer).
+5. **Fix E** — deterministic half-point push-prob derivation (E1, confirmed).
 
 ## Branch & review discipline
 
@@ -205,9 +234,9 @@ Per project rules this is product code, so: one **feature branch**, PR to
 - Confirm HTML output introduces no player/injury/pitcher absent from the pack
   (Fix D).
 
-## User review required
+## Status
 
-> [!IMPORTANT]
-> Fixes A–D are code-accurate and safe to implement on a feature branch.
-> **Fix E requires a decision (E1 deterministic vs E2 modeling, or defer)**
-> before any edit to `game_totals.py`. Confirm the scope before I start.
+> [!NOTE]
+> All five fixes (A–E) are scoped and code-accurate. Fix E is confirmed as the
+> deterministic E1 approach (half-point derivation; no scoring model). Ready to
+> implement on the `docs/betting-reports-fix-plan` feature branch.
