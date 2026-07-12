@@ -630,6 +630,20 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
 
 
+def _spread_sign_conflict(home_line: Any, away_line: Any) -> bool:
+    """True when a two-sided SPREAD market's HOME/AWAY lines aren't mirror-image.
+
+    A correctly-priced spread/run-line/puck-line always has HOME == -AWAY (e.g.
+    -1.5 / +1.5). If a feed ever ships both sides with the same sign or mismatched
+    magnitude, the sign is unrecoverable from either row alone — flag it instead
+    of letting a corrupted line reach the desk looking legitimate.
+    """
+    home_f, away_f = _to_float(home_line), _to_float(away_line)
+    if home_f is None or away_f is None:
+        return False
+    return abs(home_f + away_f) > 1e-9
+
+
 def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     from .normalizer import game_sides
     props = idx.props_by_market.get(market_id, [])
@@ -701,6 +715,10 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         "fair": fair,
     }
     _route_and_rank(card)
+    if proposition.strip().upper() == "SPREAD" and _spread_sign_conflict(
+        main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
+    ):
+        card.setdefault("flags", []).append("spread_sign_conflict")
     return card
 
 

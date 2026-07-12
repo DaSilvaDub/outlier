@@ -253,6 +253,27 @@ def _fmt_line(line: Any) -> str:
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
+# Propositions where the line is a signed margin (point spread / run line / puck
+# line) rather than a magnitude. A positive value here means the side is getting
+# a cushion, not that it's the favorite — the same "1.5" that's unambiguous on a
+# TOTAL is easy to mis-sign on a SPREAD, and different readers guess differently.
+SIGNED_MARGIN_PROPOSITIONS = {"SPREAD"}
+
+def _fmt_signed_line(line: Any, proposition: Any) -> str:
+    """``_fmt_line`` plus an explicit leading '+' for positive signed-margin lines.
+
+    Negative lines already render with '-' via ``_fmt_line``; only the positive
+    case is ambiguous (a bare "1.5" reads as a magnitude, not "+1.5"), so that's
+    the only case rewritten. Non-spread markets (totals, props) are untouched.
+    """
+    fl = _fmt_line(line)
+    if not fl or str(proposition or "").strip().upper() not in SIGNED_MARGIN_PROPOSITIONS:
+        return fl
+    val = _to_float(line)
+    if val is not None and val > 0 and not fl.startswith(("+", "-")):
+        return f"+{fl}"
+    return fl
+
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -327,7 +348,7 @@ def market_validation_flags(
                 flags.append("implausible_line")
     return flags
 
-def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
+def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: Any = None) -> str:
     name_s = str(name or "").strip()
     label_s = str(label or "").strip()
     side_s = str(side or "").strip()
@@ -346,7 +367,7 @@ def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
     if side_s:
         if side_s.lower() not in (core or "").lower():
             parts.append(side_s)
-    fl = _fmt_line(line)
+    fl = _fmt_signed_line(line, proposition)
     if fl:
         parts.append(fl)
     return " ".join(parts) if parts else (side_s if side_s else "")
@@ -377,6 +398,7 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
+    proposition = card.get("proposition") or ref.get("proposition")
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
@@ -388,7 +410,7 @@ def build_row(
     row["player_id"] = card.get("player_id") or ref.get("player_id")
     name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
     label = ref.get("market_label") or card.get("market_label") or market_token
-    row["selection"] = build_selection(name, label, headline_side, line)
+    row["selection"] = build_selection(name, label, headline_side, line, proposition)
     # Human-readable context the normalizer already resolved. Surfacing it stops
     # the reasoning desk from guessing teams/markets off the hash event_id or a
     # terse code (e.g. LAS vs LVA, PT = Pitches Thrown).
@@ -409,6 +431,10 @@ def build_row(
         card.get("market_label"), ref.get("market_label"), card.get("market_raw"), market_token
     )
     row["line"] = line
+    if str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+        signed_line = _fmt_signed_line(line, proposition)
+        if signed_line:
+            row["line"] = signed_line
     row["research_leverage"] = get_research_leverage(market_token, scope, sport)
     row["injury_flags"] = injuries.get(str(event_id), "") if event_id else ""
     row["source_timestamps"] = format_source_timestamps(source_ts)
@@ -481,8 +507,12 @@ def build_row(
         priced = _priced_line_from_ev(ev_records, ev_summary.get("best_record_id"))
         if priced is not None and _to_float(priced) != _to_float(line):
             row["priced_line"] = priced
+            priced_display = _fmt_line(priced)
+            if str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+                row["priced_line"] = _fmt_signed_line(priced, proposition)
+                priced_display = row["priced_line"]
             dq_flags = [f for f in dq_flags if f != "ev_line_fallback"]
-            dq_flags.append(f"ev_line_fallback:priced_at={_fmt_line(priced)}")
+            dq_flags.append(f"ev_line_fallback:priced_at={priced_display}")
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
@@ -706,8 +736,15 @@ ROLE_BLOCK = [
     " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
     "- data_quality_flags may also carry cross_sport_market:<LEAGUE> (the market belongs to"
-    " another sport — treat the row as a data artifact and stand it down) or implausible_line /"
-    " non_numeric_line (the line is likely corrupt — verify before quoting).",
+    " another sport — treat the row as a data artifact and stand it down), implausible_line /"
+    " non_numeric_line (the line is likely corrupt — verify before quoting), or"
+    " spread_sign_conflict (the market's two sides did not price as mirror-image lines —"
+    " treat the line as corrupt and stand the market down).",
+    "- Spread / run line / puck line rows already carry an explicit sign (e.g. '+1.5' or"
+    " '-1.5' in the line and selection) — never re-derive or flip it from model_prob or"
+    " the favorite/underdog assumption. model_prob on these rows is the probability that"
+    " the STATED signed side covers, not the probability of winning the game; a heavily"
+    " favored team can correctly show a positive (cushion) line if that is the side priced.",
     "- Variance taxonomy to anchor evaluation:",
     "   * High variance: 3PM, hits allowed, total bases, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",

@@ -955,6 +955,65 @@ def test_market_label_disambiguates_terse_code():
     assert row["home_away"] == "AWAY"  # ATL is the away token in 'ATL @ STL'
 
 
+# --- Signed spread/run-line rendering (fix: models disagreed on -1.5 vs +1.5) --
+
+def _spread_card(side, line, **extra):
+    card = {
+        "headline_side": side,
+        "card_id": "rl1",
+        "market_id": "rl1",
+        "board": "A",
+        "market_type": "GAMELINE",
+        "market": "SPREAD",
+        "proposition": "SPREAD",
+        "market_label": "Run Line",
+        "team": "ATL",
+        "matchup": "ATL @ STL",
+        "event_id": "evRL",
+        "flags": [],
+        "sides": {
+            side: {
+                "outcome_id": f"o{side}",
+                "line": line,
+                "best_odds": -170,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 1.6,
+                    "best_ev_pct": 0.046,
+                    "kelly_pct": 0.02,
+                },
+            }
+        },
+    }
+    card.update(extra)
+    return card
+
+
+def test_positive_spread_line_renders_with_explicit_sign():
+    # This is the exact ATL @ STL card from the 2026-07-12 report divergence:
+    # AWAY side, line=1.5, priced at -170 (the AWAY side is favored to cover the
+    # generous +1.5 cushion). Without an explicit '+' this reads as an ambiguous
+    # bare magnitude, which is why five reports rendered it as -1.5 and +1.5.
+    row = make_row(_spread_card("AWAY", 1.5), [])
+    assert row["line"] == "+1.5"
+    assert row["selection"] == "ATL @ STL Run Line AWAY +1.5"
+
+
+def test_negative_spread_line_keeps_explicit_sign():
+    row = make_row(_spread_card("HOME", -1.5), [])
+    assert row["line"] == "-1.5"
+    assert row["selection"] == "ATL @ STL Run Line HOME -1.5"
+
+
+def test_non_spread_line_is_not_signed():
+    # A positive TOTAL/prop line must never gain a '+' — only spread/run-line/
+    # puck-line markets carry a signed margin.
+    card = _ctx_card("ATL", "STL", "ATL @ STL", market="TOTAL", market_raw="Total")
+    row = make_row(card, [], sport="MLB")
+    assert row["line"] == 6.5  # unchanged float, no sign added
+    assert "+" not in row["selection"]
+
+
 def test_alt_line_fallback_surfaces_priced_line():
     # Shown line 9.0 but EV/price derived at 8.5 -> priced_line + annotated flag.
     card = {
@@ -989,6 +1048,27 @@ def test_alt_line_fallback_surfaces_priced_line():
     assert row["line"] == 9.0  # display line unchanged
     assert str(row["priced_line"]) == "8.5"
     assert "ev_line_fallback:priced_at=8.5" in row["data_quality_flags"]
+
+
+def test_alt_line_fallback_priced_line_is_signed_for_spread():
+    # Same alt-line-fallback path as above, but on a SPREAD market: the
+    # priced_line/ev_line_fallback annotation must carry an explicit sign too,
+    # or a positive fallback line reintroduces the exact ambiguity this fix closes.
+    card = _spread_card(
+        "AWAY",
+        1.5,
+        flags=["ev_line_fallback"],
+    )
+    card["sides"]["AWAY"]["ev"]["is_alt_line_fallback"] = True
+    card["sides"]["AWAY"]["ev"]["best_record_id"] = "recAlt"
+    ev = [{
+        "market_id": "rl1", "outcome_id": "oAWAY", "side": "AWAY",
+        "current_line": 2.5, "record_id": "recAlt", "book": "FD", "book_odds": -170,
+    }]
+    row = make_row(card, ev)
+    assert row["line"] == "+1.5"
+    assert row["priced_line"] == "+2.5"
+    assert "ev_line_fallback:priced_at=+2.5" in row["data_quality_flags"]
 
 
 def test_dossier_and_briefing_show_matchup_not_bare_hash():
