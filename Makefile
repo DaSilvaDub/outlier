@@ -22,4 +22,5 @@ endif
 
 typecheck:
 	$(PYTHON) -m mypy outlier_scrapers
+	pyright outlier_scrapers
 

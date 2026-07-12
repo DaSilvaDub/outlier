@@ -25,7 +25,6 @@ python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_configs = true
 check_untyped_defs = true
-disable_error_code = ["union-attr"]
 exclude = '(normalizer|api|line_movement|refresh|cards)\.py'
 
 [[tool.mypy.overrides]]
@@ -58,6 +57,6 @@ exclude = [
     "outlier_scrapers/run_desk.py"
 ]
 pythonVersion = "3.11"
-reportMissingImports = "none"
+reportMissingImports = "warning"
 
 

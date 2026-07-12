@@ -380,7 +380,7 @@ def build_row(
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
-    row = {k: "" for k in CANDIDATES_HEADER}
+    row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
@@ -562,8 +562,11 @@ def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    dated = {_local_date(r.get("_event_starts_at")) for r in rows}
-    dated.discard(None)
+    dated: set[str] = {
+        d
+        for r in rows
+        if (d := _local_date(r.get("_event_starts_at"))) is not None
+    }
     if not dated:
         return rows, (requested or today)
     if requested and requested in dated:
