@@ -63,7 +63,9 @@ def normalize_book_label(value: Any) -> str:
         "HARD_ROCK": "Hard Rock",
         "HARDROCK": "Hard Rock",
         "DRAFTKINGS": "DraftKings",
+        "DK": "DraftKings",
         "FANDUEL": "FanDuel",
+        "FD": "FanDuel",
         "BETMGM": "BetMGM",
         "CAESARS": "Caesars",
         "ESPN_BET": "ESPN Bet",
@@ -593,6 +595,7 @@ def normalize_games(
                 row = {
                     "league": config.league_id,
                     "event_id": event_id or None,
+                    "event_starts_at": event_info.get("starts_at"),
                     "market_id": market_id or None,
                     "outcome_id": outcome_id or None,
                     "proposition": proposition or None,

@@ -72,6 +72,27 @@ def test_validate_candidates_rejects_bad_header(tmp_path):
         runner_common.validate_candidates(tmp_path)
 
 
+def test_validate_candidates_allows_header_only_for_actionable_totals(tmp_path):
+    with open(tmp_path / "candidates.csv", "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerow(pack.CANDIDATES_HEADER)
+
+    with pytest.raises(runner_common.RunnerError):
+        runner_common.validate_candidates(tmp_path)
+
+    raw, digest = runner_common.validate_candidates(tmp_path, allow_empty=True)
+    assert digest == hashlib.sha256(raw).hexdigest()
+    assert raw.decode("utf-8-sig").splitlines() == [",".join(pack.CANDIDATES_HEADER)]
+
+
+def test_has_actionable_game_totals():
+    assert runner_common.has_actionable_game_totals(
+        b"totals_id,actionable\na,false\nb,TRUE\n"
+    )
+    assert not runner_common.has_actionable_game_totals(
+        b"totals_id,actionable\na,false\n"
+    )
+
+
 def test_atomic_write_writes_front_matter_then_body_and_leaves_no_tmp(tmp_path):
     runner_common.atomic_write(tmp_path, "out.md", "---\nk: v\n---\n\n", "BODY")
     out = tmp_path / "out.md"

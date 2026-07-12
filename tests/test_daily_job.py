@@ -220,3 +220,35 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     assert not desk_called
     assert manifest["pack_rows"] == 0
     assert manifest["overall"] == "ok"
+
+
+def test_daily_job_runs_desk_for_actionable_totals_only(tmp_path, monkeypatch):
+    _require_daily_job()
+    fake_pack = tmp_path / "packs" / "2026-07-07"
+    fake_pack.mkdir(parents=True)
+    (fake_pack / "candidates.csv").write_text("market_id,line\n", encoding="utf-8")
+    (fake_pack / "game_totals.csv").write_text(
+        "totals_id,actionable\nt1,false\nt2,true\n", encoding="utf-8"
+    )
+    (fake_pack / "briefing.md").write_text("Totals only", encoding="utf-8")
+
+    monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
+    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    manifest = {}
+    monkeypatch.setattr(
+        daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data)
+    )
+    calls = []
+    monkeypatch.setattr(
+        daily_job.run_desk,
+        "orchestrate_desk",
+        lambda *_args, **kwargs: calls.append(kwargs) or 0,
+    )
+
+    assert daily_job.main(["--analysis-profile", "full"]) == 0
+    assert calls and calls[0]["steps"] == ["A", "B", "C", "D", "E"]
+    assert manifest["pack_rows"] == 1

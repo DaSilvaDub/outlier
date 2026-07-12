@@ -157,9 +157,19 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
         return None
     try:
         with candidates.open(newline="", encoding="utf-8") as handle:
-            return max(0, sum(1 for _row in csv.reader(handle)) - 1)
-    except OSError as exc:
-        logger.error("Could not count pack candidates in %s: %s", candidates, exc)
+            candidate_count = max(0, sum(1 for _row in csv.reader(handle)) - 1)
+        totals_count = 0
+        totals = pack_dir / "game_totals.csv"
+        if totals.exists():
+            with totals.open(newline="", encoding="utf-8-sig") as handle:
+                totals_count = sum(
+                    1
+                    for row in csv.DictReader(handle)
+                    if str(row.get("actionable") or "").strip().lower() == "true"
+                )
+        return candidate_count + totals_count
+    except (OSError, csv.Error) as exc:
+        logger.error("Could not count pack rows in %s: %s", pack_dir, exc)
         return None
 
 def _acquire_pack_lock(pack_dir: Path) -> Path | None:

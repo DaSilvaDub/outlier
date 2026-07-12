@@ -26,10 +26,12 @@ def _norm_record(
     market_type: str = "GAMELINE",
     proposition: str = "TOTAL",
     event_id: str = "E1",
+    event_starts_at: str | None = "2099-12-31T00:00:00Z",
 ) -> dict:
     return {
         "market_id": market_id,
         "event_id": event_id,
+        "event_starts_at": event_starts_at,
         "market_type": market_type,
         "proposition": proposition,
         "market": proposition,
@@ -55,6 +57,29 @@ def test_aggregate_line_requires_two_books():
     p_over, count, flags = aggregate_line_p_over(over, under)
     assert count == 1
     assert "SINGLE_BOOK" in flags
+
+
+def test_aggregate_line_deduplicates_operator_aliases():
+    over = {"BetRivers": -110, "Unibet": -108, "DraftKings": -105}
+    under = {"BetRivers": -110, "Unibet": -112, "DraftKings": -115}
+    p_over, count, flags = aggregate_line_p_over(over, under)
+    assert p_over is not None
+    assert count == 2
+    assert flags == []
+
+
+@pytest.mark.parametrize(
+    ("over_price", "under_price"),
+    [(-200, -200), (100, 100)],
+)
+def test_aggregate_line_rejects_invalid_overround(over_price, under_price):
+    p_over, count, flags = aggregate_line_p_over(
+        {"DraftKings": over_price, "FanDuel": over_price},
+        {"DraftKings": under_price, "FanDuel": under_price},
+    )
+    assert p_over is None
+    assert count == 0
+    assert "NO_VALID_CONSENSUS" in flags
 
 
 def test_aggregate_line_missing_side():
@@ -105,7 +130,12 @@ def test_build_game_totals_actionable_at_three_pct_edge():
             "_event_starts_at": "2099-07-07T23:10:00+00:00",
         }
     ]
-    rows = build_game_totals(candidates, games_norm, sport="MLB")
+    rows = build_game_totals(
+        candidates,
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )
     assert len(rows) == 1
     row = rows[0]
     assert row["fair_total"] != ""
@@ -193,11 +223,12 @@ def test_build_game_totals_integer_line_with_push_prob():
 def test_build_game_totals_live_event_flag():
     games_norm = {
         "records": [
-            _norm_record("m4", 8.5, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -108}]),
-            _norm_record("m4", 8.5, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -112}]),
-            _norm_record("m4", 9.0, "OVER", [{"book": "DK", "odds": 100}, {"book": "FD", "odds": 102}]),
-            _norm_record("m4", 9.0, "UNDER", [{"book": "DK", "odds": -120}, {"book": "FD", "odds": -122}]),
+            _norm_record("m4", 8.5, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -108}], event_starts_at="2020-01-01T00:00:00Z"),
+            _norm_record("m4", 8.5, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -112}], event_starts_at="2020-01-01T00:00:00Z"),
+            _norm_record("m4", 9.0, "OVER", [{"book": "DK", "odds": 100}, {"book": "FD", "odds": 102}], event_starts_at="2020-01-01T00:00:00Z"),
+            _norm_record("m4", 9.0, "UNDER", [{"book": "DK", "odds": -120}, {"book": "FD", "odds": -122}], event_starts_at="2020-01-01T00:00:00Z"),
         ],
+        "generated_at": "2025-01-01T00:00:00Z",
     }
     past = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
     candidates = [
@@ -213,8 +244,40 @@ def test_build_game_totals_live_event_flag():
     rows = build_game_totals(
         candidates, games_norm, sport="MLB", now=datetime(2025, 1, 1, tzinfo=timezone.utc)
     )
-    assert "LIVE_EVENT" in rows[0]["quality_flags"]
+    assert "LOCKED_OR_UNVERIFIED_EVENT" in rows[0]["quality_flags"]
     assert rows[0]["actionable"] == "false"
+
+
+def test_build_game_totals_missing_start_fails_closed_without_candidate():
+    now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
+    games_norm = {
+        "generated_at": now.isoformat(),
+        "records": [
+            _norm_record("m6", 8.5, "OVER", [{"book": "DK", "odds": -125}, {"book": "FD", "odds": -122}], event_starts_at=None),
+            _norm_record("m6", 8.5, "UNDER", [{"book": "DK", "odds": 105}, {"book": "FD", "odds": 102}], event_starts_at=None),
+            _norm_record("m6", 9.0, "OVER", [{"book": "DK", "odds": 110}, {"book": "FD", "odds": 108}], event_starts_at=None),
+            _norm_record("m6", 9.0, "UNDER", [{"book": "DK", "odds": -130}, {"book": "FD", "odds": -128}], event_starts_at=None),
+        ],
+    }
+    row = build_game_totals([], games_norm, sport="MLB", now=now)[0]
+    assert "LOCKED_OR_UNVERIFIED_EVENT" in row["quality_flags"]
+    assert row["actionable"] == "false"
+
+
+def test_build_game_totals_stale_source_fails_closed():
+    now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
+    games_norm = {
+        "generated_at": "2026-07-07T05:00:00Z",
+        "records": [
+            _norm_record("m7", 8.5, "OVER", [{"book": "DK", "odds": -125}, {"book": "FD", "odds": -122}]),
+            _norm_record("m7", 8.5, "UNDER", [{"book": "DK", "odds": 105}, {"book": "FD", "odds": 102}]),
+            _norm_record("m7", 9.0, "OVER", [{"book": "DK", "odds": 110}, {"book": "FD", "odds": 108}]),
+            _norm_record("m7", 9.0, "UNDER", [{"book": "DK", "odds": -130}, {"book": "FD", "odds": -128}]),
+        ],
+    }
+    row = build_game_totals([], games_norm, sport="MLB", now=now)[0]
+    assert "STALE_DATA" in row["quality_flags"]
+    assert row["actionable"] == "false"
 
 
 def test_projected_over_prob_matches_headline_line():

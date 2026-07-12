@@ -125,8 +125,10 @@ def run_c_research(
 
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
         briefing_sha256 = rc.sha256_text(briefing_text)
-        candidates_bytes, candidates_sha256 = rc.validate_candidates(pack_dir)
         totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        candidates_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+        )
         candidates = _candidate_index(candidates_bytes)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
