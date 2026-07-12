@@ -20,9 +20,11 @@ Paste the *entire* output. Proceed only if you see:
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
+**HOUSE RULE (all ents):** Never run reasoning models / the AI Research Desk (A–E, `run_desk`, `daily_job --run-reasoning`, live OpenAI/Anthropic/Gemini desk calls, or provider-hitting reasoning tests) unless the user **explicitly asks this turn**. Default offline. If unsure, ask first. Full text: `AGENTS.md` → "Never run reasoning models unless explicitly asked".
+
 On start (after bootstrap): read `.agent-log/SUMMARY.md`, the latest `.agent-log/` entries, and
 `git log --oneline -15`.
 On end: commit with an `Agent: grok` trailer, write a `.agent-log/` session
 note, and update `.agent-log/SUMMARY.md`.
 
-See SYNC.md for the full contract and the exact text block that must live in *every* harness's global instructions (Claude, Codex, Gemini, future ents) so the "invisible commit" problem never recurs no matter the ent.
+See SYNC.md for the full contract and the exact text block that must live in *every* harness's global instructions (Claude, Codex, Gemini, future ents) so the "invisible commit" problem never recurs no matter the ent. That block now also includes the permanent **no reasoning unless asked** rule.

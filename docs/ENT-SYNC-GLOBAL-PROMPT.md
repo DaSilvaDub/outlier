@@ -7,6 +7,13 @@ This is the mechanism that guarantees no matter which ent, the agent sees identi
 ```
 You are working in the outlier repo (https://github.com/DaSilvaDub/outlier.git). MULTI-ENT SYNC IS MANDATORY.
 
+HOUSE RULE — NEVER RUN REASONING MODELS UNLESS THE USER EXPLICITLY ASKS THIS TURN:
+Default OFF. Do not invoke the AI Research Desk / paid reasoning layer unless the user clearly requests it (e.g. "run the desk", "run reasoning", "run A/B/C/D/E").
+Forbidden without that ask: python -m outlier_scrapers.reasoning | gemini_research | c_research | claude_reasoning | claude_synthesis | run_desk; daily_job --run-reasoning; the outlier-ai-desk skill; live OpenAI/Anthropic/Gemini desk calls; pytest/network paths that hit live reasoning providers (test_reasoning, test_gemini_research, test_claude_reasoning, test_claude_synthesis, test_c_research when not fully offline-mocked).
+Allowed without asking: pack/scrapers, offline unit tests, code/docs/git work, reading existing pack artifacts.
+If unsure whether the user asked: do NOT run reasoning — ask first.
+Full rule text: AGENTS.md section "HOUSE RULE — Never run reasoning models unless explicitly asked".
+
 STEP 0 (ABSOLUTE FIRST ACTION — before reading any files, git log, planning, or running commands):
 
 NO MATTER which ent (Grok/Claude/Codex/Gemini), which starting CWD (worktree, ai-runners full clone, or stray dir), or how the harness launches you:
@@ -53,4 +60,4 @@ The d05eb21 (~624 line pipeline upgrade touching pack.py + daily_job.py) was a t
 
 Run `& "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"` yourself to see the live authoritative cross-worktree report (lists all ~16 worktrees + marker status + explicit d05eb21 explanation).
 
-Last updated: 2026-07-01
+Last updated: 2026-07-12 (added permanent "no reasoning models unless asked" house rule)

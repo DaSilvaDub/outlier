@@ -11,13 +11,25 @@ description: >-
 
 # Outlier AI Research Desk Orchestrator
 
+## HARD GATE — user must explicitly ask (AGENTS.md house rule)
+
+**Do not load or execute this skill unless the user explicitly requested a desk/reasoning run this turn**
+(e.g. "run the desk", "run reasoning", "run A/B/C/D/E", "finish the AI research desk for today").
+
+If you reached this skill from an automatic trigger, a vague "continue", a code-fix session, or
+"check the pack" without a clear desk request: **stop**, tell the user the desk is gated, and wait.
+
+This skill costs paid OpenAI / Gemini / Anthropic calls and can hang on network. Default is OFF.
+See `AGENTS.md` → "HOUSE RULE — Never run reasoning models unless explicitly asked".
+
 ## Purpose
 Complete the automated + hybrid reasoning layer on top of the scrape/pack pipeline.
 `daily_job` produces the data pack. This skill drives the multi-model "desk" (Prompts A/B/C/D/E), handles paid API steps idempotently, reports structured status, and **always** yields a usable betting report even if one or more external models are unavailable.
 
-Use this instead of manually running separate `gemini_research`, `claude_reasoning`, `claude_synthesis`, and `reasoning` commands. It is the canonical way to finish a slate after packing.
+Use this instead of manually running separate `gemini_research`, `claude_reasoning`, `claude_synthesis`, and `reasoning` commands. It is the canonical way to finish a slate after packing — **only when the user asked**.
 
 ## Guardrails (non-negotiable)
+- **Explicit-ask only** — never auto-run after pack build, PR merge, or test work.
 - Operate only inside this `outlier` repo. Never touch `nba-props-pipeline`.
 - Never log, print, or persist API keys, full Outlier payloads, cookies, or raw book odds.
 - Every recommendation in a report **must** quote exact `market_id`, `selection`, `line`, and `price` from the pack's `candidates.csv`.
