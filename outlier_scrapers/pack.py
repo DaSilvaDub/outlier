@@ -24,6 +24,7 @@ from outlier_scrapers.registry import (
     team_display_name,
 )
 from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.schema import ValidationError, validate_candidate_row
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +381,7 @@ def build_row(
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
-    row = {k: "" for k in CANDIDATES_HEADER}
+    row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
@@ -562,8 +563,7 @@ def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    dated = {_local_date(r.get("_event_starts_at")) for r in rows}
-    dated.discard(None)
+    dated = {d for r in rows if (d := _local_date(r.get("_event_starts_at"))) is not None}
     if not dated:
         return rows, (requested or today)
     if requested and requested in dated:
@@ -899,6 +899,21 @@ def write_pack(
     if dossiers_dir.exists():
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
+    # Validate all candidate rows against schema constraints
+    for idx, row in enumerate(rows):
+        row_errors = validate_candidate_row(row, CANDIDATES_HEADER)
+        if row_errors:
+            # If a critical field is missing or empty, raise ValidationError
+            critical_mismatch = any(
+                "Critical field" in err or "must be a dictionary" in err
+                for err in row_errors
+            )
+            if critical_mismatch:
+                raise ValidationError(f"Critical schema compatibility violation at row {idx}: {'; '.join(row_errors)}")
+            # Log minor issues as warnings
+            for err in row_errors:
+                logger.warning("Candidate row schema warning at index %d: %s", idx, err)
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()

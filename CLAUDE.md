@@ -25,3 +25,10 @@ Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and no
 All project rules, scope constraints, and technical gotchas live in `AGENTS.md` + SYNC.md.
 
 **Global harness note**: The system prompt / pre-instructions for *every* harness (Claude, Codex, Gemini, Grok, ...) *must* contain the exact block from docs/ENT-SYNC-GLOBAL-PROMPT.md (report-sync.ps1 + "no reasoning unless asked" + paste-full-output rules). This is what prevents d05eb21-style "the commit/changes don't exist in my tree" and accidental paid desk runs no matter the ent.
+
+## Common Commands
+- Run tests: `pytest`
+- Run ruff linter: `python -m ruff check`
+- Run MyPy type checking: `python -m mypy outlier_scrapers` or `make typecheck`
+- Run Pyright type checking: `pyright outlier_scrapers`
+

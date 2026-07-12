@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -12,6 +13,9 @@ from datetime import datetime
 from typing import Any
 
 from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
+from .schema import ValidationError, validate_raw_line_movement
+
+logger = logging.getLogger(__name__)
 from .normalizer import (
     game_sides,
     _to_float,
@@ -1143,6 +1147,12 @@ def build_line_movement_payload(
             rows.extend(market_rows)
         else:
             markets_without_records.append(market_id)
+
+    # Validate the generated EV records schema compatibility
+    lm_errors = validate_raw_line_movement({"ev_records": ev_rows})
+    if lm_errors:
+        for err in lm_errors:
+            logger.warning("Line movement schema warning: %s", err)
 
     return {
         "generated_at": datetime.now().astimezone().isoformat(),
