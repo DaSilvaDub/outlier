@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from outlier_scrapers import pack, run_desk
+from outlier_scrapers import pack, paths as pack_paths, run_desk
 
 
 @pytest.fixture
@@ -38,6 +38,166 @@ def _write_output(pack_dir, name, request_hash):
     (pack_dir / name).write_text(
         f"---\nrequest_sha256: {request_hash}\n---\nbody\n", encoding="utf-8"
     )
+
+
+def _seed_league_data(root, league: str) -> None:
+    """Minimal multi-stream league tree for offline pack builds (self-contained)."""
+    low = league.lower()
+    (root / "cards").mkdir(parents=True, exist_ok=True)
+    (root / "normalized").mkdir(parents=True, exist_ok=True)
+    player_cards = {
+        "generated_at": "PC",
+        "board_a": [],
+        "board_b": [
+            {
+                "card_id": "p1",
+                "event_id": "EP",
+                "market": "PTS",
+                "matchup": "A @ B",
+                "board": "B",
+                "rank_value": 1.0,
+                "headline_side": "OVER",
+                "sides": {
+                    "OVER": {
+                        "outcome_id": "po",
+                        "line": 5.5,
+                        "best_odds": -110,
+                        "ev": None,
+                    }
+                },
+            }
+        ],
+    }
+    game_cards = {
+        "generated_at": "GC",
+        "board_a": [
+            {
+                "card_id": "gm1",
+                "board": "A",
+                "rank_value": 9.0,
+                "headline_side": "OVER",
+                "sides": {
+                    "OVER": {
+                        "outcome_id": "go",
+                        "line": 8.5,
+                        "best_odds": None,
+                        "ev": {
+                            "is_alt_line_fallback": False,
+                            "devig_decimal": 2.0,
+                            "best_ev_pct": 0.05,
+                            "kelly_pct": 0.02,
+                        },
+                    }
+                },
+            }
+        ],
+        "board_b": [],
+        "context": {
+            "events": {
+                "EG": {
+                    "home_team_id": "T1",
+                    "away_team_id": "T2",
+                    "starts_at": "2099-07-07T23:10:00+00:00",
+                }
+            },
+            "teams": {"T1": {"injuries": [{"player": "Hurt Guy"}]}},
+        },
+    }
+    games_lm = {
+        "generated_at": "GLM",
+        "ev_records": [
+            {
+                "market_id": "gm1",
+                "outcome_id": "go",
+                "event_id": "EG",
+                "market": "TOTAL",
+                "market_type": "GAMELINE",
+                "book": "FD",
+                "book_odds": 110,
+                "book_decimal_odds": 2.1,
+                "calculated_ev_pct": 0.05,
+            }
+        ],
+    }
+    (root / "cards" / f"{low}_cards_latest.json").write_text(
+        json.dumps(player_cards), encoding="utf-8"
+    )
+    (root / "cards" / f"{low}_games_cards_latest.json").write_text(
+        json.dumps(game_cards), encoding="utf-8"
+    )
+    (root / "normalized" / f"{low}_line_movement_latest.json").write_text(
+        json.dumps({"generated_at": "LM", "ev_records": []}), encoding="utf-8"
+    )
+    (root / "normalized" / f"{low}_games_line_movement_latest.json").write_text(
+        json.dumps(games_lm), encoding="utf-8"
+    )
+    (root / "normalized" / f"{low}_props_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "PN",
+                "records": [
+                    {
+                        "event_id": "EP",
+                        "sport_context": {
+                            "event_starts_at": "2099-07-07T23:10:00+00:00"
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "normalized" / f"{low}_games_latest.json").write_text(
+        json.dumps({"generated_at": "GN", "context": game_cards["context"]}),
+        encoding="utf-8",
+    )
+
+
+def _mock_all_phase_runners(monkeypatch) -> None:
+    def runner_for(phase):
+        def run(pack_dir, **kwargs):
+            _write_output(pack_dir, run_desk.PHASE_OUTPUTS[phase], phase.lower())
+            return 0
+
+        return run
+
+    for phase in run_desk.PHASES:
+        monkeypatch.setitem(run_desk.PHASE_RUNNERS, phase, runner_for(phase))
+
+
+@pytest.fixture
+def mlb_wnba_e2e_pack(monkeypatch, tmp_path):
+    """Build a real MLB+WNBA pack, then run mocked A–E desk orchestration."""
+    monkeypatch.setattr(run_desk.paths, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_desk, "load_environment", lambda: None)
+
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return pack_paths.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    for league in ("MLB", "WNBA"):
+        _seed_league_data(tmp_path / "data" / league, league)
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    rows, target, games_norm = pack.build_pack(["MLB", "WNBA"], None, 15, 10)
+    sports = {r["sport"] for r in rows}
+    assert sports == {"MLB", "WNBA"}, f"pack build missing a league: {sports}"
+
+    pack_dir = tmp_path / "packs" / target
+    pack.write_pack(rows, pack_dir, games_norm_by_league=games_norm)
+
+    for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(key, "test-key")
+    _mock_all_phase_runners(monkeypatch)
+
+    assert run_desk.orchestrate_desk(pack_dir) == 0
+    return pack_dir
 
 
 def test_c_is_wired_into_phase_maps():
@@ -183,3 +343,28 @@ def test_e_is_gated_when_required_inputs_are_missing(desk_pack, monkeypatch):
     status = json.loads((desk_pack / run_desk.STATUS_NAME).read_text(encoding="utf-8"))
     assert status["overall"] == "DATA_ONLY"
     assert status["components"]["E"]["status"] == "gated-missing-input"
+
+
+def test_mlb_wnba_e2e_pipeline(mlb_wnba_e2e_pack):
+    """Combined MLB+WNBA pack through mocked desk A–E ends FULL with both leagues."""
+    pack_dir = mlb_wnba_e2e_pack
+
+    with (pack_dir / "candidates.csv").open(newline="", encoding="utf-8") as handle:
+        sports = {row["sport"] for row in csv.DictReader(handle)}
+    assert sports == {"MLB", "WNBA"}
+
+    assert (pack_dir / "briefing.md").exists()
+    assert (pack_dir / "game_totals.csv").exists()
+    for phase in run_desk.PHASES:
+        assert (pack_dir / run_desk.PHASE_OUTPUTS[phase]).exists()
+
+    status = json.loads((pack_dir / run_desk.STATUS_NAME).read_text(encoding="utf-8"))
+    assert status["overall"] == "FULL"
+    assert set(status["components"]) == set(run_desk.PHASES)
+    assert all(
+        status["components"][phase]["status"] in run_desk.SUCCESS_STATES
+        for phase in run_desk.PHASES
+    )
+    assert status["final_report"] == {"source": "claude_e", "file": "claude_e.md"}
+    assert status["game_totals"]["present"] is True
+    assert status["game_totals"]["file"] == "game_totals.csv"
