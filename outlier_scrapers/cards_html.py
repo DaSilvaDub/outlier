@@ -8,6 +8,7 @@ are never written to status/report logs.
 
 from __future__ import annotations
 
+import html
 import json
 from typing import Any
 
@@ -64,13 +65,14 @@ th{color:var(--muted);font-weight:500}
 _JS = """
 const D=window.__CARDS__;let BOARD='A',Q='',BUCKET='';
 const el=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
-const num=v=>v==null?'-':(typeof v==='number'?(Math.round(v*100)/100):v);
-const odds=v=>v==null?'-':(v>0?'+'+v:''+v);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+const num=v=>v==null?'-':(typeof v==='number'?(Math.round(v*100)/100):esc(v));
+const odds=v=>v==null?'-':(typeof v==='number'?(v>0?'+'+v:''+v):esc(v));
 function flagChip(f){const good=f==='proxy_market_value';
-return `<span class="flag${good?' good':''}">${f.replace(/_/g,' ')}</span>`;}
+return `<span class="flag${good?' good':''}">${esc(String(f).replace(/_/g,' '))}</span>`;}
 function sideBlock(name,sv,hl){
  if(!sv)return'';
- let h=`<div class="side${hl?' hl':''}"><h4>${name} ${num(sv.line)}  <span class="meta">best ${odds(sv.best_odds)}</span></h4>`;
+ let h=`<div class="side${hl?' hl':''}"><h4>${esc(name)} ${num(sv.line)}  <span class="meta">best ${odds(sv.best_odds)}</span></h4>`;
  const hr=sv.hit_rates||{};
  h+=`<div class="kv"><span>L5 <b>${num(hr.l5_pct)}</b></span><span>L10 <b>${num(hr.l10_pct)}</b></span>
  <span>L20 <b>${num(hr.l20_pct)}</b></span><span>H2H <b>${num(hr.h2h_pct)}</b></span>
@@ -82,13 +84,13 @@ function sideBlock(name,sv,hl){
  if(al.length)h+=`<div class="kv"><span>alt lines: ${al.slice(0,8).map(a=>num(a.line)+'@'+odds(a.best_odds)).join('  ')}${al.length>8?' …+'+(al.length-8):''}</span></div>`;
  const ev=sv.ev;
  if(ev){h+=`<table><tr><th>Book</th><th>Odds</th><th>EV%</th><th>Kelly%</th><th>Max</th><th>State</th></tr>`;
- (ev.ev_books||[]).forEach(b=>{h+=`<tr><td>${b.book||'-'}</td><td>${odds(b.book_odds)}</td>
+ (ev.ev_books||[]).forEach(b=>{h+=`<tr><td>${esc(b.book||'-')}</td><td>${odds(b.book_odds)}</td>
  <td class="${b.calculated_ev_pct>=0?'evpos':'evneg'}">${num(b.calculated_ev_pct)}</td>
- <td>${num(b.kelly_pct)}</td><td>${b.max_bet==null?'-':b.max_bet}</td><td>${b.book_state||'-'}</td></tr>`;});
+ <td>${num(b.kelly_pct)}</td><td>${b.max_bet==null?'-':num(b.max_bet)}</td><td>${esc(b.book_state||'-')}</td></tr>`;});
  h+=`</table><div class="kv"><span>devig <b>${odds(ev.devig_odds)}</b></span><span>vig <b>${num(ev.vig_pct)}%</b></span><span>width <b>${num(ev.width_pct)}%</b></span></div>`;}
  const px=sv.proxy_market_edge;
- if(px)h+=`<div class="proxy">proxy_market edge ${num(px.edge_pct)}% @ ${px.book} (${odds(px.odds)}) vs fair ${num(px.fair_prob_pct)}% — market signal, not EV</div>`;
- (sv.insights||[]).forEach(i=>{h+=`<div class="ins">${i.text||''} <span class="meta">[rel ${num(i.relevancy)}, ${i.last_n_record||''}]</span></div>`;});
+ if(px)h+=`<div class="proxy">proxy_market edge ${num(px.edge_pct)}% @ ${esc(px.book)} (${odds(px.odds)}) vs fair ${num(px.fair_prob_pct)}% — market signal, not EV</div>`;
+ (sv.insights||[]).forEach(i=>{h+=`<div class="ins">${esc(i.text||'')} <span class="meta">[rel ${num(i.relevancy)}, ${esc(i.last_n_record||'')}]</span></div>`;});
  return h+'</div>';
 }
 function cardEl(c){
@@ -98,16 +100,16 @@ function cardEl(c){
  const unit=c.rank_metric==='calculated_ev_pct'?'% EV':'sig';
  const head=el('div','head');
  head.innerHTML=`<div class="rank">${RNK}</div>
- <div><div class="who">${c.player||'—'} · ${c.market||c.market_raw||''}
- <span class="badge bk-${(c.bucket||'').replace(/ /g,'-')}">${c.bucket||''}</span></div>
- <div class="meta">${c.matchup||''} · ${c.headline_side||''} ${headLine(c)} · ${c.scope||''}</div>
+ <div><div class="who">${esc(c.player||'—')} · ${esc(c.market||c.market_raw||'')}
+ <span class="badge bk-${esc((c.bucket||'').replace(/ /g,'-'))}">${esc(c.bucket||'')}</span></div>
+ <div class="meta">${esc(c.matchup||'')} · ${esc(c.headline_side||'')} ${headLine(c)} · ${esc(c.scope||'')}</div>
  <div class="flags">${(c.flags||[]).map(flagChip).join('')}</div></div>
  <div class="metric"><b class="${pos?'evpos':(neg?'evneg':'')}">${num(c.rank_value)}</b><div class="meta">${unit}</div></div>`;
  const body=el('div','body');
  const hs=c.headline_side;
  body.innerHTML=sideBlock(hs,(c.sides||{})[hs],true)+
    Object.keys(c.sides||{}).filter(s=>s!==hs).map(s=>sideBlock(s,c.sides[s],false)).join('')+
-   `<div class="note">card_id ${c.card_id} · group ${c.group_key}</div>`;
+   `<div class="note">card_id ${esc(c.card_id)} · group ${esc(c.group_key)}</div>`;
  head.onclick=()=>wrap.classList.toggle('open');
  wrap.appendChild(head);wrap.appendChild(body);return wrap;
 }
@@ -139,15 +141,22 @@ window.addEventListener('DOMContentLoaded',()=>{
 def render_html(payload: dict[str, Any]) -> str:
     cov = payload.get("coverage", {})
     skew = payload.get("snapshot_skew", {})
-    league = payload.get("league", "")
-    gen = payload.get("generated_at", "")
+    league = html.escape(str(payload.get("league", "")))
+    gen = html.escape(str(payload.get("generated_at", "")))
     skew_html = ""
     if skew.get("is_skewed"):
         skew_html = (
-            f'<div class="skew">⚠ snapshot skew {skew.get("skew_hours")}h — '
-            f"{skew.get('reason')}. Re-run the stale feed before trusting joins.</div>"
+            f'<div class="skew">⚠ snapshot skew {html.escape(str(skew.get("skew_hours")))}h — '
+            f"{html.escape(str(skew.get('reason')))}. Re-run the stale feed before trusting joins.</div>"
         )
-    data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    # Embed the payload as a JS data island. Neutralise every tag-opening char so
+    # no scraped string can start/close an element inside <script> (defence in
+    # depth with the client-side esc() applied when values reach innerHTML).
+    data_json = (
+        json.dumps(payload, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
     sub = (
         f"{cov.get('cards_total', 0)} cards · "
         f"Board A {cov.get('board_a_cards', 0)} (EV {cov.get('ev_markets', 0)} markets) · "
