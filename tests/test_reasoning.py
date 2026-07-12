@@ -4,6 +4,7 @@ import pytest
 import openai
 
 from outlier_scrapers import pack, reasoning
+from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 
 
 @pytest.fixture
@@ -46,6 +47,23 @@ def _append_candidate(pack_dir, **overrides):
     row.update(overrides)
     with open(pack_dir / "candidates.csv", "a", newline="", encoding="utf-8") as f:
         csv.DictWriter(f, fieldnames=pack.CANDIDATES_HEADER).writerow(row)
+
+
+def _write_game_totals(pack_dir, *, market_id="gm1", selection="Total O/U OVER 8.5"):
+    with (pack_dir / "game_totals.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GAME_TOTALS_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in GAME_TOTALS_HEADER}
+        row.update(
+            totals_id=f"{market_id}:8.5:OVER",
+            sport="MLB",
+            market_id=market_id,
+            selection=selection,
+            line="8.5",
+            price="-110",
+            actionable="false",
+        )
+        writer.writerow(row)
 
 
 class MockResponse:
@@ -336,9 +354,7 @@ def test_refresh_if_stale_reruns_when_model_mismatches(reasoning_env, mock_opena
 
 def test_reasoning_injects_game_totals_context(reasoning_env, mock_openai):
     _, date_str, pack_dir = reasoning_env
-    (pack_dir / "game_totals.csv").write_text(
-        "sport,market_id,selection\nMLB,gm1,Total O/U OVER 8.5\n", encoding="utf-8"
-    )
+    _write_game_totals(pack_dir)
     assert reasoning.main(["--date", date_str]) == 0
     api = mock_openai[-1].responses
     content = api.kwargs["input"][0]["content"]
@@ -351,7 +367,7 @@ def test_refresh_if_stale_reruns_when_game_totals_mismatches(reasoning_env, mock
     assert reasoning.main(["--date", date_str]) == 0
     assert len(mock_openai) == 1
 
-    (pack_dir / "game_totals.csv").write_text("sport,market_id\nMLB,gm1\n", encoding="utf-8")
+    _write_game_totals(pack_dir)
     exit_code = reasoning.run_reasoning(pack_dir, refresh_if_stale=True)
     assert exit_code == 0
     assert len(mock_openai) == 2
