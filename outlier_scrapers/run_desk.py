@@ -25,6 +25,7 @@ from outlier_scrapers import (
     claude_reasoning,
     claude_synthesis,
     gemini_research,
+    pack,
     paths,
     reasoning,
 )
@@ -182,6 +183,15 @@ def _load_candidates(pack_dir: Path) -> list[dict]:
 def produce_manual_betting_report(pack_dir: Path) -> Path:
     """Minimal manual report per contract. Quotes pack lines exactly. C findings included if present."""
     rows = _load_candidates(pack_dir)
+    # Only quote provably-pregame candidates (same house rule as the model
+    # prompts) so this fallback report can't surface a locked/started event.
+    kept, locked = pack.drop_locked_events(rows, now=datetime.now().astimezone())
+    if locked:
+        logger.warning(
+            "manual report: dropped %d candidate(s) locked or without a start time",
+            len(locked),
+        )
+    rows = kept
     briefing = _read_text_safe(pack_dir / "briefing.md")
     c_text = _read_text_safe(pack_dir / "chatgpt_c.md")
     a_text = _read_text_safe(pack_dir / "chatgpt_a.md")
@@ -215,9 +225,9 @@ def produce_manual_betting_report(pack_dir: Path) -> Path:
         ln = r.get("line", "")
         pr = r.get("price", "")
         lines.append(f"- {mid}: {sel} @ {ln} ({pr})")
-    outp = pack_dir / "manual_betting_report.md"
-    outp.write_text("\n".join(lines), encoding="utf-8")
-    return outp
+    out_name = "manual_betting_report.md"
+    rc.atomic_write(pack_dir, out_name, "", "\n".join(lines))
+    return pack_dir / out_name
 
 
 def _write_status(pack_dir: Path, payload: dict) -> None:

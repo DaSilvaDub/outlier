@@ -129,6 +129,39 @@ def test_manual_report_includes_game_totals(desk_pack):
     assert "gm1" in text
 
 
+def test_manual_report_drops_locked_events_and_writes_atomically(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_desk.paths, "PROJECT_ROOT", tmp_path)
+    pack_dir = tmp_path / "packs" / "2026-06-28"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "briefing.md").write_text("SLATE", encoding="utf-8")
+    with (pack_dir / "candidates.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=pack.CANDIDATES_HEADER)
+        writer.writeheader()
+        for mid, start in (
+            ("PREGAME_MKT", "2099-01-01T00:00:00Z"),
+            ("LOCKED_MKT", "2000-01-01T00:00:00Z"),
+        ):
+            row = {field: "" for field in pack.CANDIDATES_HEADER}
+            row.update(
+                {
+                    "market_id": mid,
+                    "selection": f"sel {mid}",
+                    "line": "8.5",
+                    "price": "-110",
+                    "_event_starts_at": start,
+                }
+            )
+            writer.writerow(row)
+
+    path = run_desk.produce_manual_betting_report(pack_dir)
+    text = path.read_text(encoding="utf-8")
+    # Only the provably-pregame candidate is quoted; the started one is dropped.
+    assert "PREGAME_MKT" in text
+    assert "LOCKED_MKT" not in text
+    # Atomic write leaves no partial temp file behind.
+    assert list(pack_dir.glob("manual_betting_report_tmp_*")) == []
+
+
 def test_local_synthesize_includes_game_totals(desk_pack):
     (desk_pack / "game_totals.csv").write_text("sport,market_id\nMLB,gm1\n", encoding="utf-8")
     text = run_desk.local_synthesize_inputs(desk_pack)
