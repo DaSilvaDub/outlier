@@ -188,21 +188,25 @@ def is_full_game_total(rec: dict[str, Any]) -> bool:
     return period_identity(rec) in FULL_GAME_SCOPES
 
 
-def is_game_total_record(rec: dict[str, Any]) -> bool:
-    """Full-game market totals only (GAMELINE / TOTAL)."""
+def _record_market_and_prop(rec: dict[str, Any]) -> tuple[str, str]:
     mt = str(rec.get("market_type") or "").upper()
     prop = str(rec.get("proposition") or rec.get("market") or "").upper()
+    return mt, prop
+
+
+def is_game_total_record(rec: dict[str, Any]) -> bool:
+    """Full-game market totals only (GAMELINE / TOTAL)."""
     if not is_full_game_total(rec):
         return False
+    mt, prop = _record_market_and_prop(rec)
     return mt == "GAMELINE" and prop == "TOTAL"
 
 
 def is_team_total_record(rec: dict[str, Any]) -> bool:
     """Full-game team totals only (TEAM_PROP / POINTS)."""
-    mt = str(rec.get("market_type") or "").upper()
-    prop = str(rec.get("proposition") or rec.get("market") or "").upper()
     if not is_full_game_total(rec):
         return False
+    mt, prop = _record_market_and_prop(rec)
     return mt == "TEAM_PROP" and prop == "POINTS"
 
 

@@ -138,8 +138,9 @@ def run_c_research(
 
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
         briefing_sha256 = rc.sha256_text(briefing_text)
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
-        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         candidates_bytes, candidates_sha256 = rc.validate_candidates(
             pack_dir,
             allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),

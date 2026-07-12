@@ -64,6 +64,13 @@ def load_team_totals(pack_dir: Path) -> tuple[bytes | None, str]:
     return raw, sha256_bytes(raw)
 
 
+def load_all_totals(pack_dir: Path) -> tuple[bytes | None, str, bytes | None, str]:
+    """Return (game_totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256)."""
+    totals_bytes, game_totals_sha256 = load_game_totals(pack_dir)
+    team_totals_bytes, team_totals_sha256 = load_team_totals(pack_dir)
+    return totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256
+
+
 def _parse_totals_csv(
     totals_bytes: bytes | None,
     *,
@@ -87,7 +94,7 @@ def _parse_totals_csv(
             strict=True,
         )
         if reader.fieldnames != GAME_TOTALS_HEADER:
-            raise RunnerError(f"{label} header does not match GAME_TOTALS_HEADER")
+            raise RunnerError(f"{label} header does not match expected totals schema")
         rows = list(reader)
         if any(None in row or any(value is None for value in row.values()) for row in rows):
             raise RunnerError(f"{label} has malformed rows")
