@@ -196,7 +196,7 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
         browser = pw.chromium.launch(headless=headless)
 
         # Load existing storage state if available
-        context_kwargs = {}
+        context_kwargs: dict[str, Any] = {}
         if target.exists() and target.stat().st_size > 0:
             context_kwargs["storage_state"] = str(target)
 
@@ -229,7 +229,7 @@ def capture_session(*, league: str, timeout_seconds: int, headless: bool) -> int
             # pages and popups), not just the original tab's URL. Login usually
             # finishes via a redirect or popup, so we trust an explicit ENTER and
             # validate by what we actually captured rather than the page URL.
-            storage_state = context.storage_state()
+            storage_state: dict[str, Any] = context.storage_state()  # type: ignore[assignment]
         finally:
             browser.close()
 

@@ -59,6 +59,9 @@ The handoff file must include:
 
 See SYNC.md for full contract, OneDrive notes, "if d05eb21-like problem recurs" steps, and the global prompt template you must paste into every harness's system instructions.
 
+### Tracking coordination files that live under an ignored path
+`.agent-log/` is listed in `.gitignore` (to keep noisy per-session logs out of history), but files this protocol mandates you commit — `.agent-log/HANDOFF.md` and any other required coordination file — still need to make it into git. A plain `git add .agent-log/HANDOFF.md` will be rejected with "paths are ignored". Use `git add -f .agent-log/HANDOFF.md` (or the specific file) to force-stage it.
+
 ## Feature Branch Workflow (MANDATORY for all non-trivial work)
 
 **Never commit new feature or fix work directly to `master`.** Direct-to-master is reserved for infra-only changes (AGENTS.md, CLAUDE.md, .agent-log/).

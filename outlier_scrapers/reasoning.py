@@ -47,6 +47,7 @@ def call_openai_responses_api(
     role_block: list[str],
     raw_csv_bytes: bytes,
     totals_bytes: bytes | None = None,
+    team_totals_bytes: bytes | None = None,
     client=None,
 ) -> str:
     if client is None:
@@ -55,7 +56,9 @@ def call_openai_responses_api(
             raise ReasoningError("OPENAI_API_KEY is not set.")
         client = openai.OpenAI(timeout=600.0, max_retries=10)
 
-    data_block = rc.build_reasoning_data_block(raw_csv_bytes, totals_bytes)
+    data_block = rc.build_reasoning_data_block(
+        raw_csv_bytes, totals_bytes, team_totals_bytes
+    )
     full_prompt = prompt_text + "\n\nData:\n" + data_block
 
     max_custom_retries = 10
@@ -91,6 +94,9 @@ def call_openai_responses_api(
         except Exception as e:
             raise ReasoningError(f"API call failed: type={type(e).__name__}")
 
+    raise ReasoningError("Failed after maximum retries")
+
+
 
 def run_reasoning(
     pack_dir: Path,
@@ -110,9 +116,12 @@ def run_reasoning(
                 logger.info("Output exists. Clean no-op.")
                 return 0
 
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         raw_bytes, candidates_sha256 = rc.validate_candidates(
-            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
 
         prompt_file = paths.PROJECT_ROOT / "prompts" / "A.md"
@@ -128,6 +137,7 @@ def run_reasoning(
             "prompt": prompt_text,
             "candidates_hash": candidates_sha256,
             "game_totals_hash": game_totals_sha256,
+            "team_totals_hash": team_totals_sha256,
         }
         canonical_json = json.dumps(request_data, sort_keys=True).encode("utf-8")
         request_sha256 = hashlib.sha256(canonical_json).hexdigest()
@@ -145,7 +155,12 @@ def run_reasoning(
 
         logger.info("Calling OpenAI Responses API...")
         output_text = call_openai_responses_api(
-            prompt_text, pack.ROLE_BLOCK, raw_bytes, totals_bytes, client=client
+            prompt_text,
+            pack.ROLE_BLOCK,
+            raw_bytes,
+            totals_bytes,
+            team_totals_bytes,
+            client=client,
         )
 
         utc_timestamp = datetime.now(timezone.utc).isoformat()
@@ -157,6 +172,7 @@ def run_reasoning(
             f"timestamp: {utc_timestamp}\n"
             f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
+            f"team_totals_sha256: {team_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"
             "---\n\n"
         )
