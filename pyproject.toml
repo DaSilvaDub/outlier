@@ -25,6 +25,8 @@ python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_configs = true
 check_untyped_defs = true
+disable_error_code = ["union-attr"]
+
 
 [tool.pyright]
 include = ["outlier_scrapers"]

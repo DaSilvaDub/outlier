@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _is_event_in_window(
-    event: dict[str, Any], start_date: datetime.date, days: int, include_final: bool
+    event: dict[str, Any], start_date: date, days: int, include_final: bool
 ) -> bool:
     status = str(event.get("status") or "").lower()
     if not include_final and status not in ("pregame", "scheduled"):
@@ -61,7 +61,7 @@ def export_games_for_league(
     client: OutlierApiClient,
     league: str,
     *,
-    target_date: datetime.date | None = None,
+    target_date: date | None = None,
     days: int = 1,
     include_final: bool = False,
 ) -> dict[str, Any]:
@@ -92,7 +92,7 @@ def export_games_for_league(
         if not event_id:
             continue
 
-        event_payload = {
+        event_payload: dict[str, Any] = {
             "eventId": event_id,
             "markets": [],
             "insights": [],
