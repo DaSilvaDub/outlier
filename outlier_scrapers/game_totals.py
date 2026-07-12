@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
-from outlier_scrapers.normalizer import implied_probability
+from outlier_scrapers.normalizer import detect_scope, implied_probability
 from outlier_scrapers.sizing import compute_sizing
 
 
@@ -132,17 +132,75 @@ def median_prob(values: list[float]) -> float | None:
     return float(statistics.median(values))
 
 
-def is_eligible_total_record(rec: dict[str, Any]) -> bool:
-    mt = str(rec.get("market_type") or "").upper()
-    prop = str(rec.get("proposition") or rec.get("market") or "").upper()
+def period_identity(rec: dict[str, Any]) -> str:
+    """Stable period token for grouping / full-game eligibility.
+
+    Prefer structured ``period_label`` / ``periods`` over ``scope`` — historical
+    games_norm files often stamp inning totals as scope=full_game while the
+    only real signal is periodLabel (e.g. ``6I``, ``1st 7I``).
+    """
+    period_label = rec.get("period_label")
+    if period_label not in (None, ""):
+        detected = detect_scope(period_label)
+        if detected not in FULL_GAME_SCOPES:
+            return detected
+        token = str(period_label).strip().lower()
+        if token and token not in FULL_GAME_SCOPES:
+            return token
+    periods = rec.get("periods")
+    if isinstance(periods, list) and periods:
+        return "p" + "-".join(str(p) for p in periods)
     scope = str(rec.get("scope") or "").lower()
     if scope and scope not in FULL_GAME_SCOPES:
-        return False
+        return scope
+    return "full_game"
+
+
+def is_full_game_total(rec: dict[str, Any]) -> bool:
+    return period_identity(rec) in FULL_GAME_SCOPES
+
+
+def is_eligible_total_record(rec: dict[str, Any]) -> bool:
+    """Full-game game/team totals only (v1 board scope)."""
+    mt = str(rec.get("market_type") or "").upper()
+    prop = str(rec.get("proposition") or rec.get("market") or "").upper()
     if mt == "GAMELINE" and prop == "TOTAL":
-        return True
+        return is_full_game_total(rec)
     if mt == "TEAM_PROP" and prop == "POINTS":
-        return True
+        return is_full_game_total(rec)
     return False
+
+
+def logical_market_key(rec: dict[str, Any]) -> str:
+    """One board market per event × kind × team × period × OT flag.
+
+    Docs (games_section_api_map): display/grouping keys use
+    ``(proposition, period_label, include_overtime)``; row grain stays outcome_id.
+    """
+    event_id = str(rec.get("event_id") or "").strip()
+    mt = str(rec.get("market_type") or "").upper()
+    total_kind = "team" if mt == "TEAM_PROP" else "game"
+    prop = str(rec.get("proposition") or rec.get("market") or "TOTAL").upper()
+    team = str(rec.get("team") or rec.get("team_raw") or "").strip().lower()
+    period = period_identity(rec)
+    ot = rec.get("include_overtime")
+    ot_token = "ot" if ot is True else ("no_ot" if ot is False else "ot_unk")
+    if total_kind == "team":
+        return f"{event_id}|{total_kind}|{prop}|{team}|{period}|{ot_token}"
+    return f"{event_id}|{total_kind}|{prop}|{period}|{ot_token}"
+
+
+def _pick_representative_market_id(records: list[dict[str, Any]], logical_key: str) -> str:
+    """Prefer the raw market_id with the most book quotes; fall back to logical key."""
+    scores: dict[str, int] = {}
+    for rec in records:
+        mid = str(rec.get("market_id") or "").strip()
+        if not mid:
+            continue
+        scores[mid] = scores.get(mid, 0) + len(rec.get("books") or [])
+    if not scores:
+        return logical_key
+    return max(scores.items(), key=lambda item: (item[1], item[0]))[0]
 
 
 def build_market_ladder(
@@ -256,16 +314,34 @@ def _index_candidates_by_market(rows: list[dict[str, Any]]) -> dict[str, dict[st
     return out
 
 
-def _group_records_by_market(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _group_records_by_logical_market(
+    records: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Collapse raw API market_ids into one ladder per logical total."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
         if not is_eligible_total_record(rec):
             continue
-        mid = str(rec.get("market_id") or "")
-        if not mid:
+        if not str(rec.get("event_id") or "").strip():
             continue
-        grouped.setdefault(mid, []).append(rec)
+        key = logical_market_key(rec)
+        grouped.setdefault(key, []).append(rec)
     return grouped
+
+
+def _resolve_candidate(
+    cand_by_market: dict[str, dict[str, Any]],
+    market_records: list[dict[str, Any]],
+    representative_market_id: str,
+) -> dict[str, Any]:
+    cand = cand_by_market.get(representative_market_id)
+    if cand:
+        return cand
+    for rec in market_records:
+        mid = str(rec.get("market_id") or "")
+        if mid and mid in cand_by_market:
+            return cand_by_market[mid]
+    return {}
 
 
 def build_game_totals(
@@ -277,7 +353,7 @@ def build_game_totals(
 ) -> list[dict[str, Any]]:
     """Build projection rows for all eligible full-game totals in games_norm."""
     records = (games_norm or {}).get("records") or []
-    by_market = _group_records_by_market(records)
+    by_market = _group_records_by_logical_market(records)
     cand_by_market = _index_candidates_by_market(candidate_rows)
     now = now or datetime.now().astimezone()
     output: list[dict[str, Any]] = []
@@ -291,18 +367,22 @@ def build_game_totals(
         source_flags.append("SOURCE_FETCH_ERRORS")
     from outlier_scrapers import pack as pack_module
 
-    for market_id, market_records in by_market.items():
-        identity = market_records[0]
+    for logical_key, market_records in by_market.items():
+        market_id = _pick_representative_market_id(market_records, logical_key)
+        rep_records = [
+            r for r in market_records if str(r.get("market_id") or "").strip() == market_id
+        ]
+        identity = rep_records[0] if rep_records else market_records[0]
         event_id = str(identity.get("event_id") or "")
         mt = str(identity.get("market_type") or "")
         prop = str(identity.get("proposition") or identity.get("market") or "")
-        scope = str(identity.get("scope") or "full_game")
+        scope = period_identity(identity) or "full_game"
         total_kind = "team" if mt == "TEAM_PROP" else "game"
         team = identity.get("team") or identity.get("team_raw") or ""
         matchup = identity.get("matchup") or identity.get("matchup_raw") or ""
 
         flags: list[str] = list(source_flags)
-        cand = cand_by_market.get(market_id, {})
+        cand = _resolve_candidate(cand_by_market, market_records, market_id)
 
         context_event = (
             ((games_norm or {}).get("context") or {}).get("events") or {}

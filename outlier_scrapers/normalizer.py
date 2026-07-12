@@ -97,16 +97,30 @@ def parse_player_name(outcome: dict[str, Any]) -> str:
 
 
 # Order matters: check the more specific "1st 3 innings" before "1st".
+# Include Outlier periodLabel abbreviations (1H, 6I, F5, 1st 7I, 7-9I, …).
 _SCOPE_CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("first_3_innings", ("1st 3 innings", "first 3 innings")),
-    ("first_5_innings", ("1st 5 innings", "first 5 innings")),
-    ("first_inning", ("1st inning", "first inning")),
-    ("first_half", ("1st half", "first half")),
-    ("second_half", ("2nd half", "second half")),
-    ("first_quarter", ("1st quarter", "first quarter")),
-    ("second_quarter", ("2nd quarter", "second quarter")),
-    ("third_quarter", ("3rd quarter", "third quarter")),
-    ("fourth_quarter", ("4th quarter", "fourth quarter")),
+    ("first_3_innings", ("1st 3 innings", "first 3 innings", "1st 3i", "f3")),
+    ("first_5_innings", ("1st 5 innings", "first 5 innings", "1st 5i", "f5")),
+    ("first_inning", ("1st inning", "first inning", "1i")),
+    ("first_half", ("1st half", "first half", "1h")),
+    ("second_half", ("2nd half", "second half", "2h")),
+    ("first_quarter", ("1st quarter", "first quarter", "1q")),
+    ("second_quarter", ("2nd quarter", "second quarter", "2q")),
+    ("third_quarter", ("3rd quarter", "third quarter", "3q")),
+    ("fourth_quarter", ("4th quarter", "fourth quarter", "4q")),
+)
+
+# Compact periodLabel tokens that are partial-game but not covered above
+# (single innings 2I–9I, ranges 4-6I / 7-9I, first-N like 1st 7I).
+_PARTIAL_PERIOD_RE = re.compile(
+    r"(?:"
+    r"\b\d+\s*-\s*\d+\s*i\b"  # 4-6I, 7-9I
+    r"|\b1st\s*\d+\s*i\b"  # 1st 7I
+    r"|\bfirst\s*\d+\s*innings?\b"
+    r"|\b\d+\s*i\b"  # 2I, 6I, 9I
+    r"|\bf\d+\b"  # F7 etc.
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -115,12 +129,15 @@ def detect_scope(*labels: Any) -> str:
 
     Outlier reuses the same ``proposition`` for full-game and partial-game
     markets (e.g. "Hits" vs "1st Inning Hits"), with the scope only in the
-    human label. Returns ``"full_game"`` when no partial-game token is found.
+    human label / periodLabel. Returns ``"full_game"`` when no partial-game
+    token is found.
     """
     text = " ".join(str(label or "").lower() for label in labels)
     for scope, needles in _SCOPE_CHECKS:
         if any(needle in text for needle in needles):
             return scope
+    if text and _PARTIAL_PERIOD_RE.search(text):
+        return "partial_period"
     return "full_game"
 
 
@@ -534,7 +551,9 @@ def normalize_games(
             proposition = str(market.get("proposition") or "")
             market_label = market.get("label")
             market_raw = parse_market_descriptor(market)
-            scope = detect_scope(market_label, market_raw)
+            # periodLabel is often the only partial-game signal (e.g. "6I", "F5")
+            # while label/raw stay "Total".
+            scope = detect_scope(market_label, market_raw, market.get("periodLabel"))
 
             canonical_market = None
             if scope == "full_game":
