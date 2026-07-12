@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Any
 
 from outlier_scrapers import (
     c_research,
@@ -280,7 +280,7 @@ def orchestrate_desk(
 
     totals_bytes, totals_hash = rc.load_game_totals(pack_dir)
     team_totals_bytes, team_totals_hash = rc.load_team_totals(pack_dir)
-    status = {
+    status: dict[str, Any] = {
         "date": pack_dir.name,
         "generated_at": _now_iso(),
         "overall": "running",
@@ -305,7 +305,7 @@ def orchestrate_desk(
         _write_status(pack_dir, status)
         return 1
 
-    components: dict[str, dict[str, str]] = {}
+    components: dict[str, dict[str, Any]] = {}
     for phase in ("A", "B", "C", "D"):
         if phase in requested:
             components[phase] = run_phase(phase, pack_dir, force=force)

@@ -66,6 +66,9 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
                     continue
             raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
 
+    raise rc.RunnerError("Failed after maximum retries")
+
+
 
 def run_gemini_b(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None

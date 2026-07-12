@@ -94,6 +94,9 @@ def call_openai_responses_api(
         except Exception as e:
             raise ReasoningError(f"API call failed: type={type(e).__name__}")
 
+    raise ReasoningError("Failed after maximum retries")
+
+
 
 def run_reasoning(
     pack_dir: Path,
