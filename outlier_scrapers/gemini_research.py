@@ -66,6 +66,9 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
                     continue
             raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
 
+    raise rc.RunnerError("Failed after maximum retries")
+
+
 
 def run_gemini_b(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None
@@ -80,8 +83,9 @@ def run_gemini_b(
                 return 0
 
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
-        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         briefing_sha256 = rc.sha256_text(briefing_text)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"

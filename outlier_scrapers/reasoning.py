@@ -94,6 +94,9 @@ def call_openai_responses_api(
         except Exception as e:
             raise ReasoningError(f"API call failed: type={type(e).__name__}")
 
+    raise ReasoningError("Failed after maximum retries")
+
+
 
 def run_reasoning(
     pack_dir: Path,
@@ -113,8 +116,9 @@ def run_reasoning(
                 logger.info("Output exists. Clean no-op.")
                 return 0
 
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
-        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         raw_bytes, candidates_sha256 = rc.validate_candidates(
             pack_dir,
             allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),

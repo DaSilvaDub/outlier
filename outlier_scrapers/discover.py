@@ -89,7 +89,8 @@ def _sample_market_ids(props_payload: dict[str, Any] | None, limit: int = 3) -> 
     for record in props:
         if not isinstance(record, dict):
             continue
-        outcome = record.get("outcome") if isinstance(record.get("outcome"), dict) else {}
+        outcome_raw = record.get("outcome")
+        outcome = outcome_raw if isinstance(outcome_raw, dict) else {}
         market_id = str(outcome.get("marketId") or "").strip()
         if market_id and market_id not in seen:
             seen.append(market_id)

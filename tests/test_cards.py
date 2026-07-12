@@ -5,7 +5,10 @@ import pytest
 
 from outlier_scrapers import cards
 from outlier_scrapers.cards import (
+    _spread_sign_conflict,
+    assemble_game_card,
     build_cards_payload,
+    build_indexes,
     movement_corroboration,
     proxy_market_edge,
     recency_hit_pct,
@@ -47,6 +50,59 @@ def test_proxy_market_edge_none_without_fair():
 def test_recency_hit_pct_weighted_blend():
     val = recency_hit_pct({"l5_pct": 100, "l10_pct": 90, "l20_pct": 50, "season_pct": 50})
     assert val == 82.0  # .4*100 + .3*90 + .2*50 + .1*50
+
+
+# --- Spread sign-conflict guard (fix: a corrupted feed could ship both sides -
+# the same sign, e.g. HOME 1.5 / AWAY 1.5, and it would look legitimate) -------
+
+def test_spread_sign_conflict_false_for_mirror_pair():
+    assert _spread_sign_conflict(-1.5, 1.5) is False
+    assert _spread_sign_conflict(1.5, -1.5) is False
+    assert _spread_sign_conflict(0.0, 0.0) is False  # pick'em
+
+
+def test_spread_sign_conflict_true_for_same_sign():
+    assert _spread_sign_conflict(1.5, 1.5) is True
+    assert _spread_sign_conflict(-1.5, -1.5) is True
+
+
+def test_spread_sign_conflict_true_for_mismatched_magnitude():
+    assert _spread_sign_conflict(-1.5, 2.5) is True
+
+
+def test_spread_sign_conflict_false_when_one_side_missing():
+    assert _spread_sign_conflict(None, 1.5) is False
+    assert _spread_sign_conflict(-1.5, None) is False
+
+
+def _spread_prop_row(position, line):
+    return {
+        "market_id": "gm1",
+        "position": position,
+        "proposition": "SPREAD",
+        "line": line,
+        "best_odds": -170,
+        "outcome_id": f"o{position}",
+        "league": "MLB",
+    }
+
+
+def test_assemble_game_card_flags_sign_conflict_end_to_end():
+    # Corrupted feed: both HOME and AWAY quoted 1.5 (same sign) instead of
+    # mirror-image lines. This must survive _route_and_rank's flags assignment.
+    idx = build_indexes(
+        [_spread_prop_row("HOME", 1.5), _spread_prop_row("AWAY", 1.5)], [], [], []
+    )
+    card = assemble_game_card("gm1", idx)
+    assert "spread_sign_conflict" in card["flags"]
+
+
+def test_assemble_game_card_no_flag_for_valid_mirror_pair():
+    idx = build_indexes(
+        [_spread_prop_row("HOME", -1.5), _spread_prop_row("AWAY", 1.5)], [], [], []
+    )
+    card = assemble_game_card("gm1", idx)
+    assert "spread_sign_conflict" not in card["flags"]
 
 
 def test_movement_corroboration_direction():

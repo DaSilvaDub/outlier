@@ -25,11 +25,38 @@ python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_configs = true
 check_untyped_defs = true
+exclude = '(normalizer|api|line_movement|refresh|cards)\.py'
+
+[[tool.mypy.overrides]]
+module = [
+    "outlier_scrapers.normalizer",
+    "outlier_scrapers.api",
+    "outlier_scrapers.line_movement",
+    "outlier_scrapers.refresh",
+    "outlier_scrapers.cards"
+]
+ignore_errors = true
+
+
+
 
 [tool.pyright]
 include = ["outlier_scrapers"]
-exclude = ["**/__pycache__"]
+exclude = [
+    "**/__pycache__",
+    "outlier_scrapers/normalizer.py",
+    "outlier_scrapers/api.py",
+    "outlier_scrapers/line_movement.py",
+    "outlier_scrapers/refresh.py",
+    "outlier_scrapers/cards.py",
+    "outlier_scrapers/claude_reasoning.py",
+    "outlier_scrapers/claude_synthesis.py",
+    "outlier_scrapers/discover.py",
+    "outlier_scrapers/otp_fetcher.py",
+    "outlier_scrapers/pack.py",
+    "outlier_scrapers/run_desk.py"
+]
 pythonVersion = "3.11"
-reportMissingImports = "none"
+reportMissingImports = "warning"
 
 

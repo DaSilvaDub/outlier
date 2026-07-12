@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Any
 
 from outlier_scrapers import (
     c_research,
