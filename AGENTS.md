@@ -2,6 +2,28 @@
 
 **CRITICAL RULE**: No matter which harness ("ent") — Grok, Claude, Codex, Gemini/antigravity, or future — **every session starts by forcing identical state from GitHub + canonical**.
 
+## HOUSE RULE — Never run reasoning models unless explicitly asked (ALL ENTS)
+
+**Default: OFF.** Do **not** invoke the AI Research Desk / paid reasoning layer unless the user **explicitly** asks in this turn (e.g. "run the desk", "run reasoning", "run A/B/C/D/E", "call OpenAI/Gemini/Claude for the pack").
+
+**Forbidden without that explicit ask:**
+- `python -m outlier_scrapers.reasoning` (Prompt A / OpenAI)
+- `python -m outlier_scrapers.gemini_research` (Prompt B)
+- `python -m outlier_scrapers.c_research` (Prompt C)
+- `python -m outlier_scrapers.claude_reasoning` (Prompt D)
+- `python -m outlier_scrapers.claude_synthesis` (Prompt E)
+- `python -m outlier_scrapers.run_desk` (full desk orchestrator)
+- `python -m outlier_scrapers.daily_job --run-reasoning` (or any flag that triggers A–E)
+- The `outlier-ai-desk` skill / any agent that would fire the above
+- Live provider API calls for desk reasoning (OpenAI / Anthropic / Gemini grounded research)
+- `pytest` (or other runners) that hit live reasoning providers or hang on network (e.g. `tests/test_reasoning.py`, `test_gemini_research.py`, `test_claude_reasoning.py`, `test_claude_synthesis.py`, `test_c_research.py` when they can leave the mock path)
+
+**Allowed without asking:** pack build, scrapers, local unit tests that stay offline/mocked, code edits, PR/git work, docs, reading existing pack/report artifacts on disk.
+
+**If unsure whether the user asked:** do **not** run reasoning — ask first. Cost, hangs, and quota burn are real.
+
+This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prompt block), `CLAUDE.md`, `GROK.md`, and the desk skill. Keep them in sync when changing the rule.
+
 d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pack.py + daily_job.py, player_id/CANDIDATES_HEADER etc) only existed in one stray full clone at one time. It was invisible on GitHub, other branches, .codex worktrees, and .gemini worktrees until explicitly materialized (88083ff) and bootstrapped. Similar-titled commits (d756cb4/4eea080) touched different files (c_research/run_desk) and are not the pack upgrade. We never want "commit not found in my tree" again no matter the ent.
 
 ## STEP 0 — ABSOLUTE FIRST ACTION (before any read, log, plan, or edit)

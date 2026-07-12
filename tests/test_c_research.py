@@ -6,6 +6,7 @@ import pytest
 from google import genai
 
 from outlier_scrapers import c_research, pack
+from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 
 
 VALID_OUTPUT = (
@@ -176,3 +177,29 @@ def test_altered_quote_is_rejected_and_previous_output_is_preserved(c_env, monke
 
     assert c_research.run_c_research(pack_dir, force=True) == 1
     assert output.read_text(encoding="utf-8") == "previous valid result"
+
+
+def test_totals_only_output_validates_against_totals_id(c_env, monkeypatch):
+    _, pack_dir = c_env
+    with (pack_dir / "candidates.csv").open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerow(pack.CANDIDATES_HEADER)
+    with (pack_dir / "game_totals.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GAME_TOTALS_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in GAME_TOTALS_HEADER}
+        row.update(
+            totals_id="total:m1:8.5:OVER",
+            market_id="m1",
+            selection="A @ B Total OVER 8.5",
+            line="8.5",
+            price="-110",
+            actionable="true",
+        )
+        writer.writerow(row)
+
+    totals_output = VALID_OUTPUT.replace("market_id=m1", "market_id=total:m1:8.5:OVER").replace(
+        "selection=OVER 8.5", "selection=A @ B Total OVER 8.5"
+    )
+    monkeypatch.setattr(c_research, "call_gemini", lambda *args, **kwargs: totals_output)
+    assert c_research.run_c_research(pack_dir) == 0
+    assert totals_output in (pack_dir / "chatgpt_c.md").read_text(encoding="utf-8")

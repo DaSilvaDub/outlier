@@ -65,6 +65,41 @@ VALID_CONSENSUS_BOOKS = {
 }
 
 
+def build_consensus_operator_refs(
+    paired_prices: list[tuple[str, Any, Any]],
+) -> tuple[dict[str, tuple[float, float]], dict[str, str]]:
+    """Devig paired prices once per independent sportsbook operator."""
+    operator_votes: dict[str, list[tuple[float, float]]] = {}
+    accepted_books: dict[str, str] = {}
+    for book_name, side1_price, side2_price in paired_prices:
+        normalized_book = normalize_book_label(book_name)
+        operator = VALID_CONSENSUS_BOOKS.get(normalized_book.upper())
+        if operator is None:
+            continue
+        p1_pct = implied_probability(side1_price)
+        p2_pct = implied_probability(side2_price)
+        if p1_pct is None or p2_pct is None:
+            continue
+        p1 = p1_pct / 100.0
+        p2 = p2_pct / 100.0
+        overround = p1 + p2
+        if not (1.0 < overround <= 1.15):
+            continue
+        operator_votes.setdefault(operator, []).append((p1 / overround, p2 / overround))
+        accepted_books[book_name] = operator
+
+    return (
+        {
+            operator: (
+                sum(vote[0] for vote in votes) / len(votes),
+                sum(vote[1] for vote in votes) / len(votes),
+            )
+            for operator, votes in operator_votes.items()
+        },
+        accepted_books,
+    )
+
+
 class StalePropsError(ValueError):
     pass
 
@@ -167,6 +202,7 @@ def _props_freshness(
     *,
     now: datetime,
     max_age_hours: float = STALE_PROPS_MAX_AGE_HOURS,
+    max_future_hours: float = 1.0,
 ) -> PropsFreshness:
     generated_at = props_latest.get("generated_at")
     generated_text = generated_at if isinstance(generated_at, str) else None
@@ -198,7 +234,7 @@ def _props_freshness(
         )
     if raw_age_hours > max_age_hours:
         reasons.append(f"props age {raw_age_hours:.3f}h > {max_age_hours:.2f}h")
-    if raw_age_hours < -1.0:
+    if raw_age_hours < -max_future_hours:
         reasons.append(f"props generated_at is {abs(raw_age_hours):.3f}h in the future")
 
     return PropsFreshness(
@@ -913,8 +949,7 @@ def _build_local_ev_records(
 
     common_books = set(books1.keys()) & set(books2.keys())
     
-    operator_votes: dict[str, list[tuple[float, float, str]]] = {}
-    target_books: list[dict[str, Any]] = []
+    eligible_books: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     for bname in common_books:
         b1 = books1[bname]
@@ -926,37 +961,27 @@ def _build_local_ev_records(
         if str(b2.get("identifier", {}).get("bookProps", {}).get("exclude_ev", "")).lower() == "true":
             continue
 
-        normalized_book = normalize_book_label(bname)
-        if normalized_book.upper() not in VALID_CONSENSUS_BOOKS:
-            continue
-        
-        operator = VALID_CONSENSUS_BOOKS[normalized_book.upper()]
-        
-        p1 = implied_probability(b1.get("american"))
-        p2 = implied_probability(b2.get("american"))
-        
-        if p1 is None or p2 is None:
-            continue
-            
-        overround = p1 + p2
-        if not (1.0 < overround <= 1.15):
-            continue
-            
-        fair1 = p1 / overround
-        fair2 = p2 / overround
-        
-        operator_votes.setdefault(operator, []).append((fair1, fair2, bname))
-        target_books.append({"bname": bname, "normalized": normalized_book, "operator": operator, "o1": b1, "o2": b2, "fair1": fair1, "fair2": fair2})
+        eligible_books[bname] = (b1, b2)
 
-    if len(operator_votes) < 3:
+    op_refs, accepted_books = build_consensus_operator_refs(
+        [
+            (bname, pair[0].get("american"), pair[1].get("american"))
+            for bname, pair in eligible_books.items()
+        ]
+    )
+    if len(op_refs) < 3:
         return []
 
-    # Calculate single reference vote per operator
-    op_refs: dict[str, tuple[float, float]] = {}
-    for op, votes in operator_votes.items():
-        avg_f1 = sum(v[0] for v in votes) / len(votes)
-        avg_f2 = sum(v[1] for v in votes) / len(votes)
-        op_refs[op] = (avg_f1, avg_f2)
+    target_books = [
+        {
+            "bname": bname,
+            "normalized": normalize_book_label(bname),
+            "operator": operator,
+            "o1": eligible_books[bname][0],
+            "o2": eligible_books[bname][1],
+        }
+        for bname, operator in accepted_books.items()
+    ]
 
     rows: list[dict[str, Any]] = []
     

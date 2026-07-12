@@ -17,9 +17,11 @@ For any branch/worktree/commit search questions: re-run the report-sync and past
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
+**HOUSE RULE (all ents):** Never run reasoning models / the AI Research Desk (A–E, `run_desk`, `daily_job --run-reasoning`, live OpenAI/Anthropic/Gemini desk calls, or provider-hitting reasoning tests) unless the user **explicitly asks this turn**. Default offline. If unsure, ask first. Full text: `AGENTS.md` → "Never run reasoning models unless explicitly asked".
+
 1. On session start (after bootstrap): read `.agent-log/HANDOFF.md` to see where the last agent left off, and `git log --oneline -15`.
 2. On session end: commit your work to your **feature branch** (see AGENTS.md "Feature Branch Workflow"), push it, open a PR to `master` via `gh pr create`, then write a brief handoff summary to `.agent-log/HANDOFF.md` (last commit, PR link, next steps). Direct commits to `master` are allowed only for coordination files (AGENTS.md, CLAUDE.md, .agent-log/).
 
 All project rules, scope constraints, and technical gotchas live in `AGENTS.md` + SYNC.md.
 
-**Global harness note**: The system prompt / pre-instructions for *every* harness (Claude, Codex, Gemini, Grok, ...) *must* contain the exact block from docs/ENT-SYNC-GLOBAL-PROMPT.md (the report-sync.ps1 + "paste full output + use only for state questions" rules). This is what prevents d05eb21-style "the commit/changes don't exist in my tree" no matter the ent.
+**Global harness note**: The system prompt / pre-instructions for *every* harness (Claude, Codex, Gemini, Grok, ...) *must* contain the exact block from docs/ENT-SYNC-GLOBAL-PROMPT.md (report-sync.ps1 + "no reasoning unless asked" + paste-full-output rules). This is what prevents d05eb21-style "the commit/changes don't exist in my tree" and accidental paid desk runs no matter the ent.

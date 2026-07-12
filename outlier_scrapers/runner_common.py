@@ -44,6 +44,45 @@ def load_game_totals(pack_dir: Path) -> tuple[bytes | None, str]:
     return raw, sha256_bytes(raw)
 
 
+def parse_game_totals(totals_bytes: bytes | None) -> list[dict[str, str]]:
+    """Parse the optional totals board using its exact canonical schema."""
+    if not totals_bytes:
+        return []
+    import io
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+
+    try:
+        reader = csv.DictReader(
+            io.StringIO(totals_bytes.decode("utf-8-sig")),
+            strict=True,
+        )
+        if reader.fieldnames != GAME_TOTALS_HEADER:
+            raise RunnerError("game_totals.csv header does not match GAME_TOTALS_HEADER")
+        rows = list(reader)
+        if any(None in row or any(value is None for value in row.values()) for row in rows):
+            raise RunnerError("game_totals.csv has malformed rows")
+        return rows
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise RunnerError("game_totals.csv is malformed") from exc
+
+
+def count_actionable_game_totals(totals_bytes: bytes | None) -> int:
+    """Count actionable totals only after schema and identity validation."""
+    required = ("totals_id", "market_id", "selection", "line", "price")
+    count = 0
+    for row in parse_game_totals(totals_bytes):
+        if str(row.get("actionable") or "").strip().lower() != "true":
+            continue
+        if any(not str(row.get(field) or "").strip() for field in required):
+            raise RunnerError("actionable game_totals.csv row is missing identity fields")
+        count += 1
+    return count
+
+
+def has_actionable_game_totals(totals_bytes: bytes | None) -> bool:
+    return count_actionable_game_totals(totals_bytes) > 0
+
+
 def append_totals_block(base: str, totals_bytes: bytes | None) -> str:
     """Append labeled game_totals.csv context when the pack artifact exists."""
     if not totals_bytes:
@@ -85,8 +124,11 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-def validate_candidates(pack_dir: Path) -> tuple[bytes, str]:
-    """Validate candidates.csv exists, has the canonical header and >=1 row.
+def validate_candidates(pack_dir: Path, *, allow_empty: bool = False) -> tuple[bytes, str]:
+    """Validate candidates.csv exists and has the canonical header.
+
+    At least one unlocked candidate is required unless an actionable totals
+    board explicitly enables the header-only state.
     Also re-applies the lock filter in case events started since pack build."""
     candidates_file = pack_dir / "candidates.csv"
     if not candidates_file.exists():
@@ -109,7 +151,7 @@ def validate_candidates(pack_dir: Path) -> tuple[bytes, str]:
             len(locked),
         )
     
-    if not kept:
+    if not kept and not allow_empty:
         raise RunnerError("candidates.csv has no data rows after dropping locked events.")
 
     import io

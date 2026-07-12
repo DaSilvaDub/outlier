@@ -10,8 +10,9 @@ import statistics
 from datetime import datetime
 from typing import Any
 
-from outlier_scrapers.cards import two_way_fair
+from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
 from outlier_scrapers.normalizer import implied_probability
+from outlier_scrapers.sizing import compute_sizing
 
 
 def _american_to_decimal(american: Any) -> float | None:
@@ -118,10 +119,11 @@ def _book_american(book_entry: dict[str, Any]) -> int | float | None:
 
 def devig_book_pair(over_odds: Any, under_odds: Any) -> tuple[float, float] | None:
     """Return (p_over, p_under) as 0–1 probabilities."""
-    fair = two_way_fair(over_odds, under_odds)
-    if not fair:
+    refs, _accepted = build_consensus_operator_refs([("DraftKings", over_odds, under_odds)])
+    fair = refs.get("DRAFTKINGS")
+    if fair is None:
         return None
-    return fair["OVER"] / 100.0, fair["UNDER"] / 100.0
+    return fair
 
 
 def median_prob(values: list[float]) -> float | None:
@@ -174,16 +176,16 @@ def aggregate_line_p_over(
 ) -> tuple[float | None, int, list[str]]:
     if not over_books or not under_books:
         return None, 0, ["MISSING_SIDE"]
-    probs: list[float] = []
-    for book, over_odds in over_books.items():
-        under_odds = under_books.get(book)
-        if under_odds is None:
-            continue
-        pair = devig_book_pair(over_odds, under_odds)
-        if pair:
-            probs.append(pair[0])
+    refs, _accepted = build_consensus_operator_refs(
+        [
+            (book, over_odds, under_books[book])
+            for book, over_odds in over_books.items()
+            if book in under_books
+        ]
+    )
+    probs = [pair[0] for pair in refs.values()]
     if not probs:
-        return None, 0, ["MISSING_SIDE"]
+        return None, 0, ["NO_VALID_CONSENSUS"]
     if len(probs) < 2:
         return median_prob(probs), len(probs), ["SINGLE_BOOK"]
     return median_prob(probs), len(probs), []
@@ -279,6 +281,15 @@ def build_game_totals(
     cand_by_market = _index_candidates_by_market(candidate_rows)
     now = now or datetime.now().astimezone()
     output: list[dict[str, Any]] = []
+    freshness = _props_freshness(
+        games_norm or {}, now=now, max_age_hours=6.0, max_future_hours=5.0 / 60.0
+    )
+    source_flags: list[str] = []
+    if freshness.is_stale:
+        source_flags.append("STALE_DATA")
+    if (games_norm or {}).get("fetch_errors"):
+        source_flags.append("SOURCE_FETCH_ERRORS")
+    from outlier_scrapers import pack as pack_module
 
     for market_id, market_records in by_market.items():
         identity = market_records[0]
@@ -290,17 +301,26 @@ def build_game_totals(
         team = identity.get("team") or identity.get("team_raw") or ""
         matchup = identity.get("matchup") or identity.get("matchup_raw") or ""
 
-        flags: list[str] = []
+        flags: list[str] = list(source_flags)
         cand = cand_by_market.get(market_id, {})
 
-        event_start = cand.get("_event_starts_at")
-        if event_start:
-            try:
-                start = datetime.fromisoformat(str(event_start).replace("Z", "+00:00"))
-                if start.tzinfo and start <= now.astimezone(start.tzinfo):
-                    flags.append("LIVE_EVENT")
-            except (ValueError, TypeError):
-                flags.append("INSUFFICIENT_DATA")
+        context_event = (
+            ((games_norm or {}).get("context") or {}).get("events") or {}
+        ).get(event_id, {})
+        event_start = (
+            identity.get("event_starts_at")
+            or (context_event.get("starts_at") if isinstance(context_event, dict) else None)
+            or cand.get("_event_starts_at")
+        )
+        _pregame, locked = pack_module.drop_locked_events(
+            [{"event_id": event_id, "_event_starts_at": event_start}], now=now
+        )
+        if locked:
+            flags.append("LOCKED_OR_UNVERIFIED_EVENT")
+        if identity.get("is_active") is False:
+            flags.append("MARKET_INACTIVE")
+        if cand.get("data_quality_flags"):
+            flags.append("SOURCE_INTEGRITY_FLAG")
 
         ladder = build_market_ladder(market_records)
         if not ladder:
@@ -313,11 +333,11 @@ def build_game_totals(
         ladder_p: dict[float, float] = {}
         line_flags: dict[float, list[str]] = {}
         for line, sides in ladder.items():
-            p_over, book_count, lf = aggregate_line_p_over(sides.get("over", {}), sides.get("under", {}))
+            line_p_over, _bc, lf = aggregate_line_p_over(sides.get("over", {}), sides.get("under", {}))
             if lf:
                 line_flags[line] = lf
-            if p_over is not None:
-                ladder_p[line] = p_over
+            if line_p_over is not None:
+                ladder_p[line] = line_p_over
 
         fair_total, fair_flags = interpolate_fair_total(ladder_p)
         flags.extend(fair_flags)
@@ -352,13 +372,34 @@ def build_game_totals(
         sizing_flags = ""
         push_blocked = _is_integer_line(headline_line)
         if push_blocked:
+            # F3 Option 2 — push-aware *display* edge only. Integer lines stay
+            # non-actionable; we only replace the misleading two-way edge_pct.
+            # Reuses sizing.compute_sizing (same helper pack.build_row uses),
+            # which nets push via p_lose = 1 - p_win - push_prob (F7-guarded).
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
+                p_side = (
+                    p_over_headline
+                    if best_side == "OVER"
+                    else (1.0 - p_over_headline if p_over_headline is not None else None)
+                )
+                if decimal_price is not None and p_side is not None:
+                    sizing = compute_sizing(
+                        decimal_price=decimal_price,
+                        model_prob=p_side,
+                        push_prob=float(push_prob),
+                    )
+                    edge_pct = (
+                        round(sizing.edge_pct, 4) if sizing.edge_pct is not None else None
+                    )
+                else:
+                    edge_pct = None
             else:
                 push_prob = ""
                 sizing_flags = "push_capable_no_prob"
-
+                # No honest push mass → blank the push-contaminated two-way edge.
+                edge_pct = None
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
@@ -372,7 +413,7 @@ def build_game_totals(
                 and book_count >= 2
                 and "MISSING_SIDE" not in headline_flags
                 and "SINGLE_BOOK" not in headline_flags
-                and "LIVE_EVENT" not in flags
+                and not flags
                 and not push_blocked
                 and fair_total is not None
             )
@@ -405,13 +446,13 @@ def build_game_totals(
                 "book": cand.get("book") or "",
                 "best_side": best_side,
                 "best_price": best_price,
-                "projected_over_prob": round(p_over, 4) if p_over is not None else "",
+                "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
                 "actionable": actionable,
-                "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over is None else ""),
+                "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
                 "devig_source": devig_source,
                 "recommended_units_pre_news": cand.get("recommended_units_pre_news") or "",
                 "sizing_flags": sizing_flags or cand.get("sizing_flags") or "",

@@ -67,7 +67,10 @@ def compute_sizing(
     p_win = model_prob
     p_lose = 1.0 - p_win - push_prob
 
-    if (p_win + p_lose) <= 0:
+    # Probabilities must form a valid partition. A push_prob that overlaps p_win
+    # (push_prob + model_prob > 1) drives p_lose negative and would otherwise
+    # inflate edge/Kelly, so treat inconsistent inputs as ineligible.
+    if push_prob < 0 or p_lose < 0 or (p_win + p_lose) <= 0:
         return Sizing(
             decimal_price=decimal_price,
             model_prob=model_prob,

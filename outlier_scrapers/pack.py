@@ -208,12 +208,30 @@ def build_injuries(games_payload: dict | None) -> dict[str, str]:
             inj = (teams.get(str(tid)) or {}).get("injuries") if tid else None
             for item in inj or []:
                 if isinstance(item, dict):
-                    flags.append(str(item.get("player") or item.get("description") or item))
+                    formatted = _format_injury(item)
+                    if formatted:
+                        flags.append(formatted)
                 else:
                     flags.append(str(item))
         if flags:
             out[str(eid)] = " | ".join(flags)
     return out
+
+
+def _format_injury(item: dict[str, Any]) -> str:
+    """Render one injury as ``"First Last (Status)"`` from the live schema
+    (firstName/lastName + nested injury.status). Falls back to a legacy
+    ``player``/``description`` field, and never dumps the raw dict."""
+    name = " ".join(
+        part for part in (item.get("firstName"), item.get("lastName")) if part
+    ).strip()
+    if not name:
+        name = str(item.get("player") or item.get("description") or "").strip()
+    injury = item.get("injury")
+    status = injury.get("status") if isinstance(injury, dict) else None
+    if name and status:
+        return f"{name} ({status})"
+    return name
 
 def _slug(text: str | None) -> str:
     if not text:
@@ -470,6 +488,18 @@ def build_row(
     )
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
+    # Stale-line edge gate: reverse line movement (line moved against this side)
+    # plus thin liquidity means the devigged edge is a phantom — the market moved
+    # sharply on prices we can't trust. The RLM/thin flags alone were already
+    # ignored downstream (2026-07-11 Bonner O10.5 shipped 3.0u with both set), so
+    # withhold the stake recommendation itself. edge_pct stays visible.
+    if (
+        row.get("recommended_units_pre_news") not in ("", None)
+        and "reverse_line_movement" in dq_flags
+        and "thin_liquidity" in dq_flags
+    ):
+        dq_flags.append("edge_suspect_stale_line")
+        row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
@@ -681,6 +711,11 @@ ROLE_BLOCK = [
     "- Variance taxonomy to anchor evaluation:",
     "   * High variance: 3PM, hits allowed, total bases, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
+    "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
+    " legs. Do NOT size stacked same-event bets as independent — their outcomes"
+    " are correlated (e.g. two props in one game, or a team side plus that game's"
+    " total). Discount total stake across correlated legs rather than summing"
+    " each leg's recommended_units_pre_news at face value.",
     "",
     "HOUSE RULES (all passes):",
     "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."

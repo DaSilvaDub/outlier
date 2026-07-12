@@ -1,5 +1,4 @@
 import argparse
-import csv
 import hashlib
 import json
 import logging
@@ -41,30 +40,6 @@ def extract_yaml_request_hash(content: str) -> str | None:
         if line.startswith("request_sha256:"):
             return line.split(":", 1)[1].strip().strip("'\"")
     return None
-
-
-def validate_pack_dir(pack_dir: Path) -> tuple[bytes, str]:
-    if not pack_dir.exists():
-        raise ReasoningError(f"Pack directory {pack_dir} does not exist.")
-
-    candidates_file = pack_dir / "candidates.csv"
-    if not candidates_file.exists():
-        raise ReasoningError(f"Candidates file {candidates_file} does not exist.")
-
-    raw_bytes = candidates_file.read_bytes()
-
-    with open(candidates_file, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if header != pack.CANDIDATES_HEADER:
-            raise ReasoningError("candidates.csv header does not match pack.CANDIDATES_HEADER")
-
-        data_rows = list(reader)
-        if len(data_rows) == 0:
-            raise ReasoningError("candidates.csv has no data rows.")
-
-    candidates_sha256 = hashlib.sha256(raw_bytes).hexdigest()
-    return raw_bytes, candidates_sha256
 
 
 def call_openai_responses_api(
@@ -135,8 +110,10 @@ def run_reasoning(
                 logger.info("Output exists. Clean no-op.")
                 return 0
 
-        raw_bytes, candidates_sha256 = validate_pack_dir(pack_dir)
         totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        raw_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+        )
 
         prompt_file = paths.PROJECT_ROOT / "prompts" / "A.md"
         if not prompt_file.exists():
@@ -197,7 +174,7 @@ def run_reasoning(
 
         return 0
 
-    except ReasoningError as e:
+    except (ReasoningError, rc.RunnerError) as e:
         logger.error(str(e))
         return 1
     except Exception as e:
