@@ -44,17 +44,43 @@ def load_game_totals(pack_dir: Path) -> tuple[bytes | None, str]:
     return raw, sha256_bytes(raw)
 
 
-def has_actionable_game_totals(totals_bytes: bytes | None) -> bool:
-    """Return whether the optional totals board contains an actionable row."""
+def parse_game_totals(totals_bytes: bytes | None) -> list[dict[str, str]]:
+    """Parse the optional totals board using its exact canonical schema."""
     if not totals_bytes:
-        return False
+        return []
     import io
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 
     try:
-        rows = csv.DictReader(io.StringIO(totals_bytes.decode("utf-8-sig")))
-        return any(str(row.get("actionable") or "").strip().lower() == "true" for row in rows)
+        reader = csv.DictReader(
+            io.StringIO(totals_bytes.decode("utf-8-sig")),
+            strict=True,
+        )
+        if reader.fieldnames != GAME_TOTALS_HEADER:
+            raise RunnerError("game_totals.csv header does not match GAME_TOTALS_HEADER")
+        rows = list(reader)
+        if any(None in row or any(value is None for value in row.values()) for row in rows):
+            raise RunnerError("game_totals.csv has malformed rows")
+        return rows
     except (UnicodeDecodeError, csv.Error) as exc:
         raise RunnerError("game_totals.csv is malformed") from exc
+
+
+def count_actionable_game_totals(totals_bytes: bytes | None) -> int:
+    """Count actionable totals only after schema and identity validation."""
+    required = ("totals_id", "market_id", "selection", "line", "price")
+    count = 0
+    for row in parse_game_totals(totals_bytes):
+        if str(row.get("actionable") or "").strip().lower() != "true":
+            continue
+        if any(not str(row.get(field) or "").strip() for field in required):
+            raise RunnerError("actionable game_totals.csv row is missing identity fields")
+        count += 1
+    return count
+
+
+def has_actionable_game_totals(totals_bytes: bytes | None) -> bool:
+    return count_actionable_game_totals(totals_bytes) > 0
 
 
 def append_totals_block(base: str, totals_bytes: bytes | None) -> str:

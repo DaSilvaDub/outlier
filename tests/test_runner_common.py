@@ -85,12 +85,40 @@ def test_validate_candidates_allows_header_only_for_actionable_totals(tmp_path):
 
 
 def test_has_actionable_game_totals():
-    assert runner_common.has_actionable_game_totals(
-        b"totals_id,actionable\na,false\nb,TRUE\n"
-    )
-    assert not runner_common.has_actionable_game_totals(
-        b"totals_id,actionable\na,false\n"
-    )
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+
+    def board(actionable):
+        import io
+
+        stream = io.StringIO()
+        writer = csv.DictWriter(stream, fieldnames=GAME_TOTALS_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in GAME_TOTALS_HEADER}
+        row.update(
+            totals_id="t1",
+            market_id="m1",
+            selection="A @ B Total OVER 8.5",
+            line="8.5",
+            price="-110",
+            actionable=actionable,
+        )
+        writer.writerow(row)
+        return stream.getvalue().encode()
+
+    assert runner_common.has_actionable_game_totals(board("TRUE"))
+    assert not runner_common.has_actionable_game_totals(board("false"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"actionable\ntrue\n",
+        b"totals_id,actionable\nt1,true,extra\n",
+    ],
+)
+def test_game_totals_gate_rejects_wrong_schema_or_malformed_rows(payload):
+    with pytest.raises(runner_common.RunnerError):
+        runner_common.has_actionable_game_totals(payload)
 
 
 def test_atomic_write_writes_front_matter_then_body_and_leaves_no_tmp(tmp_path):

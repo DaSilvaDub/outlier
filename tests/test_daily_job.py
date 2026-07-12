@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -227,9 +228,21 @@ def test_daily_job_runs_desk_for_actionable_totals_only(tmp_path, monkeypatch):
     fake_pack = tmp_path / "packs" / "2026-07-07"
     fake_pack.mkdir(parents=True)
     (fake_pack / "candidates.csv").write_text("market_id,line\n", encoding="utf-8")
-    (fake_pack / "game_totals.csv").write_text(
-        "totals_id,actionable\nt1,false\nt2,true\n", encoding="utf-8"
-    )
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+
+    with (fake_pack / "game_totals.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GAME_TOTALS_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in GAME_TOTALS_HEADER}
+        row.update(
+            totals_id="t2",
+            market_id="m2",
+            selection="A @ B Total OVER 8.5",
+            line="8.5",
+            price="-110",
+            actionable="true",
+        )
+        writer.writerow(row)
     (fake_pack / "briefing.md").write_text("Totals only", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
