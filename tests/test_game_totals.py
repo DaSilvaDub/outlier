@@ -12,6 +12,9 @@ from outlier_scrapers.game_totals import (
     compute_side_edge,
     devig_book_pair,
     interpolate_fair_total,
+    is_eligible_total_record,
+    logical_market_key,
+    period_identity,
     pick_best_side,
 )
 from outlier_scrapers.sizing import compute_sizing
@@ -27,6 +30,11 @@ def _norm_record(
     proposition: str = "TOTAL",
     event_id: str = "E1",
     event_starts_at: str | None = "2099-12-31T00:00:00Z",
+    scope: str = "full_game",
+    period_label: str | None = None,
+    periods: list | None = None,
+    include_overtime: bool | None = True,
+    team: str | None = None,
 ) -> dict:
     return {
         "market_id": market_id,
@@ -35,7 +43,11 @@ def _norm_record(
         "market_type": market_type,
         "proposition": proposition,
         "market": proposition,
-        "scope": "full_game",
+        "scope": scope,
+        "period_label": period_label,
+        "periods": periods,
+        "include_overtime": include_overtime,
+        "team": team,
         "line": line,
         "position": position,
         "matchup": "A @ B",
@@ -313,3 +325,155 @@ def test_build_market_ladder_groups_sides():
     assert 8.5 in ladder
     assert "dk" in ladder[8.5]["over"]
     assert "dk" in ladder[8.5]["under"]
+
+
+def test_period_identity_prefers_period_label_over_wrong_scope():
+    rec = _norm_record(
+        "inn6",
+        1.5,
+        "OVER",
+        [{"book": "DK", "odds": -110}],
+        scope="full_game",  # historical mis-stamp
+        period_label="6I",
+        periods=[6],
+        include_overtime=False,
+    )
+    assert period_identity(rec) != "full_game"
+    assert not is_eligible_total_record(rec)
+
+
+def test_period_identity_full_game_when_no_period_fields():
+    rec = _norm_record("fg", 8.5, "OVER", [{"book": "DK", "odds": -110}])
+    assert period_identity(rec) == "full_game"
+    assert is_eligible_total_record(rec)
+
+
+def test_logical_market_key_separates_team_totals():
+    home = _norm_record(
+        "t1",
+        88.5,
+        "OVER",
+        [{"book": "DK", "odds": -110}],
+        market_type="TEAM_PROP",
+        proposition="POINTS",
+        team="NYK",
+    )
+    away = _norm_record(
+        "t2",
+        90.5,
+        "OVER",
+        [{"book": "DK", "odds": -110}],
+        market_type="TEAM_PROP",
+        proposition="POINTS",
+        team="BOS",
+    )
+    assert logical_market_key(home) != logical_market_key(away)
+
+
+def test_build_game_totals_excludes_period_pseudo_markets():
+    """Inning/half totals must not appear as full-game board rows."""
+    books2 = [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -108}]
+    books2u = [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -112}]
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "records": [
+            # True full-game total (main + alt line) under two raw market_ids
+            # that must collapse to one logical board row.
+            _norm_record("fg-a", 8.5, "OVER", books2, include_overtime=True),
+            _norm_record("fg-a", 8.5, "UNDER", books2u, include_overtime=True),
+            _norm_record("fg-b", 9.0, "OVER", books2, include_overtime=True),
+            _norm_record("fg-b", 9.0, "UNDER", books2u, include_overtime=True),
+            # Period pseudo-markets (scope often wrongly full_game in live data)
+            _norm_record(
+                "inn6",
+                1.5,
+                "OVER",
+                books2,
+                period_label="6I",
+                periods=[6],
+                include_overtime=False,
+            ),
+            _norm_record(
+                "inn6",
+                1.5,
+                "UNDER",
+                books2u,
+                period_label="6I",
+                periods=[6],
+                include_overtime=False,
+            ),
+            _norm_record(
+                "f5",
+                4.5,
+                "OVER",
+                books2,
+                period_label="F5",
+                periods=[1, 2, 3, 4, 5],
+                include_overtime=False,
+            ),
+            _norm_record(
+                "f5",
+                4.5,
+                "UNDER",
+                books2u,
+                period_label="F5",
+                periods=[1, 2, 3, 4, 5],
+                include_overtime=False,
+            ),
+        ],
+    }
+    rows = build_game_totals(
+        [],
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert float(row["line"]) in (8.5, 9.0)
+    # Representative market_id is one of the full-game raw ids, not a period id.
+    assert row["market_id"] in {"fg-a", "fg-b"}
+    # Ladder merged across both full-game market_ids → fair total can bracket.
+    assert row["fair_total"] != "" or "NON_BRACKETING_LADDER" in row["quality_flags"]
+
+
+def test_build_game_totals_merges_split_full_game_market_ids_into_one_ladder():
+    """Same logical full-game total under two market_ids → one board row, merged lines."""
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "records": [
+            _norm_record(
+                "m-low",
+                8.0,
+                "OVER",
+                [{"book": "DK", "odds": -140}, {"book": "FD", "odds": -140}],
+            ),
+            _norm_record(
+                "m-low",
+                8.0,
+                "UNDER",
+                [{"book": "DK", "odds": 120}, {"book": "FD", "odds": 120}],
+            ),
+            _norm_record(
+                "m-high",
+                9.0,
+                "OVER",
+                [{"book": "DK", "odds": 110}, {"book": "FD", "odds": 110}],
+            ),
+            _norm_record(
+                "m-high",
+                9.0,
+                "UNDER",
+                [{"book": "DK", "odds": -130}, {"book": "FD", "odds": -130}],
+            ),
+        ],
+    }
+    rows = build_game_totals(
+        [],
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )
+    assert len(rows) == 1
+    # With lines on either side of 0.5, merged ladder should produce a fair total.
+    assert rows[0]["fair_total"] != ""
