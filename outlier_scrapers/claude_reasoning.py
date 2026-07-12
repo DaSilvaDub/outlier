@@ -37,6 +37,7 @@ def call_claude(
     role_block: list[str],
     raw_csv_bytes: bytes,
     totals_bytes: bytes | None = None,
+    team_totals_bytes: bytes | None = None,
     client=None,
 ) -> str:
     if client is None:
@@ -45,7 +46,9 @@ def call_claude(
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
         client = anthropic.Anthropic(timeout=600.0, max_retries=1)
 
-    data_block = rc.build_reasoning_data_block(raw_csv_bytes, totals_bytes)
+    data_block = rc.build_reasoning_data_block(
+        raw_csv_bytes, totals_bytes, team_totals_bytes
+    )
     full_prompt = prompt_text + "\n\nData:\n" + data_block
     try:
         with client.messages.stream(
@@ -86,8 +89,10 @@ def run_claude_d(
                 return 0
 
         totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
         raw_bytes, candidates_sha256 = rc.validate_candidates(
-            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
@@ -102,6 +107,7 @@ def run_claude_d(
                 "prompt": prompt_text,
                 "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
+                "team_totals_hash": team_totals_sha256,
             }
         )
 
@@ -114,7 +120,12 @@ def run_claude_d(
 
         logger.info("Calling Claude (Prompt D)...")
         output_text = call_claude(
-            prompt_text, pack.ROLE_BLOCK, raw_bytes, totals_bytes, client=client
+            prompt_text,
+            pack.ROLE_BLOCK,
+            raw_bytes,
+            totals_bytes,
+            team_totals_bytes,
+            client=client,
         )
 
         front_matter = (
@@ -124,6 +135,7 @@ def run_claude_d(
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
+            f"team_totals_sha256: {team_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"
             "---\n\n"
         )

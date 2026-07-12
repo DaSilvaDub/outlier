@@ -6,12 +6,18 @@ import pytest
 
 from outlier_scrapers.game_totals import (
     MIN_EDGE_TOTALS,
+    TOTAL_KIND_GAME,
+    TOTAL_KIND_TEAM,
     aggregate_line_p_over,
     build_game_totals,
+    build_team_totals,
     build_market_ladder,
     compute_side_edge,
     devig_book_pair,
     interpolate_fair_total,
+    is_eligible_total_record,
+    is_game_total_record,
+    is_team_total_record,
     pick_best_side,
 )
 from outlier_scrapers.sizing import compute_sizing
@@ -313,3 +319,112 @@ def test_build_market_ladder_groups_sides():
     assert 8.5 in ladder
     assert "dk" in ladder[8.5]["over"]
     assert "dk" in ladder[8.5]["under"]
+
+
+def test_eligibility_split_game_vs_team():
+    game = _norm_record("g1", 8.5, "OVER", [{"book": "DK", "odds": -110}])
+    team = _norm_record(
+        "t1",
+        4.5,
+        "OVER",
+        [{"book": "DK", "odds": -110}],
+        market_type="TEAM_PROP",
+        proposition="POINTS",
+    )
+    half = dict(game)
+    half["scope"] = "first_5_innings"
+
+    assert is_game_total_record(game)
+    assert not is_team_total_record(game)
+    assert is_team_total_record(team)
+    assert not is_game_total_record(team)
+    assert not is_game_total_record(half)
+    assert not is_team_total_record(half)
+    assert is_eligible_total_record(game)
+    assert is_eligible_total_record(team)
+    assert is_eligible_total_record(game, kind=TOTAL_KIND_GAME)
+    assert not is_eligible_total_record(team, kind=TOTAL_KIND_GAME)
+    assert is_eligible_total_record(team, kind=TOTAL_KIND_TEAM)
+    assert not is_eligible_total_record(game, kind=TOTAL_KIND_TEAM)
+
+
+def test_build_game_totals_excludes_team_records():
+    games_norm = {
+        "records": [
+            _norm_record("m_game", 8.5, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m_game", 8.5, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record(
+                "m_team",
+                4.5,
+                "OVER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+            _norm_record(
+                "m_team",
+                4.5,
+                "UNDER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+        ],
+    }
+    rows = build_game_totals([], games_norm, sport="MLB")
+    assert all(r["total_kind"] == TOTAL_KIND_GAME for r in rows)
+    assert all(r["market_id"] == "m_game" for r in rows)
+    assert not any(r["market_id"] == "m_team" for r in rows)
+
+
+def test_build_team_totals_shape():
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "records": [
+            _norm_record(
+                "m_team",
+                4.5,
+                "OVER",
+                [{"book": "DK", "odds": -125}, {"book": "FD", "odds": -122}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+            _norm_record(
+                "m_team",
+                4.5,
+                "UNDER",
+                [{"book": "DK", "odds": 105}, {"book": "FD", "odds": 102}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+            _norm_record(
+                "m_team",
+                5.0,
+                "OVER",
+                [{"book": "DK", "odds": 110}, {"book": "FD", "odds": 108}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+            _norm_record(
+                "m_team",
+                5.0,
+                "UNDER",
+                [{"book": "DK", "odds": -130}, {"book": "FD", "odds": -128}],
+                market_type="TEAM_PROP",
+                proposition="POINTS",
+            ),
+            _norm_record("m_game", 8.5, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m_game", 8.5, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+        ],
+    }
+    rows = build_team_totals(
+        [],
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["total_kind"] == TOTAL_KIND_TEAM
+    assert row["market_id"] == "m_team"
+    assert "Team Total" in row["selection"]

@@ -47,12 +47,18 @@ def call_gemini(prompt_text: str, role_block: list[str], research_input: str, cl
 
 
 def _market_index(
-    raw_bytes: bytes, totals_bytes: bytes | None
+    raw_bytes: bytes,
+    totals_bytes: bytes | None,
+    team_totals_bytes: bytes | None = None,
 ) -> dict[str, dict[str, str]]:
     text = raw_bytes.decode("utf-8-sig")
     rows = csv.DictReader(StringIO(text))
     index = {row["market_id"]: row for row in rows if row.get("market_id")}
     for row in rc.parse_game_totals(totals_bytes):
+        totals_id = str(row.get("totals_id") or "").strip()
+        if totals_id:
+            index[totals_id] = row
+    for row in rc.parse_team_totals(team_totals_bytes):
         totals_id = str(row.get("totals_id") or "").strip()
         if totals_id:
             index[totals_id] = row
@@ -133,10 +139,12 @@ def run_c_research(
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
         briefing_sha256 = rc.sha256_text(briefing_text)
         totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
         candidates_bytes, candidates_sha256 = rc.validate_candidates(
-            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
-        candidates = _market_index(candidates_bytes, totals_bytes)
+        candidates = _market_index(candidates_bytes, totals_bytes, team_totals_bytes)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -150,6 +158,7 @@ def run_c_research(
                 "briefing_hash": briefing_sha256,
                 "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
+                "team_totals_hash": team_totals_sha256,
             }
         )
 
@@ -165,6 +174,7 @@ def run_c_research(
             + "\n\nAuthoritative candidates.csv:\n"
             + candidates_bytes.decode("utf-8-sig"),
             totals_bytes,
+            team_totals_bytes,
         )
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)
