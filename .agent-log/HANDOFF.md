@@ -1,22 +1,16 @@
 # Agent Handoff
 
-**Last Product Commit SHA**: `61418ad`
-**Branch**: `fix/game-totals-critical-gates`
-**PR**: https://github.com/DaSilvaDub/outlier/pull/16
+**Last Commit SHA**: `077bddf1f72c3334f1a2096ea8e7e710d6c3bbfa`
+**Branch**: `test/mlb-wnba-desk-e2e`
+**PR**: https://github.com/DaSilvaDub/outlier/pull/18
 
 **Files Touched**:
-- `outlier_scrapers/game_totals.py`, `line_movement.py`, `normalizer.py` - shared consensus devig and fail-closed pregame/freshness/integrity gates
-- `outlier_scrapers/runner_common.py`, `daily_job.py` - schema-validated actionable totals counting and header-only candidate support
-- `outlier_scrapers/reasoning.py`, `claude_reasoning.py`, `c_research.py`, `prompts/C.md` - totals-only A/C/D execution and Prompt C totals-id validation
-- focused tests for totals math, runners, daily orchestration, and Prompt C
+- `tests/test_run_desk.py` (added mocked desk A-E e2e test for MLB+WNBA)
 
 **Verification**:
-- Focused offline suite: 85 passed
-- Pack and sizing regression suite: 64 passed
-- `python -m compileall -q outlier_scrapers`: passed
-- `git diff --check master...HEAD`: passed
+- `pytest tests/test_run_desk.py::test_mlb_wnba_e2e_pipeline -q` passed
 
 **Next Steps**:
-1. Review and merge draft PR #16.
-2. Rebuild a fresh pack and inspect `game_totals.csv` after merge; no reasoning providers need to run for this check.
-3. Remaining amended-plan findings outside this PR include logical market grouping, exact CSV schema/briefing integration, and broader end-to-end coverage.
+1. Review and merge the opened PR if everything looks correct.
+2. Optional: extract `_seed_league_data` to a shared test helper if pack + desk both grow more fixtures.
+3. Keep product work for team-totals split on its own branch (`feat/split-team-totals`).
