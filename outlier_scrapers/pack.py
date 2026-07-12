@@ -863,15 +863,15 @@ def build_briefing(
             )
     if totals_rows is not None:
         lines.append("")
-        lines.append(_format_game_totals_md(totals_rows).replace("# Game totals projection board", "### Game totals"))
+        lines.append(_format_game_totals_md(totals_rows, title="### Game totals"))
     if team_totals_rows is not None:
         lines.append("")
-        lines.append(_format_game_totals_md(team_totals_rows).replace("# Game totals projection board", "### Team totals"))
+        lines.append(_format_game_totals_md(team_totals_rows, title="### Team totals"))
     return "\n".join(lines)
 
 
-def _format_game_totals_md(totals_rows: list[dict[str, Any]]) -> str:
-    lines = ["# Game totals projection board", ""]
+def _format_game_totals_md(totals_rows: list[dict[str, Any]], title: str = "# Game totals projection board") -> str:
+    lines = [title, ""]
     if not totals_rows:
         lines.append("_No eligible totals markets._")
         return "\n".join(lines)
@@ -913,7 +913,13 @@ def write_pack(
         team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
         
     (out_dir / "briefing.md").write_text(
-        build_briefing(rows, out_dir.name, freshness_lines, totals_rows, team_totals_rows), encoding="utf-8"
+        build_briefing(
+            rows, 
+            out_dir.name, 
+            freshness_lines,
+            totals_rows if games_norm_by_league is not None else None,
+            team_totals_rows if games_norm_by_league is not None else None
+        ), encoding="utf-8"
     )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -942,7 +948,7 @@ def write_pack(
         writer = csv.DictWriter(tf, fieldnames=TEAM_TOTALS_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(team_totals_rows)
-    (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows).replace("# Game totals", "# Team totals"), encoding="utf-8")
+    (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
 def build_pack(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
