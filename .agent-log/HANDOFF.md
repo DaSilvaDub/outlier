@@ -1,19 +1,22 @@
 # Agent Handoff
 
-**Last Commit SHA**: e6e4f22 (master — merged #14 then #15)
-**Branch**: `master`
-**PR Links**:
-- https://github.com/DaSilvaDub/outlier/pull/14 (MERGED) — F6 manual-report lock filter + F7 sizing partition guard
-- https://github.com/DaSilvaDub/outlier/pull/15 (MERGED) — F3 Option 2 push-aware edge via `compute_sizing`
+**Last Product Commit SHA**: `61418ad`
+**Branch**: `fix/game-totals-critical-gates`
+**PR**: https://github.com/DaSilvaDub/outlier/pull/16
 
-**Files Touched (this session)**:
-- `outlier_scrapers/game_totals.py` — integer-line push-aware `edge_pct` via `sizing.compute_sizing`; blank edge when `push_capable_no_prob`; `actionable` stays false
-- `tests/test_game_totals.py` — Option 2 assertions
-- (from #14) `outlier_scrapers/sizing.py`, `run_desk.py`, `tests/test_sizing.py`, `tests/test_run_desk.py`
+**Files Touched**:
+- `outlier_scrapers/game_totals.py`, `line_movement.py`, `normalizer.py` - shared consensus devig and fail-closed pregame/freshness/integrity gates
+- `outlier_scrapers/runner_common.py`, `daily_job.py` - schema-validated actionable totals counting and header-only candidate support
+- `outlier_scrapers/reasoning.py`, `claude_reasoning.py`, `c_research.py`, `prompts/C.md` - totals-only A/C/D execution and Prompt C totals-id validation
+- focused tests for totals math, runners, daily orchestration, and Prompt C
 
-**Verification on combined master**: `tests/test_game_totals.py` + `test_sizing.py` + `test_run_desk.py` + `test_pack.py` → **85 passed**
+**Verification**:
+- Focused offline suite: 85 passed
+- Pack and sizing regression suite: 64 passed
+- `python -m compileall -q outlier_scrapers`: passed
+- `git diff --check master...HEAD`: passed
 
 **Next Steps**:
-1. Still open scan PRs (independent): #11 (F1+F2), #12 (F4 HTML escape), #8 (scan doc) — merge when ready.
-2. **Option 3 (deferred)**: unlock `actionable` when push_prob is known and push-aware edge ≥ `MIN_EDGE_TOTALS` — strategy decision, needs explicit sign-off.
-3. Other parallel branches from other ents may need rebase after these merges.
+1. Review and merge draft PR #16.
+2. Rebuild a fresh pack and inspect `game_totals.csv` after merge; no reasoning providers need to run for this check.
+3. Remaining amended-plan findings outside this PR include logical market grouping, exact CSV schema/briefing integration, and broader end-to-end coverage.
