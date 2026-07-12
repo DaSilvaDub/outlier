@@ -9,8 +9,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from outlier_scrapers import pack
@@ -118,9 +120,6 @@ def extract_yaml_request_hash(content: str) -> str | None:
             return line.split(":", 1)[1].strip().strip("'\"")
     return None
 
-
-import logging
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

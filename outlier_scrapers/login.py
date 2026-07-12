@@ -17,7 +17,7 @@ from .auth import (
 )
 from .browser_helpers import click_first_visible, is_on_props_page, wait_for_visible
 from .environment import load_environment
-from .paths import otp_code_file, storage_state_file
+from .paths import otp_code_file, storage_state_file, PROJECT_ROOT
 from .registry import supported_leagues
 
 
