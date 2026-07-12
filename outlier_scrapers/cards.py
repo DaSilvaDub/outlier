@@ -715,7 +715,13 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         "fair": fair,
     }
     _route_and_rank(card)
-    if proposition.strip().upper() == "SPREAD" and _spread_sign_conflict(
+    # Deferred import: mirrors the existing pack-module import pattern in
+    # game_totals.py (avoids a module-load-order dependency between the
+    # cards -> pack pipeline stages). Reuses pack's own signed-margin set so
+    # this conflict guard can never drift out of sync with the rendering fix.
+    from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
+
+    if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS and _spread_sign_conflict(
         main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
     ):
         card.setdefault("flags", []).append("spread_sign_conflict")
