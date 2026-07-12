@@ -3,7 +3,7 @@ from outlier_scrapers.environment import load_environment
 
 
 def test_load_environment(monkeypatch, tmp_path):
-    monkeypatch.setattr("outlier_scrapers.environment.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("outlier_scrapers.paths.PROJECT_ROOT", tmp_path)
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -37,6 +37,6 @@ def test_load_environment(monkeypatch, tmp_path):
 
 
 def test_missing_env_file(monkeypatch, tmp_path):
-    monkeypatch.setattr("outlier_scrapers.environment.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("outlier_scrapers.paths.PROJECT_ROOT", tmp_path)
     # Should not raise error
     load_environment()

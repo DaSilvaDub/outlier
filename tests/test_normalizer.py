@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from outlier_scrapers.normalizer import normalize_player_props
+from outlier_scrapers.normalizer import detect_scope, normalize_player_props
 from outlier_scrapers.registry import get_sport_config
 
 
@@ -10,6 +10,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def load_fixture(name: str):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def test_detect_scope_period_label_abbreviations():
+    assert detect_scope("Total") == "full_game"
+    assert detect_scope("Total", None) == "full_game"
+    assert detect_scope("Hits", "6I") == "partial_period"
+    assert detect_scope("F5") == "first_5_innings"
+    assert detect_scope("1H") == "first_half"
+    assert detect_scope("2Q") == "second_quarter"
+    assert detect_scope("1st 7I") == "partial_period"
+    assert detect_scope("7-9I") == "partial_period"
 
 
 def test_mlb_unknown_market_is_preserved_with_raw_fields():
