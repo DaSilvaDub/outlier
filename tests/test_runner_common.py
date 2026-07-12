@@ -145,3 +145,121 @@ def test_build_reasoning_data_block_includes_totals(tmp_path):
     assert "candidates.csv:" in block
     assert "GAME_TOTALS.CSV" in block
     assert "gm1" in block
+
+
+def _totals_csv_bytes(rows: list[dict], *, header=None) -> bytes:
+    import io
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+
+    fields = header or GAME_TOTALS_HEADER
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=fields)
+    writer.writeheader()
+    for row in rows:
+        full = {field: "" for field in fields}
+        full.update(row)
+        writer.writerow(full)
+    return stream.getvalue().encode()
+
+
+def test_append_totals_block_includes_team_totals():
+    game = _totals_csv_bytes(
+        [
+            {
+                "totals_id": "g1",
+                "market_id": "mg",
+                "selection": "A @ B Total O/U OVER 8.5",
+                "line": "8.5",
+                "price": "-110",
+                "total_kind": "game",
+                "actionable": "true",
+            }
+        ]
+    )
+    team = _totals_csv_bytes(
+        [
+            {
+                "totals_id": "t1",
+                "market_id": "mt",
+                "selection": "A Team Total OVER 4.5",
+                "line": "4.5",
+                "price": "-110",
+                "total_kind": "team",
+                "actionable": "true",
+            }
+        ]
+    )
+    block = runner_common.append_totals_block("base", game, team)
+    assert "GAME_TOTALS.CSV" in block
+    assert "TEAM_TOTALS.CSV" in block
+    assert "mg" in block and "mt" in block
+
+
+def test_parse_game_totals_filters_legacy_mixed_file():
+    mixed = _totals_csv_bytes(
+        [
+            {
+                "totals_id": "g1",
+                "market_id": "mg",
+                "selection": "game",
+                "line": "8.5",
+                "price": "-110",
+                "total_kind": "game",
+                "actionable": "true",
+            },
+            {
+                "totals_id": "t1",
+                "market_id": "mt",
+                "selection": "team",
+                "line": "4.5",
+                "price": "-110",
+                "total_kind": "team",
+                "actionable": "true",
+            },
+            {
+                "totals_id": "g2",
+                "market_id": "mg2",
+                "selection": "blank-kind",
+                "line": "9.5",
+                "price": "-105",
+                "total_kind": "",
+                "actionable": "false",
+            },
+        ]
+    )
+    game_rows = runner_common.parse_game_totals(mixed)
+    team_rows = runner_common.parse_team_totals(mixed)
+    assert {r["totals_id"] for r in game_rows} == {"g1", "g2"}
+    assert {r["totals_id"] for r in team_rows} == {"t1"}
+
+
+def test_has_actionable_any_totals():
+    game = _totals_csv_bytes(
+        [
+            {
+                "totals_id": "g1",
+                "market_id": "mg",
+                "selection": "game",
+                "line": "8.5",
+                "price": "-110",
+                "total_kind": "game",
+                "actionable": "false",
+            }
+        ]
+    )
+    team = _totals_csv_bytes(
+        [
+            {
+                "totals_id": "t1",
+                "market_id": "mt",
+                "selection": "team",
+                "line": "4.5",
+                "price": "-110",
+                "total_kind": "team",
+                "actionable": "true",
+            }
+        ]
+    )
+    assert not runner_common.has_actionable_any_totals(game, None)
+    assert runner_common.has_actionable_any_totals(game, team)
+    assert runner_common.has_actionable_team_totals(team)

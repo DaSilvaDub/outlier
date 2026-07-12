@@ -4,7 +4,7 @@ MLB: SP confirmations + days rest, bullpen usage, posted lineup (bats in/out), p
 WNBA: injury status (out/quest/prob), load management, rotation/minutes, back-to-back/travel, star-absence usage shift.
 
 Input contains the pack's markets with exact market_id, selection, line, price.
-For game/team totals, use the exact `totals_id` from `game_totals.csv` as the
+For game/team totals, use the exact `totals_id` from `game_totals.csv` or `team_totals.csv` as the
 FINDING record's `market_id`; quote that row's selection, line, and price exactly.
 
 Web discovery (search before fetch):

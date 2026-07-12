@@ -380,7 +380,7 @@ def build_row(
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
-    row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
+    row = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
@@ -562,7 +562,8 @@ def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    dated = {d for r in rows if (d := _local_date(r.get("_event_starts_at"))) is not None}
+    dated = {_local_date(r.get("_event_starts_at")) for r in rows}
+    dated.discard(None)
     if not dated:
         return rows, (requested or today)
     if requested and requested in dated:
@@ -828,7 +829,9 @@ def build_freshness_section(leagues: Sequence[str]) -> list[str]:
     return lines
 
 def build_briefing(
-    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None
+    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None,
+    totals_rows: list[dict[str, Any]] | None = None,
+    team_totals_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     lines = [f"SLATE: {target_date}", ""]
     if freshness_lines:
@@ -858,11 +861,17 @@ def build_briefing(
                 f"- {r.get('sport')} {_matchup_display(r)} | event {eid} "
                 f"| first lock: {r.get('_event_starts_at') or 'n/a'}"
             )
+    if totals_rows is not None:
+        lines.append("")
+        lines.append(_format_game_totals_md(totals_rows, title="### Game totals"))
+    if team_totals_rows is not None:
+        lines.append("")
+        lines.append(_format_game_totals_md(team_totals_rows, title="### Team totals"))
     return "\n".join(lines)
 
 
-def _format_game_totals_md(totals_rows: list[dict[str, Any]]) -> str:
-    lines = ["# Game totals projection board", ""]
+def _format_game_totals_md(totals_rows: list[dict[str, Any]], title: str = "# Game totals projection board") -> str:
+    lines = [title, ""]
     if not totals_rows:
         lines.append("_No eligible totals markets._")
         return "\n".join(lines)
@@ -894,8 +903,23 @@ def write_pack(
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+        
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+
+    totals_rows: list[dict[str, Any]] = []
+    team_totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+        
     (out_dir / "briefing.md").write_text(
-        build_briefing(rows, out_dir.name, freshness_lines), encoding="utf-8"
+        build_briefing(
+            rows, 
+            out_dir.name, 
+            freshness_lines,
+            totals_rows if games_norm_by_league is not None else None,
+            team_totals_rows if games_norm_by_league is not None else None
+        ), encoding="utf-8"
     )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -911,18 +935,20 @@ def write_pack(
     with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df:
         df.write("date,market_id,event_id,selection,decision,line_taken,price_taken,units,rationale\n")
 
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals
-
-    totals_rows: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(exist_ok=True)
+    
     with open(out_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as tf:
         writer = csv.DictWriter(tf, fieldnames=GAME_TOTALS_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(totals_rows)
     (sections_dir / "game_totals.md").write_text(_format_game_totals_md(totals_rows), encoding="utf-8")
+
+    with open(out_dir / "team_totals.csv", "w", newline="", encoding="utf-8") as tf:
+        writer = csv.DictWriter(tf, fieldnames=TEAM_TOTALS_HEADER, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(team_totals_rows)
+    (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
 def build_pack(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
