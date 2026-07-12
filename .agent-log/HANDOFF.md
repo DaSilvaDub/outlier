@@ -1,10 +1,15 @@
 # Agent Handoff
 
-**Last Commit SHA:** `0e8862f75d379e9a232b1d52bf4ea66e2018c954`
+**Last Commit SHA:** `fd1fa23e` (on branch `fix/ruff-dev-dependency`)
+
+**PR Link:** https://github.com/DaSilvaDub/outlier/pull/22
 
 **Files Touched:**
-- `.github/workflows/pytest.yml`
+- `requirements.txt`
+- `pyproject.toml`
+- `outlier_scrapers/login.py`
+- `outlier_scrapers/runner_common.py`
 
 **Next Steps:**
-- Push the branch (`feat/github-actions-offline-pytest`) to origin and open a PR.
-- Ensure GitHub actions complete successfully.
+- Review and merge PR #22.
+- Verify that `pip install -e .[dev]` successfully installs both `pytest` and `ruff`.
