@@ -9,10 +9,12 @@ from outlier_scrapers.game_totals import (
     aggregate_line_p_over,
     build_game_totals,
     build_market_ladder,
+    compute_side_edge,
     devig_book_pair,
     interpolate_fair_total,
     pick_best_side,
 )
+from outlier_scrapers.sizing import compute_sizing
 
 
 def _norm_record(
@@ -136,6 +138,9 @@ def test_build_game_totals_integer_line_push_blocked():
     row = next(r for r in rows if float(r["line"]) == 8.0)
     assert row["sizing_flags"] == "push_capable_no_prob"
     assert row["actionable"] == "false"
+    # Option 2 fallback: without a derived push mass, blank the two-way edge
+    # so a push-contaminated number never displays as if it were honest EV.
+    assert row["edge_pct"] == ""
 
 
 def test_build_game_totals_integer_line_with_push_prob():
@@ -155,7 +160,33 @@ def test_build_game_totals_integer_line_with_push_prob():
     assert row["sizing_flags"] == ""
     assert isinstance(row["push_prob"], float)
     assert row["push_prob"] > 0
+    # Option 2: display edge is push-aware via sizing.compute_sizing; gate stays closed.
     assert row["actionable"] == "false"
+    assert row["edge_pct"] != ""
+    assert row["decimal_price"] not in (None, "")
+    assert row["best_side"] in ("OVER", "UNDER")
+
+    # Recompute model_prob the same way Option 2 does: two-way headline p_side
+    # + derived push_prob into sizing.compute_sizing. Do not trust
+    # projected_over_prob here (master may still write a stale loop var — F2).
+    side = row["best_side"]
+    p_over, _, _ = aggregate_line_p_over(
+        {"DK": -110, "FD": -110},
+        {"DK": -110, "FD": -110},
+    )
+    assert p_over is not None
+    p_side = p_over if side == "OVER" else 1.0 - p_over
+    decimal = float(row["decimal_price"])
+    push = float(row["push_prob"])
+    expected = compute_sizing(decimal_price=decimal, model_prob=p_side, push_prob=push)
+    assert expected.edge_pct is not None
+    assert float(row["edge_pct"]) == pytest.approx(round(expected.edge_pct, 4))
+
+    # And it must differ from the naive two-way edge whenever push mass is non-zero
+    # (otherwise Option 2 is a no-op and the number is still push-contaminated).
+    two_way_edge, _ = compute_side_edge(side, p_over, row["best_price"])
+    assert two_way_edge is not None
+    assert float(row["edge_pct"]) != pytest.approx(two_way_edge)
 
 
 
