@@ -162,7 +162,10 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
         totals_count = 0
         totals = pack_dir / "game_totals.csv"
         if totals.exists():
-            totals_count = rc.count_actionable_game_totals(totals.read_bytes())
+            totals_count += rc.count_actionable_game_totals(totals.read_bytes())
+        team_totals = pack_dir / "team_totals.csv"
+        if team_totals.exists():
+            totals_count += rc.count_actionable_team_totals(team_totals.read_bytes())
         return candidate_count + totals_count
     except (OSError, csv.Error, rc.RunnerError) as exc:
         logger.error("Could not count pack rows in %s: %s", pack_dir, exc)

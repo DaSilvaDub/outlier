@@ -40,6 +40,7 @@ REQUIRED_INPUTS = {
 OPTIONAL_INPUTS = {
     "prompt_c": "chatgpt_c.md",
     "game_totals": rc.GAME_TOTALS_NAME,
+    "team_totals": rc.TEAM_TOTALS_NAME,
 }
 
 

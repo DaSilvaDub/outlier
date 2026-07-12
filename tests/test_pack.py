@@ -510,10 +510,14 @@ def test_end_to_end(tmp_path, monkeypatch):
     write_pack(rows, out_dir, games_norm_by_league=games_norm)
     assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "game_totals.csv").exists()
+    assert (out_dir / "team_totals.csv").exists()
     assert (out_dir / "sections" / "game_totals.md").exists()
+    assert (out_dir / "sections" / "team_totals.md").exists()
     briefing = (out_dir / "briefing.md").read_text()
     assert "REASONING PASSES (A, D):" in briefing
     assert "Slate index" in briefing
+    assert "### Game totals" in briefing
+    assert "### Team totals" in briefing
     # dossiers unique per (sport,event)
     dossiers = list((out_dir / "dossiers").glob("*.md"))
     assert len(dossiers) == len({d.name for d in dossiers})

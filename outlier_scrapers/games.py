@@ -160,7 +160,7 @@ def export_games_for_league(
         source_url="api",
     )
 
-    latest_path = paths.normalized / f"{config.league_id.lower()}_games_latest.json"
+    latest_path = paths.games_normalized_latest()
     write_json(latest_path, normalized)
     write_json(paths.timestamped(paths.normalized, "games"), normalized)
 
@@ -193,7 +193,7 @@ def export_games_for_league(
         "league": config.league_id,
         "enrichment": enrichment_map,
     }
-    enrichment_path = paths.normalized / f"{config.league_id.lower()}_games_enrichment_latest.json"
+    enrichment_path = paths.games_enrichment_latest()
     write_json(enrichment_path, enrichment_payload)
     write_json(paths.timestamped(paths.normalized, "games_enrichment"), enrichment_payload)
 

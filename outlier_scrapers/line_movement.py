@@ -338,9 +338,7 @@ def load_props_market_source(
     now: datetime | None = None,
 ) -> PropsMarketSource:
     config = get_sport_config(league)
-    path = (
-        league_paths(config.league_id).normalized / f"{config.league_id.lower()}_props_latest.json"
-    )
+    path = league_paths(config.league_id).props_normalized_latest()
     if not path.exists():
         raise FileNotFoundError(
             f"Missing props file {path}. Run python -m outlier_scrapers.props --league {config.league_id} --all first."
@@ -363,9 +361,7 @@ def load_games_market_source(
     now: datetime | None = None,
 ) -> PropsMarketSource:
     config = get_sport_config(league)
-    path = (
-        league_paths(config.league_id).normalized / f"{config.league_id.lower()}_games_latest.json"
-    )
+    path = league_paths(config.league_id).games_normalized_latest()
     if not path.exists():
         raise FileNotFoundError(
             f"Missing games file {path}. Run python -m outlier_scrapers.refresh --league {config.league_id} --games first."

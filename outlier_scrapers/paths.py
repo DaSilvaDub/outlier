@@ -27,6 +27,34 @@ class LeaguePaths:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         return directory / f"{self.league.lower()}_{stem}_{timestamp}{suffix}"
 
+    @property
+    def cards(self) -> Path:
+        return self.root / "cards"
+
+    def _latest(self, directory: Path, stem: str, suffix: str = ".json") -> Path:
+        return directory / f"{self.league.lower()}_{stem}_latest{suffix}"
+
+    def games_normalized_latest(self) -> Path:
+        return self._latest(self.normalized, "games")
+
+    def props_normalized_latest(self) -> Path:
+        return self._latest(self.normalized, "props")
+
+    def games_enrichment_latest(self) -> Path:
+        return self._latest(self.normalized, "games_enrichment")
+
+    def games_line_movement_latest(self) -> Path:
+        return self._latest(self.normalized, "games_line_movement")
+
+    def line_movement_latest(self) -> Path:
+        return self._latest(self.normalized, "line_movement")
+
+    def cards_latest(self) -> Path:
+        return self._latest(self.cards, "cards")
+
+    def games_cards_latest(self) -> Path:
+        return self._latest(self.cards, "games_cards")
+
 
 def league_paths(league: str) -> LeaguePaths:
     token = league.strip().upper()
