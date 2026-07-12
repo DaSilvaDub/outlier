@@ -314,11 +314,11 @@ def build_game_totals(
         ladder_p: dict[float, float] = {}
         line_flags: dict[float, list[str]] = {}
         for line, sides in ladder.items():
-            p_over, book_count, lf = aggregate_line_p_over(sides.get("over", {}), sides.get("under", {}))
+            line_p_over, _bc, lf = aggregate_line_p_over(sides.get("over", {}), sides.get("under", {}))
             if lf:
                 line_flags[line] = lf
-            if p_over is not None:
-                ladder_p[line] = p_over
+            if line_p_over is not None:
+                ladder_p[line] = line_p_over
 
         fair_total, fair_flags = interpolate_fair_total(ladder_p)
         flags.extend(fair_flags)
@@ -427,13 +427,13 @@ def build_game_totals(
                 "book": cand.get("book") or "",
                 "best_side": best_side,
                 "best_price": best_price,
-                "projected_over_prob": round(p_over, 4) if p_over is not None else "",
+                "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
                 "actionable": actionable,
-                "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over is None else ""),
+                "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
                 "devig_source": devig_source,
                 "recommended_units_pre_news": cand.get("recommended_units_pre_news") or "",
                 "sizing_flags": sizing_flags or cand.get("sizing_flags") or "",

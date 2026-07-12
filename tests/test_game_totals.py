@@ -217,6 +217,30 @@ def test_build_game_totals_live_event_flag():
     assert rows[0]["actionable"] == "false"
 
 
+def test_projected_over_prob_matches_headline_line():
+    """projected_over_prob must be the headline line's p_over, not a stale
+    leftover from the ladder-building loop. Here the headline (8.5) is inserted
+    BEFORE 9.5, so a stale loop variable would report 9.5's probability and the
+    over/under pair would not sum to 1 (regression guard for F2)."""
+    games_norm = {
+        "records": [
+            _norm_record("m5", 8.5, "OVER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m5", 8.5, "UNDER", [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}]),
+            _norm_record("m5", 9.5, "OVER", [{"book": "DK", "odds": 200}, {"book": "FD", "odds": 200}]),
+            _norm_record("m5", 9.5, "UNDER", [{"book": "DK", "odds": -250}, {"book": "FD", "odds": -250}]),
+        ],
+    }
+    candidates = [{"market_id": "m5", "line": 8.5, "market_type": "GAMELINE", "_proposition": "TOTAL"}]
+    rows = build_game_totals(candidates, games_norm, sport="MLB")
+    row = next(r for r in rows if float(r["line"]) == 8.5)
+    over = float(row["projected_over_prob"])
+    under = float(row["projected_under_prob"])
+    # Over and under for the SAME (headline) line must be complementary.
+    assert abs(over + under - 1.0) < 1e-6
+    # The 8.5 line at -110/-110 devigs to ~0.5 over; the 9.5 line is far lower.
+    assert abs(over - 0.5) < 0.05
+
+
 def test_build_market_ladder_groups_sides():
     records = [
         _norm_record("m1", 8.5, "OVER", [{"book": "DK", "odds": -110}]),
