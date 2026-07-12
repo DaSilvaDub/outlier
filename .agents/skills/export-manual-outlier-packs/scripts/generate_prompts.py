@@ -57,7 +57,7 @@ def main():
     briefing = briefing.replace("- Use this pack ONLY. Do not use memory or the web.\n", "")
     briefing = briefing.replace("- If you need info not in the pack, list it under NEEDS — do not guess.\n", "")
 
-    models = ["Claude", "Grok", "Gemini", "ChatGPT"]
+    models = ["Claude", "Grok", "Copilot", "Gemini", "ChatGPT"]
 
     for model in models:
         prompt = f"""Hello {model}, please analyze the following betting data and generate a final betting report.
@@ -77,7 +77,7 @@ CRITICAL INSTRUCTIONS FOR YOU:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(prompt)
 
-    print(f"Successfully generated 4 prompt files in {desktop}")
+    print(f"Successfully generated {len(models)} prompt files in {desktop}")
 
 if __name__ == "__main__":
     main()
