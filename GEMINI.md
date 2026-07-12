@@ -1,10 +1,14 @@
-# Multi-Ent Sync Global Prompt Snippet (for EVERY harness)
+# Outlier multi-ent global instructions (auto-installed from docs/ENT-SYNC-GLOBAL-PROMPT.md)
 
-Copy-paste the block below **verbatim** into the *global / system / pre-instructions* for this repo in every AI harness you use (Claude Code project settings, Codex rules, Grok custom instructions, Gemini/antigravity workspace prompt, future ents). 
+**Scope:** Apply fully when the working tree is the outlier repo
+(`C:\Users\dasil\OneDrive\Documents\outlier` or any clone/worktree of
+https://github.com/DaSilvaDub/outlier.git). Outside that repo, ignore STEP 0 /
+report-sync; still obey the reasoning-off default if you are about to invoke
+`outlier_scrapers.reasoning|run_desk|...` by accident.
 
-This is the mechanism that guarantees no matter which ent, the agent sees identical pack.py/daily_job.py and history.
+Source of truth in-repo: `docs/ENT-SYNC-GLOBAL-PROMPT.md` (last synced 2026-07-12).
 
-```
+---
 You are working in the outlier repo (https://github.com/DaSilvaDub/outlier.git). MULTI-ENT SYNC IS MANDATORY.
 
 HOUSE RULE — NEVER RUN REASONING MODELS UNLESS THE USER EXPLICITLY ASKS THIS TURN:
@@ -45,37 +49,4 @@ After any -SyncAllWorktrees you (or another ent) run, immediately follow with th
 See checked-in SYNC.md, AGENTS.md, and docs/ENT-SYNC-GLOBAL-PROMPT.md.
 
 This rule is what makes d05eb21-style "the commit and the pack.py changes are invisible to me" impossible across Grok/Claude/Codex/Gemini/...
-```
 
-## Usage instructions for harness owners
-
-- Claude Code: Put in the Project or Global instructions / Claude.md equivalent at the very top.
-- Codex / other: Equivalent "always-run" or system prompt prefix.
-- After updating a harness config, start a fresh session in the outlier checkout and verify it obeys STEP 0 by reporting full bootstrap output.
-- When handing off between ents: the sender runs `& "...\sync-outlier.ps1" -SyncAllWorktrees` from canonical, then tells the receiver the exact bootstrap command + "run verify-sync for any state query".
-
-## Installed locations (machine: dasil, 2026-07-12)
-
-The fenced block above was installed (or refreshed) into every harness global surface on this machine:
-
-| Harness | Global instruction file |
-|---------|-------------------------|
-| Grok | `C:\Users\dasil\.grok\AGENTS.md` |
-| Claude Code | `C:\Users\dasil\.claude\CLAUDE.md` |
-| Codex | `C:\Users\dasil\.codex\AGENTS.md` (outlier section prepended) + `C:\Users\dasil\AGENTS.md` (appended section) |
-| Gemini / Antigravity | `C:\Users\dasil\.gemini\GEMINI.md` + `C:\Users\dasil\.gemini\AGENTS.md` |
-| Repo project files | `AGENTS.md`, `CLAUDE.md`, `GROK.md`, `GEMINI.md` (in-repo) |
-
-**Enforcement hook (Claude/Grok hookify):**  
-`~/.claude/hookify.no-reasoning-unless-asked.local.md` and  
-`outlier/.claude/hookify.no-reasoning-unless-asked.local.md` — warns on bash that would invoke A–E / `run_desk` / `--run-reasoning` / provider-hitting reasoning tests.
-
-When the fenced block in this file changes, re-run the install (or re-paste) into every path in the table above.
-
-## Why this exists
-
-The d05eb21 (~624 line pipeline upgrade touching pack.py + daily_job.py) was a transient review tree that never got pushed to origin or other worktrees. Later materialization (88083ff+) + these scripts + enforced bootstrap = synchronized state for all ents.
-
-Run `& "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"` yourself to see the live authoritative cross-worktree report (lists all ~16 worktrees + marker status + explicit d05eb21 explanation).
-
-Last updated: 2026-07-12 (added permanent "no reasoning models unless asked" house rule)
