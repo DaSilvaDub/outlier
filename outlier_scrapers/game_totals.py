@@ -10,7 +10,7 @@ import statistics
 from datetime import datetime
 from typing import Any
 
-from outlier_scrapers.cards import two_way_fair
+from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
 from outlier_scrapers.normalizer import implied_probability
 from outlier_scrapers.sizing import compute_sizing
 
@@ -119,10 +119,11 @@ def _book_american(book_entry: dict[str, Any]) -> int | float | None:
 
 def devig_book_pair(over_odds: Any, under_odds: Any) -> tuple[float, float] | None:
     """Return (p_over, p_under) as 0–1 probabilities."""
-    fair = two_way_fair(over_odds, under_odds)
-    if not fair:
+    refs, _accepted = build_consensus_operator_refs([("DraftKings", over_odds, under_odds)])
+    fair = refs.get("DRAFTKINGS")
+    if fair is None:
         return None
-    return fair["OVER"] / 100.0, fair["UNDER"] / 100.0
+    return fair
 
 
 def median_prob(values: list[float]) -> float | None:
@@ -175,16 +176,16 @@ def aggregate_line_p_over(
 ) -> tuple[float | None, int, list[str]]:
     if not over_books or not under_books:
         return None, 0, ["MISSING_SIDE"]
-    probs: list[float] = []
-    for book, over_odds in over_books.items():
-        under_odds = under_books.get(book)
-        if under_odds is None:
-            continue
-        pair = devig_book_pair(over_odds, under_odds)
-        if pair:
-            probs.append(pair[0])
+    refs, _accepted = build_consensus_operator_refs(
+        [
+            (book, over_odds, under_books[book])
+            for book, over_odds in over_books.items()
+            if book in under_books
+        ]
+    )
+    probs = [pair[0] for pair in refs.values()]
     if not probs:
-        return None, 0, ["MISSING_SIDE"]
+        return None, 0, ["NO_VALID_CONSENSUS"]
     if len(probs) < 2:
         return median_prob(probs), len(probs), ["SINGLE_BOOK"]
     return median_prob(probs), len(probs), []
@@ -280,6 +281,15 @@ def build_game_totals(
     cand_by_market = _index_candidates_by_market(candidate_rows)
     now = now or datetime.now().astimezone()
     output: list[dict[str, Any]] = []
+    freshness = _props_freshness(
+        games_norm or {}, now=now, max_age_hours=6.0, max_future_hours=5.0 / 60.0
+    )
+    source_flags: list[str] = []
+    if freshness.is_stale:
+        source_flags.append("STALE_DATA")
+    if (games_norm or {}).get("fetch_errors"):
+        source_flags.append("SOURCE_FETCH_ERRORS")
+    from outlier_scrapers import pack as pack_module
 
     for market_id, market_records in by_market.items():
         identity = market_records[0]
@@ -291,17 +301,26 @@ def build_game_totals(
         team = identity.get("team") or identity.get("team_raw") or ""
         matchup = identity.get("matchup") or identity.get("matchup_raw") or ""
 
-        flags: list[str] = []
+        flags: list[str] = list(source_flags)
         cand = cand_by_market.get(market_id, {})
 
-        event_start = cand.get("_event_starts_at")
-        if event_start:
-            try:
-                start = datetime.fromisoformat(str(event_start).replace("Z", "+00:00"))
-                if start.tzinfo and start <= now.astimezone(start.tzinfo):
-                    flags.append("LIVE_EVENT")
-            except (ValueError, TypeError):
-                flags.append("INSUFFICIENT_DATA")
+        context_event = (
+            ((games_norm or {}).get("context") or {}).get("events") or {}
+        ).get(event_id, {})
+        event_start = (
+            identity.get("event_starts_at")
+            or (context_event.get("starts_at") if isinstance(context_event, dict) else None)
+            or cand.get("_event_starts_at")
+        )
+        _pregame, locked = pack_module.drop_locked_events(
+            [{"event_id": event_id, "_event_starts_at": event_start}], now=now
+        )
+        if locked:
+            flags.append("LOCKED_OR_UNVERIFIED_EVENT")
+        if identity.get("is_active") is False:
+            flags.append("MARKET_INACTIVE")
+        if cand.get("data_quality_flags"):
+            flags.append("SOURCE_INTEGRITY_FLAG")
 
         ladder = build_market_ladder(market_records)
         if not ladder:
@@ -394,7 +413,7 @@ def build_game_totals(
                 and book_count >= 2
                 and "MISSING_SIDE" not in headline_flags
                 and "SINGLE_BOOK" not in headline_flags
-                and "LIVE_EVENT" not in flags
+                and not flags
                 and not push_blocked
                 and fair_total is not None
             )

@@ -18,6 +18,7 @@ from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
 from . import run_desk
+from . import runner_common as rc
 
 logger = logging.getLogger(__name__)
 
@@ -157,9 +158,14 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
         return None
     try:
         with candidates.open(newline="", encoding="utf-8") as handle:
-            return max(0, sum(1 for _row in csv.reader(handle)) - 1)
-    except OSError as exc:
-        logger.error("Could not count pack candidates in %s: %s", candidates, exc)
+            candidate_count = max(0, sum(1 for _row in csv.reader(handle)) - 1)
+        totals_count = 0
+        totals = pack_dir / "game_totals.csv"
+        if totals.exists():
+            totals_count = rc.count_actionable_game_totals(totals.read_bytes())
+        return candidate_count + totals_count
+    except (OSError, csv.Error, rc.RunnerError) as exc:
+        logger.error("Could not count pack rows in %s: %s", pack_dir, exc)
         return None
 
 def _acquire_pack_lock(pack_dir: Path) -> Path | None:

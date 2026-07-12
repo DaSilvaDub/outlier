@@ -110,8 +110,10 @@ def run_reasoning(
                 logger.info("Output exists. Clean no-op.")
                 return 0
 
-        raw_bytes, candidates_sha256 = rc.validate_candidates(pack_dir)
         totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        raw_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir, allow_empty=rc.has_actionable_game_totals(totals_bytes)
+        )
 
         prompt_file = paths.PROJECT_ROOT / "prompts" / "A.md"
         if not prompt_file.exists():
