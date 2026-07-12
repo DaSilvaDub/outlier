@@ -1,8 +1,35 @@
 # Agent Handoff
 
-**Last Commit SHA:** `9833b7a` (on branch `feat/schema-compatibility-gates`)
+**Last Commit SHA:** `8e526de` (on branch `fix/spread-sign-rendering`)
 
-**PR Link:** https://github.com/DaSilvaDub/outlier/pull/23
+**PR Link:** https://github.com/DaSilvaDub/outlier/pull/25
+
+**What/Why:** The 2026-07-12 five-model betting reports (Claude/Copilot/Gemini/Grok/ChatGPT)
+disagreed on the sign of positive spread/run-line values — e.g. the same ATL @ STL
+run-line row rendered as `-1.5` in some reports and `+1.5` in others — because
+`pack.py` shipped positive spread lines as a bare unsigned number, leaving each
+downstream model to guess the sign.
+
+**Files Touched:**
+- `outlier_scrapers/pack.py` — `_fmt_signed_line()` explicit `+`/`-` rendering for
+  `proposition == "SPREAD"` markets (selection text, `line`, and the alt-line EV
+  fallback's `priced_line`/`ev_line_fallback:priced_at=` annotation); new LEDGER
+  CONTEXT bullet clarifying `model_prob` semantics on signed-margin rows.
+- `outlier_scrapers/cards.py` — `_spread_sign_conflict()` flags a card
+  `spread_sign_conflict` when a two-sided SPREAD market's HOME/AWAY lines aren't
+  mirror-image (data corruption signal).
+- `tests/test_pack.py`, `tests/test_cards.py` — 8 new tests incl. an end-to-end
+  `assemble_game_card` integration test.
+
+**Tests:** `pytest tests/` — 315 passed. Reviewed by python-reviewer subagent
+(one HIGH finding — alt-line-fallback path left unsigned — fixed before push).
+
+**Next Steps:**
+- Review and merge PR #25.
+
+---
+
+## Handoff — `feat/schema-compatibility-gates` (PR #23)
 
 **Files Touched:**
 - `outlier_scrapers/schema.py`
