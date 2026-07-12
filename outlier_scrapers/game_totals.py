@@ -12,6 +12,7 @@ from typing import Any
 
 from outlier_scrapers.cards import two_way_fair
 from outlier_scrapers.normalizer import implied_probability
+from outlier_scrapers.sizing import compute_sizing
 
 
 def _american_to_decimal(american: Any) -> float | None:
@@ -352,13 +353,34 @@ def build_game_totals(
         sizing_flags = ""
         push_blocked = _is_integer_line(headline_line)
         if push_blocked:
+            # F3 Option 2 — push-aware *display* edge only. Integer lines stay
+            # non-actionable; we only replace the misleading two-way edge_pct.
+            # Reuses sizing.compute_sizing (same helper pack.build_row uses),
+            # which nets push via p_lose = 1 - p_win - push_prob (F7-guarded).
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
+                p_side = (
+                    p_over_headline
+                    if best_side == "OVER"
+                    else (1.0 - p_over_headline if p_over_headline is not None else None)
+                )
+                if decimal_price is not None and p_side is not None:
+                    sizing = compute_sizing(
+                        decimal_price=decimal_price,
+                        model_prob=p_side,
+                        push_prob=float(push_prob),
+                    )
+                    edge_pct = (
+                        round(sizing.edge_pct, 4) if sizing.edge_pct is not None else None
+                    )
+                else:
+                    edge_pct = None
             else:
                 push_prob = ""
                 sizing_flags = "push_capable_no_prob"
-
+                # No honest push mass → blank the push-contaminated two-way edge.
+                edge_pct = None
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
