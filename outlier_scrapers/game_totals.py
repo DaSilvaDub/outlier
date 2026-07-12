@@ -510,7 +510,7 @@ def build_game_totals(
         name = matchup if total_kind == "game" else (team or matchup)
         selection = f"{name} {label} {side_for_selection} {headline_line}".strip()
 
-        row = {k: "" for k in GAME_TOTALS_HEADER}
+        row: dict[str, Any] = {k: "" for k in GAME_TOTALS_HEADER}
         row.update(
             {
                 "totals_id": _totals_id(market_id, headline_line, side_for_selection),
@@ -569,7 +569,7 @@ def _empty_row(
     cand: dict[str, Any],
     identity: dict[str, Any],
 ) -> dict[str, Any]:
-    row = {k: "" for k in GAME_TOTALS_HEADER}
+    row: dict[str, Any] = {k: "" for k in GAME_TOTALS_HEADER}
     row.update(
         {
             "totals_id": market_id,
