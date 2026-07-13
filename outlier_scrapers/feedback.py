@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
 DEFAULT_REPORT_DIR = paths.PROJECT_ROOT / "calibration" / "reports" / "latest"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MARKET_SNAPSHOT_FIELDS = [
     "snapshot_id",
@@ -203,6 +203,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        prior_schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
@@ -294,6 +295,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         }
         if "push_prob" not in snapshot_columns:
             conn.execute("ALTER TABLE market_snapshots ADD COLUMN push_prob REAL")
+        _migrate_probability_semantics(conn, prior_schema_version)
         conn.execute("DROP INDEX IF EXISTS idx_decisions_snapshot")
         _migrate_decision_ids(conn)
         conn.execute(
@@ -302,6 +304,44 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         )
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return db_path
+
+
+def _migrate_probability_semantics(
+    conn: sqlite3.Connection, prior_schema_version: int
+) -> None:
+    """Convert schema-v2 totals probabilities from conditional to unconditional P(win)."""
+
+    if prior_schema_version >= 3:
+        return
+    conn.execute(
+        """
+        UPDATE market_snapshots
+        SET market_consensus_prob = CASE
+                WHEN market_consensus_prob IS NULL THEN NULL
+                ELSE market_consensus_prob * (1.0 - push_prob)
+            END,
+            final_blended_prob = CASE
+                WHEN final_blended_prob IS NULL THEN NULL
+                ELSE final_blended_prob * (1.0 - push_prob)
+            END,
+            edge = CASE
+                WHEN final_blended_prob IS NOT NULL AND decimal_price IS NOT NULL
+                THEN final_blended_prob * (1.0 - push_prob) * decimal_price - 1.0
+                ELSE edge
+            END,
+            data_quality_flags = CASE
+                WHEN INSTR(COALESCE(data_quality_flags, ''),
+                           'probability_semantics_v3_migrated') > 0
+                THEN data_quality_flags
+                WHEN COALESCE(data_quality_flags, '') = ''
+                THEN 'probability_semantics_v3_migrated'
+                ELSE data_quality_flags || ';probability_semantics_v3_migrated'
+            END
+        WHERE push_prob > 0.0
+          AND push_prob < 1.0
+          AND board IN ('GAME_TOTALS', 'TEAM_TOTALS')
+        """
+    )
 
 
 def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
@@ -759,6 +799,31 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
             values["decision_id"] = decision_id
             values["snapshot_id"] = snapshot_id
             values["units"] = _float(row.get("units"), field="units") or 0.0
+            existing = conn.execute(
+                f"SELECT {', '.join(DECISION_FIELDS)} FROM decisions "
+                "WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+            settled = conn.execute(
+                "SELECT 1 FROM settlements WHERE snapshot_id = ? LIMIT 1",
+                (snapshot_id,),
+            ).fetchone()
+            if existing is not None and (
+                _text(existing["final_verdict"]) != "" or settled is not None
+            ):
+                changed = any(
+                    (
+                        float(existing[field] or 0.0) != float(values[field] or 0.0)
+                        if field == "units"
+                        else _text(existing[field]) != _text(values[field])
+                    )
+                    for field in DECISION_FIELDS
+                )
+                if changed:
+                    raise FeedbackError(
+                        f"{input_path}:{row_number} cannot change finalized or settled "
+                        f"decision {decision_id!r}"
+                    )
             conn.execute(
                 """
                 INSERT INTO decisions (
@@ -778,6 +843,11 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                     kill_reason = excluded.kill_reason,
                     news_override = excluded.news_override,
                     updated_at = excluded.updated_at
+                WHERE COALESCE(decisions.final_verdict, '') = ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM settlements
+                    WHERE settlements.snapshot_id = decisions.snapshot_id
+                )
                 """,
                 [values[field] for field in DECISION_FIELDS] + [now, now],
             )

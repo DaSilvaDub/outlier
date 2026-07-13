@@ -186,6 +186,15 @@ def test_recapture_cannot_rewrite_finalized_prediction_history(tmp_path, freeze_
     assert snapshot == pytest.approx((0.60, 0.60, 0.10, 1))
     assert decision == ("PLAY", 2.0)
 
+    frozen_decisions = _read_csv(pack_dir / "decisions.csv")
+    assert feedback.import_decisions(pack_dir / "decisions.csv", db_path).imported == 1
+    frozen_decisions[0]["pipeline_verdict"] = "STAND_DOWN"
+    frozen_decisions[0]["units"] = "0"
+    changed_input = tmp_path / f"changed-{freeze_with}.csv"
+    _write_csv(changed_input, feedback.DECISION_FIELDS, frozen_decisions)
+    with pytest.raises(feedback.FeedbackError, match="cannot change finalized or settled decision"):
+        feedback.import_decisions(changed_input, db_path)
+
 
 def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     row = _candidate()
@@ -347,6 +356,43 @@ def test_schema_v1_decision_and_push_mass_are_migrated_on_recapture(tmp_path):
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert decisions == [(feedback._stable_id("decision", snapshot_id), snapshot_id)]
     assert push_prob == pytest.approx(0.0)
+    assert version == feedback.SCHEMA_VERSION
+
+
+def test_schema_v2_total_probability_migration_runs_before_history_freeze(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    with sqlite3.connect(db_path) as conn:
+        snapshot_id, decision_id = conn.execute(
+            "SELECT s.snapshot_id, d.decision_id FROM market_snapshots s "
+            "JOIN decisions d ON d.snapshot_id = s.snapshot_id"
+        ).fetchone()
+        conn.execute(
+            "UPDATE market_snapshots SET board = 'GAME_TOTALS', push_prob = 0.20, "
+            "market_consensus_prob = 0.75, final_blended_prob = 0.75, edge = 0.50"
+        )
+        conn.execute("UPDATE decisions SET final_verdict = 'PLAY'")
+        conn.execute(
+            "INSERT INTO settlements ("
+            "settlement_id, decision_id, snapshot_id, outcome_id, event_id, "
+            "market_id, win_loss_push, settled_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("settled", decision_id, snapshot_id, "o1", "e1", "m1", "W", "now"),
+        )
+        conn.execute("PRAGMA user_version = 2")
+
+    feedback.initialize_database(db_path)
+    feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot = conn.execute(
+            "SELECT market_consensus_prob, final_blended_prob, edge, "
+            "data_quality_flags FROM market_snapshots"
+        ).fetchone()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert snapshot[:3] == pytest.approx((0.60, 0.60, 0.20))
+    assert "probability_semantics_v3_migrated" in snapshot[3]
     assert version == feedback.SCHEMA_VERSION
 
 

@@ -30,6 +30,11 @@ snapshot (for example, after a schema-semantics migration). Once either exists,
 both the prediction snapshot and seeded pipeline decision are frozen so grading
 history cannot be rewritten after outcomes are known.
 
+Schema v3 includes a one-time, auditable conversion of legacy schema-v2 game
+and team-total rows from conditional win probability to unconditional `P(win)`.
+It runs before the finalization freeze, recomputes expected-return edge, marks
+the migrated rows, and cannot be applied twice.
+
 Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 `--feedback-db <path>` to override the default database.
 
