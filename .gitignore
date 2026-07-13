@@ -32,4 +32,7 @@ scratch/
 # AI agent session logs / introspection (noise across ents, not part of source)
 .agent-log/
 
+# Local hookify rules (personal/local dev-time guardrails, not shared source)
+.claude/*.local.md
+
 .tmp.driveupload/
