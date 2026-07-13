@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
-from .schema import ValidationError, validate_raw_line_movement
+from .schema import validate_raw_line_movement
 
 logger = logging.getLogger(__name__)
 from .normalizer import (
