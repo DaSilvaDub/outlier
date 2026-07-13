@@ -12,10 +12,12 @@ import argparse
 import csv
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Sequence
+
+from dateutil import parser as date_parser
 
 from outlier_scrapers import gemini_research, pack, paths
 from outlier_scrapers import runner_common as rc
@@ -110,21 +112,22 @@ def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pac
                 raise rc.RunnerError(f"Prompt C output line {line_number} has an empty {field}")
         
         try:
-            from datetime import datetime, timedelta
             pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
-            from dateutil import parser as date_parser
-            ts = date_parser.parse(fields["source_timestamp"]).date()
-            if not (pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)):
-                raise rc.RunnerError(
-                    f"Prompt C output line {line_number} timestamp '{fields['source_timestamp']}' "
-                    f"is outside the valid window for pack date {pack_date_str}"
-                )
         except ValueError:
-            pass # pack_date_str wasn't YYYY-MM-DD
-        except Exception as e:
-            if isinstance(e, rc.RunnerError):
-                raise
-            raise rc.RunnerError(f"Prompt C output line {line_number} has unparseable timestamp: {fields['source_timestamp']}")
+            continue  # pack_date_str wasn't YYYY-MM-DD; nothing to validate against
+
+        try:
+            ts = date_parser.parse(fields["source_timestamp"]).date()
+        except (ValueError, OverflowError, TypeError):
+            raise rc.RunnerError(
+                f"Prompt C output line {line_number} has unparseable timestamp: {fields['source_timestamp']}"
+            )
+
+        if not (pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)):
+            raise rc.RunnerError(
+                f"Prompt C output line {line_number} timestamp '{fields['source_timestamp']}' "
+                f"is outside the valid window for pack date {pack_date_str}"
+            )
 
 
 def run_c_research(
