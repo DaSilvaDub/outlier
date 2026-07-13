@@ -5,7 +5,7 @@ import csv
 import pytest
 from google import genai
 
-from outlier_scrapers import c_research, pack
+from outlier_scrapers import c_research, pack, paths
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 
 
@@ -203,3 +203,31 @@ def test_totals_only_output_validates_against_totals_id(c_env, monkeypatch):
     monkeypatch.setattr(c_research, "call_gemini", lambda *args, **kwargs: totals_output)
     assert c_research.run_c_research(pack_dir) == 0
     assert totals_output in (pack_dir / "chatgpt_c.md").read_text(encoding="utf-8")
+
+
+def test_malformed_timestamp_is_rejected(c_env, monkeypatch):
+    """A genuinely unparseable source_timestamp must still be rejected with a
+    clear error, not silently swallowed. Regression guard: the timestamp check
+    previously wrapped the dateutil import in the same bare `except Exception`
+    used for parse failures, so a missing/broken dateutil install masqueraded
+    as this exact error message for every finding instead of failing loudly at
+    import time."""
+    _, pack_dir = c_env
+    bad = VALID_OUTPUT.replace(
+        "source_timestamp=2026-06-28T12:00:00Z", "source_timestamp=not-a-real-timestamp"
+    )
+    monkeypatch.setattr(c_research, "call_gemini", lambda *a, **k: bad)
+    assert c_research.run_c_research(pack_dir, force=True) == 1
+    assert not (pack_dir / "chatgpt_c.md").exists()
+
+
+def test_dateutil_is_a_declared_dependency():
+    """c_research.py imports dateutil directly at module level; it must be
+    declared in pyproject.toml so a clean CI/deploy environment has it.
+    Regression guard for the CI-only 'unparseable timestamp' failure caused by
+    an undeclared dependency that happened to already be installed locally."""
+    import tomllib
+
+    data = tomllib.loads((paths.PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = data["project"]["dependencies"]
+    assert any(d.lower().startswith("python-dateutil") for d in deps)
