@@ -1,0 +1,16 @@
+{
+  "name": "get_message",
+  "description": "Retrieve the full content of a specific Outlook email message, including the complete body text/HTML, all headers (To, Cc, Bcc), categories, and attachment metadata.\n\nUse this tool when you need to:\n- Read the full body of an email (outlook_search only returns previews/snippets)\n- Get the complete email content before drafting a reply\n- Check all recipients (including Cc/Bcc) of a message\n- See attachment metadata before downloading with outlook_attachment_download_artifact (preferred when you want the file in the sandbox)\n\nThe message_id should come from a previous outlook_search result.\n\nWhen presenting results:\n- Summarize key information from the email body\n- Include relevant headers when useful to the user\n- Do not fabricate content - only use what is returned",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "The Outlook message ID to retrieve. Use a message_id from outlook_search results."
+      }
+    },
+    "required": [
+      "message_id"
+    ]
+  }
+}

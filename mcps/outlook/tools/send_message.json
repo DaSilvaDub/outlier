@@ -1,0 +1,55 @@
+{
+  "name": "send_message",
+  "description": "Send a new email directly from the user's Outlook account. The email is sent immediately.\n\nIMPORTANT: This action is IRREVERSIBLE. Once sent, the email cannot be unsent.\n\nUse this tool when the user asks you to send an email. For composing without sending,\nuse outlook_create_draft instead.\n\nThis is also the tool for replying to a SPECIFIC person (not reply-all). To reply to the\nsender only (or a subset of recipients):\n1. First use outlook_get_message to read the original message\n2. Set to: [sender's email] (only the people you want to reply to)\n3. Set reply_to_message_id to the original message's internet_message_id (NOT the message_id)\n4. Set conversation_id to the original message's conversation_id\n5. The subject should start with 'Re: ' followed by the original subject\n\nFor replying to ALL recipients, use outlook_reply_all instead.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "to": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of recipient email addresses (To field)"
+      },
+      "cc": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of CC recipient email addresses (optional)"
+      },
+      "bcc": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of BCC recipient email addresses (optional)"
+      },
+      "subject": {
+        "type": "string",
+        "description": "Email subject line"
+      },
+      "body": {
+        "type": "string",
+        "description": "Plain text body of the email"
+      },
+      "body_html": {
+        "type": "string",
+        "description": "Optional: HTML body. If provided, email body is set as HTML content type."
+      },
+      "reply_to_message_id": {
+        "type": "string",
+        "description": "Optional: RFC Message-ID for threading replies (use internet_message_id from outlook_get_message, NOT the message_id). Sets In-Reply-To header."
+      },
+      "conversation_id": {
+        "type": "string",
+        "description": "Optional: conversation ID to keep the reply in the same thread"
+      }
+    },
+    "required": [
+      "to",
+      "subject",
+      "body"
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "modify_message",
+  "description": "Modify properties of an Outlook message: mark as read/unread, set importance, or toggle flag status.\n\nCommon operations:\n- Mark as read: is_read = true\n- Mark as unread: is_read = false\n- Flag for follow-up: flag_status = \"flagged\"\n- Complete flag: flag_status = \"complete\"\n- Clear flag: flag_status = \"notFlagged\"\n- Set high importance: importance = \"high\"\n\nThe message_id should come from outlook_search or outlook_get_message.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "Message ID to modify (from outlook_search or outlook_get_message)"
+      },
+      "is_read": {
+        "type": "boolean",
+        "description": "Set to true to mark as read, false to mark as unread"
+      },
+      "importance": {
+        "type": "string",
+        "description": "Message importance: \"high\", \"normal\", or \"low\""
+      },
+      "flag_status": {
+        "type": "string",
+        "description": "Flag status: \"flagged\", \"complete\", or \"notFlagged\""
+      }
+    },
+    "required": [
+      "message_id"
+    ]
+  }
+}

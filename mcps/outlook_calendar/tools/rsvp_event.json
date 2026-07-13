@@ -1,0 +1,25 @@
+{
+  "name": "rsvp_event",
+  "description": "Accept, decline, or tentatively accept an Outlook Calendar event invitation.\n\nParameters:\n- event_id: The event ID to RSVP to (required, from outlook_calendar_search).\n- response_status: One of \"accepted\", \"declined\", or \"tentative\" (required).\n- comment: Optional message to include with the response.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "description": "The event ID to respond to (from outlook_calendar_search)."
+      },
+      "response_status": {
+        "type": "string",
+        "description": "Response: \"accepted\", \"declined\", or \"tentative\"."
+      },
+      "comment": {
+        "type": "string",
+        "description": "Optional message to include with the RSVP response."
+      }
+    },
+    "required": [
+      "event_id",
+      "response_status"
+    ]
+  }
+}

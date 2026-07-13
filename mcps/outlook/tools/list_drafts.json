@@ -1,0 +1,13 @@
+{
+  "name": "list_drafts",
+  "description": "List the user's Outlook email drafts. Returns draft IDs, subjects, recipients, and preview snippets.\n\nUse this tool to:\n- Check what drafts the user has pending\n- Find a specific draft to update or send\n- Get message IDs for use with outlook_update_draft or outlook_send_draft\n\nResults include message_id (needed for updating/sending), subject, recipients, and a body preview.\nDrafts are sorted by most recently modified first.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "max_results": {
+        "type": "integer",
+        "description": "Maximum number of drafts to return (default 10, max 50)"
+      }
+    }
+  }
+}

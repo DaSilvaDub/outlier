@@ -1,0 +1,24 @@
+{
+  "name": "batch_move",
+  "description": "Move multiple Outlook messages to a folder at once. More efficient than moving one at a time.\n\nUse outlook_list_folders to find folder IDs, or use well-known names (inbox, archive, deleteditems, etc.).",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of message IDs to move (from outlook_search results)"
+      },
+      "destination_folder_id": {
+        "type": "string",
+        "description": "Destination folder ID (from outlook_list_folders) or well-known name: inbox, drafts, sentitems, deleteditems, archive, junkemail"
+      }
+    },
+    "required": [
+      "message_ids",
+      "destination_folder_id"
+    ]
+  }
+}

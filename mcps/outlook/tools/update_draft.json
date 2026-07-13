@@ -1,0 +1,52 @@
+{
+  "name": "update_draft",
+  "description": "Update an existing Outlook draft with new content. Replaces the draft's recipients, subject, and body.\n\nUse this tool when the user wants to modify a draft they previously created.\nThe message_id should come from outlook_create_draft or outlook_list_drafts.\n\nNote: This completely replaces the draft content. Provide all fields, not just the changed ones.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "The message ID of the draft to update (from outlook_create_draft)"
+      },
+      "to": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Updated list of recipient email addresses (To field)"
+      },
+      "cc": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Updated CC recipients (optional)"
+      },
+      "bcc": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Updated BCC recipients (optional)"
+      },
+      "subject": {
+        "type": "string",
+        "description": "Updated email subject line"
+      },
+      "body": {
+        "type": "string",
+        "description": "Updated plain text body of the email"
+      },
+      "body_html": {
+        "type": "string",
+        "description": "Optional: HTML body. If provided, email body is set as HTML content type."
+      }
+    },
+    "required": [
+      "message_id",
+      "to",
+      "subject",
+      "body"
+    ]
+  }
+}

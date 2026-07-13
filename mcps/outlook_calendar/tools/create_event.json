@@ -1,0 +1,57 @@
+{
+  "name": "create_event",
+  "description": "Create an event in the user's connected Outlook Calendar.\n\nParameters:\n- subject: Event title (required).\n- start_time/end_time: Event start and end timestamps (required). Use YYYY-MM-DD for all-day events, otherwise use RFC3339 timestamps with the user's timezone offset from viewer context (e.g. 1970-01-31T12:00:00-08:00). Always include the offset — never send bare datetimes.\n- timezone: IANA or Windows timezone for the event (e.g. \"America/Chicago\", \"Pacific Standard Time\"). Defaults to UTC.\n- description: Optional event body/notes (plain text).\n- location: Optional location name.\n- attendees: Optional list of email addresses to invite.\n- is_online_meeting: Set to true to create a Teams meeting link.\n- is_all_day: Set to true for all-day events (start/end should be dates like 2026-04-28T00:00:00).\n- recurrence: Optional recurrence pattern. Must include \"pattern\" and \"range\" objects.\n  Pattern types:\n    \"daily\" - repeats every N days.\n    \"weekly\" - repeats on specific days of the week (use \"daysOfWeek\": [\"monday\", ...]).\n    \"absoluteMonthly\" - repeats on a fixed date each month (use \"dayOfMonth\": 15 for the 15th).\n    \"relativeMonthly\" - repeats on a weekday position each month (use \"daysOfWeek\": [\"tuesday\"], \"index\": \"second\" for the second Tuesday).\n    \"absoluteYearly\" - repeats on a fixed date each year (use \"dayOfMonth\" and \"month\").\n    \"relativeYearly\" - repeats on a weekday position each year (use \"daysOfWeek\", \"index\", and \"month\", e.g. last Friday of November).\n  The \"index\" field accepts: \"first\", \"second\", \"third\", \"fourth\", \"last\".\n  Range types: \"noEnd\" (repeats forever), \"endDate\" (stops at \"endDate\"), \"numbered\" (repeats \"numberOfOccurrences\" times).\n  Example (daily, no end): {\"pattern\": {\"type\": \"daily\", \"interval\": 1}, \"range\": {\"type\": \"noEnd\", \"startDate\": \"2026-04-30\"}}\n  Example (weekly Mon/Wed/Fri): {\"pattern\": {\"type\": \"weekly\", \"interval\": 1, \"daysOfWeek\": [\"monday\", \"wednesday\", \"friday\"]}, \"range\": {\"type\": \"noEnd\", \"startDate\": \"2026-04-30\"}}\n  Example (second Tuesday of every month): {\"pattern\": {\"type\": \"relativeMonthly\", \"interval\": 1, \"daysOfWeek\": [\"tuesday\"], \"index\": \"second\"}, \"range\": {\"type\": \"noEnd\", \"startDate\": \"2026-04-30\"}}\n  The range.startDate MUST match the date portion of start_time.\n\nIf the user has a request relative to today, like \"create an event for tomorrow\" or \"schedule for next week\",\ncompute the actual timestamps for start_time and end_time rather than using relative words.\n\nThe result contains the created event's event_id and details.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "subject": {
+        "type": "string",
+        "description": "Event title."
+      },
+      "start_time": {
+        "type": "string",
+        "description": "Start time as RFC3339 with timezone offset (e.g. 1970-01-31T12:00:00-08:00), or YYYY-MM-DD for all-day events. Always include the user's timezone offset from viewer context."
+      },
+      "end_time": {
+        "type": "string",
+        "description": "End time as RFC3339 with timezone offset (e.g. 1970-01-31T13:00:00-08:00), or YYYY-MM-DD for all-day events. Always include the user's timezone offset from viewer context."
+      },
+      "timezone": {
+        "type": "string",
+        "description": "IANA or Windows timezone (e.g. \"America/Chicago\"). Always provide this."
+      },
+      "description": {
+        "type": "string",
+        "description": "Event description or notes (plain text)."
+      },
+      "location": {
+        "type": "string",
+        "description": "Location of the event."
+      },
+      "attendees": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of attendee email addresses to invite."
+      },
+      "is_online_meeting": {
+        "type": "boolean",
+        "description": "When true, a Microsoft Teams meeting link is added to the event."
+      },
+      "is_all_day": {
+        "type": "boolean",
+        "description": "When true, creates an all-day event."
+      },
+      "recurrence": {
+        "type": "object",
+        "description": "Recurrence pattern for recurring events. Must have \"pattern\" (with type and interval) and \"range\" (with type and startDate). See tool description for examples."
+      }
+    },
+    "required": [
+      "subject",
+      "start_time",
+      "end_time"
+    ]
+  }
+}

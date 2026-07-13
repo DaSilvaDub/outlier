@@ -1,0 +1,55 @@
+{
+  "name": "update_event",
+  "description": "Update an existing event in the user's Outlook Calendar. Only the provided fields will be modified; omitted fields remain unchanged.\n\nParameters:\n- event_id: The event ID to update (required, from outlook_calendar_search).\n- subject: Updated event title.\n- start_time/end_time: Updated event start and end timestamps. Use YYYY-MM-DD for all-day events, otherwise use RFC3339 timestamps with the user's timezone offset from viewer context (e.g. 1970-01-31T12:00:00-08:00). Always include the offset — never send bare datetimes.\n- timezone: IANA or Windows timezone for the event times. Defaults to UTC.\n- description: Updated event body (plain text).\n- location: Updated location.\n- attendees: Updated attendee list (email addresses). This REPLACES the full attendee list.\n- is_online_meeting: Set to true to add a Teams meeting link.\n- is_all_day: Set to true to make it an all-day event.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "description": "The event ID to update (from outlook_calendar_search)."
+      },
+      "subject": {
+        "type": "string",
+        "description": "Updated event title."
+      },
+      "start_time": {
+        "type": "string",
+        "description": "Updated start time as RFC3339 with timezone offset (e.g. 1970-01-31T12:00:00-08:00), or YYYY-MM-DD for all-day events. Always include the user's timezone offset from viewer context."
+      },
+      "end_time": {
+        "type": "string",
+        "description": "Updated end time as RFC3339 with timezone offset (e.g. 1970-01-31T13:00:00-08:00), or YYYY-MM-DD for all-day events. Always include the user's timezone offset from viewer context."
+      },
+      "timezone": {
+        "type": "string",
+        "description": "IANA or Windows timezone (e.g. \"America/Chicago\"). Always provide this."
+      },
+      "description": {
+        "type": "string",
+        "description": "Updated event description (plain text)."
+      },
+      "location": {
+        "type": "string",
+        "description": "Updated event location."
+      },
+      "attendees": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Updated list of attendee email addresses. Replaces the full attendee list."
+      },
+      "is_online_meeting": {
+        "type": "boolean",
+        "description": "When true, adds a Teams meeting link."
+      },
+      "is_all_day": {
+        "type": "boolean",
+        "description": "When true, makes it an all-day event."
+      }
+    },
+    "required": [
+      "event_id"
+    ]
+  }
+}

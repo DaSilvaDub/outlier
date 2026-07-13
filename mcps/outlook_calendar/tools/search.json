@@ -1,0 +1,25 @@
+{
+  "name": "search",
+  "description": "Search for events in the user's connected Outlook Calendar within a time range.\n\nBoth start_date_time and end_date_time must be provided in ISO 8601 format with the user's timezone offset from viewer context (e.g. 1970-01-31T12:00:00-08:00). Always include the offset — never send bare datetimes.\n\nFor time-based questions like \"what meetings do I have today\" or \"schedule for next week\",\ncompute the actual ISO 8601 timestamps for start_date_time and end_date_time rather than\nusing relative words.\n\nThis returns expanded event instances (recurring events are shown as individual occurrences).\n\nWhen presenting results:\n- Summarize the schedule naturally\n- Include subject, time, location, and attendees when relevant\n- Mention online meeting links if available\n- Do not fabricate event details - only use what is returned",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "start_date_time": {
+        "type": "string",
+        "description": "Start of the time range in ISO 8601 format with timezone offset (e.g. 1970-01-31T12:00:00-08:00). Always include the user's timezone offset from viewer context."
+      },
+      "end_date_time": {
+        "type": "string",
+        "description": "End of the time range in ISO 8601 format with timezone offset (e.g. 1970-01-31T13:00:00-08:00). Always include the user's timezone offset from viewer context."
+      },
+      "max_results": {
+        "type": "integer",
+        "description": "Maximum number of events to return (default 25, max 100)."
+      }
+    },
+    "required": [
+      "start_date_time",
+      "end_date_time"
+    ]
+  }
+}

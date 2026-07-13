@@ -1,0 +1,8 @@
+{
+  "name": "list_folders",
+  "description": "List all mail folders in the user's Outlook account (Inbox, Sent Items, Drafts, Deleted Items, custom folders).\n\nReturns folder IDs, display names, child folder counts, and total/unread item counts.\n\nUse this to discover available folders before moving messages with other tools.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}

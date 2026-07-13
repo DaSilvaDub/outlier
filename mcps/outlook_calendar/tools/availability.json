@@ -1,0 +1,32 @@
+{
+  "name": "availability",
+  "description": "Check availability of users in Outlook Calendar. Can check the current user's\nschedule or colleagues in the same organization by email address.\n\nBoth start_date_time and end_date_time must be provided in ISO 8601 format with the user's timezone offset from viewer context (e.g. 1970-01-31T12:00:00-08:00). Always include the offset — never send bare datetimes.\n\nFor time-based questions like \"am I free at 3pm\" or \"when is alice available tomorrow\",\ncompute the actual ISO 8601 timestamps for start_date_time and end_date_time rather than\nusing relative words.\n\nUse this tool to answer questions like:\n- \"Am I free at 3pm?\"\n- \"When is alice@company.com available this week?\"\n- \"Find a time when both bob@company.com and I are free tomorrow\"\n\nThe response includes a compact availability string where each character represents a time slot:\n0=free, 1=tentative, 2=busy, 3=out of office.\n\nFor other people's schedules, event details (subject, location) may be hidden for private events.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "start_date_time": {
+        "type": "string",
+        "description": "Start of the time range in ISO 8601 format with timezone offset (e.g. 1970-01-31T12:00:00-08:00). Always include the user's timezone offset from viewer context."
+      },
+      "end_date_time": {
+        "type": "string",
+        "description": "End of the time range in ISO 8601 format with timezone offset (e.g. 1970-01-31T13:00:00-08:00). Always include the user's timezone offset from viewer context."
+      },
+      "schedules": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Email addresses to check availability for. Defaults to the current user if empty. Can check colleagues in the same organization."
+      },
+      "availability_view_interval": {
+        "type": "integer",
+        "description": "Time slot interval in minutes for the availability view (default 30, options: 5, 10, 15, 30, 60)."
+      }
+    },
+    "required": [
+      "start_date_time",
+      "end_date_time"
+    ]
+  }
+}

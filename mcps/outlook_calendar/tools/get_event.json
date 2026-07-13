@@ -1,0 +1,16 @@
+{
+  "name": "get_event",
+  "description": "Get the details of a specific event in the user's Outlook Calendar by event ID.\n\nUse this when the model needs full event details (attendees, body, location, etc.) for an event found via outlook_calendar_search.\n\nThe event_id should come from a previous outlook_calendar_search result.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "event_id": {
+        "type": "string",
+        "description": "The event ID to retrieve (from outlook_calendar_search results)."
+      }
+    },
+    "required": [
+      "event_id"
+    ]
+  }
+}

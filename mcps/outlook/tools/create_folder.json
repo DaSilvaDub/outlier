@@ -1,0 +1,20 @@
+{
+  "name": "create_folder",
+  "description": "Create a new mail folder in Outlook. Optionally nest it under a parent folder.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "display_name": {
+        "type": "string",
+        "description": "Name for the new mail folder"
+      },
+      "parent_folder_id": {
+        "type": "string",
+        "description": "Optional parent folder ID to nest under. Creates at root level if omitted."
+      }
+    },
+    "required": [
+      "display_name"
+    ]
+  }
+}

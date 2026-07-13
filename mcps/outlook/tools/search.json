@@ -1,0 +1,29 @@
+{
+  "name": "search",
+  "description": "Search for relevant emails in the user's connected Outlook account (primary mailbox + optionally the Online Archive). Returns message summaries with short body previews (NOT full email content).\n\nIMPORTANT: Results contain only a truncated body_preview snippet. To read the full email body, use outlook_get_message with the returned message_id. Never quote or reply based on the preview alone.\n\nTwo search modes:\n1. query (KQL text search): from:sender@email.com, to:, subject:, has:attachment, received>=2024-01-01\n2. filter (OData $filter): flag/flagStatus eq 'flagged', isRead eq false, importance eq 'high', hasAttachments eq true\n\nUse query for text search OR filter for property-based filtering — they can't be combined in one request, so provide just one.\nAt least one of query or filter must be provided.\n\nWhen constructing the query for time-sensitive or historical searches, use absolute date filters\n(e.g., received>=2023-01-01 or received:2022-01-01..2025-12-31) rather than relative keywords.\nFor archive searches (include_archive=true, now default), the same query/filter is run against the\nOnline Archive and merged with the primary-mailbox results (deduplicated by message). The connector\nadds no implicit date restriction, so include an explicit received/receivedDateTime clause when you\nwant to limit the period.\n\nSet include_archive=true to also search the Exchange Online Archive (many orgs auto-move mail >~12 months old there via retention policies). The connector resolves and searches the Archive folder automatically; use outlook_list_folders only if you want to inspect the mailbox's folders directly.\n\nWhen the user asks to read, show, or retrieve the full content/body of an email\n(not just a preview or summary), set use_full_body=true. This returns the complete\nHTML body instead of a truncated plain-text preview.\n\nWhen presenting results:\n- Present email content naturally and summarize key information\n- Include sender, date, and subject when relevant to the user's question\n- Do not fabricate email content - only use what is returned in the search results",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "KQL (Keyword Query Language) search query for Outlook messages. This value is automatically wrapped in $search=\"...\" before being sent to the Microsoft Graph API, so do NOT include double quotes in this string (they will cause a 400 syntax error). Plain text without a property prefix searches from, subject, and body by default. Supports KQL property restrictions: from:sender, to:recipient, subject:keyword, body:keyword, hasAttachment:true, received:2022-01-01..2025-12-31, participants:name, cc:name, bcc:name, size:1..500000, importance:high, kind:email. Combine clauses with AND, OR, NOT (uppercase). Examples: 'from:alice@example.com AND hasAttachment:true', 'budget OR forecast', 'subject:quarterly report received:2022-01-01..2025-12-31'."
+      },
+      "include_archive": {
+        "type": "boolean",
+        "description": "Whether to also search the user's Exchange Online Archive folder in addition to the primary mailbox. Useful for finding mail older than ~12 months that retention policies have moved to archive. Defaults to true (the manifest sets this as the default for historical searches)."
+      },
+      "max_results": {
+        "type": "integer",
+        "description": "Maximum number of email messages to return (default 10, max 50)"
+      },
+      "use_full_body": {
+        "type": "boolean",
+        "description": "When true, returns the full email body (HTML) instead of a truncated plain-text preview. Use when the user requests the complete content of emails."
+      },
+      "filter": {
+        "type": "string",
+        "description": "OData $filter expression for precise filtering. Can be used alone or with query. Examples: \"flag/flagStatus eq 'flagged'\" (flagged emails), \"isRead eq false\" (unread), \"importance eq 'high'\" (high importance), \"hasAttachments eq true\" (with attachments), \"from/emailAddress/address eq 'user@example.com'\". Multiple conditions: \"isRead eq false and importance eq 'high'\""
+      }
+    }
+  }
+}

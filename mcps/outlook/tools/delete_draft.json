@@ -1,0 +1,16 @@
+{
+  "name": "delete_draft",
+  "description": "Permanently delete an Outlook draft. This action cannot be undone.\n\nUse this tool when the user explicitly asks to discard or delete a draft.\nThe message_id should come from outlook_create_draft.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "The message ID of the draft to delete. Use the message_id from outlook_create_draft."
+      }
+    },
+    "required": [
+      "message_id"
+    ]
+  }
+}

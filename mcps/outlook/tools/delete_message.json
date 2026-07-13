@@ -1,0 +1,16 @@
+{
+  "name": "delete_message",
+  "description": "PERMANENTLY delete an Outlook message. This action is IRREVERSIBLE — the message cannot be recovered.\n\nFor recoverable deletion, use outlook_trash_message instead (moves to Deleted Items).\n\nOnly use this when the user explicitly asks to permanently delete an email.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "Message ID to permanently delete (from outlook_search or outlook_get_message)"
+      }
+    },
+    "required": [
+      "message_id"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "reply_all",
+  "description": "Reply to all recipients of an Outlook email. The Outlook server automatically determines\nthe correct To/CC recipients from the original message -- you do NOT need to specify recipients.\n\nIMPORTANT: This sends to ALL original recipients (sender + all To + all CC).\n\nFor replying to ONLY the sender (or a specific subset of people), do NOT use this tool.\nInstead use outlook_send_message with reply_to_message_id and conversation_id, specifying\nonly the recipients you want in the to field.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "Message ID to reply to (from outlook_search or outlook_get_message)"
+      },
+      "body": {
+        "type": "string",
+        "description": "Reply body (plain text)"
+      },
+      "body_html": {
+        "type": "string",
+        "description": "Optional HTML body for rich formatting"
+      }
+    },
+    "required": [
+      "message_id",
+      "body"
+    ]
+  }
+}

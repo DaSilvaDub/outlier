@@ -1,0 +1,16 @@
+{
+  "name": "send_draft",
+  "description": "Send an existing Outlook draft. This will deliver the email to all recipients.\n\nIMPORTANT: This action is IRREVERSIBLE. Once sent, the email cannot be unsent.\n\nThe message_id should come from outlook_create_draft or outlook_list_drafts.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "The message ID of the draft to send. Use the message_id from outlook_create_draft."
+      }
+    },
+    "required": [
+      "message_id"
+    ]
+  }
+}

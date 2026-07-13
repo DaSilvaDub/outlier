@@ -1,0 +1,21 @@
+{
+  "name": "move_message",
+  "description": "Move an Outlook message to a different mail folder.\n\nUse outlook_list_folders to find folder IDs, or use well-known folder names:\ninbox, drafts, sentitems, deleteditems, archive, junkemail.\n\nThe message_id should come from outlook_search or outlook_get_message.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "type": "string",
+        "description": "Message ID to move (from outlook_search or outlook_get_message)"
+      },
+      "destination_folder_id": {
+        "type": "string",
+        "description": "Destination folder ID (from outlook_list_folders) or well-known name: inbox, drafts, sentitems, deleteditems, archive, junkemail"
+      }
+    },
+    "required": [
+      "message_id",
+      "destination_folder_id"
+    ]
+  }
+}

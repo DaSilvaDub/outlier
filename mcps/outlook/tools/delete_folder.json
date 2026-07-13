@@ -1,0 +1,16 @@
+{
+  "name": "delete_folder",
+  "description": "PERMANENTLY delete an Outlook mail folder. IRREVERSIBLE. Messages in the folder are also deleted.\n\nSystem folders (Inbox, Sent, etc.) cannot be deleted. Use outlook_list_folders to find custom folder IDs.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "folder_id": {
+        "type": "string",
+        "description": "Folder ID to delete (from outlook_list_folders). System folders cannot be deleted."
+      }
+    },
+    "required": [
+      "folder_id"
+    ]
+  }
+}
