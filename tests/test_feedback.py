@@ -391,7 +391,7 @@ def test_schema_v2_total_probability_migration_runs_before_history_freeze(tmp_pa
             "data_quality_flags FROM market_snapshots"
         ).fetchone()
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert snapshot[:3] == pytest.approx((0.60, 0.60, 0.20))
+    assert snapshot[:3] == pytest.approx((0.60, 0.60, 0.40))
     assert "probability_semantics_v3_migrated" in snapshot[3]
     assert version == feedback.SCHEMA_VERSION
 

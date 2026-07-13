@@ -326,7 +326,8 @@ def _migrate_probability_semantics(
             END,
             edge = CASE
                 WHEN final_blended_prob IS NOT NULL AND decimal_price IS NOT NULL
-                THEN final_blended_prob * (1.0 - push_prob) * decimal_price - 1.0
+                THEN final_blended_prob * (1.0 - push_prob) * decimal_price
+                     + push_prob - 1.0
                 ELSE edge
             END,
             data_quality_flags = CASE
