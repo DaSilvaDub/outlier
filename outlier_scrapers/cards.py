@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -569,12 +570,7 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         if side in rows_by_side:
             rows_by_side[side].append(prop)
 
-    main_row: dict[str, dict[str, Any]] = {}
-    for side, rws in rows_by_side.items():
-        if not rws:
-            continue
-        side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
-        main_row[side] = _pick_main_side_row(rws, movement.get(side), side_ev)
+    main_row = _select_main_rows(rows_by_side, movement, ev_rows)
 
     _align_main_lines(main_row, rows_by_side, ev_rows, movement, str(identity.get("proposition") or ""))
 
@@ -652,12 +648,34 @@ def _spread_sign_conflict(home_line: Any, away_line: Any) -> bool:
     return abs(home_f + away_f) > 1e-9
 
 
+def _line_values_equal(left: Any, right: Any, *, epsilon: float = 1e-9) -> bool:
+    """Compare normalized line values without allowing missing values to match."""
+    left_f, right_f = _to_float(left), _to_float(right)
+    return left_f is not None and right_f is not None and abs(left_f - right_f) <= epsilon
+
+
+def _select_main_rows(
+    rows_by_side: dict[str, list[dict[str, Any]]],
+    movement: dict[str, Any],
+    ev_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Select each side's primary row using the shared EV/movement priority rules."""
+    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ev_rows:
+        ev_by_side[str(row.get("side") or "").upper()].append(row)
+    return {
+        side: _pick_main_side_row(side_rows, movement.get(side), ev_by_side.get(side, []))
+        for side, side_rows in rows_by_side.items()
+        if side_rows
+    }
+
+
 def _align_main_lines(
     main_row: dict[str, dict[str, Any]],
     rows_by_side: dict[str, list[dict[str, Any]]],
     ev_rows: list[dict[str, Any]],
     movement: dict[str, Any],
-    proposition: str,
+    proposition: Any,
 ) -> None:
     """Force mirror-image spreads or matching totals when independent selection diverges."""
     if len(main_row) != 2:
@@ -668,24 +686,29 @@ def _align_main_lines(
 
     # Local deferred import to avoid circular dependency
     from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
-    is_spread = proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS
+    is_spread = str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS
 
     has_conflict = False
     if is_spread:
         has_conflict = _spread_sign_conflict(r1.get("line"), r2.get("line"))
     else:
-        has_conflict = _to_float(r1.get("line")) != _to_float(r2.get("line"))
+        has_conflict = not _line_values_equal(r1.get("line"), r2.get("line"))
 
     if not has_conflict:
         return
 
+    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for ev_row in ev_rows:
+        ev_by_side[str(ev_row.get("side") or "").upper()].append(ev_row)
+
     def _strength(side: str, row: dict[str, Any]) -> int:
-        side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
         line = _to_float(row.get("line"))
-        if any(_to_float(e.get("current_line")) == line for e in side_ev):
+        if line is None:
+            return 1
+        if any(_line_values_equal(e.get("current_line"), line) for e in ev_by_side.get(side, [])):
             return 3
         mv = movement.get(side)
-        if mv and _to_float(mv.get("current_line")) == line:
+        if mv and _line_values_equal(mv.get("current_line"), line):
             return 2
         return 1
 
@@ -697,7 +720,11 @@ def _align_main_lines(
 
     if winner_val is not None:
         target_loser_val = -winner_val if is_spread else winner_val
-        exact = [r for r in rows_by_side[loser_s] if _to_float(r.get("line")) == target_loser_val]
+        exact = [
+            row
+            for row in rows_by_side[loser_s]
+            if _line_values_equal(row.get("line"), target_loser_val)
+        ]
         if exact:
             main_row[loser_s] = max(exact, key=lambda r: len(r.get("books") or []))
 
@@ -723,12 +750,7 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         elif pos in rows_by_side:
             rows_by_side[pos].append(prop)
 
-    main_row: dict[str, dict[str, Any]] = {}
-    for side, rws in rows_by_side.items():
-        if not rws:
-            continue
-        side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
-        main_row[side] = _pick_main_side_row(rws, movement.get(side), side_ev)
+    main_row = _select_main_rows(rows_by_side, movement, ev_rows)
 
     _align_main_lines(main_row, rows_by_side, ev_rows, movement, proposition)
 
