@@ -522,11 +522,12 @@ def build_totals(
         best_book = under_book if best_side == "UNDER" else over_book
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
-        p_side = (
+        p_side_conditional = (
             p_over_headline
             if best_side == "OVER"
             else (1.0 - p_over_headline if p_over_headline is not None else None)
         )
+        model_win_prob = p_side_conditional
         decimal_price = _american_to_decimal(best_price)
         implied_prob = implied_probability(best_price)
 
@@ -542,10 +543,15 @@ def build_totals(
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
-                if decimal_price is not None and p_side is not None:
+                model_win_prob = (
+                    p_side_conditional * (1.0 - float(push_prob))
+                    if p_side_conditional is not None
+                    else None
+                )
+                if decimal_price is not None and model_win_prob is not None:
                     sizing = compute_sizing(
                         decimal_price=decimal_price,
-                        model_prob=p_side,
+                        model_prob=model_win_prob,
                         push_prob=float(push_prob),
                     )
                     edge_pct = (
@@ -558,10 +564,10 @@ def build_totals(
                 sizing_flags = "push_capable_no_prob"
                 # No honest push mass → blank the push-contaminated two-way edge.
                 edge_pct = None
-        elif decimal_price is not None and p_side is not None:
+        elif decimal_price is not None and model_win_prob is not None:
             sizing = compute_sizing(
                 decimal_price=decimal_price,
-                model_prob=p_side,
+                model_prob=model_win_prob,
                 push_prob=0.0,
             )
             edge_pct = sizing.edge_pct
@@ -619,9 +625,9 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(p_side, 4) if p_side is not None else "",
+                "market_consensus_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
                 "independent_model_prob": "",
-                "final_blended_prob": round(p_side, 4) if p_side is not None else "",
+                "final_blended_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",

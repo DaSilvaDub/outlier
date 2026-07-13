@@ -19,6 +19,7 @@ import logging
 import math
 import sqlite3
 from collections import defaultdict
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -201,6 +202,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
@@ -292,8 +294,80 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         }
         if "push_prob" not in snapshot_columns:
             conn.execute("ALTER TABLE market_snapshots ADD COLUMN push_prob REAL")
+        conn.execute("DROP INDEX IF EXISTS idx_decisions_snapshot")
+        _migrate_decision_ids(conn)
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_snapshot "
+            "ON decisions(snapshot_id)"
+        )
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return db_path
+
+
+def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
+    """Normalize schema-v1/custom decisions to one deterministic ID per snapshot."""
+
+    fields = [
+        "decision_id",
+        "snapshot_id",
+        "pipeline_verdict",
+        "A_verdict",
+        "B_verdict",
+        "C_verdict",
+        "D_verdict",
+        "final_verdict",
+        "units",
+        "kill_reason",
+        "news_override",
+        "created_at",
+        "updated_at",
+    ]
+    for legacy in list(conn.execute(f"SELECT {', '.join(fields)} FROM decisions")):
+        new_id = _stable_id("decision", legacy["snapshot_id"])
+        if legacy["decision_id"] == new_id:
+            continue
+        existing = conn.execute(
+            f"SELECT {', '.join(fields)} FROM decisions WHERE decision_id = ?", (new_id,)
+        ).fetchone()
+        merged = dict(existing) if existing is not None else dict(legacy)
+        if existing is not None:
+            for field in (
+                "pipeline_verdict",
+                "A_verdict",
+                "B_verdict",
+                "C_verdict",
+                "D_verdict",
+                "final_verdict",
+                "units",
+                "kill_reason",
+                "news_override",
+            ):
+                if legacy[field] not in (None, ""):
+                    merged[field] = legacy[field]
+            merged["created_at"] = min(
+                _text(existing["created_at"]), _text(legacy["created_at"])
+            )
+            merged["updated_at"] = max(
+                _text(existing["updated_at"]), _text(legacy["updated_at"])
+            )
+        merged["decision_id"] = new_id
+        if existing is None:
+            conn.execute(
+                f"INSERT INTO decisions ({', '.join(fields)}) "
+                f"VALUES ({', '.join('?' for _ in fields)})",
+                [merged[field] for field in fields],
+            )
+        else:
+            assignments = ", ".join(f"{field} = ?" for field in fields[1:])
+            conn.execute(
+                f"UPDATE decisions SET {assignments} WHERE decision_id = ?",
+                [merged[field] for field in fields[1:]] + [new_id],
+            )
+        conn.execute(
+            "UPDATE settlements SET decision_id = ? WHERE decision_id = ?",
+            (new_id, legacy["decision_id"]),
+        )
+        conn.execute("DELETE FROM decisions WHERE decision_id = ?", (legacy["decision_id"],))
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -303,6 +377,12 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
+
+
+def open_database(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    """Open an initialized connection for a caller-managed transaction."""
+
+    return _connect(Path(db_path))
 
 
 def _read_csv(path: Path, required: Iterable[str] = ()) -> list[dict[str, str]]:
@@ -535,6 +615,7 @@ def capture_pack(
     db_path: Path = DEFAULT_DB_PATH,
     *,
     recorded_pack_path: Path | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> CaptureStats:
     """Persist a dated pack's opportunity snapshots and seed pipeline decisions.
 
@@ -558,7 +639,9 @@ def capture_pack(
         decisions.append(_decision_seed(snapshot, row))
 
     now = _utc_now()
-    with _connect(Path(db_path)) as conn:
+    connection_context = nullcontext(connection) if connection is not None else _connect(Path(db_path))
+    with connection_context as conn:
+        assert conn is not None
         for snapshot in snapshots:
             values = [snapshot[field] for field in MARKET_SNAPSHOT_FIELDS]
             conn.execute(
@@ -567,7 +650,8 @@ def capture_pack(
                 VALUES ({', '.join('?' for _ in MARKET_SNAPSHOT_FIELDS)}, ?)
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     selected = excluded.selected,
-                    pack_path = excluded.pack_path
+                    pack_path = excluded.pack_path,
+                    push_prob = COALESCE(excluded.push_prob, market_snapshots.push_prob)
                 """,
                 [*values, now],
             )
@@ -625,7 +709,14 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                 raise FeedbackError(
                     f"{input_path}:{row_number} references unknown snapshot_id {snapshot_id!r}"
                 )
-            decision_id = _text(row.get("decision_id")) or _stable_id("decision", snapshot_id)
+            expected_decision_id = _stable_id("decision", snapshot_id)
+            supplied_decision_id = _text(row.get("decision_id"))
+            if supplied_decision_id and supplied_decision_id != expected_decision_id:
+                raise FeedbackError(
+                    f"{input_path}:{row_number} decision_id {supplied_decision_id!r} does not "
+                    f"match snapshot_id {snapshot_id!r} ({expected_decision_id!r})"
+                )
+            decision_id = expected_decision_id
             values: dict[str, Any] = {
                 field: (_text(row.get(field)).upper() if "verdict" in field else _text(row.get(field)))
                 for field in DECISION_FIELDS

@@ -22,9 +22,9 @@ top-N ranking step and then captures the pack into
 
 Repeated capture of the same source timestamp/line/price is idempotent. A new
 line, outcome, source timestamp, price, or book creates a new snapshot and a new
-seeded decision. Pack files are staged, captured to the durable ledger, and only
-then promoted to the dated pack directory; a capture failure leaves the prior
-published pack intact.
+seeded decision. Pack files are staged while the SQLite transaction remains
+open, then swapped into the dated directory and committed together. Capture or
+publication failure rolls back the ledger and restores the prior published pack.
 
 Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 `--feedback-db <path>` to override the default database.
@@ -32,6 +32,8 @@ Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 ## Probability and edge semantics
 
 - `market_consensus_prob` is the existing no-vig market-derived probability.
+  For a market with known push mass it stores unconditional `P(win)`; two-way
+  totals ladder probability is multiplied by `(1 - push_prob)` before storage.
 - `independent_model_prob` is intentionally blank until a real independent
   model supplies it.
 - `final_blended_prob` currently equals the market-consensus probability. It is

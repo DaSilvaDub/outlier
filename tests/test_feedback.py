@@ -167,6 +167,36 @@ def test_pack_main_does_not_publish_when_feedback_capture_fails(tmp_path, monkey
     assert not list((tmp_path / "packs").glob(".*.feedback-staging-*"))
 
 
+def test_pack_swap_failure_rolls_back_ledger_and_restores_published_pack(tmp_path, monkeypatch):
+    row = _candidate()
+    out_dir = tmp_path / "packs" / "2026-07-13"
+    out_dir.mkdir(parents=True)
+    (out_dir / "candidates.csv").write_text("old pack", encoding="utf-8")
+
+    def fake_build(_leagues, _date, _top_ev, _top_signal, *, opportunity_rows_out=None):
+        assert opportunity_rows_out is not None
+        opportunity_rows_out.append(dict(row))
+        return [row], "2026-07-13", {}, {}
+
+    monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
+    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues: [])
+    monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        pack,
+        "_swap_staged_pack",
+        lambda *_args: (_ for _ in ()).throw(OSError("swap failed")),
+    )
+
+    with pytest.raises(OSError, match="swap failed"):
+        pack.main(["--leagues", "WNBA"])
+
+    assert (out_dir / "candidates.csv").read_text(encoding="utf-8") == "old pack"
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 0
+
+
 def test_capture_preserves_selected_total_alternate_not_represented_by_specialized_board(tmp_path):
     represented = _candidate(market_id="m1", outcome_id="o1", line=10.5)
     alternate = _candidate(market_id="m1", outcome_id="o2", line=11.5)
@@ -225,6 +255,27 @@ def test_new_market_snapshot_gets_its_own_decision(tmp_path):
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 2
+
+
+def test_schema_v1_decision_and_push_mass_are_migrated_on_recapture(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    with sqlite3.connect(db_path) as conn:
+        snapshot_id = conn.execute("SELECT snapshot_id FROM market_snapshots").fetchone()[0]
+        conn.execute("UPDATE decisions SET decision_id = 'legacy-decision'")
+        conn.execute("UPDATE market_snapshots SET push_prob = NULL")
+        conn.execute("PRAGMA user_version = 1")
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        decisions = conn.execute("SELECT decision_id, snapshot_id FROM decisions").fetchall()
+        push_prob = conn.execute("SELECT push_prob FROM market_snapshots").fetchone()[0]
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert decisions == [(feedback._stable_id("decision", snapshot_id), snapshot_id)]
+    assert push_prob == pytest.approx(0.0)
+    assert version == feedback.SCHEMA_VERSION
 
 
 def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):

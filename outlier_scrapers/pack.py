@@ -1323,8 +1323,8 @@ def build_pack(
     return rows, target_date, games_norm
 
 
-def _publish_staged_pack(staging_dir: Path, out_dir: Path) -> None:
-    """Replace the published pack only after durable feedback capture succeeds."""
+def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
+    """Publish staging while retaining the prior pack for transaction rollback."""
 
     backup_dir = out_dir.parent / f".{out_dir.name}.feedback-backup-{uuid.uuid4().hex}"
     had_existing = out_dir.exists()
@@ -1336,8 +1336,14 @@ def _publish_staged_pack(staging_dir: Path, out_dir: Path) -> None:
         if had_existing and backup_dir.exists() and not out_dir.exists():
             os.replace(backup_dir, out_dir)
         raise
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
+    return backup_dir if had_existing else None
+
+
+def _restore_published_pack(out_dir: Path, backup_dir: Path | None) -> None:
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    if backup_dir is not None and backup_dir.exists():
+        os.replace(backup_dir, out_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> Path:
@@ -1383,6 +1389,9 @@ def main(argv: Sequence[str] | None = None) -> Path:
         staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
         if out_dir.exists():
             shutil.copytree(out_dir, staging_dir)
+        conn = None
+        backup_dir: Path | None = None
+        published = False
         try:
             write_pack(
                 final_rows,
@@ -1392,16 +1401,33 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 coverage=coverage,
                 opportunity_rows=opportunity_rows,
             )
+            conn = feedback.open_database(feedback_db)
+            conn.execute("BEGIN IMMEDIATE")
             stats = feedback.capture_pack(
                 staging_dir,
                 feedback_db,
                 recorded_pack_path=out_dir,
+                connection=conn,
             )
-            _publish_staged_pack(staging_dir, out_dir)
+            backup_dir = _swap_staged_pack(staging_dir, out_dir)
+            published = True
+            conn.commit()
         except Exception:
+            if conn is not None:
+                conn.rollback()
+            if published:
+                _restore_published_pack(out_dir, backup_dir)
             if staging_dir.exists():
                 shutil.rmtree(staging_dir)
             raise
+        finally:
+            if conn is not None:
+                conn.close()
+        if backup_dir is not None and backup_dir.exists():
+            try:
+                shutil.rmtree(backup_dir)
+            except OSError as exc:
+                logger.warning("Could not remove prior pack backup %s: %s", backup_dir, exc)
         logger.info(
             "Captured %d feedback snapshots and %d decisions in %s",
             stats.snapshots,

@@ -110,12 +110,14 @@ def test_build_game_totals_integer_line_with_push_prob():
     side = row['best_side']
     p_over, _, _ = aggregate_line_p_over({'DK': -110, 'FD': -110}, {'DK': -110, 'FD': -110})
     assert p_over is not None
-    p_side = p_over if side == 'OVER' else 1.0 - p_over
+    p_side_conditional = p_over if side == 'OVER' else 1.0 - p_over
     decimal = float(row['decimal_price'])
     push = float(row['push_prob'])
+    p_side = p_side_conditional * (1.0 - push)
     expected = compute_sizing(decimal_price=decimal, model_prob=p_side, push_prob=push)
     assert expected.edge_pct is not None
     assert float(row['edge_pct']) == pytest.approx(round(expected.edge_pct, 4))
+    assert float(row['market_consensus_prob']) == pytest.approx(round(p_side, 4))
     two_way_edge, _ = compute_side_edge(side, p_over, row['best_price'])
     assert two_way_edge is not None
     assert float(row['edge_pct']) != pytest.approx(two_way_edge)
