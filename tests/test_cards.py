@@ -5,6 +5,7 @@ import pytest
 
 from outlier_scrapers import cards
 from outlier_scrapers.cards import (
+    _align_main_lines,
     _spread_sign_conflict,
     assemble_game_card,
     build_cards_payload,
@@ -85,6 +86,114 @@ def _spread_prop_row(position, line):
         "outcome_id": f"o{position}",
         "league": "MLB",
     }
+
+
+def _line_row(line, *, books=1):
+    return {"line": line, "books": [{"book": str(index)} for index in range(books)]}
+
+
+def test_align_main_lines_mirrors_spread_to_stronger_side():
+    home = _line_row(-8.5)
+    away_main = _line_row(7.5)
+    away_mirror = _line_row(8.5)
+    main = {"HOME": home, "AWAY": away_main}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away_main, away_mirror]},
+        [],
+        {"HOME": {"current_line": -8.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_mirror}
+
+
+def test_align_main_lines_matches_total_to_stronger_side():
+    over = _line_row(180.5)
+    under_main = _line_row(179.5)
+    under_match = _line_row(180.5)
+    main = {"OVER": over, "UNDER": under_main}
+
+    _align_main_lines(
+        main,
+        {"OVER": [over], "UNDER": [under_main, under_match]},
+        [],
+        {"OVER": {"current_line": 180.5}},
+        "TOTAL",
+    )
+
+    assert main == {"OVER": over, "UNDER": under_match}
+
+
+def test_align_main_lines_ev_priority_beats_movement():
+    home = _line_row(-7.5)
+    home_for_away = _line_row(-8.5)
+    away = _line_row(8.5)
+    away_for_home = _line_row(7.5)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home, home_for_away], "AWAY": [away, away_for_home]},
+        [{"side": "HOME", "current_line": -7.5}],
+        {"AWAY": {"current_line": 8.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_for_home}
+
+
+def test_align_main_lines_movement_priority_beats_default():
+    home = _line_row(-7.5)
+    away = _line_row(8.5)
+    away_for_home = _line_row(7.5)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away, away_for_home]},
+        [],
+        {"HOME": {"current_line": -7.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_for_home}
+
+
+def test_align_main_lines_uses_most_books_for_target_line():
+    home = _line_row(-7.5)
+    away = _line_row(8.5)
+    thin_target = _line_row(7.5, books=1)
+    deep_target = _line_row(7.5, books=3)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away, thin_target, deep_target]},
+        [{"side": "HOME", "current_line": -7.5}],
+        {},
+        "SPREAD",
+    )
+
+    assert main["AWAY"] is deep_target
+
+
+def test_align_main_lines_missing_line_cannot_gain_ev_priority_and_none_proposition_is_safe():
+    missing = _line_row(None)
+    matching = _line_row(8.5)
+    under = _line_row(8.5)
+    main = {"OVER": missing, "UNDER": under}
+
+    _align_main_lines(
+        main,
+        {"OVER": [missing, matching], "UNDER": [under]},
+        [{"side": "OVER", "current_line": None}],
+        {"UNDER": {"current_line": 8.5}},
+        None,
+    )
+
+    assert main["OVER"] is matching
 
 
 def test_assemble_game_card_flags_sign_conflict_end_to_end():
