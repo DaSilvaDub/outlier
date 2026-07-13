@@ -115,6 +115,28 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
 
 
+def test_recapture_refreshes_corrected_probability_semantics(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE market_snapshots "
+            "SET market_consensus_prob = 0.90, final_blended_prob = 0.90, "
+            "edge = 0.40, independent_model_prob = 0.70"
+        )
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT market_consensus_prob, independent_model_prob, "
+            "final_blended_prob, edge FROM market_snapshots"
+        ).fetchone()
+    assert row == pytest.approx((0.60, 0.70, 0.60, 0.10))
+
+
 def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     row = _candidate()
 

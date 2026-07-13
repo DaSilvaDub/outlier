@@ -649,9 +649,30 @@ def capture_pack(
                 INSERT INTO market_snapshots ({', '.join(MARKET_SNAPSHOT_FIELDS)}, created_at)
                 VALUES ({', '.join('?' for _ in MARKET_SNAPSHOT_FIELDS)}, ?)
                 ON CONFLICT(snapshot_id) DO UPDATE SET
+                    market_consensus_prob = COALESCE(
+                        excluded.market_consensus_prob, market_snapshots.market_consensus_prob
+                    ),
+                    independent_model_prob = COALESCE(
+                        excluded.independent_model_prob, market_snapshots.independent_model_prob
+                    ),
+                    final_blended_prob = COALESCE(
+                        excluded.final_blended_prob, market_snapshots.final_blended_prob
+                    ),
+                    edge = excluded.edge,
+                    data_quality_flags = excluded.data_quality_flags,
+                    market_type = excluded.market_type,
+                    model_prob_source = excluded.model_prob_source,
+                    decimal_price = excluded.decimal_price,
+                    implied_prob = excluded.implied_prob,
+                    board = excluded.board,
                     selected = excluded.selected,
                     pack_path = excluded.pack_path,
-                    push_prob = COALESCE(excluded.push_prob, market_snapshots.push_prob)
+                    push_prob = COALESCE(excluded.push_prob, market_snapshots.push_prob),
+                    signal_flags = excluded.signal_flags,
+                    hit_rate_component = excluded.hit_rate_component,
+                    insight_component = excluded.insight_component,
+                    movement_component = excluded.movement_component,
+                    orf_component = excluded.orf_component
                 """,
                 [*values, now],
             )
