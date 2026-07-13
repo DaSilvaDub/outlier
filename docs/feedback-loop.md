@@ -13,14 +13,18 @@ top-N ranking step and then captures the pack into
 - `market_snapshots`: every pregame opportunity, including non-selected rows,
   the final pack selection state, exact outcome/line identity, probabilities,
   edge, book, data-quality flags, and the four Board B components.
-- `decisions`: one decision per exact event/market/outcome/selection/line,
-  seeded as `PLAY` or `STAND_DOWN`. A/B/C/D and final verdicts remain blank
-  until imported from the pack-local `decisions.csv`.
+- `decisions`: one decision per immutable market snapshot, seeded as `PLAY` or
+  `STAND_DOWN`. A/B/C/D and final verdicts remain blank until imported from the
+  pack-local `decisions.csv`. A later price/time snapshot gets its own decision
+  instead of rewriting the earlier verdict history.
 - `settlements`: the result, closing line/price, CLV, PnL, and would-have result
   joined to a decision/snapshot.
 
 Repeated capture of the same source timestamp/line/price is idempotent. A new
-line, outcome, source timestamp, price, or book creates a new snapshot.
+line, outcome, source timestamp, price, or book creates a new snapshot and a new
+seeded decision. Pack files are staged, captured to the durable ledger, and only
+then promoted to the dated pack directory; a capture failure leaves the prior
+published pack intact.
 
 Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 `--feedback-db <path>` to override the default database.
@@ -36,9 +40,11 @@ Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 - `edge` preserves the pipeline's expected-return edge as a decimal; `0.07`
   means 7% expected return. It is not probability minus implied probability.
 
-Reports calculate Brier score, log loss, expected-versus-actual hit rate, and
-calibration curves separately for all three probability columns. Pushes are
-excluded from binary probability scoring but retained in ROI/result tables.
+`push_prob` is stored with every snapshot. Reports calculate Brier score, log
+loss, expected-versus-actual hit rate, and calibration curves separately for
+all three probability columns using `P(win | not push) = p_win / (1 - p_push)`.
+Rows with unknown push mass and actual pushes are excluded from binary scoring,
+but pushes remain in ROI/result tables.
 
 ## Daily/post-slate workflow
 

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
 DEFAULT_REPORT_DIR = paths.PROJECT_ROOT / "calibration" / "reports" / "latest"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MARKET_SNAPSHOT_FIELDS = [
     "snapshot_id",
@@ -47,6 +47,7 @@ MARKET_SNAPSHOT_FIELDS = [
     "market_consensus_prob",
     "independent_model_prob",
     "final_blended_prob",
+    "push_prob",
     "edge",
     "data_quality_flags",
     # Required for the requested segmentation and future weight fitting.
@@ -220,6 +221,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 market_consensus_prob REAL,
                 independent_model_prob REAL,
                 final_blended_prob REAL,
+                push_prob REAL,
                 edge REAL,
                 data_quality_flags TEXT,
                 market_type TEXT,
@@ -285,6 +287,11 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 ON settlements(decision_id);
             """
         )
+        snapshot_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")
+        }
+        if "push_prob" not in snapshot_columns:
+            conn.execute("ALTER TABLE market_snapshots ADD COLUMN push_prob REAL")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return db_path
 
@@ -330,8 +337,26 @@ def _pack_fallback_timestamp(pack_dir: Path) -> str:
     return _utc_now()
 
 
-def _identity_key(row: dict[str, Any]) -> tuple[str, str, str]:
-    return (_text(row.get("sport")), _text(row.get("event_id")), _text(row.get("market_id")))
+def _selection_side(row: dict[str, Any]) -> str:
+    explicit = _text(row.get("best_side")).upper()
+    if explicit in {"OVER", "UNDER"}:
+        return explicit
+    selection = f" {_text(row.get('selection')).upper()} "
+    if " UNDER " in selection:
+        return "UNDER"
+    if " OVER " in selection:
+        return "OVER"
+    return ""
+
+
+def _total_representation_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        _text(row.get("sport")),
+        _text(row.get("event_id")),
+        _text(row.get("market_id")),
+        _text(row.get("line")),
+        _selection_side(row),
+    )
 
 
 def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
@@ -352,12 +377,12 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
             row["selected"] = "true"
             specialized.append((source, row))
 
-    specialized_keys = {_identity_key(row) for _source, row in specialized}
+    specialized_keys = {_total_representation_key(row) for _source, row in specialized}
     output: list[tuple[str, dict[str, Any]]] = []
     for row in base_rows:
         # A specialized totals ledger is the authoritative representation for a
         # selected total.  Keep non-selected raw opportunities for auditability.
-        if _truthy(row.get("selected")) and _identity_key(row) in specialized_keys:
+        if _truthy(row.get("selected")) and _total_representation_key(row) in specialized_keys:
             continue
         output.append((base_source, row))
     output.extend(specialized)
@@ -378,6 +403,7 @@ def _snapshot_from_pack_row(
     row: dict[str, Any],
     pack_dir: Path,
     fallback_timestamp: str,
+    recorded_pack_path: Path | None = None,
 ) -> dict[str, Any]:
     is_totals = source in {"game_totals", "team_totals"}
     event_id = _text(row.get("event_id"))
@@ -467,6 +493,7 @@ def _snapshot_from_pack_row(
         "market_consensus_prob": market_consensus,
         "independent_model_prob": independent,
         "final_blended_prob": final_blended,
+        "push_prob": _probability(row.get("push_prob"), field="push_prob"),
         "edge": _float(row.get("edge") or row.get("edge_pct"), field="edge"),
         "data_quality_flags": data_quality_flags,
         "market_type": market_type,
@@ -480,22 +507,14 @@ def _snapshot_from_pack_row(
         "insight_component": insight,
         "movement_component": movement,
         "orf_component": orf,
-        "pack_path": str(pack_dir.resolve()),
+        "pack_path": str((recorded_pack_path or pack_dir).resolve()),
     }
 
 
 def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     units = _float(row.get("recommended_units_pre_news"), field="units") or 0.0
     play = bool(snapshot["selected"]) and _truthy(row.get("actionable")) and units > 0
-    decision_id = _stable_id(
-        "decision",
-        snapshot["sport"],
-        snapshot["event_id"],
-        snapshot["market_id"],
-        snapshot["outcome_id"],
-        snapshot["selection"],
-        snapshot["line"],
-    )
+    decision_id = _stable_id("decision", snapshot["snapshot_id"])
     return {
         "decision_id": decision_id,
         "snapshot_id": snapshot["snapshot_id"],
@@ -511,7 +530,12 @@ def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, A
     }
 
 
-def capture_pack(pack_dir: Path, db_path: Path = DEFAULT_DB_PATH) -> CaptureStats:
+def capture_pack(
+    pack_dir: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    recorded_pack_path: Path | None = None,
+) -> CaptureStats:
     """Persist a dated pack's opportunity snapshots and seed pipeline decisions.
 
     Re-capturing an identical source timestamp is idempotent.  A new line, price,
@@ -527,7 +551,9 @@ def capture_pack(pack_dir: Path, db_path: Path = DEFAULT_DB_PATH) -> CaptureStat
     snapshots: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
     for source, row in source_rows:
-        snapshot = _snapshot_from_pack_row(source, row, pack_dir, fallback_timestamp)
+        snapshot = _snapshot_from_pack_row(
+            source, row, pack_dir, fallback_timestamp, recorded_pack_path
+        )
         snapshots.append(snapshot)
         decisions.append(_decision_seed(snapshot, row))
 
@@ -555,10 +581,6 @@ def capture_pack(pack_dir: Path, db_path: Path = DEFAULT_DB_PATH) -> CaptureStat
                     units, kill_reason, news_override, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(decision_id) DO UPDATE SET
-                    snapshot_id = CASE
-                        WHEN COALESCE(decisions.final_verdict, '') = '' THEN excluded.snapshot_id
-                        ELSE decisions.snapshot_id
-                    END,
                     pipeline_verdict = excluded.pipeline_verdict,
                     units = CASE
                         WHEN COALESCE(decisions.final_verdict, '') = '' THEN excluded.units
@@ -691,9 +713,18 @@ def _resolve_settlement_decision(
     snapshot_id = _text(row.get("snapshot_id"))
     outcome_id = _text(row.get("outcome_id"))
     if decision_id:
-        return conn.execute(query + " WHERE d.decision_id = ?", (decision_id,)).fetchone()
+        match = conn.execute(query + " WHERE d.decision_id = ?", (decision_id,)).fetchone()
+        if match is None:
+            raise FeedbackError(
+                f"{input_path}:{row_number} references unknown decision_id {decision_id!r}"
+            )
+        return match
     if snapshot_id:
         matches = conn.execute(query + " WHERE d.snapshot_id = ?", (snapshot_id,)).fetchall()
+        if not matches:
+            raise FeedbackError(
+                f"{input_path}:{row_number} references unknown snapshot_id {snapshot_id!r}"
+            )
     else:
         clauses = ["s.event_id = ?", "s.market_id = ?"]
         params: list[Any] = [_text(row.get("event_id")), _text(row.get("market_id"))]
@@ -709,6 +740,19 @@ def _resolve_settlement_decision(
     return matches[0] if matches else None
 
 
+def _validate_settlement_identity(
+    matched: sqlite3.Row, row: dict[str, Any], row_number: int, input_path: Path
+) -> None:
+    for field in ("snapshot_id", "event_id", "market_id", "outcome_id"):
+        supplied = _text(row.get(field))
+        expected = _text(matched[field])
+        if supplied and supplied != expected:
+            raise FeedbackError(
+                f"{input_path}:{row_number} {field}={supplied!r} contradicts "
+                f"the resolved decision snapshot ({expected!r})"
+            )
+
+
 def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> ImportStats:
     input_path = Path(input_path)
     rows = _read_csv(input_path, SETTLEMENT_REQUIRED_FIELDS)
@@ -720,6 +764,8 @@ def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Imp
             matched = _resolve_settlement_decision(conn, row, row_number, input_path)
             if matched is None:
                 unlinked += 1
+            else:
+                _validate_settlement_identity(matched, row, row_number, input_path)
             decision_id = _text(row.get("decision_id")) or (
                 _text(matched["decision_id"]) if matched else ""
             )
@@ -729,8 +775,8 @@ def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Imp
             outcome_id = _text(row.get("outcome_id")) or (
                 _text(matched["outcome_id"]) if matched else ""
             )
-            event_id = _text(row.get("event_id")) or (_text(matched["event_id"]) if matched else "")
-            market_id = _text(row.get("market_id")) or (_text(matched["market_id"]) if matched else "")
+            event_id = _text(matched["event_id"]) if matched else _text(row.get("event_id"))
+            market_id = _text(matched["market_id"]) if matched else _text(row.get("market_id"))
             if not event_id or not market_id:
                 raise FeedbackError(f"{input_path}:{row_number} needs event_id and market_id")
 
@@ -824,7 +870,7 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 s.snapshot_id, s.captured_at, s.sport, s.event_id, s.market_id,
                 s.outcome_id, s.player_id, s.selection, s.line, s.price, s.book,
                 s.market_consensus_prob, s.independent_model_prob,
-                s.final_blended_prob, s.edge, s.data_quality_flags,
+                s.final_blended_prob, s.push_prob, s.edge, s.data_quality_flags,
                 s.market_type, s.model_prob_source, s.decimal_price,
                 s.implied_prob, s.board, s.selected, s.signal_flags,
                 s.hit_rate_component, s.insight_component,
@@ -911,13 +957,31 @@ def _grouped(rows: list[dict[str, Any]], field: str, label: str) -> list[dict[st
     return [_group_metrics(groups[key], label, key) for key in sorted(groups)]
 
 
+def _scoring_probability(row: dict[str, Any], column: str) -> float | None:
+    """Return P(win | not push), the binary probability used for W/L scoring.
+
+    A blank push probability means the row's binary basis is unknown, so it is
+    excluded rather than silently assuming no push. No-push markets explicitly
+    carry 0.0.
+    """
+
+    probability = _probability(row.get(column), field=column)
+    push_prob = _probability(row.get("push_prob"), field="push_prob")
+    if probability is None or push_prob is None or push_prob >= 1.0:
+        return None
+    conditional = probability / (1.0 - push_prob)
+    if not 0.0 <= conditional <= 1.0:
+        return None
+    return conditional
+
+
 def _probability_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for source, column in PROBABILITY_COLUMNS.items():
         pairs: list[tuple[float, float]] = []
         for row in rows:
             result = _text(row.get("win_loss_push")).upper()
-            probability = _probability(row.get(column), field=column)
+            probability = _scoring_probability(row, column)
             if probability is None or result == "PUSH":
                 continue
             pairs.append((probability, 1.0 if result == "W" else 0.0))
@@ -952,7 +1016,7 @@ def _calibration_curve(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         bins: dict[int, list[tuple[float, float]]] = defaultdict(list)
         for row in rows:
             result = _text(row.get("win_loss_push")).upper()
-            probability = _probability(row.get(column), field=column)
+            probability = _scoring_probability(row, column)
             if probability is None or result == "PUSH":
                 continue
             bucket = min(9, int(probability * 10))

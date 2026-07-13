@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from outlier_scrapers import feedback, pack
+from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 from outlier_scrapers.pack import CANDIDATES_HEADER
 
 
@@ -49,6 +50,7 @@ def _candidate(
             "market_consensus_prob": 0.60,
             "independent_model_prob": "",
             "final_blended_prob": 0.60,
+            "push_prob": 0.0,
             "implied_prob": 0.50,
             "edge_pct": 0.10,
             "recommended_units_pre_news": 2.0,
@@ -134,6 +136,95 @@ def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
+
+
+def test_pack_main_does_not_publish_when_feedback_capture_fails(tmp_path, monkeypatch):
+    row = _candidate()
+    out_dir = tmp_path / "packs" / "2026-07-13"
+    out_dir.mkdir(parents=True)
+    (out_dir / "keep-me.txt").write_text("previous published pack", encoding="utf-8")
+    (out_dir / "candidates.csv").write_text("old pack", encoding="utf-8")
+
+    def fake_build(_leagues, _date, _top_ev, _top_signal, *, opportunity_rows_out=None):
+        assert opportunity_rows_out is not None
+        opportunity_rows_out.append(dict(row))
+        return [row], "2026-07-13", {}, {}
+
+    monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
+    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues: [])
+    monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        feedback,
+        "capture_pack",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(feedback.FeedbackError("locked")),
+    )
+
+    with pytest.raises(feedback.FeedbackError, match="locked"):
+        pack.main(["--leagues", "WNBA"])
+
+    assert (out_dir / "keep-me.txt").read_text(encoding="utf-8") == "previous published pack"
+    assert (out_dir / "candidates.csv").read_text(encoding="utf-8") == "old pack"
+    assert not list((tmp_path / "packs").glob(".*.feedback-staging-*"))
+
+
+def test_capture_preserves_selected_total_alternate_not_represented_by_specialized_board(tmp_path):
+    represented = _candidate(market_id="m1", outcome_id="o1", line=10.5)
+    alternate = _candidate(market_id="m1", outcome_id="o2", line=11.5)
+    pack_dir = _pack(tmp_path, [represented, alternate])
+    total = {field: "" for field in GAME_TOTALS_HEADER}
+    total.update(
+        {
+            "totals_id": "m1:10.5:OVER",
+            "sport": "WNBA",
+            "event_id": "e1",
+            "market_id": "m1",
+            "outcome_id": "m1:10.5:OVER",
+            "total_kind": "game",
+            "selection": "Player Points OVER 10.5",
+            "line": "10.5",
+            "price": "100",
+            "decimal_price": "2.0",
+            "book": "FD",
+            "best_side": "OVER",
+            "projected_over_prob": "0.60",
+            "projected_under_prob": "0.40",
+            "market_consensus_prob": "0.60",
+            "final_blended_prob": "0.60",
+            "edge_pct": "0.10",
+            "implied_prob": "0.50",
+            "actionable": "true",
+            "recommended_units_pre_news": "2",
+            "push_prob": "0",
+            "as_of": "2026-07-13T16:00:00+00:00",
+        }
+    )
+    _write_csv(pack_dir / "game_totals.csv", GAME_TOTALS_HEADER, [total])
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT outcome_id, line FROM market_snapshots ORDER BY line"
+        ).fetchall()
+    assert rows == [("m1:10.5:OVER", "10.5"), ("o2", "11.5")]
+
+
+def test_new_market_snapshot_gets_its_own_decision(tmp_path):
+    row = _candidate()
+    pack_dir = _pack(tmp_path, [row])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    row["as_of"] = "2026-07-13T16:05:00+00:00"
+    row["price"] = "110"
+    row["decimal_price"] = "2.1"
+    _pack(tmp_path, [row])
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 2
 
 
 def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
@@ -243,6 +334,31 @@ def test_settlement_requires_identifier_when_alt_lines_are_ambiguous(tmp_path):
         feedback.import_settlements(settlement_input, db_path)
 
 
+def test_settlement_rejects_identity_that_contradicts_decision(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    decision = _read_csv(pack_dir / "decisions.csv")[0]
+    settlement = {field: "" for field in feedback.SETTLEMENT_FIELDS}
+    settlement.update(
+        {
+            "decision_id": decision["decision_id"],
+            "event_id": "wrong-event",
+            "market_id": "m1",
+            "actual_result": "14",
+            "win_loss_push": "W",
+            "closing_line": "11.5",
+            "closing_price": "-110",
+            "would_have_result": "W",
+        }
+    )
+    input_path = tmp_path / "contradictory.csv"
+    _write_csv(input_path, feedback.SETTLEMENT_FIELDS, [settlement])
+
+    with pytest.raises(feedback.FeedbackError, match="contradicts"):
+        feedback.import_settlements(input_path, db_path)
+
+
 @pytest.mark.parametrize(
     ("selection", "taken", "closing", "expected"),
     [
@@ -254,3 +370,28 @@ def test_settlement_requires_identifier_when_alt_lines_are_ambiguous(tmp_path):
 )
 def test_compute_clv_line_sign_convention(selection, taken, closing, expected):
     assert feedback.compute_clv_line(selection, taken, closing) == pytest.approx(expected)
+
+
+def test_probability_scoring_conditions_on_non_push_mass():
+    rows = [
+        {
+            "win_loss_push": "W",
+            "market_consensus_prob": 0.54,
+            "independent_model_prob": "",
+            "final_blended_prob": 0.54,
+            "push_prob": 0.10,
+        },
+        {
+            "win_loss_push": "L",
+            "market_consensus_prob": 0.55,
+            "independent_model_prob": "",
+            "final_blended_prob": 0.55,
+            "push_prob": "",
+        },
+    ]
+
+    metrics = {
+        row["probability_source"]: row for row in feedback._probability_metrics(rows)
+    }
+    assert metrics["market_consensus"]["n"] == 1
+    assert metrics["market_consensus"]["brier_score"] == pytest.approx((0.6 - 1.0) ** 2)

@@ -339,6 +339,20 @@ def pick_best_side(p_over: float, over_price: Any, under_price: Any) -> tuple[st
     return "OVER", over_price, over_edge
 
 
+def _best_book_offer(
+    offers: dict[str, Any], *, fallback_book: Any = "", fallback_price: Any = None
+) -> tuple[str, Any]:
+    valid = [
+        (str(book), price, _american_to_decimal(price))
+        for book, price in offers.items()
+        if _american_to_decimal(price) is not None
+    ]
+    if not valid:
+        return str(fallback_book or ""), fallback_price
+    book, price, _decimal = max(valid, key=lambda offer: offer[2] or 0.0)
+    return book, price
+
+
 def derive_push_prob(line: float, ladder_p: dict[float, float]) -> float | None:
     if not _is_integer_line(line):
         return None
@@ -498,11 +512,14 @@ def build_totals(
         if p_over_headline is None:
             flags.append("INSUFFICIENT_DATA")
 
-        over_price = max(over_books.values()) if over_books else cand.get("price")
-        under_price = max(under_books.values()) if under_books else None
+        over_book, over_price = _best_book_offer(
+            over_books, fallback_book=cand.get("book"), fallback_price=cand.get("price")
+        )
+        under_book, under_price = _best_book_offer(under_books)
         best_side, best_price, edge_pct = (
             pick_best_side(p_over_headline, over_price, under_price) if p_over_headline is not None else ("OVER", over_price, None)
         )
+        best_book = under_book if best_side == "UNDER" else over_book
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         p_side = (
@@ -513,9 +530,10 @@ def build_totals(
         decimal_price = _american_to_decimal(best_price)
         implied_prob = implied_probability(best_price)
 
-        push_prob: float | str = ""
-        sizing_flags = ""
         push_blocked = _is_integer_line(headline_line)
+        push_prob: float | str = "" if push_blocked else 0.0
+        sizing_flags = ""
+        sizing = None
         if push_blocked:
             # F3 Option 2 — push-aware *display* edge only. Integer lines stay
             # non-actionable; we only replace the misleading two-way edge_pct.
@@ -540,6 +558,13 @@ def build_totals(
                 sizing_flags = "push_capable_no_prob"
                 # No honest push mass → blank the push-contaminated two-way edge.
                 edge_pct = None
+        elif decimal_price is not None and p_side is not None:
+            sizing = compute_sizing(
+                decimal_price=decimal_price,
+                model_prob=p_side,
+                push_prob=0.0,
+            )
+            edge_pct = sizing.edge_pct
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
@@ -565,6 +590,10 @@ def build_totals(
             elif fair_total is None:
                 quality_flags = "NON_BRACKETING_LADDER"
 
+        recommended_units: float | str = ""
+        if actionable == "true" and sizing is not None:
+            recommended_units = sizing.recommended_units_pre_news or 0.0
+
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
         name = matchup if total_kind == "game" else (team or matchup)
@@ -585,7 +614,7 @@ def build_totals(
                 "line": headline_line,
                 "price": best_price,
                 "decimal_price": decimal_price,
-                "book": cand.get("book") or "",
+                "book": best_book,
                 "best_side": best_side,
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
@@ -599,9 +628,9 @@ def build_totals(
                 "actionable": actionable,
                 "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
                 "devig_source": devig_source,
-                "recommended_units_pre_news": cand.get("recommended_units_pre_news") or "",
-                "sizing_flags": sizing_flags or cand.get("sizing_flags") or "",
-                "push_prob": push_prob if push_prob != "" else cand.get("push_prob", ""),
+                "recommended_units_pre_news": recommended_units,
+                "sizing_flags": sizing_flags,
+                "push_prob": push_prob,
                 "line_open": cand.get("line_open") or "",
                 "line_now": cand.get("line_now") or "",
                 "public_money_pct": cand.get("public_money_pct") or "",

@@ -68,6 +68,9 @@ def test_build_game_totals_actionable_at_three_pct_edge():
     assert row['fair_total'] != ''
     if row['edge_pct'] != '' and float(row['edge_pct']) >= MIN_EDGE_TOTALS:
         assert row['actionable'] == 'true'
+        assert row['recommended_units_pre_news'] not in ('', None)
+    expected_book = 'fd' if row['best_side'] == 'OVER' else 'dk'
+    assert row['book'] == expected_book
     assert row['outcome_id'] == row['totals_id']
     assert row['independent_model_prob'] == ''
     side_probability = (

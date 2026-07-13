@@ -14,6 +14,9 @@ import csv
 import json
 import logging
 import math
+import os
+import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -1319,6 +1322,24 @@ def build_pack(
     )
     return rows, target_date, games_norm
 
+
+def _publish_staged_pack(staging_dir: Path, out_dir: Path) -> None:
+    """Replace the published pack only after durable feedback capture succeeds."""
+
+    backup_dir = out_dir.parent / f".{out_dir.name}.feedback-backup-{uuid.uuid4().hex}"
+    had_existing = out_dir.exists()
+    if had_existing:
+        os.replace(out_dir, backup_dir)
+    try:
+        os.replace(staging_dir, out_dir)
+    except Exception:
+        if had_existing and backup_dir.exists() and not out_dir.exists():
+            os.replace(backup_dir, out_dir)
+        raise
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+
+
 def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
     parser.add_argument("--leagues", default="MLB,WNBA")
@@ -1343,21 +1364,44 @@ def main(argv: Sequence[str] | None = None) -> Path:
     )
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
-    write_pack(
-        final_rows,
-        out_dir,
-        freshness,
-        games_norm_by_league=games_norm,
-        coverage=coverage,
-        opportunity_rows=opportunity_rows,
-    )
-    if not args.no_feedback_ledger:
+    if args.no_feedback_ledger:
+        write_pack(
+            final_rows,
+            out_dir,
+            freshness,
+            games_norm_by_league=games_norm,
+            coverage=coverage,
+            opportunity_rows=opportunity_rows,
+        )
+    else:
         from outlier_scrapers import feedback
 
         feedback_db = args.feedback_db or (
             paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
         )
-        stats = feedback.capture_pack(out_dir, feedback_db)
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
+        if out_dir.exists():
+            shutil.copytree(out_dir, staging_dir)
+        try:
+            write_pack(
+                final_rows,
+                staging_dir,
+                freshness,
+                games_norm_by_league=games_norm,
+                coverage=coverage,
+                opportunity_rows=opportunity_rows,
+            )
+            stats = feedback.capture_pack(
+                staging_dir,
+                feedback_db,
+                recorded_pack_path=out_dir,
+            )
+            _publish_staged_pack(staging_dir, out_dir)
+        except Exception:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+            raise
         logger.info(
             "Captured %d feedback snapshots and %d decisions in %s",
             stats.snapshots,
