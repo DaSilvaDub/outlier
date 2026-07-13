@@ -82,12 +82,12 @@ def main() -> None:
         "--out-dir",
         action="append",
         default=None,
-        help="Output directory for prompts (repeatable). Defaults to both the OneDrive Desktop and Google Drive 'today' folders.",
+        help="Additional output directory for prompts (repeatable). Always includes both the OneDrive Desktop and Google Drive 'today' folders.",
     )
     parser.add_argument("--no-clean", action="store_true", help="Do not clean the output directory before generating")
     args = parser.parse_args()
 
-    out_dirs = [Path(p) for p in (args.out_dir or DEFAULT_OUT_DIRS)]
+    out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
     packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
 
     subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
