@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -263,7 +264,7 @@ def _fmt_line(line: Any) -> str:
     # already flags it non_numeric_line) — int(f) raises ValueError on either,
     # which would crash pack generation for the whole slate over one bad row.
     # Fall back to the raw repr, same as an unparseable string above.
-    if f != f or f in (float("inf"), float("-inf")):
+    if not math.isfinite(f):
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
@@ -550,7 +551,7 @@ def build_row(
     # trusted enough to size (2026-07-13 LAS @ ATL shipped units=1.5 on a
     # spread_sign_conflict row before this gate existed).
     if row.get("recommended_units_pre_news") not in ("", None) and (
-        any(f in dq_flags for f in DISQUALIFYING_DQ_FLAGS)
+        not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
         or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
     ):
         row["recommended_units_pre_news"] = ""
