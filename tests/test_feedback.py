@@ -137,6 +137,56 @@ def test_recapture_refreshes_corrected_probability_semantics(tmp_path):
     assert row == pytest.approx((0.60, 0.70, 0.60, 0.10))
 
 
+@pytest.mark.parametrize("freeze_with", ["final_verdict", "settlement"])
+def test_recapture_cannot_rewrite_finalized_prediction_history(tmp_path, freeze_with):
+    source = _candidate()
+    pack_dir = _pack(tmp_path, [source])
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot_id, decision_id = conn.execute(
+            "SELECT s.snapshot_id, d.decision_id FROM market_snapshots s "
+            "JOIN decisions d ON d.snapshot_id = s.snapshot_id"
+        ).fetchone()
+        if freeze_with == "final_verdict":
+            conn.execute(
+                "UPDATE decisions SET final_verdict = 'PLAY' WHERE decision_id = ?",
+                (decision_id,),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO settlements ("
+                "settlement_id, decision_id, snapshot_id, outcome_id, event_id, "
+                "market_id, win_loss_push, settled_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("settled", decision_id, snapshot_id, "o1", "e1", "m1", "W", "now"),
+            )
+
+    source.update(
+        {
+            "market_consensus_prob": 0.75,
+            "final_blended_prob": 0.75,
+            "edge_pct": 0.50,
+            "selected": "false",
+            "actionable": "false",
+        }
+    )
+    _pack(tmp_path, [source])
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot = conn.execute(
+            "SELECT market_consensus_prob, final_blended_prob, edge, selected "
+            "FROM market_snapshots"
+        ).fetchone()
+        decision = conn.execute(
+            "SELECT pipeline_verdict, units FROM decisions"
+        ).fetchone()
+    assert snapshot == pytest.approx((0.60, 0.60, 0.10, 1))
+    assert decision == ("PLAY", 2.0)
+
+
 def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     row = _candidate()
 

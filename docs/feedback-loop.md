@@ -13,7 +13,7 @@ top-N ranking step and then captures the pack into
 - `market_snapshots`: every pregame opportunity, including non-selected rows,
   the final pack selection state, exact outcome/line identity, probabilities,
   edge, book, data-quality flags, and the four Board B components.
-- `decisions`: one decision per immutable market snapshot, seeded as `PLAY` or
+- `decisions`: one decision per market snapshot, seeded as `PLAY` or
   `STAND_DOWN`. A/B/C/D and final verdicts remain blank until imported from the
   pack-local `decisions.csv`. A later price/time snapshot gets its own decision
   instead of rewriting the earlier verdict history.
@@ -25,6 +25,10 @@ line, outcome, source timestamp, price, or book creates a new snapshot and a new
 seeded decision. Pack files are staged while the SQLite transaction remains
 open, then swapped into the dated directory and committed together. Capture or
 publication failure rolls back the ledger and restores the prior published pack.
+Before a final verdict or settlement, recapture may repair fields on an identical
+snapshot (for example, after a schema-semantics migration). Once either exists,
+both the prediction snapshot and seeded pipeline decision are frozen so grading
+history cannot be rewritten after outcomes are known.
 
 Use `--no-feedback-ledger` only for an explicit pack-only diagnostic. Use
 `--feedback-db <path>` to override the default database.

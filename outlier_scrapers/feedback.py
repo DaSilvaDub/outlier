@@ -673,6 +673,15 @@ def capture_pack(
                     insight_component = excluded.insight_component,
                     movement_component = excluded.movement_component,
                     orf_component = excluded.orf_component
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM decisions
+                    WHERE decisions.snapshot_id = market_snapshots.snapshot_id
+                      AND COALESCE(decisions.final_verdict, '') <> ''
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM settlements
+                    WHERE settlements.snapshot_id = market_snapshots.snapshot_id
+                )
                 """,
                 [*values, now],
             )
@@ -696,6 +705,11 @@ def capture_pack(
                         ELSE decisions.kill_reason
                     END,
                     updated_at = excluded.updated_at
+                WHERE COALESCE(decisions.final_verdict, '') = ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM settlements
+                    WHERE settlements.snapshot_id = decisions.snapshot_id
+                )
                 """,
                 [decision[field] for field in DECISION_FIELDS] + [now, now],
             )
