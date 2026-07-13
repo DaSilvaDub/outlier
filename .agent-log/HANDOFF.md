@@ -1,3 +1,68 @@
+**Last Commit SHA:** `37e665d` (on branch `feat/desk2-manual-research-desk`)
+
+**PR Link:** https://github.com/DaSilvaDub/outlier/pull/26
+
+**What/Why:** Added "Desk 2", a second, opt-in AI research desk alongside the
+existing A-E desk. A-E splits work by *function* (reason vs research) and
+calls provider APIs; Desk 2 splits work by *model strength* (ChatGPT, Gemini,
+Grok, Claude) and is manual/offline only — it generates paste-ready docs and
+stitches saved replies, never calling a reasoning provider directly. Grok
+fills a new live-X/late-breaking lane (replacing the old automated Phase C
+web-research slot); its findings are treated as Tier-3-by-default and can
+only lower confidence or flag a lead, never solely support a BET.
+
+Phase map: Q=ChatGPT (quant/EV pack-only reasoning), W=Gemini (grounded web),
+X=Grok (live-X sentiment), R=Claude (skeptical pack-only + contradiction
+detection), S=Claude (head-of-desk synthesis).
+
+**Files Touched:**
+- `outlier_scrapers/run_desk2.py` — new module: `build_paste_doc()`,
+  `generate_paste_docs()`, `produce_manual_report()`, `orchestrate_desk2()`.
+  Imports no provider SDK and has no `PHASE_RUNNERS`/`PHASE_KEYS`, so it
+  cannot call a reasoning model even by accident (house rule satisfied
+  structurally). Reuses `pack.ROLE_BLOCK`, `runner_common` data-block
+  assembly, and `pack.drop_locked_events` (pregame-only).
+- `prompts/desk2/{Q_chatgpt,W_gemini,X_grok,R_claude,S_claude}.md` — the five
+  role prompts.
+- `outlier_scrapers/pack.py` — generalized the two desk-1-lettered ROLE_BLOCK
+  labels ("REASONING PASSES (A, D)" / "RESEARCH PASSES (B, C)") to
+  desk-agnostic wording ("pack-only" / "web-enabled") since the block is now
+  shared by both desks. Semantics unchanged.
+- `tests/test_run_desk2.py` — 15 new tests (phase map, offline generation
+  with no API keys, Grok Tier-3 guardrail, pregame lock-drop, manual-report
+  stitching, GENERATED/FULL/PARTIAL/DATA_ONLY status).
+- `tests/test_pack.py` — updated `test_end_to_end` for the generalized
+  ROLE_BLOCK wording.
+
+**Usage:**
+```
+python -m outlier_scrapers.run_desk2 --date <YYYY-MM-DD> --stage generate
+# paste each doc into its model, save replies as chatgpt_q.md / gemini_w.md /
+# grok_x.md / claude_r.md
+python -m outlier_scrapers.run_desk2 --date <YYYY-MM-DD> --stage assemble
+```
+
+**Tests:** `pytest tests/test_run_desk2.py` — 15 passed. Adjacent offline
+suites (`test_run_desk`, `test_pack`, `test_runner_common`, `test_reasoning`,
+`test_claude_reasoning`) — 114 passed, no regressions. `ruff check` and
+`mypy outlier_scrapers/run_desk2.py` clean. Live-provider reasoning tests
+intentionally not run (house rule: reasoning off unless explicitly asked).
+CI on PR #26: typecheck + Codacy both green, `mergeStateStatus: CLEAN`.
+
+**Gotcha for the next agent:** this session hit the local-branch-reset hazard
+twice — the repo's concurrent sync tooling reset the checked-out feature
+branch back to `origin/master` mid-session (via `git reset`, visible in
+`git reflog show <branch>`), even after the branch had commits pushed to
+origin. No work was lost either time (origin always had the real commits;
+recovered locally via `git reset --hard origin/<branch>`), but **run
+`git branch --show-current` and diff it against `origin/<branch>` right
+before every commit**, not just at session start.
+
+**Next Steps:**
+- Review and merge PR #26.
+
+---
+
 Branch: feat/add-type-checking
 Last Commit SHA: 1e4e5f9 (on feat/add-type-checking)
 PR Link: https://github.com/DaSilvaDub/outlier/pull/24
