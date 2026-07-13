@@ -7,7 +7,7 @@ description: >-
 # Export Manual Outlier Packs
 
 ## Overview
-Use this skill when the user wants to run the daily betting pipeline but bypasses the automated reasoning models in favor of manually uploading the pack data to external web LLMs (Claude, Grok, Copilot, Gemini, ChatGPT).
+Use this skill when the user wants to run the daily betting pipeline but bypasses the automated reasoning models in favor of manually uploading the pack data to external web LLMs (Claude, Grok, Copilot, Gemini, and ChatGPT).
 
 ## Workflow
 
