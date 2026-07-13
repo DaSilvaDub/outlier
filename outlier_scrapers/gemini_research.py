@@ -80,8 +80,9 @@ def run_gemini_b(
                 return 0
 
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
-        team_totals_bytes, team_totals_sha256 = rc.load_team_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         briefing_sha256 = rc.sha256_text(briefing_text)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
