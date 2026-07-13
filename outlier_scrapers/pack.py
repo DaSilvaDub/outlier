@@ -50,6 +50,7 @@ CANDIDATES_HEADER = [
     "book",
     "as_of",
     "model_prob",
+    "model_prob_source",
     "push_prob",
     "implied_prob",
     "edge_pct",
@@ -58,6 +59,7 @@ CANDIDATES_HEADER = [
     "recommended_units_pre_news",
     "sizing_flags",
     "data_quality_flags",
+    "actionable",
     "outlier_ev_pct",
     "outlier_kelly_pct",
     "local_ev_pct",
@@ -91,7 +93,12 @@ LONGSHOT_AMERICAN_PRICE = 150
 # presumed corrupt, so a stake recommendation would contradict our own
 # instruction to the desk. Exact-match flags; cross_sport_market carries a
 # dynamic ":<LEAGUE>" suffix and is matched by prefix below.
-DISQUALIFYING_DQ_FLAGS = {"spread_sign_conflict", "implausible_line", "non_numeric_line"}
+DISQUALIFYING_DQ_FLAGS = {
+    "spread_sign_conflict",
+    "movement_line_mismatch",
+    "implausible_line",
+    "non_numeric_line",
+}
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
 def american_to_decimal(american: float | int | str | None) -> float | None:
@@ -414,6 +421,13 @@ def build_row(
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
     proposition = card.get("proposition") or ref.get("proposition")
+    has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
+    if not (card.get("market_type") or ref.get("market_type")) and not has_player:
+        prop_token = str(proposition or "").upper()
+        if prop_token == "POINTS" and (card.get("team") or ref.get("team")):
+            market_type = "TEAM_PROP"
+        elif prop_token in {"TOTAL", "SPREAD", "MONEYLINE"}:
+            market_type = "GAMELINE"
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
@@ -423,8 +437,22 @@ def build_row(
     row["market_id"] = market_id
     row["market_type"] = market_type
     row["player_id"] = card.get("player_id") or ref.get("player_id")
-    name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
-    label = ref.get("market_label") or card.get("market_label") or market_token
+    is_team_total = (
+        str(market_type or "").upper() == "TEAM_PROP"
+        and str(proposition or "").upper() == "POINTS"
+    )
+    name = (
+        card.get("player")
+        or ref.get("player")
+        or ((card.get("team") or ref.get("team")) if is_team_total else None)
+        or card.get("matchup")
+        or ref.get("matchup")
+    )
+    label = (
+        "Team Total"
+        if is_team_total
+        else (ref.get("market_label") or card.get("market_label") or market_token)
+    )
     row["selection"] = build_selection(name, label, headline_side, line, proposition)
     # Human-readable context the normalizer already resolved. Surfacing it stops
     # the reasoning desk from guessing teams/markets off the hash event_id or a
@@ -485,6 +513,12 @@ def build_row(
         devig = (ev_summary or {}).get("devig_decimal")
         model_prob = (1.0 / devig) if devig else None
         row["model_prob"] = model_prob
+        if model_prob is not None:
+            row["model_prob_source"] = (
+                "local_devig"
+                if str((ev_summary or {}).get("ev_source") or "").upper() == "LOCAL"
+                else "outlier_devig"
+            )
         if push_prob is None:
             row["sizing_flags"] = "push_capable_no_prob"
         else:
@@ -499,15 +533,41 @@ def build_row(
             row["sizing_flags"] = "ev_line_fallback"
         elif ev_summary:
             row["sizing_flags"] = "no_book_decimal"
-        best_odds = side_view.get("best_odds")
+        proxy = side_view.get("proxy_market_edge") or {}
+        best_odds = proxy.get("odds") if proxy else side_view.get("best_odds")
         row["price"] = best_odds
         row["decimal_price"] = american_to_decimal(best_odds)
         row["as_of"] = odds_ts if ev_summary else norm_ts
         per_book = side_view.get("per_book_odds") or {}
-        if isinstance(per_book, dict) and per_book:
+        if proxy:
+            row["book"] = proxy.get("book")
+        elif isinstance(per_book, dict) and per_book:
             row["book"] = next(iter(per_book.keys()), None)
         elif isinstance(per_book, list) and per_book and isinstance(per_book[0], dict):
             row["book"] = per_book[0].get("book")
+        proxy_prob_pct = _to_float(proxy.get("fair_prob_pct")) if proxy else None
+        if (
+            proxy_prob_pct is not None
+            and row.get("decimal_price") is not None
+            and push_prob is not None
+        ):
+            model_prob = proxy_prob_pct / 100.0
+            sizing = compute_sizing(
+                decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob
+            )
+            row["model_prob"] = model_prob
+            row["model_prob_source"] = "proxy_market_devig"
+            row["implied_prob"] = sizing.implied_prob
+            row["edge_pct"] = sizing.edge_pct
+            row["kelly_025_units"] = (
+                max(0.0, sizing.kelly_025_units)
+                if sizing.kelly_025_units is not None
+                else None
+            )
+            row["max_units"] = sizing.max_units
+            row["sizing_flags"] = ";".join(
+                filter(None, (str(row.get("sizing_flags") or ""), "proxy_market_probability"))
+            )
     if is_longshot_price(row.get("price")):
         return None
 
@@ -518,6 +578,9 @@ def build_row(
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
     # so the desk sees the mismatch instead of silently trusting the shown line.
     dq_flags = [str(f) for f in (card.get("flags") or [])]
+    movement_now = _to_float((side_view.get("movement") or {}).get("current_line"))
+    if movement_now is not None and _to_float(line) is not None and movement_now != _to_float(line):
+        dq_flags.append("movement_line_mismatch")
     if (ev_summary or {}).get("is_alt_line_fallback"):
         priced = _priced_line_from_ev(ev_records, ev_summary.get("best_record_id"))
         if priced is not None and _to_float(priced) != _to_float(line):
@@ -555,9 +618,14 @@ def build_row(
         or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
     ):
         row["recommended_units_pre_news"] = ""
+    units = _to_float(row.get("recommended_units_pre_news"))
+    row["actionable"] = "true" if card.get("board") == "A" and units is not None and units > 0 else "false"
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
-    row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
+    if card.get("board") == "A":
+        row["_board"] = "board_a" if row["actionable"] == "true" else "flagged"
+    else:
+        row["_board"] = "board_b"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
     row["_slug"] = _slug(card.get("matchup") or ref.get("matchup"))
@@ -673,6 +741,7 @@ def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> l
     ]
     board_a = [r for r in rows if r.get("_board") == "board_a"]
     board_b = [r for r in rows if r.get("_board") == "board_b"]
+    flagged = [r for r in rows if r.get("_board") == "flagged"]
     def _key(r: dict[str, Any]) -> tuple[float, str]:
         return (-(r.get("_rank_value") or 0.0), str(r.get("market_id") or ""))
     def bucket_key(r: dict[str, Any]) -> tuple[str, str]:
@@ -705,9 +774,11 @@ def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> l
             remain.sort(key=_key)
             selected.extend(remain[: limit - len(selected)])
         return selected
-    ev = round_robin_then_fill(board_a, top_ev_n)
+    ev_audit = round_robin_then_fill(board_a + flagged, top_ev_n)
+    ev = [row for row in ev_audit if row.get("_board") == "board_a"]
+    audit = [row for row in ev_audit if row.get("_board") == "flagged"]
     sig = round_robin_then_fill(board_b, top_signal_n)
-    return ev + sig
+    return ev + sig + audit
 
 MLB_QUESTIONS = [
     "- **Starters:** both confirmed SPs, days rest, recent form, pitch-count limit / opener.",
@@ -767,7 +838,14 @@ ROLE_BLOCK = [
     " another sport — treat the row as a data artifact and stand it down), implausible_line /"
     " non_numeric_line (the line is likely corrupt — verify before quoting), or"
     " spread_sign_conflict (the market's two sides did not price as mirror-image lines —"
-    " treat the line as corrupt and stand the market down).",
+    " treat the line as corrupt and stand the market down), or movement_line_mismatch"
+    " (the card line disagrees with line_now — stand the market down).",
+    "- edge_suspect_stale_line means reverse movement plus thin liquidity invalidated EV"
+    " eligibility. The row is retained for audit only and actionable=false.",
+    "- model_prob_source distinguishes Outlier EV devig from proxy_market_devig. The proxy"
+    " source fills probability/edge/Kelly for auditability but is market-implied context,"
+    " not an independent predictive model, cannot satisfy a 75% true-hit SGP gate, and"
+    " never makes a signal-only row actionable.",
     "- Spread / run line / puck line rows already carry an explicit sign (e.g. '+1.5' or"
     " '-1.5' in the line and selection) — never re-derive or flip it from model_prob or"
     " the favorite/underdog assumption. model_prob on these rows is the probability that"
@@ -812,6 +890,7 @@ ROLE_BLOCK = [
 ]
 
 DERIVED_PACK_OUTPUTS = (
+    "candidate_coverage.json",
     "chatgpt_a.md",
     "gemini_b.md",
     "chatgpt_c.md",
@@ -893,17 +972,43 @@ def build_freshness_section(leagues: Sequence[str]) -> list[str]:
         )
     return lines
 
+
+def build_candidate_coverage_section(coverage: dict[str, dict[str, int]]) -> list[str]:
+    """Explain exactly why a requested league did or did not reach the pack."""
+    lines = ["### Candidate Coverage"]
+    for league, stats in coverage.items():
+        emitted = stats.get("emitted", 0)
+        state = "ZERO CANDIDATES" if emitted == 0 else f"{emitted} emitted"
+        lines.append(
+            f"- {league}: {state}; cards={stats.get('cards', 0)}, "
+            f"rows_built={stats.get('rows_built', 0)}, "
+            f"date_filtered={stats.get('date_filtered', 0)}, "
+            f"started_dropped={stats.get('started_dropped', 0)}, "
+            f"unverified_start_dropped={stats.get('unverified_start_dropped', 0)}"
+        )
+    return lines
+
 def build_briefing(
     rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None,
     totals_rows: list[dict[str, Any]] | None = None,
     team_totals_rows: list[dict[str, Any]] | None = None,
+    coverage_lines: list[str] | None = None,
 ) -> str:
+    derived_market_ids = {
+        (str(r.get("sport") or ""), str(r.get("market_id")))
+        for r in (totals_rows or []) + (team_totals_rows or [])
+        if r.get("market_id")
+    }
     lines = [f"SLATE: {target_date}", ""]
     if freshness_lines:
         lines += freshness_lines + [""]
+    if coverage_lines:
+        lines += coverage_lines + [""]
     lines += ROLE_BLOCK + ["", "### Top EV cards"]
     for r in rows:
-        if r.get("_board") == "board_a":
+        if r.get("_board") == "board_a" and (
+            str(r.get("sport") or ""), str(r.get("market_id"))
+        ) not in derived_market_ids:
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')} "
@@ -911,10 +1016,21 @@ def build_briefing(
             )
     lines += ["", "### Top signal cards"]
     for r in rows:
-        if r.get("_board") == "board_b":
+        if r.get("_board") == "board_b" and (
+            str(r.get("sport") or ""), str(r.get("market_id"))
+        ) not in derived_market_ids:
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"| {_matchup_display(r)}"
+            )
+    flagged = [r for r in rows if r.get("_board") == "flagged"]
+    if flagged:
+        lines += ["", "### Non-actionable flagged cards"]
+        for r in flagged:
+            lines.append(
+                f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} "
+                f"@ {r.get('line')} ({r.get('price')}) actionable=false "
+                f"flags={r.get('data_quality_flags')}"
             )
     lines += ["", "### Slate index"]
     seen: set[str] = set()
@@ -956,6 +1072,7 @@ def write_pack(
     freshness_lines: list[str] | None = None,
     *,
     games_norm_by_league: dict[str, Any] | None = None,
+    coverage: dict[str, dict[str, int]] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in DERIVED_PACK_OUTPUTS:
@@ -983,9 +1100,14 @@ def write_pack(
             out_dir.name, 
             freshness_lines,
             totals_rows if games_norm_by_league is not None else None,
-            team_totals_rows if games_norm_by_league is not None else None
+            team_totals_rows if games_norm_by_league is not None else None,
+            build_candidate_coverage_section(coverage) if coverage is not None else None,
         ), encoding="utf-8"
     )
+    if coverage is not None:
+        (out_dir / "candidate_coverage.json").write_text(
+            json.dumps(coverage, indent=2, sort_keys=True), encoding="utf-8"
+        )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:
@@ -1015,11 +1137,12 @@ def write_pack(
         writer.writerows(team_totals_rows)
     (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
-def build_pack(
+def build_pack_with_coverage(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
-) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
+    coverage: dict[str, dict[str, int]] = {}
     for raw_league in leagues:
         lg = raw_league.strip().upper()
         if not lg:
@@ -1033,8 +1156,10 @@ def build_pack(
         props_norm = load_json(norm / f"{low}_props_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
+        props_cards = load_json(cards_dir / f"{low}_cards_latest.json")
+        games_cards = load_json(cards_dir / f"{low}_games_cards_latest.json")
         props_rows = process_stream(
-            load_json(cards_dir / f"{low}_cards_latest.json"),
+            props_cards,
             load_json(norm / f"{low}_line_movement_latest.json"),
             props_norm,
             None,
@@ -1044,7 +1169,7 @@ def build_pack(
             injuries,
         )
         games_rows = process_stream(
-            load_json(cards_dir / f"{low}_games_cards_latest.json"),
+            games_cards,
             load_json(norm / f"{low}_games_line_movement_latest.json"),
             games_norm,
             load_json(norm / f"{low}_games_enrichment_latest.json"),
@@ -1053,12 +1178,36 @@ def build_pack(
             event_starts,
             injuries,
         )
-        if not load_json(cards_dir / f"{low}_games_cards_latest.json"):
+        if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
+        coverage[lg] = {
+            "cards": sum(
+                len((payload or {}).get(key) or [])
+                for payload in (props_cards, games_cards)
+                for key in ("board_a", "board_b")
+            ),
+            "rows_built": len(props_rows) + len(games_rows),
+            "date_filtered": 0,
+            "started_dropped": 0,
+            "unverified_start_dropped": 0,
+            "emitted": 0,
+        }
         all_rows.extend(props_rows)
         all_rows.extend(games_rows)
     kept, target_date = select_date(all_rows, requested_date)
+    for lg, stats in coverage.items():
+        before = sum(1 for row in all_rows if row.get("sport") == lg)
+        after = sum(1 for row in kept if row.get("sport") == lg)
+        stats["date_filtered"] = before - after
     kept, locked = drop_locked_events(kept)
+    for row in locked:
+        league_stats = coverage.get(str(row.get("sport") or ""))
+        if league_stats is None:
+            continue
+        if _parse_start(row.get("_event_starts_at")) is None:
+            league_stats["unverified_start_dropped"] += 1
+        else:
+            league_stats["started_dropped"] += 1
     if locked:
         locked_ids = sorted({str(r.get("market_id")) for r in locked})
         sample = locked_ids[:10]
@@ -1070,7 +1219,19 @@ def build_pack(
             " ..." if len(locked_ids) > len(sample) else "",
         )
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
-    return final_rows, target_date, games_norm_by_league
+    for lg, stats in coverage.items():
+        stats["emitted"] = sum(1 for row in final_rows if row.get("sport") == lg)
+    return final_rows, target_date, games_norm_by_league, coverage
+
+
+def build_pack(
+    leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
+) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+    """Backward-compatible pack builder; coverage-aware callers use the companion helper."""
+    rows, target_date, games_norm, _coverage = build_pack_with_coverage(
+        leagues, requested_date, top_ev_n, top_signal_n
+    )
+    return rows, target_date, games_norm
 
 def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
@@ -1080,12 +1241,18 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--top-signal-n", type=int, default=10)
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
-    final_rows, target_date, games_norm = build_pack(
+    final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
         leagues, args.date, args.top_ev_n, args.top_signal_n
     )
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
-    write_pack(final_rows, out_dir, freshness, games_norm_by_league=games_norm)
+    write_pack(
+        final_rows,
+        out_dir,
+        freshness,
+        games_norm_by_league=games_norm,
+        coverage=coverage,
+    )
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
     return out_dir
 
