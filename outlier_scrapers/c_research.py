@@ -78,6 +78,16 @@ def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pac
     if not stripped:
         raise rc.RunnerError("Received empty or whitespace-only response from API")
 
+    # pack_date_str is the pack directory's own name (an internal,
+    # caller-controlled value), not part of the model's output -- an
+    # unexpected format here only disables the window check below
+    # (pack_date is None); source_timestamp is still validated for every
+    # line regardless. It is loop-invariant, so parse it once.
+    try:
+        pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        pack_date = None
+
     for line_number, line in enumerate(stripped.splitlines(), start=1):
         if not line.startswith(RECORD_PREFIX):
             raise rc.RunnerError(f"Prompt C output line {line_number} is not a FINDING record")
@@ -112,18 +122,15 @@ def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pac
                 raise rc.RunnerError(f"Prompt C output line {line_number} has an empty {field}")
         
         try:
-            pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            continue  # pack_date_str wasn't YYYY-MM-DD; nothing to validate against
-
-        try:
             ts = date_parser.parse(fields["source_timestamp"]).date()
         except (ValueError, OverflowError, TypeError):
             raise rc.RunnerError(
                 f"Prompt C output line {line_number} has unparseable timestamp: {fields['source_timestamp']}"
             )
 
-        if not (pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)):
+        if pack_date is not None and not (
+            pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)
+        ):
             raise rc.RunnerError(
                 f"Prompt C output line {line_number} timestamp '{fields['source_timestamp']}' "
                 f"is outside the valid window for pack date {pack_date_str}"
