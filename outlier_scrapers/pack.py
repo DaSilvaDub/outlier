@@ -85,6 +85,14 @@ EXCLUDED_MARKETS = {
 # from packs. Any candidate priced at +LONGSHOT_AMERICAN_PRICE or longer is dropped.
 LONGSHOT_AMERICAN_PRICE = 150
 
+# data_quality_flags that ROLE_BLOCK explicitly tells every reasoning pass to
+# "stand the market/row down" on: the line or market itself is proven or
+# presumed corrupt, so a stake recommendation would contradict our own
+# instruction to the desk. Exact-match flags; cross_sport_market carries a
+# dynamic ":<LEAGUE>" suffix and is matched by prefix below.
+DISQUALIFYING_DQ_FLAGS = {"spread_sign_conflict", "implausible_line", "non_numeric_line"}
+CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
+
 def american_to_decimal(american: float | int | str | None) -> float | None:
     if american is None or american == "":
         return None
@@ -250,6 +258,12 @@ def _fmt_line(line: Any) -> str:
     try:
         f = float(line)
     except (ValueError, TypeError):
+        return str(line)
+    # NaN/inf can reach here from an upstream feed (market_validation_flags
+    # already flags it non_numeric_line) — int(f) raises ValueError on either,
+    # which would crash pack generation for the whole slate over one bad row.
+    # Fall back to the raw repr, same as an unparseable string above.
+    if f != f or f in (float("inf"), float("-inf")):
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
@@ -529,6 +543,16 @@ def build_row(
         and "thin_liquidity" in dq_flags
     ):
         dq_flags.append("edge_suspect_stale_line")
+        row["recommended_units_pre_news"] = ""
+    # Any single disqualifying flag (line/market proven or presumed corrupt)
+    # withholds the stake on its own — no second flag needed, unlike the
+    # stale-line gate above. edge_pct stays visible; the number just can't be
+    # trusted enough to size (2026-07-13 LAS @ ATL shipped units=1.5 on a
+    # spread_sign_conflict row before this gate existed).
+    if row.get("recommended_units_pre_news") not in ("", None) and (
+        any(f in dq_flags for f in DISQUALIFYING_DQ_FLAGS)
+        or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
+    ):
         row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
