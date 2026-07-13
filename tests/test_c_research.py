@@ -221,6 +221,28 @@ def test_malformed_timestamp_is_rejected(c_env, monkeypatch):
     assert not (pack_dir / "chatgpt_c.md").exists()
 
 
+def test_malformed_pack_date_still_validates_timestamp_parseability():
+    """Regression guard (PR #30 review): pack_date_str is the pack directory's
+    own name -- an internal, caller-controlled value, not part of the model's
+    output. A malformed pack_date_str must only disable the date-window check
+    below; it must never silently skip validating that source_timestamp
+    itself is a parseable date."""
+    candidates = {"m1": {"selection": "OVER 8.5", "line": "8.5", "price": "-110"}}
+    garbled = VALID_OUTPUT.replace(
+        "source_timestamp=2026-06-28T12:00:00Z", "source_timestamp=not-a-real-timestamp"
+    )
+    with pytest.raises(c_research.rc.RunnerError, match="unparseable timestamp"):
+        c_research.validate_output(garbled, candidates, "not-a-pack-date")
+
+
+def test_malformed_pack_date_skips_window_check_for_valid_timestamp():
+    """Complements the guard above: when pack_date_str can't be parsed, a
+    genuinely valid source_timestamp must still pass (the window check has
+    nothing to compare against, so it is skipped rather than raising)."""
+    candidates = {"m1": {"selection": "OVER 8.5", "line": "8.5", "price": "-110"}}
+    c_research.validate_output(VALID_OUTPUT, candidates, "not-a-pack-date")  # no raise
+
+
 def test_dateutil_is_a_declared_dependency():
     """c_research.py imports dateutil directly at module level; it must be
     declared in pyproject.toml so a clean CI/deploy environment has it.
