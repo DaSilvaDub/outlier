@@ -196,6 +196,49 @@ def test_align_main_lines_missing_line_cannot_gain_ev_priority_and_none_proposit
     assert main["OVER"] is matching
 
 
+@pytest.mark.parametrize("assembler", [cards.assemble_card, assemble_game_card])
+def test_missing_two_way_lines_do_not_create_fair_or_proxy_market(assembler):
+    rows = []
+    for side in ("OVER", "UNDER"):
+        rows.append(
+            {
+                "market_id": "gm1",
+                "side": side,
+                "position": side,
+                "proposition": "TOTAL",
+                "player": "Test Player" if assembler is cards.assemble_card else None,
+                "market": "PTS",
+                "line": None,
+                "best_odds": -110,
+                "outcome_id": f"o{side}",
+                "league": "WNBA",
+            }
+        )
+
+    card = assembler("gm1", build_indexes(rows, [], [], []))
+
+    assert card["fair"] is None
+    assert all(side["proxy_market_edge"] is None for side in card["sides"].values())
+
+
+def test_near_equal_movement_line_does_not_trigger_mismatch_flag():
+    movement = [
+        {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
+        {"market_id": "gm1", "side": "AWAY", "current_line": 8.5000000005},
+    ]
+    card = assemble_game_card(
+        "gm1",
+        build_indexes(
+            [_spread_prop_row("HOME", -8.5), _spread_prop_row("AWAY", 8.5)],
+            movement,
+            [],
+            [],
+        ),
+    )
+
+    assert "movement_line_mismatch" not in card["flags"]
+
+
 def test_assemble_game_card_flags_sign_conflict_end_to_end():
     # Corrupted feed: both HOME and AWAY quoted 1.5 (same sign) instead of
     # mirror-image lines. This must survive _route_and_rank's flags assignment.

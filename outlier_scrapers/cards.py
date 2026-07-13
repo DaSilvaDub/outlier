@@ -591,7 +591,7 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     # this is a book-vs-consensus market edge, never Outlier EV).
     over_r, under_r = main_row.get("OVER"), main_row.get("UNDER")
     fair = None
-    if over_r and under_r and _to_float(over_r.get("line")) == _to_float(under_r.get("line")):
+    if over_r and under_r and _line_values_equal(over_r.get("line"), under_r.get("line")):
         fair = two_way_fair(over_r.get("best_odds"), under_r.get("best_odds"))
 
     side_views: dict[str, dict[str, Any]] = {}
@@ -769,7 +769,7 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
     over_r, under_r = main_row.get("OVER"), main_row.get("UNDER")
     fair = None
-    if over_r and under_r and _to_float(over_r.get("line")) == _to_float(under_r.get("line")):
+    if over_r and under_r and _line_values_equal(over_r.get("line"), under_r.get("line")):
         fair = two_way_fair(over_r.get("best_odds"), under_r.get("best_odds"))
 
     side_views: dict[str, dict[str, Any]] = {}
@@ -829,7 +829,11 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     if headline in main_row:
         movement_line = _to_float((movement.get(headline) or {}).get("current_line"))
         card_line = _to_float(main_row[headline].get("line"))
-        if movement_line is not None and card_line is not None and movement_line != card_line:
+        if (
+            movement_line is not None
+            and card_line is not None
+            and not _line_values_equal(movement_line, card_line)
+        ):
             card.setdefault("flags", []).append("movement_line_mismatch")
     return card
 
