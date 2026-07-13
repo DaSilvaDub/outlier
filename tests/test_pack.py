@@ -245,6 +245,136 @@ def test_stale_line_gate_requires_both_flags():
     assert "edge_suspect_stale_line" not in row["data_quality_flags"]
 
 
+# 8c2. A NaN/inf line must never crash build_row (found while adding the
+#      non_numeric_line withhold-gate test below: _fmt_line did int(f) on NaN
+#      unconditionally, which raises ValueError and would take down the whole
+#      slate's pack generation over one bad upstream row).
+def test_nan_line_does_not_crash_build_row():
+    nan = float("nan")
+    card = ev_card(line=nan, market_type="MONEYLINE", market="MONEYLINE")
+    row = make_row(card, [])
+    assert row is not None
+    assert "non_numeric_line" in row["data_quality_flags"]
+
+
+# 8d. spread_sign_conflict alone withholds the stake (2026-07-13 LAS @ ATL:
+#     HOME -1.5 / AWAY +7.5 mismatched magnitudes shipped units=1.5 to the
+#     desk despite the flag telling readers to stand the market down).
+def test_spread_sign_conflict_withholds_units():
+    card = ev_card(
+        market_type="GAMELINE",
+        market="SPREAD",
+        proposition="SPREAD",
+        flags=["spread_sign_conflict"],
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] == ""  # stake withheld
+    assert "spread_sign_conflict" in row["data_quality_flags"]
+    assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
+
+
+# 8e. Without the flag, an otherwise-identical SPREAD row sizes normally.
+def test_spread_row_without_conflict_sizes_normally():
+    card = ev_card(
+        market_type="GAMELINE", market="SPREAD", proposition="SPREAD", flags=[]
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] != ""
+    assert "spread_sign_conflict" not in row["data_quality_flags"]
+
+
+# 8f. Same gate for the other ROLE_BLOCK "stand it down" flags: a corrupt
+#     (NaN) line still sized fully before this gate existed, since
+#     compute_sizing only consumes price/model_prob, never the line itself.
+def test_non_numeric_line_withholds_units():
+    nan = float("nan")
+    card = ev_card(
+        line=nan, market_type="MONEYLINE", market="MONEYLINE", proposition="MONEYLINE"
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] == ""
+    assert "non_numeric_line" in row["data_quality_flags"]
+
+
+# 8g. implausible_line (player-prop line past the sanity ceiling).
+def test_implausible_line_withholds_units():
+    card = ev_card(
+        line=350.5,
+        market_type="PLAYER_PROP",
+        market="HITS",
+        proposition="HITS",
+        market_raw="Hits",
+        player_id="p1",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["recommended_units_pre_news"] == ""
+    assert "implausible_line" in row["data_quality_flags"]
+
+
+# 8h. cross_sport_market:<LEAGUE> (dynamic-suffix flag, matched by prefix).
+def test_cross_sport_market_withholds_units():
+    card = ev_card(
+        line=6.5,
+        market_type="PLAYER_PROP",
+        market="REB",
+        proposition="REBOUNDS",
+        market_raw="Rebounds",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev, sport="MLB")
+    assert row["recommended_units_pre_news"] == ""
+    assert "cross_sport_market:WNBA" in row["data_quality_flags"]
+
+
 # 9. american_to_decimal pure helper.
 def test_american_to_decimal():
     assert american_to_decimal(150) == 2.50
@@ -510,10 +640,18 @@ def test_end_to_end(tmp_path, monkeypatch):
     write_pack(rows, out_dir, games_norm_by_league=games_norm)
     assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "game_totals.csv").exists()
+    assert (out_dir / "team_totals.csv").exists()
     assert (out_dir / "sections" / "game_totals.md").exists()
+    assert (out_dir / "sections" / "team_totals.md").exists()
     briefing = (out_dir / "briefing.md").read_text()
-    assert "REASONING PASSES (A, D):" in briefing
+    assert "REASONING PASSES (pack-only):" in briefing
+    # Pass labels are desk-agnostic (no A/B/C/D letters) so the shared ROLE_BLOCK
+    # reads cleanly in both the A-E desk and Desk 2 (Q/W/X/R/S).
+    assert "(A, D)" not in briefing
+    assert "(B, C)" not in briefing
     assert "Slate index" in briefing
+    assert "### Game totals" in briefing
+    assert "### Team totals" in briefing
     # dossiers unique per (sport,event)
     dossiers = list((out_dir / "dossiers").glob("*.md"))
     assert len(dossiers) == len({d.name for d in dossiers})
@@ -951,6 +1089,65 @@ def test_market_label_disambiguates_terse_code():
     assert row["home_away"] == "AWAY"  # ATL is the away token in 'ATL @ STL'
 
 
+# --- Signed spread/run-line rendering (fix: models disagreed on -1.5 vs +1.5) --
+
+def _spread_card(side, line, **extra):
+    card = {
+        "headline_side": side,
+        "card_id": "rl1",
+        "market_id": "rl1",
+        "board": "A",
+        "market_type": "GAMELINE",
+        "market": "SPREAD",
+        "proposition": "SPREAD",
+        "market_label": "Run Line",
+        "team": "ATL",
+        "matchup": "ATL @ STL",
+        "event_id": "evRL",
+        "flags": [],
+        "sides": {
+            side: {
+                "outcome_id": f"o{side}",
+                "line": line,
+                "best_odds": -170,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 1.6,
+                    "best_ev_pct": 0.046,
+                    "kelly_pct": 0.02,
+                },
+            }
+        },
+    }
+    card.update(extra)
+    return card
+
+
+def test_positive_spread_line_renders_with_explicit_sign():
+    # This is the exact ATL @ STL card from the 2026-07-12 report divergence:
+    # AWAY side, line=1.5, priced at -170 (the AWAY side is favored to cover the
+    # generous +1.5 cushion). Without an explicit '+' this reads as an ambiguous
+    # bare magnitude, which is why five reports rendered it as -1.5 and +1.5.
+    row = make_row(_spread_card("AWAY", 1.5), [])
+    assert row["line"] == "+1.5"
+    assert row["selection"] == "ATL @ STL Run Line AWAY +1.5"
+
+
+def test_negative_spread_line_keeps_explicit_sign():
+    row = make_row(_spread_card("HOME", -1.5), [])
+    assert row["line"] == "-1.5"
+    assert row["selection"] == "ATL @ STL Run Line HOME -1.5"
+
+
+def test_non_spread_line_is_not_signed():
+    # A positive TOTAL/prop line must never gain a '+' — only spread/run-line/
+    # puck-line markets carry a signed margin.
+    card = _ctx_card("ATL", "STL", "ATL @ STL", market="TOTAL", market_raw="Total")
+    row = make_row(card, [], sport="MLB")
+    assert row["line"] == 6.5  # unchanged float, no sign added
+    assert "+" not in row["selection"]
+
+
 def test_alt_line_fallback_surfaces_priced_line():
     # Shown line 9.0 but EV/price derived at 8.5 -> priced_line + annotated flag.
     card = {
@@ -985,6 +1182,27 @@ def test_alt_line_fallback_surfaces_priced_line():
     assert row["line"] == 9.0  # display line unchanged
     assert str(row["priced_line"]) == "8.5"
     assert "ev_line_fallback:priced_at=8.5" in row["data_quality_flags"]
+
+
+def test_alt_line_fallback_priced_line_is_signed_for_spread():
+    # Same alt-line-fallback path as above, but on a SPREAD market: the
+    # priced_line/ev_line_fallback annotation must carry an explicit sign too,
+    # or a positive fallback line reintroduces the exact ambiguity this fix closes.
+    card = _spread_card(
+        "AWAY",
+        1.5,
+        flags=["ev_line_fallback"],
+    )
+    card["sides"]["AWAY"]["ev"]["is_alt_line_fallback"] = True
+    card["sides"]["AWAY"]["ev"]["best_record_id"] = "recAlt"
+    ev = [{
+        "market_id": "rl1", "outcome_id": "oAWAY", "side": "AWAY",
+        "current_line": 2.5, "record_id": "recAlt", "book": "FD", "book_odds": -170,
+    }]
+    row = make_row(card, ev)
+    assert row["line"] == "+1.5"
+    assert row["priced_line"] == "+2.5"
+    assert "ev_line_fallback:priced_at=+2.5" in row["data_quality_flags"]
 
 
 def test_dossier_and_briefing_show_matchup_not_bare_hash():

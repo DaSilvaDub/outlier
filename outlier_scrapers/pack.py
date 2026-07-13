@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -84,6 +85,14 @@ EXCLUDED_MARKETS = {
 # House rule: plus-money longshots (e.g. a Hits Over at +181) are hard-filtered
 # from packs. Any candidate priced at +LONGSHOT_AMERICAN_PRICE or longer is dropped.
 LONGSHOT_AMERICAN_PRICE = 150
+
+# data_quality_flags that ROLE_BLOCK explicitly tells every reasoning pass to
+# "stand the market/row down" on: the line or market itself is proven or
+# presumed corrupt, so a stake recommendation would contradict our own
+# instruction to the desk. Exact-match flags; cross_sport_market carries a
+# dynamic ":<LEAGUE>" suffix and is matched by prefix below.
+DISQUALIFYING_DQ_FLAGS = {"spread_sign_conflict", "implausible_line", "non_numeric_line"}
+CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
 def american_to_decimal(american: float | int | str | None) -> float | None:
     if american is None or american == "":
@@ -251,7 +260,34 @@ def _fmt_line(line: Any) -> str:
         f = float(line)
     except (ValueError, TypeError):
         return str(line)
+    # NaN/inf can reach here from an upstream feed (market_validation_flags
+    # already flags it non_numeric_line) — int(f) raises ValueError on either,
+    # which would crash pack generation for the whole slate over one bad row.
+    # Fall back to the raw repr, same as an unparseable string above.
+    if not math.isfinite(f):
+        return str(line)
     return str(int(f)) if f == int(f) else str(f)
+
+# Propositions where the line is a signed margin (point spread / run line / puck
+# line) rather than a magnitude. A positive value here means the side is getting
+# a cushion, not that it's the favorite — the same "1.5" that's unambiguous on a
+# TOTAL is easy to mis-sign on a SPREAD, and different readers guess differently.
+SIGNED_MARGIN_PROPOSITIONS = {"SPREAD"}
+
+def _fmt_signed_line(line: Any, proposition: Any) -> str:
+    """``_fmt_line`` plus an explicit leading '+' for positive signed-margin lines.
+
+    Negative lines already render with '-' via ``_fmt_line``; only the positive
+    case is ambiguous (a bare "1.5" reads as a magnitude, not "+1.5"), so that's
+    the only case rewritten. Non-spread markets (totals, props) are untouched.
+    """
+    fl = _fmt_line(line)
+    if not fl or str(proposition or "").strip().upper() not in SIGNED_MARGIN_PROPOSITIONS:
+        return fl
+    val = _to_float(line)
+    if val is not None and val > 0 and not fl.startswith(("+", "-")):
+        return f"+{fl}"
+    return fl
 
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
@@ -327,7 +363,7 @@ def market_validation_flags(
                 flags.append("implausible_line")
     return flags
 
-def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
+def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: Any = None) -> str:
     name_s = str(name or "").strip()
     label_s = str(label or "").strip()
     side_s = str(side or "").strip()
@@ -346,7 +382,7 @@ def build_selection(name: Any, label: Any, side: Any, line: Any) -> str:
     if side_s:
         if side_s.lower() not in (core or "").lower():
             parts.append(side_s)
-    fl = _fmt_line(line)
+    fl = _fmt_signed_line(line, proposition)
     if fl:
         parts.append(fl)
     return " ".join(parts) if parts else (side_s if side_s else "")
@@ -377,10 +413,11 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
+    proposition = card.get("proposition") or ref.get("proposition")
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
-    row = {k: "" for k in CANDIDATES_HEADER}
+    row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
@@ -388,7 +425,7 @@ def build_row(
     row["player_id"] = card.get("player_id") or ref.get("player_id")
     name = card.get("player") or ref.get("player") or card.get("matchup") or ref.get("matchup")
     label = ref.get("market_label") or card.get("market_label") or market_token
-    row["selection"] = build_selection(name, label, headline_side, line)
+    row["selection"] = build_selection(name, label, headline_side, line, proposition)
     # Human-readable context the normalizer already resolved. Surfacing it stops
     # the reasoning desk from guessing teams/markets off the hash event_id or a
     # terse code (e.g. LAS vs LVA, PT = Pitches Thrown).
@@ -409,6 +446,10 @@ def build_row(
         card.get("market_label"), ref.get("market_label"), card.get("market_raw"), market_token
     )
     row["line"] = line
+    if str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+        signed_line = _fmt_signed_line(line, proposition)
+        if signed_line:
+            row["line"] = signed_line
     row["research_leverage"] = get_research_leverage(market_token, scope, sport)
     row["injury_flags"] = injuries.get(str(event_id), "") if event_id else ""
     row["source_timestamps"] = format_source_timestamps(source_ts)
@@ -481,8 +522,12 @@ def build_row(
         priced = _priced_line_from_ev(ev_records, ev_summary.get("best_record_id"))
         if priced is not None and _to_float(priced) != _to_float(line):
             row["priced_line"] = priced
+            priced_display = _fmt_line(priced)
+            if str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+                row["priced_line"] = _fmt_signed_line(priced, proposition)
+                priced_display = row["priced_line"]
             dq_flags = [f for f in dq_flags if f != "ev_line_fallback"]
-            dq_flags.append(f"ev_line_fallback:priced_at={_fmt_line(priced)}")
+            dq_flags.append(f"ev_line_fallback:priced_at={priced_display}")
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
@@ -499,6 +544,16 @@ def build_row(
         and "thin_liquidity" in dq_flags
     ):
         dq_flags.append("edge_suspect_stale_line")
+        row["recommended_units_pre_news"] = ""
+    # Any single disqualifying flag (line/market proven or presumed corrupt)
+    # withholds the stake on its own — no second flag needed, unlike the
+    # stale-line gate above. edge_pct stays visible; the number just can't be
+    # trusted enough to size (2026-07-13 LAS @ ATL shipped units=1.5 on a
+    # spread_sign_conflict row before this gate existed).
+    if row.get("recommended_units_pre_news") not in ("", None) and (
+        not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
+        or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
+    ):
         row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
@@ -562,8 +617,11 @@ def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    dated = {_local_date(r.get("_event_starts_at")) for r in rows}
-    dated.discard(None)
+    dated: set[str] = {
+        d
+        for r in rows
+        if (d := _local_date(r.get("_event_starts_at"))) is not None
+    }
     if not dated:
         return rows, (requested or today)
     if requested and requested in dated:
@@ -706,8 +764,15 @@ ROLE_BLOCK = [
     " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
     "- data_quality_flags may also carry cross_sport_market:<LEAGUE> (the market belongs to"
-    " another sport — treat the row as a data artifact and stand it down) or implausible_line /"
-    " non_numeric_line (the line is likely corrupt — verify before quoting).",
+    " another sport — treat the row as a data artifact and stand it down), implausible_line /"
+    " non_numeric_line (the line is likely corrupt — verify before quoting), or"
+    " spread_sign_conflict (the market's two sides did not price as mirror-image lines —"
+    " treat the line as corrupt and stand the market down).",
+    "- Spread / run line / puck line rows already carry an explicit sign (e.g. '+1.5' or"
+    " '-1.5' in the line and selection) — never re-derive or flip it from model_prob or"
+    " the favorite/underdog assumption. model_prob on these rows is the probability that"
+    " the STATED signed side covers, not the probability of winning the game; a heavily"
+    " favored team can correctly show a positive (cushion) line if that is the side priced.",
     "- Variance taxonomy to anchor evaluation:",
     "   * High variance: 3PM, hits allowed, total bases, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
@@ -727,12 +792,12 @@ ROLE_BLOCK = [
     " event's first lock, its lines are LIVE/in-play — treat the whole event as a data error"
     " and stand it down.",
     "",
-    "REASONING PASSES (A, D):",
+    "REASONING PASSES (pack-only):",
     "- Use this pack ONLY. Do not use memory or the web.",
     "- Never invent or recall odds/lines. Every verdict quotes the exact market_id + line/price from the pack.",
     "- If you need info not in the pack, list it under NEEDS — do not guess.",
     "",
-    "RESEARCH PASSES (B, C):",
+    "RESEARCH PASSES (web-enabled):",
     "- You MAY use current web sources (last 24h).",
     "- Do NOT invent, quote, or update any betting line/price. The pack's lines are the only lines.",
     "- Tie every finding back to a quoted market_id + line/price from the pack.",
@@ -829,7 +894,9 @@ def build_freshness_section(leagues: Sequence[str]) -> list[str]:
     return lines
 
 def build_briefing(
-    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None
+    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None,
+    totals_rows: list[dict[str, Any]] | None = None,
+    team_totals_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     lines = [f"SLATE: {target_date}", ""]
     if freshness_lines:
@@ -859,11 +926,17 @@ def build_briefing(
                 f"- {r.get('sport')} {_matchup_display(r)} | event {eid} "
                 f"| first lock: {r.get('_event_starts_at') or 'n/a'}"
             )
+    if totals_rows is not None:
+        lines.append("")
+        lines.append(_format_game_totals_md(totals_rows, title="### Game totals"))
+    if team_totals_rows is not None:
+        lines.append("")
+        lines.append(_format_game_totals_md(team_totals_rows, title="### Team totals"))
     return "\n".join(lines)
 
 
-def _format_game_totals_md(totals_rows: list[dict[str, Any]]) -> str:
-    lines = ["# Game totals projection board", ""]
+def _format_game_totals_md(totals_rows: list[dict[str, Any]], title: str = "# Game totals projection board") -> str:
+    lines = [title, ""]
     if not totals_rows:
         lines.append("_No eligible totals markets._")
         return "\n".join(lines)
@@ -895,8 +968,23 @@ def write_pack(
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+        
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+
+    totals_rows: list[dict[str, Any]] = []
+    team_totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+        
     (out_dir / "briefing.md").write_text(
-        build_briefing(rows, out_dir.name, freshness_lines), encoding="utf-8"
+        build_briefing(
+            rows, 
+            out_dir.name, 
+            freshness_lines,
+            totals_rows if games_norm_by_league is not None else None,
+            team_totals_rows if games_norm_by_league is not None else None
+        ), encoding="utf-8"
     )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -912,18 +1000,20 @@ def write_pack(
     with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df:
         df.write("date,market_id,event_id,selection,decision,line_taken,price_taken,units,rationale\n")
 
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals
-
-    totals_rows: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(exist_ok=True)
+    
     with open(out_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as tf:
         writer = csv.DictWriter(tf, fieldnames=GAME_TOTALS_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(totals_rows)
     (sections_dir / "game_totals.md").write_text(_format_game_totals_md(totals_rows), encoding="utf-8")
+
+    with open(out_dir / "team_totals.csv", "w", newline="", encoding="utf-8") as tf:
+        writer = csv.DictWriter(tf, fieldnames=TEAM_TOTALS_HEADER, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(team_totals_rows)
+    (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
 def build_pack(
     leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int

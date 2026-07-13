@@ -19,6 +19,12 @@ G. GAME TOTALS O/U (deterministic ledger — do NOT recompute edge or fair_total
    - desk_verdict PASS or STAND-DOWN does NOT change `actionable` in the CSV — markdown only.
    - Quote `totals_id`, line, and price exactly; never alter projections.
 
-Move game totals OUT of A. SINGLES (spreads/ML only there).
+H. TEAM TOTALS O/U (deterministic ledger — same schema as G, separate stream)
+   totals_id | market_id | team | selection @ line (best_price) | fair_total | edge% | desk_verdict (BET | LEAN | PASS | STAND-DOWN) | units (≤ pipeline, downgrade only) | news support {tier, source, ts}
+   - Use `team_totals.csv` `actionable`, `edge_pct`, and `quality_flags` as authoritative pipeline state.
+   - desk_verdict PASS or STAND-DOWN does NOT change `actionable` in the CSV — markdown only.
+   - Quote `totals_id`, line, and price exactly; never alter projections.
+
+Move game totals and team totals OUT of A. SINGLES (spreads/ML only there).
 
 Output the §4 schema, plus an AGREE/DISAGREE matrix (market_id × A/B/C/D).

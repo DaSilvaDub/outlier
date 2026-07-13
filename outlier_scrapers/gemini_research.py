@@ -66,6 +66,9 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
                     continue
             raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
 
+    raise rc.RunnerError("Failed after maximum retries")
+
+
 
 def run_gemini_b(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None
@@ -80,7 +83,9 @@ def run_gemini_b(
                 return 0
 
         briefing_text = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
-        totals_bytes, game_totals_sha256 = rc.load_game_totals(pack_dir)
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
         briefing_sha256 = rc.sha256_text(briefing_text)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
@@ -94,6 +99,7 @@ def run_gemini_b(
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,
                 "game_totals_hash": game_totals_sha256,
+                "team_totals_hash": team_totals_sha256,
             }
         )
 
@@ -105,7 +111,9 @@ def run_gemini_b(
             out_file.unlink()
 
         logger.info("Calling Gemini (Prompt B)...")
-        briefing_input = rc.append_totals_block(briefing_text, totals_bytes)
+        briefing_input = rc.append_totals_block(
+            briefing_text, totals_bytes, team_totals_bytes
+        )
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, briefing_input, client=client)
 
         front_matter = (
@@ -115,6 +123,7 @@ def run_gemini_b(
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"briefing_sha256: {briefing_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
+            f"team_totals_sha256: {team_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"
             "---\n\n"
         )

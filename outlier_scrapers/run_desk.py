@@ -18,7 +18,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Any
 
 from outlier_scrapers import (
     c_research,
@@ -131,12 +131,19 @@ def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, s
 
 def _game_totals_context(pack_dir: Path) -> str:
     totals_bytes, _ = rc.load_game_totals(pack_dir)
-    if not totals_bytes:
-        return ""
-    return (
-        "\n\n===== GAME_TOTALS.CSV (projection board) =====\n"
-        + totals_bytes.decode("utf-8-sig")
-    )
+    team_totals_bytes, _ = rc.load_team_totals(pack_dir)
+    parts: list[str] = []
+    if totals_bytes:
+        parts.append(
+            "\n\n===== GAME_TOTALS.CSV (projection board) =====\n"
+            + totals_bytes.decode("utf-8-sig")
+        )
+    if team_totals_bytes:
+        parts.append(
+            "\n\n===== TEAM_TOTALS.CSV (projection board) =====\n"
+            + team_totals_bytes.decode("utf-8-sig")
+        )
+    return "".join(parts)
 
 
 def local_synthesize_inputs(pack_dir: Path) -> str:
@@ -213,11 +220,17 @@ def produce_manual_betting_report(pack_dir: Path) -> Path:
         if txt:
             lines += [f"## {label}", txt[:1500], ""]
     totals_bytes, _ = rc.load_game_totals(pack_dir)
+    team_totals_bytes, _ = rc.load_team_totals(pack_dir)
     lines += ["## Game Totals (projection board)", ""]
     if totals_bytes:
         lines.append(totals_bytes.decode("utf-8-sig"))
     else:
         lines.append("(game_totals.csv not present in pack)")
+    lines += ["", "## Team Totals (projection board)", ""]
+    if team_totals_bytes:
+        lines.append(team_totals_bytes.decode("utf-8-sig"))
+    else:
+        lines.append("(team_totals.csv not present in pack)")
     lines += ["", "## Candidates (quoted)", ""]
     for r in rows[:10]:
         mid = r.get("market_id", "")
@@ -266,7 +279,8 @@ def orchestrate_desk(
         return 1
 
     totals_bytes, totals_hash = rc.load_game_totals(pack_dir)
-    status = {
+    team_totals_bytes, team_totals_hash = rc.load_team_totals(pack_dir)
+    status: dict[str, Any] = {
         "date": pack_dir.name,
         "generated_at": _now_iso(),
         "overall": "running",
@@ -277,6 +291,11 @@ def orchestrate_desk(
             "present": totals_bytes is not None,
             "sha256": totals_hash,
         },
+        "team_totals": {
+            "file": rc.TEAM_TOTALS_NAME,
+            "present": team_totals_bytes is not None,
+            "sha256": team_totals_hash,
+        },
         "notes": [],
     }
 
@@ -286,7 +305,7 @@ def orchestrate_desk(
         _write_status(pack_dir, status)
         return 1
 
-    components: dict[str, dict[str, str]] = {}
+    components: dict[str, dict[str, Any]] = {}
     for phase in ("A", "B", "C", "D"):
         if phase in requested:
             components[phase] = run_phase(phase, pack_dir, force=force)

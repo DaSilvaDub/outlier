@@ -67,9 +67,13 @@ def fetch_and_write_otp(attempt_timestamp: float) -> bool:
                         if msg.is_multipart():
                             for part in msg.walk():
                                 if part.get_content_type() in ["text/plain", "text/html"]:
-                                    body += part.get_payload(decode=True).decode(errors="ignore")
+                                    payload = part.get_payload(decode=True)
+                                    if isinstance(payload, bytes):
+                                        body += payload.decode(errors="ignore")
                         else:
-                            body = msg.get_payload(decode=True).decode(errors="ignore")
+                            payload = msg.get_payload(decode=True)
+                            if isinstance(payload, bytes):
+                                body = payload.decode(errors="ignore")
 
                         # Find 6-digit code
                         matches = re.findall(r"\b\d{6}\b", body)

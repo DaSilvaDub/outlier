@@ -32,9 +32,12 @@ def _resolve_teams(
     insight: dict[str, Any],
     config: SportConfig,
 ) -> tuple[str | None, str | None, str | None, str | None, str | None, dict[str, Any]]:
-    event = insight.get("event") if isinstance(insight.get("event"), dict) else {}
-    away = event.get("away") if isinstance(event.get("away"), dict) else {}
-    home = event.get("home") if isinstance(event.get("home"), dict) else {}
+    evt = insight.get("event")
+    event: dict[str, Any] = evt if isinstance(evt, dict) else {}
+    aw = event.get("away")
+    away = aw if isinstance(aw, dict) else {}
+    hm = event.get("home")
+    home = hm if isinstance(hm, dict) else {}
     away_alias = away.get("alias") or away.get("abbr") or away.get("name")
     home_alias = home.get("alias") or home.get("abbr") or home.get("name")
     away_id = str(away.get("teamId") or "").strip()
