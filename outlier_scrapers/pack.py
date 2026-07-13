@@ -424,7 +424,7 @@ def build_row(
     has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
     if not (card.get("market_type") or ref.get("market_type")) and not has_player:
         prop_token = str(proposition or "").upper()
-        if prop_token == "POINTS" and (card.get("team") or ref.get("team")):
+        if prop_token == "POINTS" and (card.get("team") or ref.get("team")):  # nosec B105 - market name, not a credential
             market_type = "TEAM_PROP"
         elif prop_token in {"TOTAL", "SPREAD", "MONEYLINE"}:
             market_type = "GAMELINE"

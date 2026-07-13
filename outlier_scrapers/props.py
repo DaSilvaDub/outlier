@@ -66,9 +66,9 @@ def enrich_schedule_for_props(
         except Exception as exc:
             errors.append({"event_id": event_id, "error": str(exc)[:200]})
             continue
-        if isinstance(payload.get("event"), dict):
+        if isinstance(payload, dict) and isinstance(payload.get("event"), dict):
             event = payload["event"]
-        elif isinstance(payload.get("events"), list):
+        elif isinstance(payload, dict) and isinstance(payload.get("events"), list):
             event = next(
                 (
                     item
