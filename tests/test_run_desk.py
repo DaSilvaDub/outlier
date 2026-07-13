@@ -185,12 +185,14 @@ def mlb_wnba_e2e_pack(monkeypatch, tmp_path):
         _seed_league_data(tmp_path / "data" / league, league)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, target, games_norm = pack.build_pack(["MLB", "WNBA"], None, 15, 10)
+    rows, target, games_norm, coverage = pack.build_pack_with_coverage(
+        ["MLB", "WNBA"], None, 15, 10
+    )
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}, f"pack build missing a league: {sports}"
 
     pack_dir = tmp_path / "packs" / target
-    pack.write_pack(rows, pack_dir, games_norm_by_league=games_norm)
+    pack.write_pack(rows, pack_dir, games_norm_by_league=games_norm, coverage=coverage)
 
     for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(key, "test-key")

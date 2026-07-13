@@ -1,4 +1,28 @@
-## Session Summary
+## Handoff — `fix/pack-structural-integrity` (PR #31)
+
+**Last Commit SHA:** `5cb6282` (code commit on `fix/pack-structural-integrity`)
+
+**PR Link:** https://github.com/DaSilvaDub/outlier/pull/31
+
+**Files Touched:**
+- `outlier_scrapers/props.py` — bounded repair of schedule gaps for prop-referenced events.
+- `outlier_scrapers/cards.py` — preserved market type; headline-scoped line mismatch and ladder-aware spread mirror validation.
+- `outlier_scrapers/pack.py` — coverage report, actionability, non-actionable EV audit section, team-total dedup/labels, and sourced proxy probability/edge/Kelly.
+- `tests/test_props.py`, `tests/test_cards.py`, `tests/test_pack.py`, `tests/test_run_desk.py` — regression coverage and signature adaptation.
+
+**Verification:** 105 focused tests passed (73 pack; 32 cards/props); Ruff and MyPy passed. Offline game-card/pack regeneration passed. `test_run_desk.py` collection hung before executing the mocked test and was terminated; no provider calls ran.
+
+**Next Steps:**
+- Review PR #31 and run CI.
+- On the next authenticated props refresh, verify the MLB single-event enrichment restores `event_starts_at` and produces MLB candidates. Current stale July 13 source data still reports MLB as zero emitted with 394 unverifiable-start drops, now explicitly surfaced rather than silently omitted.
+
+---
+
+**Last Commit SHA:** `37e665d` (on branch `feat/desk2-manual-research-desk`)
+
+---
+
+## Handoff — `fix/spread-sign-conflict` (PR #32, merged)
 
 - **Last Commit SHA**: `6ce1389`
 - **Branch**: `fix/spread-sign-conflict`

@@ -12,9 +12,89 @@ from .paths import league_paths
 from .registry import get_sport_config, supported_leagues
 
 
+MAX_SCHEDULE_EVENT_FETCHES = 50
+
+
 def write_json(path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _referenced_event_ids(props_payload: dict[str, Any]) -> set[str]:
+    """Return every event referenced by the player-props feed."""
+    event_ids: set[str] = set()
+    for item in props_payload.get("props") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_outcome = item.get("outcome")
+        outcome = raw_outcome if isinstance(raw_outcome, dict) else item
+        event_id = str(outcome.get("eventId") or outcome.get("event_id") or "").strip()
+        if event_id:
+            event_ids.add(event_id)
+    return event_ids
+
+
+def enrich_schedule_for_props(
+    client: OutlierApiClient,
+    schedule_payload: dict[str, Any],
+    props_payload: dict[str, Any],
+    *,
+    max_missing_events: int = MAX_SCHEDULE_EVENT_FETCHES,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Fill schedule gaps for events that are present in props.
+
+    The league schedule endpoint can omit same-day events while the props feed
+    still contains hundreds of markets for them.  Missing schedule rows erase
+    ``event_starts_at`` during normalization; the pack's pregame guard then has
+    to drop every affected card.  Reuse the existing single-event endpoint only
+    for referenced IDs that the schedule did not return.
+    """
+    events = [e for e in (schedule_payload.get("events") or []) if isinstance(e, dict)]
+    start_keys = ("scheduledTime", "startTime", "startDate", "date", "scheduled")
+    known = {
+        str(event.get("eventId") or event.get("id") or "").strip()
+        for event in events
+        if any(event.get(key) for key in start_keys)
+    }
+    errors: list[dict[str, str]] = []
+    missing = sorted(_referenced_event_ids(props_payload) - known)
+    for event_id in missing[max_missing_events:]:
+        errors.append({"event_id": event_id, "error": "event detail fetch cap exceeded"})
+    for event_id in missing[:max_missing_events]:
+        try:
+            payload = client.fetch_event(event_id)
+        except Exception as exc:
+            errors.append({"event_id": event_id, "error": str(exc)[:200]})
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("event"), dict):
+            event = payload["event"]
+        elif isinstance(payload, dict) and isinstance(payload.get("events"), list):
+            event = next(
+                (
+                    item
+                    for item in payload["events"]
+                    if isinstance(item, dict)
+                    and str(item.get("eventId") or item.get("id") or "").strip() == event_id
+                ),
+                None,
+            )
+        else:
+            event = payload
+        if not isinstance(event, dict):
+            errors.append({"event_id": event_id, "error": "non-object event payload"})
+            continue
+        enriched = dict(event)
+        enriched.setdefault("eventId", event_id)
+        if not any(enriched.get(key) for key in start_keys):
+            errors.append({"event_id": event_id, "error": "event payload missing scheduled time"})
+            continue
+        events = [
+            existing
+            for existing in events
+            if str(existing.get("eventId") or existing.get("id") or "").strip() != event_id
+        ]
+        events.append(enriched)
+    return {**schedule_payload, "events": events}, errors
 
 
 def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, Any]:
@@ -22,6 +102,9 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
     paths = league_paths(config.league_id).ensure()
     schedule_payload = client.fetch_schedule(config.league_id)
     props_payload = client.fetch_player_props(config.league_id)
+    schedule_payload, schedule_event_errors = enrich_schedule_for_props(
+        client, schedule_payload, props_payload
+    )
 
     exported_at = datetime.now().astimezone().isoformat()
     raw_payload = {
@@ -50,11 +133,13 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
 
     status = {
         "league": config.league_id,
-        "status": "ok",
+        "status": "partial" if schedule_event_errors else "ok",
         "generated_at": datetime.now().astimezone().isoformat(),
         "raw_latest": str(raw_latest),
         "normalized_latest": str(normalized_latest),
         "record_count": normalized["record_count"],
+        "schedule_event_fetch_error_count": len(schedule_event_errors),
+        "schedule_event_fetch_errors": schedule_event_errors,
     }
     write_json(paths.reports / "props_export_status_latest.json", status)
     return status

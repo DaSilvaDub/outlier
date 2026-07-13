@@ -402,6 +402,7 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "player": row.get("player"),
                 "player_id": row.get("player_id"),
                 "market": row.get("market") or row.get("market_raw"),
+                "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "proposition": row.get("proposition") or sctx.get("proposition"),
@@ -421,6 +422,7 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "event_id": row.get("event_id"),
                 "proposition": row.get("proposition"),
                 "market": row.get("market") or row.get("market_raw"),
+                "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "scope": row.get("scope") or sctx.get("scope"),
@@ -783,10 +785,30 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     # this conflict guard can never drift out of sync with the rendering fix.
     from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
 
-    if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS and _spread_sign_conflict(
-        main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
-    ):
-        card.setdefault("flags", []).append("spread_sign_conflict")
+    if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+        headline = str(card.get("headline_side") or "")
+        opposite = "HOME" if headline == "AWAY" else "AWAY"
+        headline_line = _to_float(main_row.get(headline, {}).get("line"))
+        opposite_lines = [
+            _to_float(row.get("line")) for row in rows_by_side.get(opposite, [])
+        ]
+        has_mirror = (
+            headline_line is not None
+            and any(
+                other is not None and abs(headline_line + other) <= 1e-9
+                for other in opposite_lines
+            )
+        )
+        if not has_mirror and _spread_sign_conflict(
+            main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
+        ):
+            card.setdefault("flags", []).append("spread_sign_conflict")
+    headline = str(card.get("headline_side") or "")
+    if headline in main_row:
+        movement_line = _to_float((movement.get(headline) or {}).get("current_line"))
+        card_line = _to_float(main_row[headline].get("line"))
+        if movement_line is not None and card_line is not None and movement_line != card_line:
+            card.setdefault("flags", []).append("movement_line_mismatch")
     return card
 
 
