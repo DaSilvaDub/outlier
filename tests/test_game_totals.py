@@ -68,6 +68,15 @@ def test_build_game_totals_actionable_at_three_pct_edge():
     assert row['fair_total'] != ''
     if row['edge_pct'] != '' and float(row['edge_pct']) >= MIN_EDGE_TOTALS:
         assert row['actionable'] == 'true'
+    assert row['outcome_id'] == row['totals_id']
+    assert row['independent_model_prob'] == ''
+    side_probability = (
+        row['projected_over_prob']
+        if row['best_side'] == 'OVER'
+        else row['projected_under_prob']
+    )
+    assert row['market_consensus_prob'] == side_probability
+    assert row['final_blended_prob'] == side_probability
 
 def test_build_game_totals_single_book_not_actionable():
     games_norm = {'records': [_norm_record('m2', 174.5, 'OVER', [{'book': 'DK', 'odds': -110}]), _norm_record('m2', 174.5, 'UNDER', [{'book': 'DK', 'odds': -110}])]}

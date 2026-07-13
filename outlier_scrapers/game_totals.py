@@ -85,6 +85,7 @@ GAME_TOTALS_HEADER = [
     "sport",
     "event_id",
     "market_id",
+    "outcome_id",
     "total_kind",
     "team",
     "selection",
@@ -96,6 +97,9 @@ GAME_TOTALS_HEADER = [
     "best_price",
     "projected_over_prob",
     "projected_under_prob",
+    "market_consensus_prob",
+    "independent_model_prob",
+    "final_blended_prob",
     "fair_total",
     "edge_pct",
     "implied_prob",
@@ -501,6 +505,11 @@ def build_totals(
         )
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
+        p_side = (
+            p_over_headline
+            if best_side == "OVER"
+            else (1.0 - p_over_headline if p_over_headline is not None else None)
+        )
         decimal_price = _american_to_decimal(best_price)
         implied_prob = implied_probability(best_price)
 
@@ -515,11 +524,6 @@ def build_totals(
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
-                p_side = (
-                    p_over_headline
-                    if best_side == "OVER"
-                    else (1.0 - p_over_headline if p_over_headline is not None else None)
-                )
                 if decimal_price is not None and p_side is not None:
                     sizing = compute_sizing(
                         decimal_price=decimal_price,
@@ -565,14 +569,16 @@ def build_totals(
         label = "Total O/U" if total_kind == "game" else "Team Total"
         name = matchup if total_kind == "game" else (team or matchup)
         selection = f"{name} {label} {side_for_selection} {headline_line}".strip()
+        totals_id = _totals_id(market_id, headline_line, side_for_selection)
 
         row: dict[str, Any] = {k: "" for k in GAME_TOTALS_HEADER}
         row.update(
             {
-                "totals_id": _totals_id(market_id, headline_line, side_for_selection),
+                "totals_id": totals_id,
                 "sport": sport,
                 "event_id": event_id,
                 "market_id": market_id,
+                "outcome_id": totals_id,
                 "total_kind": total_kind,
                 "team": team,
                 "selection": selection,
@@ -584,6 +590,9 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
+                "market_consensus_prob": round(p_side, 4) if p_side is not None else "",
+                "independent_model_prob": "",
+                "final_blended_prob": round(p_side, 4) if p_side is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
