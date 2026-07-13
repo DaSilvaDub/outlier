@@ -514,7 +514,11 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert (out_dir / "sections" / "game_totals.md").exists()
     assert (out_dir / "sections" / "team_totals.md").exists()
     briefing = (out_dir / "briefing.md").read_text()
-    assert "REASONING PASSES (A, D):" in briefing
+    assert "REASONING PASSES (pack-only):" in briefing
+    # Pass labels are desk-agnostic (no A/B/C/D letters) so the shared ROLE_BLOCK
+    # reads cleanly in both the A-E desk and Desk 2 (Q/W/X/R/S).
+    assert "(A, D)" not in briefing
+    assert "(B, C)" not in briefing
     assert "Slate index" in briefing
     assert "### Game totals" in briefing
     assert "### Team totals" in briefing
