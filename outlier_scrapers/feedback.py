@@ -164,6 +164,15 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
 
+def _coalesce(*values: Any) -> Any:
+    """Return the first value that is not None (unlike ``or``, keeps a real 0)."""
+
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _american_to_decimal(price: Any) -> float | None:
     value = _float(price, field="price")
     if value is None:
