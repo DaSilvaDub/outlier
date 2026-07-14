@@ -1061,7 +1061,7 @@ def capture_pack(
 
         decision_ids = [decision["decision_id"] for decision in decisions]
         current: list[dict[str, Any]] = []
-        for decision_id in sorted(decision_ids):
+        for decision_id in sorted(set(decision_ids)):
             row = conn.execute(SELECT_DECISION_BY_ID_SQL, (decision_id,)).fetchone()
             if row is not None:
                 current.append(dict(row))

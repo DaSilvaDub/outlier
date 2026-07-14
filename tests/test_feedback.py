@@ -115,6 +115,19 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
 
 
+def test_capture_pack_deduplicates_repeated_opportunity_decisions(tmp_path):
+    repeated = _candidate()
+    pack_dir = _pack(tmp_path, [repeated, repeated.copy()])
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+
+    stats = feedback.capture_pack(pack_dir, db_path)
+
+    assert stats == feedback.CaptureStats(snapshots=2, decisions=1)
+    assert len(_read_csv(pack_dir / "decisions.csv")) == 1
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
+
+
 @pytest.mark.parametrize("source", ["opportunities", "game_totals"])
 def test_snapshot_numeric_zero_values_do_not_fall_back(source, tmp_path):
     row = _candidate()
