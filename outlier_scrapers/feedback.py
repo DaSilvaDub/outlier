@@ -1086,8 +1086,13 @@ def _mean(values: Iterable[float | None]) -> float | None:
     return sum(kept) / len(kept) if kept else None
 
 
-def _flat_pnl(row: dict[str, Any], result_field: str = "win_loss_push") -> float | None:
+def _flat_pnl(row: dict[str, Any], result_field: str = "win_loss_push", *, invert: bool = False) -> float | None:
     result = _text(row.get(result_field)).upper()
+    if invert:
+        if result == "W":
+            result = "L"
+        elif result == "L":
+            result = "W"
     if result == "L":
         return -1.0
     if result == "PUSH":
@@ -1096,7 +1101,6 @@ def _flat_pnl(row: dict[str, Any], result_field: str = "win_loss_push") -> float
         return None
     decimal_price = _float(row.get("decimal_price"), field="decimal_price")
     return decimal_price - 1.0 if decimal_price is not None else None
-
 
 def _group_metrics(rows: list[dict[str, Any]], label: str, value: str) -> dict[str, Any]:
     wins = sum(_text(row.get("win_loss_push")).upper() == "W" for row in rows)
