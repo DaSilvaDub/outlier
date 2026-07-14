@@ -110,6 +110,83 @@ PROBABILITY_COLUMNS = {
     "final_blended": "final_blended_prob",
 }
 
+# ``CREATE TABLE IF NOT EXISTS`` does not evolve an existing SQLite table.  The
+# definitions below are deliberately valid for ``ALTER TABLE ... ADD COLUMN``;
+# new databases still receive the stricter primary-key/foreign-key declarations
+# in ``initialize_database``.
+MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
+    "snapshot_id": "TEXT",
+    "captured_at": "TEXT NOT NULL DEFAULT ''",
+    "sport": "TEXT NOT NULL DEFAULT ''",
+    "event_id": "TEXT NOT NULL DEFAULT ''",
+    "market_id": "TEXT NOT NULL DEFAULT ''",
+    "outcome_id": "TEXT NOT NULL DEFAULT ''",
+    "player_id": "TEXT",
+    "selection": "TEXT NOT NULL DEFAULT ''",
+    "line": "TEXT",
+    "price": "REAL",
+    "book": "TEXT",
+    "market_consensus_prob": "REAL",
+    "independent_model_prob": "REAL",
+    "final_blended_prob": "REAL",
+    "push_prob": "REAL",
+    "edge": "REAL",
+    "data_quality_flags": "TEXT",
+    "market_type": "TEXT",
+    "model_prob_source": "TEXT",
+    "decimal_price": "REAL",
+    "implied_prob": "REAL",
+    "board": "TEXT",
+    "selected": "INTEGER NOT NULL DEFAULT 0",
+    "signal_flags": "TEXT",
+    "hit_rate_component": "REAL",
+    "insight_component": "REAL",
+    "movement_component": "REAL",
+    "orf_component": "REAL",
+    "pack_path": "TEXT",
+    "created_at": "TEXT NOT NULL DEFAULT ''",
+}
+
+DECISION_COLUMN_DEFINITIONS = {
+    "decision_id": "TEXT",
+    "snapshot_id": "TEXT",
+    "pipeline_verdict": "TEXT",
+    "A_verdict": "TEXT",
+    "B_verdict": "TEXT",
+    "C_verdict": "TEXT",
+    "D_verdict": "TEXT",
+    "final_verdict": "TEXT",
+    "units": "REAL",
+    "kill_reason": "TEXT",
+    "news_override": "TEXT",
+    "created_at": "TEXT NOT NULL DEFAULT ''",
+    "updated_at": "TEXT NOT NULL DEFAULT ''",
+}
+
+SETTLEMENT_COLUMN_DEFINITIONS = {
+    "settlement_id": "TEXT",
+    "decision_id": "TEXT",
+    "snapshot_id": "TEXT",
+    "outcome_id": "TEXT",
+    "event_id": "TEXT NOT NULL DEFAULT ''",
+    "market_id": "TEXT NOT NULL DEFAULT ''",
+    "actual_result": "TEXT",
+    "win_loss_push": "TEXT NOT NULL DEFAULT ''",
+    "closing_line": "TEXT",
+    "closing_price": "REAL",
+    "clv_line": "REAL",
+    "clv_price": "REAL",
+    "pnl": "REAL",
+    "would_have_result": "TEXT",
+    "settled_at": "TEXT NOT NULL DEFAULT ''",
+}
+
+REQUIRED_TABLE_IDENTITY_COLUMNS = {
+    "market_snapshots": {"snapshot_id"},
+    "decisions": {"decision_id", "snapshot_id"},
+    "settlements": {"settlement_id"},
+}
+
 
 class FeedbackError(ValueError):
     """Raised when a ledger row is invalid or cannot be joined safely."""
@@ -165,10 +242,10 @@ def _truthy(value: Any) -> bool:
 
 
 def _coalesce(*values: Any) -> Any:
-    """Return the first value that is not None (unlike ``or``, keeps a real 0)."""
+    """Return the first populated value while preserving a real numeric zero."""
 
     for value in values:
-        if value is not None:
+        if value not in (None, ""):
             return value
     return None
 
@@ -205,6 +282,21 @@ def _normal_result(value: Any, *, field: str = "win_loss_push") -> str:
     if token not in aliases:
         raise FeedbackError(f"{field} must be W, L, or PUSH, got {value!r}")
     return aliases[token]
+
+
+def _ensure_table_columns(
+    conn: sqlite3.Connection, table: str, definitions: dict[str, str]
+) -> None:
+    existing = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+    missing_identity = REQUIRED_TABLE_IDENTITY_COLUMNS[table] - existing
+    if missing_identity:
+        raise FeedbackError(
+            f"Cannot safely migrate {table}: missing identity columns "
+            f"{', '.join(sorted(missing_identity))}"
+        )
+    for column, definition in definitions.items():
+        if column not in existing:
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
 
 
 def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
@@ -251,11 +343,6 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 created_at TEXT NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_snapshots_market
-                ON market_snapshots(event_id, market_id, outcome_id, captured_at);
-            CREATE INDEX IF NOT EXISTS idx_snapshots_segment
-                ON market_snapshots(sport, market_type, book);
-
             CREATE TABLE IF NOT EXISTS decisions (
                 decision_id TEXT PRIMARY KEY,
                 snapshot_id TEXT NOT NULL REFERENCES market_snapshots(snapshot_id),
@@ -271,9 +358,6 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-
-            CREATE INDEX IF NOT EXISTS idx_decisions_snapshot
-                ON decisions(snapshot_id);
 
             CREATE TABLE IF NOT EXISTS settlements (
                 settlement_id TEXT PRIMARY KEY,
@@ -293,26 +377,69 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 settled_at TEXT NOT NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_settlements_market
-                ON settlements(event_id, market_id, outcome_id);
-            CREATE INDEX IF NOT EXISTS idx_settlements_decision
-                ON settlements(decision_id);
             """
         )
-        snapshot_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")
-        }
-        if "push_prob" not in snapshot_columns:
-            conn.execute("ALTER TABLE market_snapshots ADD COLUMN push_prob REAL")
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_table_columns(
+            conn, "market_snapshots", MARKET_SNAPSHOT_COLUMN_DEFINITIONS
+        )
+        _ensure_table_columns(conn, "decisions", DECISION_COLUMN_DEFINITIONS)
+        _ensure_table_columns(conn, "settlements", SETTLEMENT_COLUMN_DEFINITIONS)
+        _validate_decision_snapshot_identities(conn)
         _migrate_probability_semantics(conn, prior_schema_version)
         conn.execute("DROP INDEX IF EXISTS idx_decisions_snapshot")
         _migrate_decision_ids(conn)
-        conn.execute(
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_market "
+            "ON market_snapshots(event_id, market_id, outcome_id, captured_at)",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_segment "
+            "ON market_snapshots(sport, market_type, book)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_snapshot "
-            "ON decisions(snapshot_id)"
-        )
+            "ON decisions(snapshot_id)",
+            "CREATE INDEX IF NOT EXISTS idx_settlements_market "
+            "ON settlements(event_id, market_id, outcome_id)",
+            "CREATE INDEX IF NOT EXISTS idx_settlements_decision "
+            "ON settlements(decision_id)",
+        ):
+            conn.execute(statement)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return db_path
+
+
+def _validate_decision_snapshot_identities(conn: sqlite3.Connection) -> None:
+    invalid_decision = conn.execute(
+        """
+        SELECT snapshot_id
+        FROM decisions
+        WHERE decision_id IS NULL
+           OR TRIM(CAST(decision_id AS TEXT)) = ''
+        ORDER BY snapshot_id
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid_decision is not None:
+        raise FeedbackError(
+            "Cannot safely migrate decisions: blank or missing decision_id "
+            f"for snapshot {_text(invalid_decision[0])!r}"
+        )
+
+    invalid = conn.execute(
+        """
+        SELECT d.decision_id
+        FROM decisions d
+        LEFT JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+        WHERE d.snapshot_id IS NULL
+           OR TRIM(CAST(d.snapshot_id AS TEXT)) = ''
+           OR s.snapshot_id IS NULL
+        ORDER BY d.decision_id
+        LIMIT 1
+        """
+    ).fetchone()
+    if invalid is not None:
+        raise FeedbackError(
+            "Cannot safely migrate decisions: blank, missing, or unknown snapshot_id "
+            f"for decision {_text(invalid[0])!r}"
+        )
 
 
 def _migrate_probability_semantics(
@@ -350,12 +477,39 @@ def _migrate_probability_semantics(
         WHERE push_prob > 0.0
           AND push_prob < 1.0
           AND board IN ('GAME_TOTALS', 'TEAM_TOTALS')
+          AND INSTR(COALESCE(data_quality_flags, ''),
+                    'probability_semantics_v3_migrated') = 0
         """
     )
 
 
+def _timestamp_rank(value: Any) -> tuple[int, str]:
+    text = _text(value)
+    if not text:
+        return (0, "")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return (1, text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (2, parsed.astimezone(timezone.utc).isoformat())
+
+
+def _timestamp_extreme(values: Iterable[Any], *, latest: bool) -> str:
+    candidates = [
+        (_timestamp_rank(value), _text(value)) for value in values if _text(value)
+    ]
+    if not candidates:
+        return ""
+    valid = [candidate for candidate in candidates if candidate[0][0] == 2]
+    pool = valid or candidates
+    chooser = max if latest else min
+    return chooser(pool, key=lambda candidate: candidate[0])[1]
+
+
 def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
-    """Normalize schema-v1/custom decisions to one deterministic ID per snapshot."""
+    """Normalize legacy decisions to one newest deterministic row per snapshot."""
 
     fields = [
         "decision_id",
@@ -372,35 +526,32 @@ def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
         "created_at",
         "updated_at",
     ]
-    for legacy in list(conn.execute(f"SELECT {', '.join(fields)} FROM decisions")):
-        new_id = _stable_id("decision", legacy["snapshot_id"])
-        if legacy["decision_id"] == new_id:
+    grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for row in conn.execute(f"SELECT {', '.join(fields)} FROM decisions"):
+        grouped[_text(row["snapshot_id"])].append(row)
+
+    for snapshot_id, group in grouped.items():
+        new_id = _stable_id("decision", snapshot_id)
+        if len(group) == 1 and group[0]["decision_id"] == new_id:
             continue
-        existing = conn.execute(
-            f"SELECT {', '.join(fields)} FROM decisions WHERE decision_id = ?", (new_id,)
-        ).fetchone()
-        merged = dict(existing) if existing is not None else dict(legacy)
-        if existing is not None:
-            for field in (
-                "pipeline_verdict",
-                "A_verdict",
-                "B_verdict",
-                "C_verdict",
-                "D_verdict",
-                "final_verdict",
-                "units",
-                "kill_reason",
-                "news_override",
-            ):
-                if legacy[field] not in (None, ""):
-                    merged[field] = legacy[field]
-            merged["created_at"] = min(
-                _text(existing["created_at"]), _text(legacy["created_at"])
-            )
-            merged["updated_at"] = max(
-                _text(existing["updated_at"]), _text(legacy["updated_at"])
-            )
+        authoritative = max(
+            group,
+            key=lambda row: (
+                _timestamp_rank(row["updated_at"]),
+                int(row["decision_id"] == new_id),
+                _text(row["decision_id"]),
+            ),
+        )
+        merged = dict(authoritative)
         merged["decision_id"] = new_id
+        merged["snapshot_id"] = snapshot_id
+        merged["created_at"] = _timestamp_extreme(
+            (row["created_at"] for row in group), latest=False
+        )
+        merged["updated_at"] = _timestamp_extreme(
+            (row["updated_at"] for row in group), latest=True
+        )
+        existing = next((row for row in group if row["decision_id"] == new_id), None)
         if existing is None:
             conn.execute(
                 f"INSERT INTO decisions ({', '.join(fields)}) "
@@ -413,11 +564,15 @@ def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
                 f"UPDATE decisions SET {assignments} WHERE decision_id = ?",
                 [merged[field] for field in fields[1:]] + [new_id],
             )
-        conn.execute(
-            "UPDATE settlements SET decision_id = ? WHERE decision_id = ?",
-            (new_id, legacy["decision_id"]),
-        )
-        conn.execute("DELETE FROM decisions WHERE decision_id = ?", (legacy["decision_id"],))
+        for row in group:
+            old_id = row["decision_id"]
+            if old_id == new_id:
+                continue
+            conn.execute(
+                "UPDATE settlements SET decision_id = ? WHERE decision_id = ?",
+                (new_id, old_id),
+            )
+            conn.execute("DELETE FROM decisions WHERE decision_id = ?", (old_id,))
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -567,11 +722,11 @@ def _snapshot_from_pack_row(
             row.get("projected_under_prob") if best_side == "UNDER" else row.get("projected_over_prob")
         )
         market_consensus = _probability(
-            row.get("market_consensus_prob") or probability_value,
+            _coalesce(row.get("market_consensus_prob"), probability_value),
             field="market_consensus_prob",
         )
         final_blended = _probability(
-            row.get("final_blended_prob") or probability_value,
+            _coalesce(row.get("final_blended_prob"), probability_value),
             field="final_blended_prob",
         )
         model_prob_source = model_prob_source or _text(row.get("devig_source"))
@@ -579,16 +734,16 @@ def _snapshot_from_pack_row(
             signal_flags = data_quality_flags
     else:
         market_consensus = _probability(
-            row.get("market_consensus_prob") or row.get("model_prob"),
+            _coalesce(row.get("market_consensus_prob"), row.get("model_prob")),
             field="market_consensus_prob",
         )
         final_blended = _probability(
-            row.get("final_blended_prob") or row.get("model_prob"),
+            _coalesce(row.get("final_blended_prob"), row.get("model_prob")),
             field="final_blended_prob",
         )
 
     independent = _probability(row.get("independent_model_prob"), field="independent_model_prob")
-    price = _float(row.get("price") or row.get("best_price"), field="price")
+    price = _float(_coalesce(row.get("price"), row.get("best_price")), field="price")
     decimal_price = _float(row.get("decimal_price"), field="decimal_price")
     if decimal_price is None and price is not None:
         decimal_price = _american_to_decimal(price)
@@ -691,7 +846,8 @@ def capture_pack(
     now = _utc_now()
     connection_context = nullcontext(connection) if connection is not None else _connect(Path(db_path))
     with connection_context as conn:
-        assert conn is not None
+        if conn is None:
+            raise FeedbackError("capture_pack requires a valid SQLite connection")
         for snapshot in snapshots:
             values = [snapshot[field] for field in MARKET_SNAPSHOT_FIELDS]
             conn.execute(
@@ -1325,7 +1481,7 @@ def _model_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pushes = sum(_text(row.get("win_loss_push")).upper() == "PUSH" for row in group)
         directional_n = wins + losses if verdict in positive | negative else 0
         successes = wins if verdict in positive else (losses if verdict in negative else 0)
-        flat_values = [_flat_pnl(row) for row in group]
+        flat_values = [_flat_pnl(row, invert=(verdict in negative)) for row in group]
         output.append(
             {
                 "model": model,

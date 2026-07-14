@@ -6,6 +6,7 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _opportunity_key,
     _summarize_lm_status,
     american_to_decimal,
     build_briefing,
@@ -26,6 +27,21 @@ from outlier_scrapers.pack import (
 )
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
+
+
+def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
+    numeric = {
+        "sport": "WNBA",
+        "event_id": "e1",
+        "market_id": "m1",
+        "outcome_id": 0,
+        "selection": "OVER 10",
+        "line": 10.0,
+    }
+    serialized = {**numeric, "outcome_id": "0", "line": "10"}
+
+    assert _opportunity_key(numeric) == _opportunity_key(serialized)
+    assert _opportunity_key(numeric)[3] == "0"
 
 
 def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):

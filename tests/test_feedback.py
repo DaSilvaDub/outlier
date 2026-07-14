@@ -115,6 +115,58 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
 
 
+@pytest.mark.parametrize("source", ["opportunities", "game_totals"])
+def test_snapshot_numeric_zero_values_do_not_fall_back(source, tmp_path):
+    row = _candidate()
+    row.update(
+        {
+            "market_consensus_prob": 0.0,
+            "final_blended_prob": 0.0,
+            "model_prob": 0.60,
+            "price": 0.0,
+            "best_price": 125,
+            "edge": 0.0,
+            "edge_pct": 0.25,
+            "best_side": "OVER",
+            "projected_over_prob": 0.60,
+            "total_kind": "game",
+        }
+    )
+
+    snapshot = feedback._snapshot_from_pack_row(
+        source, row, tmp_path, "2026-07-13T16:00:00+00:00"
+    )
+
+    assert snapshot["market_consensus_prob"] == pytest.approx(0.0)
+    assert snapshot["final_blended_prob"] == pytest.approx(0.0)
+    assert snapshot["price"] == pytest.approx(0.0)
+    assert snapshot["edge"] == pytest.approx(0.0)
+
+
+def test_snapshot_blank_numeric_values_use_fallbacks(tmp_path):
+    row = _candidate()
+    row.update(
+        {
+            "market_consensus_prob": "",
+            "final_blended_prob": "",
+            "model_prob": 0.60,
+            "price": "",
+            "best_price": 125,
+            "edge": "",
+            "edge_pct": 0.25,
+        }
+    )
+
+    snapshot = feedback._snapshot_from_pack_row(
+        "opportunities", row, tmp_path, "2026-07-13T16:00:00+00:00"
+    )
+
+    assert snapshot["market_consensus_prob"] == pytest.approx(0.60)
+    assert snapshot["final_blended_prob"] == pytest.approx(0.60)
+    assert snapshot["price"] == pytest.approx(125)
+    assert snapshot["edge"] == pytest.approx(0.25)
+
+
 def test_recapture_refreshes_corrected_probability_semantics(tmp_path):
     pack_dir = _pack(tmp_path, [_candidate()])
     db_path = tmp_path / "calibration" / "feedback.sqlite3"
@@ -359,6 +411,202 @@ def test_schema_v1_decision_and_push_mass_are_migrated_on_recapture(tmp_path):
     assert version == feedback.SCHEMA_VERSION
 
 
+@pytest.mark.parametrize(
+    (
+        "stable_updated",
+        "legacy_updated",
+        "expected_verdict",
+        "expected_units",
+        "expected_updated",
+    ),
+    [
+        (
+            "2026-07-13T16:00:00+00:00",
+            "2026-07-13T14:00:00+00:00",
+            "PLAY",
+            2.0,
+            "2026-07-13T16:00:00+00:00",
+        ),
+        (
+            "2026-07-13T14:00:00+00:00",
+            "2026-07-13T16:00:00+00:00",
+            "STAND_DOWN",
+            0.0,
+            "2026-07-13T16:00:00+00:00",
+        ),
+        (
+            "2026-07-13T16:00:00+00:00",
+            "2026-07-13T16:00:00+00:00",
+            "PLAY",
+            2.0,
+            "2026-07-13T16:00:00+00:00",
+        ),
+    ],
+)
+def test_initialize_database_upgrades_reduced_legacy_schema(
+    tmp_path,
+    stable_updated,
+    legacy_updated,
+    expected_verdict,
+    expected_units,
+    expected_updated,
+):
+    db_path = tmp_path / "feedback.sqlite3"
+    snapshot_id = "snapshot_legacy"
+    stable_decision_id = feedback._stable_id("decision", snapshot_id)
+    created_at = "2026-07-13T15:00:00+00:00"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE market_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                captured_at TEXT,
+                event_id TEXT,
+                market_id TEXT,
+                selection TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE decisions (
+                decision_id TEXT PRIMARY KEY,
+                snapshot_id TEXT,
+                pipeline_verdict TEXT,
+                units REAL,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE settlements (
+                settlement_id TEXT PRIMARY KEY,
+                decision_id TEXT,
+                event_id TEXT,
+                market_id TEXT,
+                win_loss_push TEXT,
+                settled_at TEXT
+            );
+            PRAGMA user_version = 1;
+            """
+        )
+        conn.execute(
+            "INSERT INTO market_snapshots "
+            "(snapshot_id, captured_at, event_id, market_id, selection, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (snapshot_id, created_at, "e1", "m1", "OVER 10.5", created_at),
+        )
+        conn.execute(
+            "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?)",
+            (stable_decision_id, snapshot_id, "PLAY", 2.0, created_at, stable_updated),
+        )
+        conn.execute(
+            "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?)",
+            ("legacy-decision", snapshot_id, "STAND_DOWN", 0.0, "", legacy_updated),
+        )
+
+    feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")
+        }
+        decision_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(decisions)")
+        }
+        settlement_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(settlements)")
+        }
+        decision = conn.execute(
+            "SELECT decision_id, pipeline_verdict, units, created_at, updated_at "
+            "FROM decisions"
+        ).fetchone()
+        indexes = {
+            row[1]
+            for table in ("market_snapshots", "decisions", "settlements")
+            for row in conn.execute(f"PRAGMA index_list({table})")
+        }
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    assert set(feedback.MARKET_SNAPSHOT_COLUMN_DEFINITIONS) <= snapshot_columns
+    assert set(feedback.DECISION_COLUMN_DEFINITIONS) <= decision_columns
+    assert set(feedback.SETTLEMENT_COLUMN_DEFINITIONS) <= settlement_columns
+    assert decision == (
+        stable_decision_id,
+        expected_verdict,
+        expected_units,
+        created_at,
+        expected_updated,
+    )
+    assert {
+        "idx_snapshots_market",
+        "idx_snapshots_segment",
+        "idx_decisions_snapshot",
+        "idx_settlements_market",
+        "idx_settlements_decision",
+    } <= indexes
+    assert version == feedback.SCHEMA_VERSION
+
+
+def test_initialize_database_rejects_orphan_decisions_atomically(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE market_snapshots (snapshot_id TEXT PRIMARY KEY);
+            CREATE TABLE decisions (
+                decision_id TEXT PRIMARY KEY,
+                snapshot_id TEXT
+            );
+            CREATE TABLE settlements (settlement_id TEXT PRIMARY KEY);
+            INSERT INTO decisions VALUES ('orphan-blank', '');
+            INSERT INTO decisions VALUES ('orphan-null', NULL);
+            PRAGMA user_version = 1;
+            """
+        )
+
+    with pytest.raises(
+        feedback.FeedbackError, match="blank, missing, or unknown snapshot_id"
+    ):
+        feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT decision_id, snapshot_id FROM decisions ORDER BY decision_id"
+        ).fetchall()
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert rows == [("orphan-blank", ""), ("orphan-null", None)]
+    assert columns == {"decision_id", "snapshot_id"}
+    assert version == 1
+
+
+def test_initialize_database_rejects_null_decision_id_atomically(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE market_snapshots (snapshot_id TEXT PRIMARY KEY);
+            CREATE TABLE decisions (
+                decision_id TEXT PRIMARY KEY,
+                snapshot_id TEXT
+            );
+            CREATE TABLE settlements (settlement_id TEXT PRIMARY KEY);
+            INSERT INTO market_snapshots VALUES ('snapshot-valid');
+            INSERT INTO decisions VALUES (NULL, 'snapshot-valid');
+            PRAGMA user_version = 1;
+            """
+        )
+
+    with pytest.raises(
+        feedback.FeedbackError, match="blank or missing decision_id"
+    ):
+        feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT decision_id, snapshot_id FROM decisions").fetchall()
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert rows == [(None, "snapshot-valid")]
+    assert columns == {"decision_id", "snapshot_id"}
+    assert version == 1
+
+
 def test_schema_v2_total_probability_migration_runs_before_history_freeze(tmp_path):
     pack_dir = _pack(tmp_path, [_candidate()])
     db_path = tmp_path / "feedback.sqlite3"
@@ -383,6 +631,10 @@ def test_schema_v2_total_probability_migration_runs_before_history_freeze(tmp_pa
         conn.execute("PRAGMA user_version = 2")
 
     feedback.initialize_database(db_path)
+    with sqlite3.connect(db_path) as conn:
+        # Simulate a process failure after row conversion but before the schema
+        # version was durably advanced. The row marker must make retry safe.
+        conn.execute("PRAGMA user_version = 2")
     feedback.initialize_database(db_path)
 
     with sqlite3.connect(db_path) as conn:
@@ -393,6 +645,7 @@ def test_schema_v2_total_probability_migration_runs_before_history_freeze(tmp_pa
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert snapshot[:3] == pytest.approx((0.60, 0.60, 0.40))
     assert "probability_semantics_v3_migrated" in snapshot[3]
+    assert snapshot[3].count("probability_semantics_v3_migrated") == 1
     assert version == feedback.SCHEMA_VERSION
 
 
@@ -564,3 +817,18 @@ def test_probability_scoring_conditions_on_non_push_mass():
     }
     assert metrics["market_consensus"]["n"] == 1
     assert metrics["market_consensus"]["brier_score"] == pytest.approx((0.6 - 1.0) ** 2)
+
+
+def test_model_performance_inverts_negative_recommendation_pnl():
+    rows = [
+        {
+            "A_verdict": "FADE",
+            "win_loss_push": "L",
+            "decimal_price": 2.25,
+        }
+    ]
+
+    performance = feedback._model_performance(rows)
+
+    assert performance[0]["recommendation_accuracy"] == pytest.approx(1.0)
+    assert performance[0]["would_have_flat_pnl"] == pytest.approx(1.25)

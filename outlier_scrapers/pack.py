@@ -288,6 +288,19 @@ def _fmt_line(line: Any) -> str:
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
+
+def _opportunity_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """Return the normalized identity used to mark full-board rows as selected."""
+
+    return (
+        str(_coalesce(row.get("sport"), "")),
+        str(_coalesce(row.get("event_id"), "")),
+        str(_coalesce(row.get("market_id"), "")),
+        str(_coalesce(row.get("outcome_id"), "")),
+        str(_coalesce(row.get("selection"), "")),
+        _fmt_line(row.get("line")),
+    )
+
 # Propositions where the line is a signed margin (point spread / run line / puck
 # line) rather than a magnitude. A positive value here means the side is getting
 # a cushion, not that it's the favorite — the same "1.5" that's unambiguous on a
@@ -1135,28 +1148,11 @@ def write_pack(
         writer.writeheader()
         writer.writerows(rows)
 
-    selected_keys = {
-        (
-            str(row.get("sport") or ""),
-            str(row.get("event_id") or ""),
-            str(row.get("market_id") or ""),
-            str(row.get("outcome_id") or ""),
-            str(row.get("selection") or ""),
-            str(row.get("line") or ""),
-        )
-        for row in rows
-    }
+    selected_keys = {_opportunity_key(row) for row in rows}
     opportunity_output: list[dict[str, Any]] = []
     for source_row in opportunity_rows if opportunity_rows is not None else rows:
         row = dict(source_row)
-        key = (
-            str(row.get("sport") or ""),
-            str(row.get("event_id") or ""),
-            str(row.get("market_id") or ""),
-            str(row.get("outcome_id") or ""),
-            str(row.get("selection") or ""),
-            str(row.get("line") or ""),
-        )
+        key = _opportunity_key(row)
         row["selected"] = "true" if key in selected_keys else "false"
         opportunity_output.append(row)
     with open(out_dir / "opportunities.csv", "w", newline="", encoding="utf-8") as f:
