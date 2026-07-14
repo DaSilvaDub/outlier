@@ -615,7 +615,7 @@ def _snapshot_from_pack_row(
         "independent_model_prob": independent,
         "final_blended_prob": final_blended,
         "push_prob": _probability(row.get("push_prob"), field="push_prob"),
-        "edge": _float(row.get("edge") or row.get("edge_pct"), field="edge"),
+        "edge": _float(_coalesce(row.get("edge"), row.get("edge_pct")), field="edge"),
         "data_quality_flags": data_quality_flags,
         "market_type": market_type,
         "model_prob_source": model_prob_source,
