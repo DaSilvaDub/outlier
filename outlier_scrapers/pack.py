@@ -1215,6 +1215,34 @@ def write_pack(
         writer.writerows(team_totals_rows)
     (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
+    from outlier_scrapers.alt_team_totals import (
+        ALT_TEAM_TOTAL_PARLAYS_HEADER,
+        ALT_TEAM_TOTALS_HEADER,
+        build_alt_team_total_board,
+        build_alt_team_total_parlays,
+        format_alt_team_totals_md,
+    )
+
+    alt_tt_rows: list[dict[str, Any]] = []
+    alt_tt_parlays: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        league_rows = build_alt_team_total_board(payload, league=lg)
+        alt_tt_rows.extend(league_rows)
+        alt_tt_parlays.extend(build_alt_team_total_parlays(league_rows))
+    with open(out_dir / "alt_team_totals.csv", "w", newline="", encoding="utf-8") as tf:
+        writer = csv.DictWriter(tf, fieldnames=ALT_TEAM_TOTALS_HEADER, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(alt_tt_rows)
+    with open(out_dir / "alt_team_total_parlays.csv", "w", newline="", encoding="utf-8") as tf:
+        writer = csv.DictWriter(
+            tf, fieldnames=ALT_TEAM_TOTAL_PARLAYS_HEADER, extrasaction="ignore"
+        )
+        writer.writeheader()
+        writer.writerows(alt_tt_parlays)
+    (sections_dir / "alt_team_totals.md").write_text(
+        format_alt_team_totals_md(alt_tt_rows, alt_tt_parlays), encoding="utf-8"
+    )
+
 def build_pack_with_coverage(
     leagues: Sequence[str],
     requested_date: str | None,
