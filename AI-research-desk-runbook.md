@@ -62,16 +62,22 @@ RESEARCH PASSES (B, C):
 ### 2b. `candidates.csv` — the shortlist (auto-read by Prompts A and C)
 One row per `market_id` on the EV or signal board. Columns (identity + sizing fully anchored so props and alt lines can't be confused):
 ```
-sport, event_id, market_id, market_type, player_id, selection, line, price, decimal_price, book, as_of,
-model_prob, push_prob, implied_prob, edge_pct, kelly_025_units, max_units, recommended_units_pre_news,
-sizing_flags, outlier_ev_pct, outlier_kelly_pct, local_ev_pct, local_kelly_pct,
-line_open, line_now, public_money_pct, money_pct, injury_flags, research_leverage, source_timestamps
+sport, event_id, _event_starts_at, market_id, outcome_id, market_type, player_id,
+matchup, team, team_name, opponent, opp_name, home_away, market_label, selection,
+line, priced_line, price, decimal_price, book, as_of, model_prob, model_prob_source,
+market_consensus_prob, independent_model_prob, final_blended_prob, push_prob, implied_prob,
+edge_pct, kelly_025_units, max_units, recommended_units_pre_news, sizing_flags,
+data_quality_flags, board, signal_flags, hit_rate_component, insight_component,
+movement_component, orf_component, actionable, outlier_ev_pct, outlier_kelly_pct,
+local_ev_pct, local_kelly_pct, line_open, line_now, public_money_pct, money_pct,
+injury_flags, research_leverage, source_timestamps
 ```
 This is the canonical, complete column list — the export header must match it exactly (no extra, no missing).
 - `price` = American odds (display); `decimal_price` = same price in decimal form, the value the sizing formula uses (§4). Source the decimal book price from the normalized `ev_records` (`book_decimal_odds`); never derive the bet price from de-vig/fair odds.
 - `selection` = the exact side/outcome (e.g. `HOME -1.5`, `Player X Over 5.5 K`), so alternate lines never collide.
 - `push_prob` = pipeline's probability the bet pushes (0 for no-push markets — moneylines, half-point lines, run line ±1.5). For any push-capable **whole-number** line (spreads, totals, **and integer-result player/team props**) where no real push probability exists yet, the row is **sizing-ineligible** (units empty) rather than sized with `push_prob=0`, which would mis-size it. See §4.
-- `model_prob` = The computed true probability of the outcome (1.0 / devig_decimal). The desk assumes this is perfectly sharp.
+- `model_prob` = backward-compatible sizing probability. It is currently market-derived (`1.0 / devig_decimal` or the totals ladder), not an independently estimated truth.
+- `market_consensus_prob` = explicit market-derived no-vig probability; `independent_model_prob` stays blank until a real independent model exists; `final_blended_prob` is the probability actually evaluated for calibration and currently equals market consensus.
 - `push_prob` = The probability of exactly hitting the number (for whole-number lines).
 - `edge_pct` = Our computed expected value based on price and model_prob (e.g. 0.052 = 5.2% edge).
 - `kelly_025_units` / `max_units` = Sizing recommendations. The desk treats these as hard upper bounds.
@@ -277,13 +283,13 @@ Kill or re-stake a play if any holds at T‑30:
 
 ## 5. Calibration log (so the desk improves)
 
-Log **every play AND every stand-down/fade** — that's how you learn whether the desk is killing good bets or correctly avoiding bad ones. Append to `calibration/log.csv`:
+Log **every play AND every stand-down/fade** — that's how you learn whether the desk is killing good bets or correctly avoiding bad ones. Pack generation now captures the full pre-ranking opportunity set and seeds the permanent SQLite decision ledger automatically. Fill/import the pack-local `decisions.csv`, then import the post-slate settlement CSV:
 ```
-date, market_id, event_id, selection, decision(PLAY/STAND_DOWN/FADE), line_taken, price_taken,
-closing_line, CLV, units, result(W/L/push/would_have), pnl,
-chatgpt_verdict, gemini_verdict, claude_verdict, final_verdict, news_tier_overrode, kill_reason
+python -m outlier_scrapers.feedback decisions --input packs/YYYY-MM-DD/decisions.csv
+python -m outlier_scrapers.feedback settle --input settlements_YYYY-MM-DD.csv
+python -m outlier_scrapers.feedback report
 ```
-For stand-downs/fades, grade the **would-have** result + CLV — did avoiding it save or cost you? Track weekly: **CLV first** (did you beat the close, on plays and on the close of things you passed?), then ROI and hit rate. Grade each model and the pipeline separately so you learn whose calls to trust on which market types.
+The permanent schemas, probability/edge semantics, identifier rules, CLV sign convention, and report files are documented in `docs/feedback-loop.md`. For stand-downs/fades, grade the **would-have** result + CLV — did avoiding it save or cost you? Track weekly: **CLV first** (did you beat the close, on plays and on the close of things you passed?), then ROI and hit rate. Grade each model and the pipeline separately so you learn whose calls to trust on which market types.
 
 ---
 
@@ -307,4 +313,5 @@ For stand-downs/fades, grade the **would-have** result + CLV — did avoiding it
 1. **Implemented:** pack export writes `candidates.csv`, `briefing.md`, and dossiers under `packs/YYYY-MM-DD/`.
 2. **Implemented:** Prompt A lives in `prompts/A.md` and can run through the GPT-5.5 xhigh Responses API with hash-based caching.
 3. **Still manual:** Gemini B, ChatGPT Deep Research C, Claude D, and Claude synthesis E.
-4. **Optional later:** calibration logging for plays and stand-downs, plus UI automation for the remaining research passes.
+4. **Implemented:** permanent market-snapshot, decision, and settlement ledgers plus ROI/CLV/calibration/segment/model reports (`outlier_scrapers.feedback`).
+5. **Still external:** an authoritative result/closing-line feed, structured A/B/D/E verdict sidecars, learned Board B weights, and a genuinely independent probability model.

@@ -85,6 +85,7 @@ GAME_TOTALS_HEADER = [
     "sport",
     "event_id",
     "market_id",
+    "outcome_id",
     "total_kind",
     "team",
     "selection",
@@ -96,6 +97,9 @@ GAME_TOTALS_HEADER = [
     "best_price",
     "projected_over_prob",
     "projected_under_prob",
+    "market_consensus_prob",
+    "independent_model_prob",
+    "final_blended_prob",
     "fair_total",
     "edge_pct",
     "implied_prob",
@@ -335,6 +339,20 @@ def pick_best_side(p_over: float, over_price: Any, under_price: Any) -> tuple[st
     return "OVER", over_price, over_edge
 
 
+def _best_book_offer(
+    offers: dict[str, Any], *, fallback_book: Any = "", fallback_price: Any = None
+) -> tuple[str, Any]:
+    valid = [
+        (str(book), price, _american_to_decimal(price))
+        for book, price in offers.items()
+        if _american_to_decimal(price) is not None
+    ]
+    if not valid:
+        return str(fallback_book or ""), fallback_price
+    book, price, _decimal = max(valid, key=lambda offer: offer[2] or 0.0)
+    return book, price
+
+
 def derive_push_prob(line: float, ladder_p: dict[float, float]) -> float | None:
     if not _is_integer_line(line):
         return None
@@ -494,19 +512,29 @@ def build_totals(
         if p_over_headline is None:
             flags.append("INSUFFICIENT_DATA")
 
-        over_price = max(over_books.values()) if over_books else cand.get("price")
-        under_price = max(under_books.values()) if under_books else None
+        over_book, over_price = _best_book_offer(
+            over_books, fallback_book=cand.get("book"), fallback_price=cand.get("price")
+        )
+        under_book, under_price = _best_book_offer(under_books)
         best_side, best_price, edge_pct = (
             pick_best_side(p_over_headline, over_price, under_price) if p_over_headline is not None else ("OVER", over_price, None)
         )
+        best_book = under_book if best_side == "UNDER" else over_book
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
+        p_side_conditional = (
+            p_over_headline
+            if best_side == "OVER"
+            else (1.0 - p_over_headline if p_over_headline is not None else None)
+        )
+        model_win_prob = p_side_conditional
         decimal_price = _american_to_decimal(best_price)
         implied_prob = implied_probability(best_price)
 
-        push_prob: float | str = ""
-        sizing_flags = ""
         push_blocked = _is_integer_line(headline_line)
+        push_prob: float | str = "" if push_blocked else 0.0
+        sizing_flags = ""
+        sizing = None
         if push_blocked:
             # F3 Option 2 — push-aware *display* edge only. Integer lines stay
             # non-actionable; we only replace the misleading two-way edge_pct.
@@ -515,15 +543,15 @@ def build_totals(
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
-                p_side = (
-                    p_over_headline
-                    if best_side == "OVER"
-                    else (1.0 - p_over_headline if p_over_headline is not None else None)
+                model_win_prob = (
+                    p_side_conditional * (1.0 - float(push_prob))
+                    if p_side_conditional is not None
+                    else None
                 )
-                if decimal_price is not None and p_side is not None:
+                if decimal_price is not None and model_win_prob is not None:
                     sizing = compute_sizing(
                         decimal_price=decimal_price,
-                        model_prob=p_side,
+                        model_prob=model_win_prob,
                         push_prob=float(push_prob),
                     )
                     edge_pct = (
@@ -536,6 +564,13 @@ def build_totals(
                 sizing_flags = "push_capable_no_prob"
                 # No honest push mass → blank the push-contaminated two-way edge.
                 edge_pct = None
+        elif decimal_price is not None and model_win_prob is not None:
+            sizing = compute_sizing(
+                decimal_price=decimal_price,
+                model_prob=model_win_prob,
+                push_prob=0.0,
+            )
+            edge_pct = sizing.edge_pct
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
@@ -561,38 +596,47 @@ def build_totals(
             elif fair_total is None:
                 quality_flags = "NON_BRACKETING_LADDER"
 
+        recommended_units: float | str = ""
+        if actionable == "true" and sizing is not None:
+            recommended_units = sizing.recommended_units_pre_news or 0.0
+
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
         name = matchup if total_kind == "game" else (team or matchup)
         selection = f"{name} {label} {side_for_selection} {headline_line}".strip()
+        totals_id = _totals_id(market_id, headline_line, side_for_selection)
 
         row: dict[str, Any] = {k: "" for k in GAME_TOTALS_HEADER}
         row.update(
             {
-                "totals_id": _totals_id(market_id, headline_line, side_for_selection),
+                "totals_id": totals_id,
                 "sport": sport,
                 "event_id": event_id,
                 "market_id": market_id,
+                "outcome_id": totals_id,
                 "total_kind": total_kind,
                 "team": team,
                 "selection": selection,
                 "line": headline_line,
                 "price": best_price,
                 "decimal_price": decimal_price,
-                "book": cand.get("book") or "",
+                "book": best_book,
                 "best_side": best_side,
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
+                "market_consensus_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
+                "independent_model_prob": "",
+                "final_blended_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
                 "actionable": actionable,
                 "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
                 "devig_source": devig_source,
-                "recommended_units_pre_news": cand.get("recommended_units_pre_news") or "",
-                "sizing_flags": sizing_flags or cand.get("sizing_flags") or "",
-                "push_prob": push_prob if push_prob != "" else cand.get("push_prob", ""),
+                "recommended_units_pre_news": recommended_units,
+                "sizing_flags": sizing_flags,
+                "push_prob": push_prob,
                 "line_open": cand.get("line_open") or "",
                 "line_now": cand.get("line_now") or "",
                 "public_money_pct": cand.get("public_money_pct") or "",

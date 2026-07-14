@@ -1,3 +1,4 @@
+import csv
 import json
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _opportunity_key,
     _summarize_lm_status,
     american_to_decimal,
     build_briefing,
@@ -25,6 +27,21 @@ from outlier_scrapers.pack import (
 )
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
+
+
+def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
+    numeric = {
+        "sport": "WNBA",
+        "event_id": "e1",
+        "market_id": "m1",
+        "outcome_id": 0,
+        "selection": "OVER 10",
+        "line": 10.0,
+    }
+    serialized = {**numeric, "outcome_id": "0", "line": "10"}
+
+    assert _opportunity_key(numeric) == _opportunity_key(serialized)
+    assert _opportunity_key(numeric)[3] == "0"
 
 
 def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):
@@ -99,6 +116,10 @@ def test_ev_row_sized():
     ]
     row = make_row(card, ev)
     assert row["model_prob"] == 0.5
+    assert row["outcome_id"] == "o1"
+    assert row["market_consensus_prob"] == 0.5
+    assert row["independent_model_prob"] == ""
+    assert row["final_blended_prob"] == 0.5
     assert row["decimal_price"] == 2.1
     assert row["price"] == 110  # same row as the chosen book, not card best_odds
     assert row["book"] == "FD"
@@ -226,6 +247,13 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
                 "outcome_id": "o2",
                 "line": 7.5,
                 "best_odds": -144,
+                "signal": {
+                    "hit_component": 70.0,
+                    "insight_component": 60.0,
+                    "movement_corroboration": 1.0,
+                    "orf_component": 55.0,
+                    "insight_conflict": False,
+                },
                 "proxy_market_edge": {
                     "book": "Prophetx",
                     "odds": -144,
@@ -238,6 +266,13 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
     row = make_row(card, [])
     assert row["model_prob"] == pytest.approx(0.56933)
     assert row["model_prob_source"] == "proxy_market_devig"
+    assert row["market_consensus_prob"] == pytest.approx(0.56933)
+    assert row["final_blended_prob"] == pytest.approx(0.56933)
+    assert row["board"] == "B"
+    assert row["movement_component"] == pytest.approx(75.0)
+    assert set(row["signal_flags"].split(";")) == {
+        "hit_rate_support", "insight_support", "orf_support", "movement_support"
+    }
     assert isinstance(row["edge_pct"], float)
     assert isinstance(row["kelly_025_units"], float)
     assert row["actionable"] == "false"
@@ -730,6 +765,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     out_dir = tmp_path / "packs" / target
     write_pack(rows, out_dir, games_norm_by_league=games_norm, coverage=coverage)
     assert (out_dir / "candidates.csv").exists()
+    assert (out_dir / "opportunities.csv").exists()
     assert (out_dir / "candidate_coverage.json").exists()
     assert (out_dir / "game_totals.csv").exists()
     assert (out_dir / "team_totals.csv").exists()
@@ -1231,6 +1267,12 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
     assert not (out_dir / "chatgpt_a.md").exists()
     assert not (dossiers / "stale-event.md").exists()
     assert (out_dir / "keep-me.txt").read_text() == "unrelated"
+    with (out_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == [
+            "decision_id", "snapshot_id", "pipeline_verdict", "A_verdict",
+            "B_verdict", "C_verdict", "D_verdict", "final_verdict", "units",
+            "kill_reason", "news_override",
+        ]
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.
