@@ -187,6 +187,116 @@ REQUIRED_TABLE_IDENTITY_COLUMNS = {
     "settlements": {"settlement_id"},
 }
 
+# SQLite does not support bind parameters for identifiers. Keep every schema
+# upgrade statement explicit so only these trusted table/column names can reach
+# ``execute`` and static security scanners can verify that boundary.
+TABLE_COLUMN_ADD_STATEMENTS = {
+    "market_snapshots": {
+        "snapshot_id": "ALTER TABLE market_snapshots ADD COLUMN snapshot_id TEXT",
+        "captured_at": "ALTER TABLE market_snapshots ADD COLUMN captured_at TEXT NOT NULL DEFAULT ''",
+        "sport": "ALTER TABLE market_snapshots ADD COLUMN sport TEXT NOT NULL DEFAULT ''",
+        "event_id": "ALTER TABLE market_snapshots ADD COLUMN event_id TEXT NOT NULL DEFAULT ''",
+        "market_id": "ALTER TABLE market_snapshots ADD COLUMN market_id TEXT NOT NULL DEFAULT ''",
+        "outcome_id": "ALTER TABLE market_snapshots ADD COLUMN outcome_id TEXT NOT NULL DEFAULT ''",
+        "player_id": "ALTER TABLE market_snapshots ADD COLUMN player_id TEXT",
+        "selection": "ALTER TABLE market_snapshots ADD COLUMN selection TEXT NOT NULL DEFAULT ''",
+        "line": "ALTER TABLE market_snapshots ADD COLUMN line TEXT",
+        "price": "ALTER TABLE market_snapshots ADD COLUMN price REAL",
+        "book": "ALTER TABLE market_snapshots ADD COLUMN book TEXT",
+        "market_consensus_prob": "ALTER TABLE market_snapshots ADD COLUMN market_consensus_prob REAL",
+        "independent_model_prob": "ALTER TABLE market_snapshots ADD COLUMN independent_model_prob REAL",
+        "final_blended_prob": "ALTER TABLE market_snapshots ADD COLUMN final_blended_prob REAL",
+        "push_prob": "ALTER TABLE market_snapshots ADD COLUMN push_prob REAL",
+        "edge": "ALTER TABLE market_snapshots ADD COLUMN edge REAL",
+        "data_quality_flags": "ALTER TABLE market_snapshots ADD COLUMN data_quality_flags TEXT",
+        "market_type": "ALTER TABLE market_snapshots ADD COLUMN market_type TEXT",
+        "model_prob_source": "ALTER TABLE market_snapshots ADD COLUMN model_prob_source TEXT",
+        "decimal_price": "ALTER TABLE market_snapshots ADD COLUMN decimal_price REAL",
+        "implied_prob": "ALTER TABLE market_snapshots ADD COLUMN implied_prob REAL",
+        "board": "ALTER TABLE market_snapshots ADD COLUMN board TEXT",
+        "selected": "ALTER TABLE market_snapshots ADD COLUMN selected INTEGER NOT NULL DEFAULT 0",
+        "signal_flags": "ALTER TABLE market_snapshots ADD COLUMN signal_flags TEXT",
+        "hit_rate_component": "ALTER TABLE market_snapshots ADD COLUMN hit_rate_component REAL",
+        "insight_component": "ALTER TABLE market_snapshots ADD COLUMN insight_component REAL",
+        "movement_component": "ALTER TABLE market_snapshots ADD COLUMN movement_component REAL",
+        "orf_component": "ALTER TABLE market_snapshots ADD COLUMN orf_component REAL",
+        "pack_path": "ALTER TABLE market_snapshots ADD COLUMN pack_path TEXT",
+        "created_at": "ALTER TABLE market_snapshots ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+    },
+    "decisions": {
+        "decision_id": "ALTER TABLE decisions ADD COLUMN decision_id TEXT",
+        "snapshot_id": "ALTER TABLE decisions ADD COLUMN snapshot_id TEXT",
+        "pipeline_verdict": "ALTER TABLE decisions ADD COLUMN pipeline_verdict TEXT",
+        "A_verdict": "ALTER TABLE decisions ADD COLUMN A_verdict TEXT",
+        "B_verdict": "ALTER TABLE decisions ADD COLUMN B_verdict TEXT",
+        "C_verdict": "ALTER TABLE decisions ADD COLUMN C_verdict TEXT",
+        "D_verdict": "ALTER TABLE decisions ADD COLUMN D_verdict TEXT",
+        "final_verdict": "ALTER TABLE decisions ADD COLUMN final_verdict TEXT",
+        "units": "ALTER TABLE decisions ADD COLUMN units REAL",
+        "kill_reason": "ALTER TABLE decisions ADD COLUMN kill_reason TEXT",
+        "news_override": "ALTER TABLE decisions ADD COLUMN news_override TEXT",
+        "created_at": "ALTER TABLE decisions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "updated_at": "ALTER TABLE decisions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    },
+    "settlements": {
+        "settlement_id": "ALTER TABLE settlements ADD COLUMN settlement_id TEXT",
+        "decision_id": "ALTER TABLE settlements ADD COLUMN decision_id TEXT",
+        "snapshot_id": "ALTER TABLE settlements ADD COLUMN snapshot_id TEXT",
+        "outcome_id": "ALTER TABLE settlements ADD COLUMN outcome_id TEXT",
+        "event_id": "ALTER TABLE settlements ADD COLUMN event_id TEXT NOT NULL DEFAULT ''",
+        "market_id": "ALTER TABLE settlements ADD COLUMN market_id TEXT NOT NULL DEFAULT ''",
+        "actual_result": "ALTER TABLE settlements ADD COLUMN actual_result TEXT",
+        "win_loss_push": "ALTER TABLE settlements ADD COLUMN win_loss_push TEXT NOT NULL DEFAULT ''",
+        "closing_line": "ALTER TABLE settlements ADD COLUMN closing_line TEXT",
+        "closing_price": "ALTER TABLE settlements ADD COLUMN closing_price REAL",
+        "clv_line": "ALTER TABLE settlements ADD COLUMN clv_line REAL",
+        "clv_price": "ALTER TABLE settlements ADD COLUMN clv_price REAL",
+        "pnl": "ALTER TABLE settlements ADD COLUMN pnl REAL",
+        "would_have_result": "ALTER TABLE settlements ADD COLUMN would_have_result TEXT",
+        "settled_at": "ALTER TABLE settlements ADD COLUMN settled_at TEXT NOT NULL DEFAULT ''",
+    },
+}
+
+SELECT_DECISION_BY_ID_SQL = """
+    SELECT decision_id, snapshot_id, pipeline_verdict,
+           A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
+           units, kill_reason, news_override
+    FROM decisions
+    WHERE decision_id = ?
+"""
+
+SETTLEMENT_DECISION_SELECT_SQL = """
+    SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
+           s.decimal_price
+    FROM decisions d
+    JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+    WHERE d.decision_id = ?
+"""
+
+SETTLEMENT_SNAPSHOT_SELECT_SQL = """
+    SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
+           s.decimal_price
+    FROM decisions d
+    JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+    WHERE d.snapshot_id = ?
+"""
+
+SETTLEMENT_MARKET_SELECT_SQL = """
+    SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
+           s.decimal_price
+    FROM decisions d
+    JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+    WHERE s.event_id = ? AND s.market_id = ?
+"""
+
+SETTLEMENT_OUTCOME_SELECT_SQL = """
+    SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
+           s.decimal_price
+    FROM decisions d
+    JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+    WHERE s.event_id = ? AND s.market_id = ? AND s.outcome_id = ?
+"""
+
 
 class FeedbackError(ValueError):
     """Raised when a ledger row is invalid or cannot be joined safely."""
@@ -287,16 +397,19 @@ def _normal_result(value: Any, *, field: str = "win_loss_push") -> str:
 def _ensure_table_columns(
     conn: sqlite3.Connection, table: str, definitions: dict[str, str]
 ) -> None:
-    existing = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+    statements = TABLE_COLUMN_ADD_STATEMENTS.get(table)
+    if statements is None or statements.keys() != definitions.keys():
+        raise FeedbackError(f"No trusted schema upgrade map for {table!r}")
+    existing = {row[0] for row in conn.execute("SELECT name FROM pragma_table_info(?)", (table,))}
     missing_identity = REQUIRED_TABLE_IDENTITY_COLUMNS[table] - existing
     if missing_identity:
         raise FeedbackError(
             f"Cannot safely migrate {table}: missing identity columns "
             f"{', '.join(sorted(missing_identity))}"
         )
-    for column, definition in definitions.items():
+    for column in definitions:
         if column not in existing:
-            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
+            conn.execute(statements[column])
 
 
 def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
@@ -380,9 +493,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             """
         )
         conn.execute("BEGIN IMMEDIATE")
-        _ensure_table_columns(
-            conn, "market_snapshots", MARKET_SNAPSHOT_COLUMN_DEFINITIONS
-        )
+        _ensure_table_columns(conn, "market_snapshots", MARKET_SNAPSHOT_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "decisions", DECISION_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "settlements", SETTLEMENT_COLUMN_DEFINITIONS)
         _validate_decision_snapshot_identities(conn)
@@ -394,15 +505,13 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             "ON market_snapshots(event_id, market_id, outcome_id, captured_at)",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_segment "
             "ON market_snapshots(sport, market_type, book)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_snapshot "
-            "ON decisions(snapshot_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_snapshot ON decisions(snapshot_id)",
             "CREATE INDEX IF NOT EXISTS idx_settlements_market "
             "ON settlements(event_id, market_id, outcome_id)",
-            "CREATE INDEX IF NOT EXISTS idx_settlements_decision "
-            "ON settlements(decision_id)",
+            "CREATE INDEX IF NOT EXISTS idx_settlements_decision ON settlements(decision_id)",
         ):
             conn.execute(statement)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version = 3")
     return db_path
 
 
@@ -442,9 +551,7 @@ def _validate_decision_snapshot_identities(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_probability_semantics(
-    conn: sqlite3.Connection, prior_schema_version: int
-) -> None:
+def _migrate_probability_semantics(conn: sqlite3.Connection, prior_schema_version: int) -> None:
     """Convert schema-v2 totals probabilities from conditional to unconditional P(win)."""
 
     if prior_schema_version >= 3:
@@ -497,9 +604,7 @@ def _timestamp_rank(value: Any) -> tuple[int, str]:
 
 
 def _timestamp_extreme(values: Iterable[Any], *, latest: bool) -> str:
-    candidates = [
-        (_timestamp_rank(value), _text(value)) for value in values if _text(value)
-    ]
+    candidates = [(_timestamp_rank(value), _text(value)) for value in values if _text(value)]
     if not candidates:
         return ""
     valid = [candidate for candidate in candidates if candidate[0][0] == 2]
@@ -527,7 +632,14 @@ def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
         "updated_at",
     ]
     grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
-    for row in conn.execute(f"SELECT {', '.join(fields)} FROM decisions"):
+    for row in conn.execute(
+        """
+        SELECT decision_id, snapshot_id, pipeline_verdict,
+               A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
+               units, kill_reason, news_override, created_at, updated_at
+        FROM decisions
+        """
+    ):
         grouped[_text(row["snapshot_id"])].append(row)
 
     for snapshot_id, group in grouped.items():
@@ -548,20 +660,29 @@ def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
         merged["created_at"] = _timestamp_extreme(
             (row["created_at"] for row in group), latest=False
         )
-        merged["updated_at"] = _timestamp_extreme(
-            (row["updated_at"] for row in group), latest=True
-        )
+        merged["updated_at"] = _timestamp_extreme((row["updated_at"] for row in group), latest=True)
         existing = next((row for row in group if row["decision_id"] == new_id), None)
         if existing is None:
             conn.execute(
-                f"INSERT INTO decisions ({', '.join(fields)}) "
-                f"VALUES ({', '.join('?' for _ in fields)})",
+                """
+                INSERT INTO decisions (
+                    decision_id, snapshot_id, pipeline_verdict,
+                    A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
+                    units, kill_reason, news_override, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 [merged[field] for field in fields],
             )
         else:
-            assignments = ", ".join(f"{field} = ?" for field in fields[1:])
             conn.execute(
-                f"UPDATE decisions SET {assignments} WHERE decision_id = ?",
+                """
+                UPDATE decisions SET
+                    snapshot_id = ?, pipeline_verdict = ?,
+                    A_verdict = ?, B_verdict = ?, C_verdict = ?, D_verdict = ?,
+                    final_verdict = ?, units = ?, kill_reason = ?, news_override = ?,
+                    created_at = ?, updated_at = ?
+                WHERE decision_id = ?
+                """,
                 [merged[field] for field in fields[1:]] + [new_id],
             )
         for row in group:
@@ -674,7 +795,9 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
     return output
 
 
-def _signal_fields(row: dict[str, Any]) -> tuple[str, float | None, float | None, float | None, float | None]:
+def _signal_fields(
+    row: dict[str, Any],
+) -> tuple[str, float | None, float | None, float | None, float | None]:
     hit = _float(row.get("hit_rate_component"), field="hit_rate_component")
     insight = _float(row.get("insight_component"), field="insight_component")
     movement = _float(row.get("movement_component"), field="movement_component")
@@ -719,7 +842,9 @@ def _snapshot_from_pack_row(
         board = board or ("TEAM_TOTALS" if total_kind == "team" else "GAME_TOTALS")
         best_side = _text(row.get("best_side")).upper()
         probability_value = (
-            row.get("projected_under_prob") if best_side == "UNDER" else row.get("projected_over_prob")
+            row.get("projected_under_prob")
+            if best_side == "UNDER"
+            else row.get("projected_over_prob")
         )
         market_consensus = _probability(
             _coalesce(row.get("market_consensus_prob"), probability_value),
@@ -810,7 +935,9 @@ def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, A
         "D_verdict": "",
         "final_verdict": "",
         "units": units if play else 0.0,
-        "kill_reason": "" if play else (snapshot["data_quality_flags"] or "not_selected_or_actionable"),
+        "kill_reason": ""
+        if play
+        else (snapshot["data_quality_flags"] or "not_selected_or_actionable"),
         "news_override": "",
     }
 
@@ -844,16 +971,28 @@ def capture_pack(
         decisions.append(_decision_seed(snapshot, row))
 
     now = _utc_now()
-    connection_context = nullcontext(connection) if connection is not None else _connect(Path(db_path))
+    connection_context = (
+        nullcontext(connection) if connection is not None else _connect(Path(db_path))
+    )
     with connection_context as conn:
         if conn is None:
             raise FeedbackError("capture_pack requires a valid SQLite connection")
         for snapshot in snapshots:
             values = [snapshot[field] for field in MARKET_SNAPSHOT_FIELDS]
             conn.execute(
-                f"""
-                INSERT INTO market_snapshots ({', '.join(MARKET_SNAPSHOT_FIELDS)}, created_at)
-                VALUES ({', '.join('?' for _ in MARKET_SNAPSHOT_FIELDS)}, ?)
+                """
+                INSERT INTO market_snapshots (
+                    snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                    player_id, selection, line, price, book, market_consensus_prob,
+                    independent_model_prob, final_blended_prob, push_prob, edge,
+                    data_quality_flags, market_type, model_prob_source, decimal_price,
+                    implied_prob, board, selected, signal_flags, hit_rate_component,
+                    insight_component, movement_component, orf_component, pack_path,
+                    created_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
                         excluded.market_consensus_prob, market_snapshots.market_consensus_prob
@@ -922,16 +1061,10 @@ def capture_pack(
 
         decision_ids = [decision["decision_id"] for decision in decisions]
         current: list[dict[str, Any]] = []
-        if decision_ids:
-            placeholders = ",".join("?" for _ in decision_ids)
-            current = [
-                dict(row)
-                for row in conn.execute(
-                    f"SELECT {', '.join(DECISION_FIELDS)} FROM decisions "
-                    f"WHERE decision_id IN ({placeholders}) ORDER BY decision_id",
-                    decision_ids,
-                )
-            ]
+        for decision_id in sorted(decision_ids):
+            row = conn.execute(SELECT_DECISION_BY_ID_SQL, (decision_id,)).fetchone()
+            if row is not None:
+                current.append(dict(row))
 
     _write_csv(pack_dir / "decisions.csv", DECISION_FIELDS, current)
     return CaptureStats(snapshots=len(snapshots), decisions=len(current))
@@ -959,15 +1092,16 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                 )
             decision_id = expected_decision_id
             values: dict[str, Any] = {
-                field: (_text(row.get(field)).upper() if "verdict" in field else _text(row.get(field)))
+                field: (
+                    _text(row.get(field)).upper() if "verdict" in field else _text(row.get(field))
+                )
                 for field in DECISION_FIELDS
             }
             values["decision_id"] = decision_id
             values["snapshot_id"] = snapshot_id
             values["units"] = _float(row.get("units"), field="units") or 0.0
             existing = conn.execute(
-                f"SELECT {', '.join(DECISION_FIELDS)} FROM decisions "
-                "WHERE decision_id = ?",
+                SELECT_DECISION_BY_ID_SQL,
                 (decision_id,),
             ).fetchone()
             settled = conn.execute(
@@ -1065,35 +1199,31 @@ def _computed_pnl(result: str, units: float, decimal_price: float | None, *, pla
 def _resolve_settlement_decision(
     conn: sqlite3.Connection, row: dict[str, Any], row_number: int, input_path: Path
 ) -> sqlite3.Row | None:
-    query = """
-        SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
-               s.decimal_price
-        FROM decisions d
-        JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
-    """
     decision_id = _text(row.get("decision_id"))
     snapshot_id = _text(row.get("snapshot_id"))
     outcome_id = _text(row.get("outcome_id"))
     if decision_id:
-        match = conn.execute(query + " WHERE d.decision_id = ?", (decision_id,)).fetchone()
+        match = conn.execute(SETTLEMENT_DECISION_SELECT_SQL, (decision_id,)).fetchone()
         if match is None:
             raise FeedbackError(
                 f"{input_path}:{row_number} references unknown decision_id {decision_id!r}"
             )
         return match
     if snapshot_id:
-        matches = conn.execute(query + " WHERE d.snapshot_id = ?", (snapshot_id,)).fetchall()
+        matches = conn.execute(SETTLEMENT_SNAPSHOT_SELECT_SQL, (snapshot_id,)).fetchall()
         if not matches:
             raise FeedbackError(
                 f"{input_path}:{row_number} references unknown snapshot_id {snapshot_id!r}"
             )
     else:
-        clauses = ["s.event_id = ?", "s.market_id = ?"]
-        params: list[Any] = [_text(row.get("event_id")), _text(row.get("market_id"))]
+        event_id = _text(row.get("event_id"))
+        market_id = _text(row.get("market_id"))
         if outcome_id:
-            clauses.append("s.outcome_id = ?")
-            params.append(outcome_id)
-        matches = conn.execute(query + " WHERE " + " AND ".join(clauses), params).fetchall()
+            matches = conn.execute(
+                SETTLEMENT_OUTCOME_SELECT_SQL, (event_id, market_id, outcome_id)
+            ).fetchall()
+        else:
+            matches = conn.execute(SETTLEMENT_MARKET_SELECT_SQL, (event_id, market_id)).fetchall()
     if len(matches) > 1:
         raise FeedbackError(
             f"{input_path}:{row_number} matches {len(matches)} decisions; add decision_id, "
@@ -1160,9 +1290,7 @@ def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Imp
                         result,
                         units,
                         _float(matched["decimal_price"], field="decimal_price"),
-                        play=_is_play(
-                            matched["final_verdict"], matched["pipeline_verdict"], units
-                        ),
+                        play=_is_play(matched["final_verdict"], matched["pipeline_verdict"], units),
                     )
 
             would_have = _normal_result(
@@ -1251,7 +1379,9 @@ def _mean(values: Iterable[float | None]) -> float | None:
     return sum(kept) / len(kept) if kept else None
 
 
-def _flat_pnl(row: dict[str, Any], result_field: str = "win_loss_push", *, invert: bool = False) -> float | None:
+def _flat_pnl(
+    row: dict[str, Any], result_field: str = "win_loss_push", *, invert: bool = False
+) -> float | None:
     result = _text(row.get(result_field)).upper()
     if invert:
         if result == "W":
@@ -1266,6 +1396,7 @@ def _flat_pnl(row: dict[str, Any], result_field: str = "win_loss_push", *, inver
         return None
     decimal_price = _float(row.get("decimal_price"), field="decimal_price")
     return decimal_price - 1.0 if decimal_price is not None else None
+
 
 def _group_metrics(rows: list[dict[str, Any]], label: str, value: str) -> dict[str, Any]:
     wins = sum(_text(row.get("win_loss_push")).upper() == "W" for row in rows)
@@ -1355,8 +1486,7 @@ def _probability_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         log_loss = _mean(
             -(
                 actual * math.log(min(max(probability, 1e-15), 1 - 1e-15))
-                + (1 - actual)
-                * math.log(1 - min(max(probability, 1e-15), 1 - 1e-15))
+                + (1 - actual) * math.log(1 - min(max(probability, 1e-15), 1 - 1e-15))
             )
             for probability, actual in pairs
         )
@@ -1370,7 +1500,9 @@ def _probability_metrics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "log_loss": log_loss,
                 "expected_hit_rate": expected,
                 "actual_hit_rate": actual,
-                "calibration_gap": (actual - expected) if expected is not None and actual is not None else None,
+                "calibration_gap": (actual - expected)
+                if expected is not None and actual is not None
+                else None,
             }
         )
     return output
@@ -1466,7 +1598,12 @@ def _play_vs_stand_down(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _model_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for model, field in (("A", "A_verdict"), ("B", "B_verdict"), ("C", "C_verdict"), ("D", "D_verdict")):
+    for model, field in (
+        ("A", "A_verdict"),
+        ("B", "B_verdict"),
+        ("C", "C_verdict"),
+        ("D", "D_verdict"),
+    ):
         for row in rows:
             verdict = _text(row.get(field)).upper()
             if verdict:
@@ -1504,20 +1641,42 @@ def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
         snapshot_rows = [
             dict(row)
             for row in conn.execute(
-                f"SELECT {', '.join(MARKET_SNAPSHOT_FIELDS)} FROM market_snapshots "
-                "ORDER BY captured_at, snapshot_id"
+                """
+                SELECT snapshot_id, captured_at, sport, event_id, market_id,
+                       outcome_id, player_id, selection, line, price, book,
+                       market_consensus_prob, independent_model_prob,
+                       final_blended_prob, push_prob, edge, data_quality_flags,
+                       market_type, model_prob_source, decimal_price, implied_prob,
+                       board, selected, signal_flags, hit_rate_component,
+                       insight_component, movement_component, orf_component, pack_path
+                FROM market_snapshots
+                ORDER BY captured_at, snapshot_id
+                """
             )
         ]
         decision_rows = [
             dict(row)
             for row in conn.execute(
-                f"SELECT {', '.join(DECISION_FIELDS)} FROM decisions ORDER BY decision_id"
+                """
+                SELECT decision_id, snapshot_id, pipeline_verdict,
+                       A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
+                       units, kill_reason, news_override
+                FROM decisions
+                ORDER BY decision_id
+                """
             )
         ]
         settlement_rows = [
             dict(row)
             for row in conn.execute(
-                f"SELECT {', '.join(SETTLEMENT_FIELDS)} FROM settlements ORDER BY settled_at, settlement_id"
+                """
+                SELECT settlement_id, decision_id, snapshot_id, outcome_id,
+                       event_id, market_id, actual_result, win_loss_push,
+                       closing_line, closing_price, clv_line, clv_price, pnl,
+                       would_have_result
+                FROM settlements
+                ORDER BY settled_at, settlement_id
+                """
             )
         ]
     _write_csv(output_dir / "market_snapshots.csv", MARKET_SNAPSHOT_FIELDS, snapshot_rows)
@@ -1539,7 +1698,9 @@ def _fmt(value: Any) -> str:
 
 
 def _report_markdown(
-    coverage: dict[str, int], probability_metrics: list[dict[str, Any]], market_type: list[dict[str, Any]]
+    coverage: dict[str, int],
+    probability_metrics: list[dict[str, Any]],
+    market_type: list[dict[str, Any]],
 ) -> str:
     lines = [
         "# Feedback-loop calibration report",
@@ -1723,7 +1884,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     export_parser = subparsers.add_parser("export", help="Export the three permanent ledgers.")
     export_parser.add_argument("--output", type=Path, required=True)
 
-    template_parser = subparsers.add_parser("templates", help="Write decision/settlement templates.")
+    template_parser = subparsers.add_parser(
+        "templates", help="Write decision/settlement templates."
+    )
     template_parser.add_argument("--output", type=Path, required=True)
 
     args = parser.parse_args(argv)

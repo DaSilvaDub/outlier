@@ -69,11 +69,23 @@ CRITICAL INSTRUCTIONS FOR YOU:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(prompt)
 
+    desk2_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts\desk2")
+    desk2_count = 0
+    if desk2_dir.exists():
+        for p in desk2_dir.glob("*.md"):
+            with open(p, "r", encoding="utf-8") as pf:
+                p_text = pf.read()
+            full_prompt = f"{p_text}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
+            out_file = out_dir / f"{p.stem}_pack_{date_str}.txt"
+            with open(out_file, "w", encoding="utf-8") as f:
+                f.write(full_prompt)
+            desk2_count += 1
+
     current_date = date.fromisoformat(date_str)
     keep_dates = {date_str, (current_date - timedelta(days=1)).isoformat()}
     archive_old_packs(out_dir, keep_dates)
 
-    print(f"Successfully generated {len(models)} prompt files in {out_dir} (archived anything older than {min(keep_dates)})")
+    print(f"Successfully generated {len(models)} generic and {desk2_count} desk2 prompt files in {out_dir} (archived anything older than {min(keep_dates)})")
 
 
 def main() -> None:
