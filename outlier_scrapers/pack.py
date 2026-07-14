@@ -1218,6 +1218,7 @@ def write_pack(
     from outlier_scrapers.alt_team_totals import (
         ALT_TEAM_TOTAL_PARLAYS_HEADER,
         ALT_TEAM_TOTALS_HEADER,
+        _write_csv,
         build_alt_team_total_board,
         build_alt_team_total_parlays,
         format_alt_team_totals_md,
@@ -1229,16 +1230,12 @@ def write_pack(
         league_rows = build_alt_team_total_board(payload, league=lg)
         alt_tt_rows.extend(league_rows)
         alt_tt_parlays.extend(build_alt_team_total_parlays(league_rows))
-    with open(out_dir / "alt_team_totals.csv", "w", newline="", encoding="utf-8") as tf:
-        writer = csv.DictWriter(tf, fieldnames=ALT_TEAM_TOTALS_HEADER, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(alt_tt_rows)
-    with open(out_dir / "alt_team_total_parlays.csv", "w", newline="", encoding="utf-8") as tf:
-        writer = csv.DictWriter(
-            tf, fieldnames=ALT_TEAM_TOTAL_PARLAYS_HEADER, extrasaction="ignore"
-        )
-        writer.writeheader()
-        writer.writerows(alt_tt_parlays)
+    _write_csv(out_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, alt_tt_rows)
+    _write_csv(
+        out_dir / "alt_team_total_parlays.csv",
+        ALT_TEAM_TOTAL_PARLAYS_HEADER,
+        alt_tt_parlays,
+    )
     (sections_dir / "alt_team_totals.md").write_text(
         format_alt_team_totals_md(alt_tt_rows, alt_tt_parlays), encoding="utf-8"
     )

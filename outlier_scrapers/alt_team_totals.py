@@ -21,6 +21,7 @@ from typing import Any
 from outlier_scrapers.game_totals import (
     _american_to_decimal,
     _best_book_offer,
+    _decimal_to_american,
     _to_float,
     build_market_ladder,
     is_full_game_total,
@@ -290,14 +291,6 @@ def build_alt_team_total_board(
     return rows
 
 
-def _decimal_to_american(decimal_price: float) -> int | None:
-    if decimal_price <= 1.0:
-        return None
-    if decimal_price >= 2.0:
-        return round((decimal_price - 1.0) * 100.0)
-    return -round(100.0 / (decimal_price - 1.0))
-
-
 def _parlay_eligible(row: dict[str, Any]) -> bool:
     if row.get("is_best_line") != "true":
         return False
@@ -307,17 +300,20 @@ def _parlay_eligible(row: dict[str, Any]) -> bool:
     return row.get("decimal_price") not in (None, "")
 
 
+def _price_text(price: Any) -> str:
+    """American odds display: leading + on plus-money prices."""
+    if isinstance(price, (int, float)):
+        return f"+{price:g}" if price > 0 else f"{price:g}"
+    return str(price)
+
+
 def _leg_text(row: dict[str, Any]) -> str:
     record = (
         f"{row['l10_hits']}/{row['l10_total']}"
         if row.get("l10_hits") != ""
         else f"{row['l10_pct']}%"
     )
-    price = row.get("best_price")
-    if isinstance(price, (int, float)):
-        price_text = f"+{price:g}" if price > 0 else f"{price:g}"
-    else:
-        price_text = str(price)
+    price_text = _price_text(row.get("best_price"))
     return f"{row['team']} o{row['line']:g} ({record}, {price_text} {row['best_book']})"
 
 
@@ -391,7 +387,7 @@ def format_alt_team_totals_md(
         flags = f" flags={row['quality_flags']}" if row.get("quality_flags") else ""
         lines.append(
             f"- [{row['league']}] {row['team']} OVER {row['line']:g} "
-            f"({record} L10) {row['best_price']} {row['best_book']} "
+            f"({record} L10) {_price_text(row['best_price'])} {row['best_book']} "
             f"| {row['matchup']}{best}{flags}"
         )
     lines += ["", "## Parlay suggestions (indicative pricing)"]
@@ -401,7 +397,8 @@ def format_alt_team_totals_md(
         sgp = " [SGP]" if parlay.get("is_sgp") == "true" else ""
         lines.append(
             f"- {parlay['legs']} => dec {parlay['combined_decimal']} "
-            f"({parlay['combined_american']}) naive L10 {parlay['naive_l10_prob']}%{sgp}"
+            f"({_price_text(parlay['combined_american'])}) "
+            f"naive L10 {parlay['naive_l10_prob']}%{sgp}"
         )
     return "\n".join(lines)
 

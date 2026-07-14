@@ -29,6 +29,14 @@ def _american_to_decimal(american: Any) -> float | None:
     return 2.0
 
 
+def _decimal_to_american(decimal_price: float) -> int | None:
+    if decimal_price <= 1.0:
+        return None
+    if decimal_price >= 2.0:
+        return round((decimal_price - 1.0) * 100.0)
+    return -round(100.0 / (decimal_price - 1.0))
+
+
 TOTAL_KIND_GAME = "game"
 TOTAL_KIND_TEAM = "team"
 
