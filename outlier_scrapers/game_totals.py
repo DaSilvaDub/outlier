@@ -529,7 +529,8 @@ def build_totals(
         )
         model_win_prob = p_side_conditional
         decimal_price = _american_to_decimal(best_price)
-        implied_prob = implied_probability(best_price)
+        _implied_pct_val = implied_probability(best_price)
+        implied_prob = _implied_pct_val / 100.0 if _implied_pct_val is not None else None
 
         push_blocked = _is_integer_line(headline_line)
         push_prob: float | str = "" if push_blocked else 0.0
