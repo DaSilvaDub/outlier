@@ -1362,7 +1362,6 @@ def build_pack_with_coverage(
     top_signal_n: int,
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
-    projection_records_out: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
@@ -1379,8 +1378,6 @@ def build_pack_with_coverage(
         games_norm_by_league[lg] = games_norm
         props_norm = load_json(norm / f"{low}_props_latest.json")
         projections_payload = load_json(norm / f"{low}_projections_latest.json")
-        if projection_records_out is not None:
-            projection_records_out.extend((projections_payload or {}).get("projections") or [])
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
         props_cards = load_json(cards_dir / f"{low}_cards_latest.json")
@@ -1489,6 +1486,22 @@ def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
     if last_err:
         raise last_err
 
+
+def load_projection_records(leagues: Sequence[str]) -> list[dict[str, Any]]:
+    """Load the league projection artifacts for pack-local audit freezing."""
+
+    records: list[dict[str, Any]] = []
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        league_paths = paths.league_paths(league)
+        payload = load_json(
+            league_paths.normalized / f"{league.lower()}_projections_latest.json"
+        )
+        records.extend((payload or {}).get("projections") or [])
+    return records
+
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
 
@@ -1527,15 +1540,14 @@ def main(argv: Sequence[str] | None = None) -> Path:
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
     opportunity_rows: list[dict[str, Any]] = []
-    projection_records: list[dict[str, Any]] = []
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
         leagues,
         args.date,
         args.top_ev_n,
         args.top_signal_n,
         opportunity_rows_out=opportunity_rows,
-        projection_records_out=projection_records,
     )
+    projection_records = load_projection_records(leagues)
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:

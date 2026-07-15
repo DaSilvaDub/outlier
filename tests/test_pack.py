@@ -21,6 +21,7 @@ from outlier_scrapers.pack import (
     is_excluded_market,
     is_longshot_price,
     is_no_push_market,
+    load_projection_records,
     market_validation_flags,
     rank_rows,
     select_date,
@@ -885,10 +886,10 @@ def test_end_to_end(tmp_path, monkeypatch):
         _league_fixture(tmp_path / "data" / lg, lg)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    projection_records = []
     rows, target, games_norm, coverage = build_pack_with_coverage(
-        ["MLB", "WNBA"], None, 15, 10, projection_records_out=projection_records
+        ["MLB", "WNBA"], None, 15, 10
     )
+    projection_records = load_projection_records(["MLB", "WNBA"])
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
     # both streams represented: a player (board_b) and a game (board_a) row exist
