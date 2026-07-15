@@ -69,3 +69,23 @@ def test_project_rows_returns_auditable_probability_partition():
     assert projections[0]["status"] == "eligible"
     distribution = projections[0]["distribution"]
     assert distribution["win_prob"] + distribution["push_prob"] + distribution["loss_prob"] == pytest.approx(1.0)
+
+
+def test_first_inning_yes_no_sides_map_to_over_under_partition():
+    projection = project_rows(
+        [
+            {
+                "outcome_id": "yrfi-1",
+                "event_id": "game-1",
+                "market_id": "first-inning",
+                "proposition": "FIRST_INNING_RUN",
+                "line": 0.5,
+                "position": "YES",
+                "projection_features": {"home_run_mean": 0.4, "away_run_mean": 0.35},
+            }
+        ],
+        "MLB",
+    )[0]
+    assert projection["side"] == "YES"
+    assert projection["distribution"]["side"] == "OVER"
+    assert projection["distribution"]["push_prob"] == 0.0

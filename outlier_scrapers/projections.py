@@ -264,8 +264,10 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
 
     record = {
         "status": "eligible",
+        "sport": row.get("sport") or row.get("league") or "MLB",
         "row_id": row.get("outcome_id"),
         "event_id": row.get("event_id"),
+        "market_id": row.get("market_id"),
         "market": row.get("market") or row.get("proposition"),
         "line": row.get("line"),
         "side": row.get("position"),
@@ -273,8 +275,13 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
         "feature_snapshot_hash": row.get("feature_snapshot_hash"),
     }
     if row.get("line") is not None and row.get("position"):
+        partition_side = str(row["position"])
+        if "FIRST_INNING" in proposition or "NRFI" in proposition or "YRFI" in proposition:
+            partition_side = {"YES": "OVER", "NO": "UNDER"}.get(
+                partition_side.upper(), partition_side
+            )
         record["distribution"] = distribution.to_record(
-            line=float(str(row["line"])), side=str(row["position"])
+            line=float(str(row["line"])), side=partition_side
         )
     return record
 
