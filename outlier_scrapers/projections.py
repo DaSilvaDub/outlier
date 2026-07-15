@@ -274,7 +274,7 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
     }
     if row.get("line") is not None and row.get("position"):
         record["distribution"] = distribution.to_record(
-            line=float(row["line"]), side=str(row["position"])
+            line=float(str(row["line"])), side=str(row["position"])
         )
     return record
 
