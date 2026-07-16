@@ -668,8 +668,9 @@ def build_row(
     # Descriptive-only: edge implied by the raw recency hit rate. Reads
     # signal["hit_pct"] (None when Outlier had no recency data), NOT
     # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
     hist_edge = compute_historical_edge(
-        hit_rate_pct=_to_float(signal.get("hit_pct")),
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
         decimal_price=_to_float(row.get("decimal_price")),
         push_prob=_to_float(row.get("push_prob")),
     )
