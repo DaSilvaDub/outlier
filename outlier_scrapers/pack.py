@@ -27,7 +27,7 @@ from outlier_scrapers.registry import (
     get_sport_config,
     team_display_name,
 )
-from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ CANDIDATES_HEADER = [
     "push_prob",
     "implied_prob",
     "edge_pct",
+    "historical_edge_pct",
     "kelly_025_units",
     "max_units",
     "recommended_units_pre_news",
@@ -664,6 +665,15 @@ def build_row(
         else ""
     )
     row["orf_component"] = signal.get("orf_component", "")
+    # Descriptive-only: edge implied by the raw recency hit rate. Reads
+    # signal["hit_pct"] (None when Outlier had no recency data), NOT
+    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hist_edge = compute_historical_edge(
+        hit_rate_pct=_to_float(signal.get("hit_pct")),
+        decimal_price=_to_float(row.get("decimal_price")),
+        push_prob=_to_float(row.get("push_prob")),
+    )
+    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     signal_flags: list[str] = []
     for value, flag in (
         (_to_float(row.get("hit_rate_component")), "hit_rate_support"),
