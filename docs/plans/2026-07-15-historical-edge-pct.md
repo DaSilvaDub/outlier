@@ -6,9 +6,13 @@
 
 **Goal:** Add a `historical_edge_pct` column to `candidates.csv` that shows, per candidate, the edge implied by the raw recency hit rate alone — for manual eyeballing only, never for sizing.
 
-**Architecture:** One pure function in `outlier_scrapers/sizing.py` (next to `compute_sizing`, which owns the edge convention), wired into `build_row` in `outlier_scrapers/pack.py`. No database changes: `feedback.py` ingestion maps fields explicitly by name, so it ignores new CSV columns, and the value stays derivable from columns the DB already stores.
+**Architecture:** One pure function in `outlier_scrapers/sizing.py` (next to `compute_sizing`, which owns the edge convention), wired into `build_row` in `outlier_scrapers/pack.py`. No database changes: `feedback.py` ingestion maps fields explicitly by name, so it ignores new CSV columns, and the value stays derivable from columns the DB already stores. The canonical CSV retains the descriptive field for human review, while `runner_common.filter_candidates_for_ai` removes it from AI-facing candidate payloads, including standalone manual prompt exports.
 
 **Tech Stack:** Python 3, pytest. Repo commands: `pytest`, `python -m ruff check`, `python -m mypy outlier_scrapers`.
+
+## Final implementation alignment
+
+Post-review hardening standardized `compute_historical_edge` on the same 0–1 probability scale used by `compute_sizing`. `pack.py` converts raw `signal["hit_pct"]` values from 0–100 at the call boundary. Missing, invalid, NaN, and infinite inputs return `None`. The human-facing CSV keeps `historical_edge_pct`; every AI-facing candidate projection strips it.
 
 ---
 
@@ -39,12 +43,12 @@ Append to `tests/test_sizing.py` (check the top of the file: if `pytest` is not 
 ```python
 def test_historical_edge_known_value():
     # 60% hit rate at even money: 0.6 * 1.0 - 0.4 = +0.20 (fraction, like edge_pct)
-    assert compute_historical_edge(60.0, 2.0) == pytest.approx(0.2)
+    assert compute_historical_edge(0.60, 2.0) == pytest.approx(0.2)
 
 
 def test_historical_edge_push_aware():
     # Push mass shrinks p_lose: 0.6 * 1.0 - (1 - 0.6 - 0.1) = +0.30
-    assert compute_historical_edge(60.0, 2.0, push_prob=0.1) == pytest.approx(0.3)
+    assert compute_historical_edge(0.60, 2.0, push_prob=0.1) == pytest.approx(0.3)
 
 
 def test_historical_edge_missing_hit_rate_is_none():
@@ -54,22 +58,22 @@ def test_historical_edge_missing_hit_rate_is_none():
 
 
 def test_historical_edge_missing_price_is_none():
-    assert compute_historical_edge(60.0, None) is None
+    assert compute_historical_edge(0.60, None) is None
 
 
 def test_historical_edge_degenerate_price_is_none():
-    assert compute_historical_edge(60.0, 1.0) is None
-    assert compute_historical_edge(60.0, 0.5) is None
+    assert compute_historical_edge(0.60, 1.0) is None
+    assert compute_historical_edge(0.60, 0.5) is None
 
 
 def test_historical_edge_inconsistent_push_is_none():
     # p_win + push > 1 is an invalid partition (same rule as compute_sizing).
-    assert compute_historical_edge(95.0, 2.0, push_prob=0.10) is None
+    assert compute_historical_edge(0.95, 2.0, push_prob=0.10) is None
 
 
 def test_historical_edge_out_of_range_hit_is_none():
-    assert compute_historical_edge(120.0, 2.0) is None
-    assert compute_historical_edge(-5.0, 2.0) is None
+    assert compute_historical_edge(1.20, 2.0) is None
+    assert compute_historical_edge(-0.05, 2.0) is None
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -79,30 +83,35 @@ Expected: FAIL / ERROR with `ImportError: cannot import name 'compute_historical
 
 **Step 3: Write the implementation**
 
-Append to `outlier_scrapers/sizing.py`:
+Add `from math import isfinite` with the imports, then append to `outlier_scrapers/sizing.py`:
 
 ```python
 def compute_historical_edge(
-    hit_rate_pct: float | None,
+    hit_rate_prob: float | None,
     decimal_price: float | None,
     push_prob: float | None = None,
 ) -> float | None:
     """Edge implied by the raw recency hit rate alone. Descriptive only.
 
-    Same convention as ``compute_sizing``: returns a fraction
-    (``p_win * b - p_lose``), push-aware, or ``None`` when inputs are
-    missing or form an invalid probability partition.
+    Same convention as compute_sizing: probability inputs are fractions
+    and the result is a fraction (p_win * b - p_lose). Returns None when
+    inputs are missing, non-finite, or form an invalid partition.
 
-    Callers must pass the raw nullable hit rate (``signal["hit_pct"]``),
-    never ``hit_rate_component`` — its 50.0 default stands in for missing
-    data and would fabricate an edge. This value must never feed sizing.
+    Callers must convert the raw nullable hit rate (signal["hit_pct"],
+    expressed from 0 to 100) to a probability before calling. Never use
+    hit_rate_component: its 50.0 default stands in for missing data and
+    would fabricate an edge. This value must never feed sizing.
     """
-    if hit_rate_pct is None or decimal_price is None or decimal_price <= 1.0:
-        return None
-    p_win = hit_rate_pct / 100.0
-    if p_win < 0.0 or p_win > 1.0:
+    if hit_rate_prob is None or decimal_price is None:
         return None
     push = push_prob if push_prob is not None else 0.0
+    if not all(isfinite(value) for value in (hit_rate_prob, decimal_price, push)):
+        return None
+    if decimal_price <= 1.0:
+        return None
+    p_win = hit_rate_prob
+    if p_win < 0.0 or p_win > 1.0:
+        return None
     p_lose = 1.0 - p_win - push
     if push < 0.0 or p_lose < 0.0:
         return None
@@ -170,7 +179,7 @@ def test_historical_edge_pct_populated_from_raw_hit_pct():
     assert row is not None
     dec = float(row["decimal_price"])
     push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
-    expected = compute_historical_edge(62.0, dec, push)
+    expected = compute_historical_edge(0.62, dec, push)
     assert expected is not None
     assert row["historical_edge_pct"] != ""
     assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)
@@ -202,8 +211,9 @@ Expected: 3 FAIL — the position test with an `IndexError`/assertion on the mis
     # Descriptive-only: edge implied by the raw recency hit rate. Reads
     # signal["hit_pct"] (None when Outlier had no recency data), NOT
     # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
     hist_edge = compute_historical_edge(
-        hit_rate_pct=_to_float(signal.get("hit_pct")),
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
         decimal_price=_to_float(row.get("decimal_price")),
         push_prob=_to_float(row.get("push_prob")),
     )
@@ -233,7 +243,18 @@ artifacts)."
 
 ---
 
-### Task 3: Full verification suite
+### Task 3: Keep descriptive data out of AI payloads
+
+**Files:**
+- Modify: `outlier_scrapers/runner_common.py`
+- Modify: `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
+- Test: `tests/test_runner_common.py`
+
+Add `historical_edge_pct` to an explicit AI-excluded field set and project candidate CSV bytes through `filter_candidates_for_ai` before building any automated or manual prompt. Test that the canonical human CSV retains the field, the AI projection removes both its header and values, malformed CSV still raises `RunnerError`, and automated/manual prompt paths use the filtered bytes.
+
+---
+
+### Task 4: Full verification suite
 
 **Step 1:** Run: `python -m ruff check`
 Expected: no new violations (fix trivial ones like import order if flagged; nothing else).
@@ -257,5 +278,5 @@ Then open the generated `candidates.csv`: rows with recency data show a small fr
 - No changes to `outlier_scrapers/feedback.py` (schema, migrations, inserts, views).
 - No changes to `outlier_scrapers/cards.py` (`hit_pct` is already exposed).
 - No relaxation of the `runner_common.py:252` header check.
-- No use of `historical_edge_pct` in sizing, boards, `actionable`, or prompts.
+- No use of `historical_edge_pct` in sizing, boards, `actionable`, or prompts; AI-facing exports must remove the field.
 - No runs of the reasoning desk / `run_desk` / `daily_job --run-reasoning` / live provider calls.
