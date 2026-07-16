@@ -25,6 +25,7 @@ from outlier_scrapers.pack import (
     select_date,
     write_pack,
 )
+from outlier_scrapers.sizing import compute_historical_edge
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
 
@@ -1600,3 +1601,37 @@ def test_home_away_unresolved_flag():
     row2 = make_row(card, [])
     assert row2["home_away"] == ""
     assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]
+
+
+# historical_edge_pct: descriptive edge from the raw recency hit rate.
+def test_historical_edge_pct_column_position():
+    # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1]
+        == "historical_edge_pct"
+    )
+    # Must not displace the pinned last column.
+    assert CANDIDATES_HEADER[-1] == "source_timestamps"
+
+
+def test_historical_edge_pct_blank_when_hit_data_missing():
+    # Regression: signal_score() defaults hit_component to 50.0 when Outlier
+    # has no recency data. That sentinel must NOT leak into historical_edge_pct.
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 50.0, "hit_pct": None}
+    row = make_row(card, [])
+    assert row is not None
+    assert row["historical_edge_pct"] == ""
+
+
+def test_historical_edge_pct_populated_from_raw_hit_pct():
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 62.0, "hit_pct": 62.0}
+    row = make_row(card, [])
+    assert row is not None
+    dec = float(row["decimal_price"])
+    push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
+    expected = compute_historical_edge(0.62, dec, push)
+    assert expected is not None
+    assert row["historical_edge_pct"] != ""
+    assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)

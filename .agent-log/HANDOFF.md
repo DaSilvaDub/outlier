@@ -24,3 +24,19 @@
 - Re-ran the daily Outlier pipeline locally to filter out completed games and fetch the latest line-movement data for the remaining games.
 - Successfully generated and exported the tailored manual prompt files for the web LLMs to the target Desktop and Drive folders.
 - The user is all set to manually copy the prompts and run their desk routines.
+
+---
+
+## Handoff - historical_edge_pct (PR #42)
+
+**Last Commit SHA**: 54125348a7984fd3abd8b33e56ac7488fcb0b23c (plus handoff/review fixes)
+**PR Link**: https://github.com/DaSilvaDub/outlier/pull/42
+**Files Touched**:
+- `outlier_scrapers/sizing.py`
+- `tests/test_sizing.py`
+- `outlier_scrapers/pack.py`
+- `tests/test_pack.py`
+- `docs/plans/2026-07-15-historical-edge-pct.md`
+
+**Next Steps**:
+- The `historical_edge_pct` column has been successfully implemented and verified to be descriptive-only. The task is fully complete and PR #42 is open against master. No further action is required from the agent.
