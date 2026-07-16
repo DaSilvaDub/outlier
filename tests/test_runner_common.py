@@ -108,7 +108,12 @@ def test_validate_candidates_allows_header_only_for_actionable_totals(tmp_path):
 
     raw, digest = runner_common.validate_candidates(tmp_path, allow_empty=True)
     assert digest == hashlib.sha256(raw).hexdigest()
-    assert raw.decode("utf-8-sig").splitlines() == [",".join(pack.CANDIDATES_HEADER)]
+    expected_header = [
+        field
+        for field in pack.CANDIDATES_HEADER
+        if field not in runner_common.AI_EXCLUDED_CANDIDATE_FIELDS
+    ]
+    assert raw.decode("utf-8-sig").splitlines() == [",".join(expected_header)]
 
 
 def test_has_actionable_game_totals():
