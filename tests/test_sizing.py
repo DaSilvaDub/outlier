@@ -123,6 +123,7 @@ def test_historical_edge_out_of_range_hit_is_none():
     assert compute_historical_edge(1.20, 2.0) is None
     assert compute_historical_edge(-0.05, 2.0) is None
 
+
 def test_historical_edge_non_finite_inputs_are_none():
     for bad in (float("nan"), float("inf"), float("-inf")):
         assert compute_historical_edge(bad, 2.0) is None
