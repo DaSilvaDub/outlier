@@ -102,3 +102,30 @@ def compute_sizing(
         max_units=max_units,
         recommended_units_pre_news=recommended_units_pre_news,
     )
+
+
+def compute_historical_edge(
+    hit_rate_pct: float | None,
+    decimal_price: float | None,
+    push_prob: float | None = None,
+) -> float | None:
+    """Edge implied by the raw recency hit rate alone. Descriptive only.
+
+    Same convention as ``compute_sizing``: returns a fraction
+    (``p_win * b - p_lose``), push-aware, or ``None`` when inputs are
+    missing or form an invalid probability partition.
+
+    Callers must pass the raw nullable hit rate (``signal["hit_pct"]``),
+    never ``hit_rate_component`` — its 50.0 default stands in for missing
+    data and would fabricate an edge. This value must never feed sizing.
+    """
+    if hit_rate_pct is None or decimal_price is None or decimal_price <= 1.0:
+        return None
+    p_win = hit_rate_pct / 100.0
+    if p_win < 0.0 or p_win > 1.0:
+        return None
+    push = push_prob if push_prob is not None else 0.0
+    p_lose = 1.0 - p_win - push
+    if push < 0.0 or p_lose < 0.0:
+        return None
+    return p_win * (decimal_price - 1.0) - p_lose

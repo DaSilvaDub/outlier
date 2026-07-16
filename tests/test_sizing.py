@@ -1,5 +1,5 @@
 import pytest
-from outlier_scrapers.sizing import compute_sizing, compute_full_kelly
+from outlier_scrapers.sizing import compute_sizing, compute_full_kelly, compute_historical_edge
 
 
 def test_no_push_even_money():
@@ -87,3 +87,38 @@ def test_negative_push_prob_is_ineligible():
     sizing = compute_sizing(decimal_price=2.0, model_prob=0.55, push_prob=-0.2)
     assert sizing.edge_pct is None
     assert sizing.recommended_units_pre_news is None
+
+
+def test_historical_edge_known_value():
+    # 60% hit rate at even money: 0.6 * 1.0 - 0.4 = +0.20 (fraction, like edge_pct)
+    assert compute_historical_edge(60.0, 2.0) == pytest.approx(0.2)
+
+
+def test_historical_edge_push_aware():
+    # Push mass shrinks p_lose: 0.6 * 1.0 - (1 - 0.6 - 0.1) = +0.30
+    assert compute_historical_edge(60.0, 2.0, push_prob=0.1) == pytest.approx(0.3)
+
+
+def test_historical_edge_missing_hit_rate_is_none():
+    # Regression guard: missing recency data must yield None, never a
+    # neutral-50 fabricated edge.
+    assert compute_historical_edge(None, 2.0) is None
+
+
+def test_historical_edge_missing_price_is_none():
+    assert compute_historical_edge(60.0, None) is None
+
+
+def test_historical_edge_degenerate_price_is_none():
+    assert compute_historical_edge(60.0, 1.0) is None
+    assert compute_historical_edge(60.0, 0.5) is None
+
+
+def test_historical_edge_inconsistent_push_is_none():
+    # p_win + push > 1 is an invalid partition (same rule as compute_sizing).
+    assert compute_historical_edge(95.0, 2.0, push_prob=0.10) is None
+
+
+def test_historical_edge_out_of_range_hit_is_none():
+    assert compute_historical_edge(120.0, 2.0) is None
+    assert compute_historical_edge(-5.0, 2.0) is None
