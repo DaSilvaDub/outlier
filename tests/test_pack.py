@@ -1631,7 +1631,7 @@ def test_historical_edge_pct_populated_from_raw_hit_pct():
     assert row is not None
     dec = float(row["decimal_price"])
     push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
-    expected = compute_historical_edge(62.0, dec, push)
+    expected = compute_historical_edge(0.62, dec, push)
     assert expected is not None
     assert row["historical_edge_pct"] != ""
     assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)
