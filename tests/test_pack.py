@@ -1601,6 +1601,8 @@ def test_home_away_unresolved_flag():
     row2 = make_row(card, [])
     assert row2["home_away"] == ""
     assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]
+
+
 # historical_edge_pct: descriptive edge from the raw recency hit rate.
 def test_historical_edge_pct_column_position():
     # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
