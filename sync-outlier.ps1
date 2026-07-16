@@ -53,7 +53,11 @@ $knownFullClones = @(
 
 # 1. Ensure we have a real GitHub remote (cross-ent glue). Prefer "origin".
 $githubUrl = 'https://github.com/DaSilvaDub/outlier.git'
-$originUrl = (git remote get-url origin 2>$null) -or ''
+# NOTE: -or would coerce the URL to a boolean ('True'), which made this branch
+# fire on EVERY run: remote remove deleted all origin/* refs each pass, and any
+# transient fetch failure then surfaced as "No origin/master" (2026-07-15 incident).
+$originUrl = git remote get-url origin 2>$null
+if (-not $originUrl) { $originUrl = '' }
 if (-not $originUrl -or $originUrl -notlike '*github.com*DaSilvaDub/outlier*') {
   Write-Info "Setting origin to GitHub (was '$originUrl')."
   git remote remove origin 2>$null | Out-Null
