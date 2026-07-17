@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 FRESHNESS_MAX_AGE = timedelta(hours=6)
 FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
 
+# run_desk writes uppercase overall statuses (FULL/PARTIAL/DATA_ONLY); compare lowercased.
+SUCCESS_OVERALL_STATUSES = ("ok", "degraded", "partial", "full")
+
 def perform_auth_check(leagues: list[str]) -> bool:
     try:
         client = OutlierApiClient()
@@ -284,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         _atomic_write_manifest(pack_dir, manifest)
 
-        final_code = 0 if overall in ("ok", "degraded", "partial") else 1
+        final_code = 0 if str(overall).lower() in SUCCESS_OVERALL_STATUSES else 1
         logger.info("Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall)
         return final_code
     finally:

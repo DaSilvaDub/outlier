@@ -130,6 +130,44 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 1
 
+def _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall: str) -> int:
+    fake_pack = tmp_path / "packs" / "2026-07-17"
+    fake_pack.mkdir(parents=True, exist_ok=True)
+    (fake_pack / "candidates.csv").write_text(
+        "market_id,line\nm1,1.5\n", encoding="utf-8"
+    )
+    (fake_pack / "briefing.md").write_text("SLATE", encoding="utf-8")
+
+    monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
+    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda _pack, _data: None)
+
+    def fake_desk(pack_dir, **_kwargs):
+        (pack_dir / "reasoning_status.json").write_text(
+            json.dumps({"overall": overall}), encoding="utf-8"
+        )
+        return 0
+
+    monkeypatch.setattr(daily_job.run_desk, "orchestrate_desk", fake_desk)
+    return daily_job.main(["--leagues", "MLB"])
+
+
+@pytest.mark.parametrize("overall", ["PARTIAL", "FULL", "partial", "ok", "degraded"])
+def test_daily_job_exits_zero_for_successful_desk_status(tmp_path, monkeypatch, overall):
+    _require_daily_job()
+    assert _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall) == 0
+
+
+@pytest.mark.parametrize("overall", ["DATA_ONLY", "failed", "running", "ERROR"])
+def test_daily_job_exits_one_for_unsuccessful_desk_status(tmp_path, monkeypatch, overall):
+    _require_daily_job()
+    assert _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall) == 1
+
+
 def test_orchestrate_login_removes_stale_status(tmp_path):
     status_file = tmp_path / "otp_status.json"
     status_file.write_text(json.dumps({"stage": "authenticated"}), encoding="utf-8")
