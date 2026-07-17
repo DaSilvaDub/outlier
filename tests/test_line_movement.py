@@ -85,6 +85,69 @@ def test_build_line_movement_payload_games_keeps_team_sides():
     assert "HOME" in {r["side"] for r in result["ev_records"]}
 
 
+def _local_ev_market_detail(market_id="m-local"):
+    """Props market-detail payload with NO native evOutcomes but a 3-operator
+    two-way board, so build_line_movement_payload takes the LOCAL EV fallback."""
+
+    def _book(book, american, decimal):
+        return {"book": book, "american": american, "decimal": decimal}
+
+    return {
+        "market": {
+            "eventId": "e1",
+            "marketId": market_id,
+            "label": "Aaron Judge - Hits",
+            "leagueId": "MLB",
+            "marketType": "PLAYER_PROP",
+            "propType": "PLAYER",
+            "proposition": "HITS",
+            "isActive": True,
+            "player": {"fullName": "Aaron Judge", "playerId": "p1", "teamId": "nyy-id"},
+            "outcomes": [
+                {
+                    "outcomeId": f"{market_id}-over",
+                    "position": "OVER",
+                    "line": 1.5,
+                    "primary": True,
+                    "odds": [
+                        _book("DRAFTKINGS", "-120", 1.83),
+                        _book("FANDUEL", "-118", 1.85),
+                        _book("CAESARS", "-122", 1.82),
+                    ],
+                },
+                {
+                    "outcomeId": f"{market_id}-under",
+                    "position": "UNDER",
+                    "line": 1.5,
+                    "primary": True,
+                    "odds": [
+                        _book("DRAFTKINGS", "+100", 2.0),
+                        _book("FANDUEL", "-102", 1.98),
+                        _book("CAESARS", "+102", 2.02),
+                    ],
+                },
+            ],
+        },
+        "marketHistory": None,
+    }
+
+
+def test_build_line_movement_payload_local_ev_records_carry_side():
+    """LOCAL fallback EV records must carry the OVER/UNDER side like NATIVE
+    ones do; cards._ev_for_side drops side-less records, emptying Board A."""
+    result = build_line_movement_payload(
+        league="MLB",
+        market_payloads=[_local_ev_market_detail()],
+        props_context={},
+        source_url_template="t",
+        props_latest="x",
+    )
+    ev_rows = result["ev_records"]
+    assert ev_rows, "expected LOCAL EV records from a 3-operator two-way market"
+    assert all(r["ev_source"] == "LOCAL" for r in ev_rows)
+    assert {r.get("side") for r in ev_rows} == {"OVER", "UNDER"}
+
+
 def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
     payload = {
         "market": {

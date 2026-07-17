@@ -1017,7 +1017,14 @@ def _build_local_ev_records(
             outcome_id = str(outcome.get("outcomeId") or "")
             ev_source = "LOCAL"
             record_id = hashlib.sha256(f"{league}|{market_id}|{outcome_id}|{tb['normalized']}|{ev_source}".encode()).hexdigest()
-            
+            # Same side resolution as normalize_ev_records: without a side the
+            # record can never join a card side (cards._ev_for_side drops it).
+            side = _side_for_source(
+                outcome.get("position") or outcome.get("label"),
+                str(market.get("proposition") or ""),
+                source,
+            )
+
             base_row = {
                 "record_id": record_id,
                 "ev_source": ev_source,
@@ -1025,6 +1032,7 @@ def _build_local_ev_records(
                 "league": get_sport_config(league).league_id,
                 "market_id": market_id,
                 "outcome_id": outcome_id,
+                "side": side or None,
                 "player": props_context.get("player"),
                 "player_raw": props_context.get("player_raw"),
                 "player_id": props_context.get("player_id"),
