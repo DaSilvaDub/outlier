@@ -148,6 +148,31 @@ def test_build_line_movement_payload_local_ev_records_carry_side():
     assert {r.get("side") for r in ev_rows} == {"OVER", "UNDER"}
 
 
+def test_build_line_movement_payload_local_ev_records_carry_american_odds():
+    """LOCAL fallback EV records must expose the book's American price like
+    NATIVE ones do. A null book_odds leaves the pack candidate's price blank
+    AND bypasses the +150 longshot house filter (is_longshot_price(None) is
+    False), letting banned plus-money longshots through as edge plays."""
+    result = build_line_movement_payload(
+        league="MLB",
+        market_payloads=[_local_ev_market_detail()],
+        props_context={},
+        source_url_template="t",
+        props_latest="x",
+    )
+    ev_rows = result["ev_records"]
+    assert ev_rows, "expected LOCAL EV records from a 3-operator two-way market"
+    fixture_prices = {-120, -118, -122, 100, -102, 102}
+    for row in ev_rows:
+        assert row["book_odds"] in fixture_prices, (
+            f"book_odds missing/unparsed for {row['book']} {row.get('side')}: "
+            f"{row['book_odds']!r}"
+        )
+        assert row["current_odds"] == row["book_odds"]
+        assert row["book_ip_pct"] is not None
+        assert row["current_ip_pct"] is not None
+
+
 def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
     payload = {
         "market": {

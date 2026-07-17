@@ -997,6 +997,10 @@ def _build_local_ev_records(
             dec_odds = _to_float(book_entry.get("decimal"))
             if not dec_odds:
                 continue
+            # book_entry is a single per-book odds dict, not an outcome with an
+            # "odds" list, so read its American price directly (as _ev_book_rows
+            # does) instead of via _best_american_price.
+            book_american = _to_int(book_entry.get("american"))
                 
             devig_decimal = 1.0 / cons_f if cons_f > 0 else 0.0
             ev = (cons_f * dec_odds) - 1.0
@@ -1051,13 +1055,13 @@ def _build_local_ev_records(
                 "scope": props_context.get("scope"),
                 "is_active": props_context.get("is_active"),
                 "current_line": _to_float(line_val),
-                "current_odds": _best_american_price(book_entry),
-                "current_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "current_odds": book_american,
+                "current_ip_pct": implied_probability(book_american),
                 "book": tb["normalized"],
                 "book_raw": tb["bname"],
-                "book_odds": _best_american_price(book_entry),
+                "book_odds": book_american,
                 "book_decimal_odds": dec_odds,
-                "book_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "book_ip_pct": implied_probability(book_american),
                 "book_state": book_entry.get("state"),
                 "max_bet": _to_float(book_entry.get("maxBet")),
                 "calculated_ev_method": "LOCAL_PROPORTIONAL",
