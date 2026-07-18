@@ -70,7 +70,7 @@ def tail_otp_status_and_fetch(attempt_timestamp: float, timeout: int = 150) -> b
     logger.error("Timeout waiting for authentication.")
     return False
 
-def orchestrate_login() -> bool:
+def orchestrate_login(leagues: list[str] | None = None) -> bool:
     attempt_timestamp = time.time()
     status_file = otp_status_file()
     if status_file.exists():
@@ -86,6 +86,15 @@ def orchestrate_login() -> bool:
     if login_proc.returncode != 0:
         logger.error(f"Login process exited with code {login_proc.returncode}")
         success = False
+    if not success:
+        # A still-valid session refreshes storage_state.json silently: no login
+        # form or OTP prompt appears, so the status file never reports success.
+        # The direct auth check is the ground truth for whether auth works now.
+        logger.info("OTP status did not confirm login; re-checking auth directly...")
+        if perform_auth_check(leagues or []):
+            logger.info("Auth check passed after login attempt; continuing.")
+            return True
+        logger.error("Auth check still failing after login attempt.")
     return success
 
 def run_explicit_refresh(leagues: list[str]) -> bool:
@@ -217,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     load_environment()
 
     if not perform_auth_check(leagues):
-        if not orchestrate_login():
+        if not orchestrate_login(leagues):
             logger.error("Authentication failed. Aborting pipeline.")
             return 1
 

@@ -88,7 +88,7 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_explicit_refresh", lambda *a, **k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.check_freshness", lambda *a, **k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
-    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
+    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
     monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
@@ -116,7 +116,7 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_explicit_refresh", lambda *a,**k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.check_freshness", lambda *a, **k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
-    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda: True)
+    monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
     monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
@@ -172,6 +172,74 @@ def test_orchestrate_login_removes_stale_status(tmp_path):
     status_file = tmp_path / "otp_status.json"
     status_file.write_text(json.dumps({"stage": "authenticated"}), encoding="utf-8")
     assert status_file.exists()
+
+
+class _FakeLoginProc:
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
+
+
+def _setup_orchestrate_login(
+    monkeypatch, tmp_path, *, otp_result: bool, returncode: int, auth_check: bool
+) -> dict:
+    calls: dict = {"auth_checks": []}
+    monkeypatch.setattr(daily_job, "otp_status_file", lambda: tmp_path / "otp_status.json")
+    monkeypatch.setattr(
+        daily_job.subprocess, "Popen", lambda *_a, **_k: _FakeLoginProc(returncode)
+    )
+    monkeypatch.setattr(daily_job, "tail_otp_status_and_fetch", lambda _ts: otp_result)
+
+    def fake_auth_check(leagues):
+        calls["auth_checks"].append(leagues)
+        return auth_check
+
+    monkeypatch.setattr(daily_job, "perform_auth_check", fake_auth_check)
+    return calls
+
+
+def test_orchestrate_login_recovers_when_session_already_valid(tmp_path, monkeypatch):
+    # Regression for 2026-07-17: a still-valid session refreshes silently, so no
+    # OTP form appears and the status wait times out even though auth now works.
+    _require_daily_job()
+    calls = _setup_orchestrate_login(
+        monkeypatch, tmp_path, otp_result=False, returncode=0, auth_check=True
+    )
+
+    assert daily_job.orchestrate_login(["MLB", "WNBA"])
+    assert calls["auth_checks"] == [["MLB", "WNBA"]]
+
+
+def test_orchestrate_login_fails_when_auth_check_also_fails(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = _setup_orchestrate_login(
+        monkeypatch, tmp_path, otp_result=False, returncode=0, auth_check=False
+    )
+
+    assert not daily_job.orchestrate_login(["MLB"])
+    assert calls["auth_checks"] == [["MLB"]]
+
+
+def test_orchestrate_login_recovers_from_nonzero_exit_if_auth_ok(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = _setup_orchestrate_login(
+        monkeypatch, tmp_path, otp_result=True, returncode=1, auth_check=True
+    )
+
+    assert daily_job.orchestrate_login(["MLB"])
+    assert calls["auth_checks"] == [["MLB"]]
+
+
+def test_orchestrate_login_skips_auth_recheck_on_clean_success(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = _setup_orchestrate_login(
+        monkeypatch, tmp_path, otp_result=True, returncode=0, auth_check=True
+    )
+
+    assert daily_job.orchestrate_login(["MLB"])
+    assert calls["auth_checks"] == []
 
 
 def _write_movement_statuses(reports: Path, generated_at: str) -> None:
