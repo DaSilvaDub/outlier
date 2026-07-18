@@ -489,6 +489,13 @@ def build_row(
     matchup = card.get("matchup") or ref.get("matchup")
     team = card.get("team") or ref.get("team")
     opponent = card.get("opponent") or ref.get("opponent")
+    # A row whose own team is unresolved must not carry a populated opponent:
+    # the desk reads opponent-only context as the player's side (2026-07-18
+    # Carleton row showed her matchup's other team as the only team column).
+    is_player_row = has_player or str(market_type or "").upper() == "PLAYER_PROP"
+    team_enrichment_failed = not team and bool(opponent or is_player_row)
+    if team_enrichment_failed:
+        opponent = None
     try:
         config = get_sport_config(sport, allow_disabled=True)
     except ValueError:
@@ -627,6 +634,8 @@ def build_row(
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
+    if team_enrichment_failed:
+        dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
     # Stale-line edge gate: reverse line movement (line moved against this side)
