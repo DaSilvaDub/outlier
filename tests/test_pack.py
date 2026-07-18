@@ -1347,6 +1347,64 @@ def test_context_columns_populated_with_full_names():
     assert "Rebounds" in row["market_label"]
 
 
+def test_portland_fire_context_resolves_full_names():
+    # Expansion team must resolve like any other: PDX -> Portland Fire, AWAY side
+    # of 'PDX @ MIN' (regression for the 2026-07-18 Carleton blank-team row).
+    card = _ctx_card(
+        "PDX", "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert row["team"] == "PDX"
+    assert row["team_name"] == "Portland Fire"
+    assert row["opponent"] == "MIN"
+    assert row["opp_name"] == "Minnesota Lynx"
+    assert row["home_away"] == "AWAY"
+
+
+def test_unresolved_team_blanks_opponent_and_flags():
+    # When the player's team cannot be resolved, a populated opponent column is
+    # worse than an empty one: 2026-07-18 the desk read opponent=MIN as the only
+    # team context on a PDX player's row. Blank the pair and flag it.
+    card = _ctx_card(
+        None, "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert not row["team"]
+    assert not row["team_name"]
+    assert not row["opponent"]
+    assert not row["opp_name"]
+    assert not row["home_away"]
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_player_prop_without_any_team_context_is_flagged():
+    # A player row where neither side resolved is still an enrichment failure.
+    card = _ctx_card(None, None, None)
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_resolved_team_context_is_not_flagged():
+    card = _ctx_card("LAS", "CHI", "CHI @ LAS")
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
+def test_gameline_without_team_context_is_not_flagged():
+    # Game totals carry no team on purpose; the guard must not fire there.
+    card = ev_card(market_type="GAMELINE", market="TOTAL", proposition="TOTAL",
+                   matchup="PDX @ MIN", line=160.5)
+    ev = [{
+        "market_id": "m1", "outcome_id": "o1", "book": "FD",
+        "book_odds": 110, "book_decimal_odds": 2.1, "calculated_ev_pct": 0.05,
+    }]
+    row = make_row(card, ev)
+    assert row is not None
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
 def test_market_label_disambiguates_terse_code():
     # 'PT' reads as basketball points but is Pitches Thrown; market_label spells it out.
     card = _ctx_card(
