@@ -5,6 +5,7 @@ import pytest
 
 from outlier_scrapers import cards
 from outlier_scrapers.cards import (
+    _align_main_lines,
     _spread_sign_conflict,
     assemble_game_card,
     build_cards_payload,
@@ -85,6 +86,157 @@ def _spread_prop_row(position, line):
         "outcome_id": f"o{position}",
         "league": "MLB",
     }
+
+
+def _line_row(line, *, books=1):
+    return {"line": line, "books": [{"book": str(index)} for index in range(books)]}
+
+
+def test_align_main_lines_mirrors_spread_to_stronger_side():
+    home = _line_row(-8.5)
+    away_main = _line_row(7.5)
+    away_mirror = _line_row(8.5)
+    main = {"HOME": home, "AWAY": away_main}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away_main, away_mirror]},
+        {},
+        {"HOME": {"current_line": -8.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_mirror}
+
+
+def test_align_main_lines_matches_total_to_stronger_side():
+    over = _line_row(180.5)
+    under_main = _line_row(179.5)
+    under_match = _line_row(180.5)
+    main = {"OVER": over, "UNDER": under_main}
+
+    _align_main_lines(
+        main,
+        {"OVER": [over], "UNDER": [under_main, under_match]},
+        {},
+        {"OVER": {"current_line": 180.5}},
+        "TOTAL",
+    )
+
+    assert main == {"OVER": over, "UNDER": under_match}
+
+
+def test_align_main_lines_ev_priority_beats_movement():
+    home = _line_row(-7.5)
+    home_for_away = _line_row(-8.5)
+    away = _line_row(8.5)
+    away_for_home = _line_row(7.5)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home, home_for_away], "AWAY": [away, away_for_home]},
+        {"HOME": [{"side": "HOME", "current_line": -7.5}]},
+        {"AWAY": {"current_line": 8.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_for_home}
+
+
+def test_align_main_lines_movement_priority_beats_default():
+    home = _line_row(-7.5)
+    away = _line_row(8.5)
+    away_for_home = _line_row(7.5)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away, away_for_home]},
+        {},
+        {"HOME": {"current_line": -7.5}},
+        "SPREAD",
+    )
+
+    assert main == {"HOME": home, "AWAY": away_for_home}
+
+
+def test_align_main_lines_uses_most_books_for_target_line():
+    home = _line_row(-7.5)
+    away = _line_row(8.5)
+    thin_target = _line_row(7.5, books=1)
+    deep_target = _line_row(7.5, books=3)
+    main = {"HOME": home, "AWAY": away}
+
+    _align_main_lines(
+        main,
+        {"HOME": [home], "AWAY": [away, thin_target, deep_target]},
+        {"HOME": [{"side": "HOME", "current_line": -7.5}]},
+        {},
+        "SPREAD",
+    )
+
+    assert main["AWAY"] is deep_target
+
+
+def test_align_main_lines_missing_line_cannot_gain_ev_priority_and_none_proposition_is_safe():
+    missing = _line_row(None)
+    matching = _line_row(8.5)
+    under = _line_row(8.5)
+    main = {"OVER": missing, "UNDER": under}
+
+    _align_main_lines(
+        main,
+        {"OVER": [missing, matching], "UNDER": [under]},
+        {"OVER": [{"side": "OVER", "current_line": None}]},
+        {"UNDER": {"current_line": 8.5}},
+        None,
+    )
+
+    assert main["OVER"] is matching
+
+
+@pytest.mark.parametrize("assembler", [cards.assemble_card, assemble_game_card])
+def test_missing_two_way_lines_do_not_create_fair_or_proxy_market(assembler):
+    rows = []
+    for side in ("OVER", "UNDER"):
+        rows.append(
+            {
+                "market_id": "gm1",
+                "side": side,
+                "position": side,
+                "proposition": "TOTAL",
+                "player": "Test Player" if assembler is cards.assemble_card else None,
+                "market": "PTS",
+                "line": None,
+                "best_odds": -110,
+                "outcome_id": f"o{side}",
+                "league": "WNBA",
+            }
+        )
+
+    card = assembler("gm1", build_indexes(rows, [], [], []))
+
+    assert card["fair"] is None
+    assert all(side["proxy_market_edge"] is None for side in card["sides"].values())
+
+
+def test_near_equal_movement_line_does_not_trigger_mismatch_flag():
+    movement = [
+        {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
+        {"market_id": "gm1", "side": "AWAY", "current_line": 8.5000000005},
+    ]
+    card = assemble_game_card(
+        "gm1",
+        build_indexes(
+            [_spread_prop_row("HOME", -8.5), _spread_prop_row("AWAY", 8.5)],
+            movement,
+            [],
+            [],
+        ),
+    )
+
+    assert "movement_line_mismatch" not in card["flags"]
 
 
 def test_assemble_game_card_flags_sign_conflict_end_to_end():
