@@ -94,6 +94,7 @@ def test_board_emits_mlb_total_runs_ladder():
     ]
     rows = build_alt_team_total_board(_games_norm(records), league="MLB", now=NOW)
     assert [r["line"] for r in rows] == [3.5, 2.5]
+    assert [r["l10_hits"] for r in rows] == [9, 10]
     assert rows[0]["is_best_line"] == "true"
 
 
