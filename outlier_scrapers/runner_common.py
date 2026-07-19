@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from outlier_scrapers import pack
 
 GAME_TOTALS_NAME = "game_totals.csv"
 TEAM_TOTALS_NAME = "team_totals.csv"
+AI_EXCLUDED_CANDIDATE_FIELDS = frozenset({"historical_edge_pct"})
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +209,35 @@ def append_totals_block(
     return out
 
 
+def filter_candidates_for_ai(raw_bytes: bytes) -> bytes:
+    """Remove descriptive-only fields before candidates reach any AI model."""
+    try:
+        reader = csv.DictReader(
+            io.StringIO(raw_bytes.decode("utf-8-sig")),
+            strict=True,
+        )
+        fieldnames = reader.fieldnames
+        if not fieldnames:
+            raise RunnerError("candidates.csv has no header")
+        rows = list(reader)
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise RunnerError("candidates.csv is malformed") from exc
+
+    if any(None in row or any(value is None for value in row.values()) for row in rows):
+        raise RunnerError("candidates.csv has malformed rows")
+
+    ai_fieldnames = [
+        field for field in fieldnames if field not in AI_EXCLUDED_CANDIDATE_FIELDS
+    ]
+    out_io = io.StringIO()
+    writer = csv.DictWriter(out_io, fieldnames=ai_fieldnames)
+    writer.writeheader()
+    writer.writerows(
+        {field: row.get(field, "") for field in ai_fieldnames} for row in rows
+    )
+    return out_io.getvalue().encode("utf-8-sig")
+
+
 def build_reasoning_data_block(
     candidates_bytes: bytes,
     totals_bytes: bytes | None,
@@ -272,8 +303,9 @@ def validate_candidates(pack_dir: Path, *, allow_empty: bool = False) -> tuple[b
     writer.writeheader()
     writer.writerows(kept)
 
-    raw_bytes = out_io.getvalue().encode("utf-8-sig")
-    return raw_bytes, sha256_bytes(raw_bytes)
+    canonical_bytes = out_io.getvalue().encode("utf-8-sig")
+    ai_bytes = filter_candidates_for_ai(canonical_bytes)
+    return ai_bytes, sha256_bytes(ai_bytes)
 
 
 def read_required_text(path: Path, label: str) -> str:

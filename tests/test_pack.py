@@ -25,6 +25,7 @@ from outlier_scrapers.pack import (
     select_date,
     write_pack,
 )
+from outlier_scrapers.sizing import compute_historical_edge
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
 
@@ -1349,6 +1350,64 @@ def test_context_columns_populated_with_full_names():
     assert "Rebounds" in row["market_label"]
 
 
+def test_portland_fire_context_resolves_full_names():
+    # Expansion team must resolve like any other: PDX -> Portland Fire, AWAY side
+    # of 'PDX @ MIN' (regression for the 2026-07-18 Carleton blank-team row).
+    card = _ctx_card(
+        "PDX", "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert row["team"] == "PDX"
+    assert row["team_name"] == "Portland Fire"
+    assert row["opponent"] == "MIN"
+    assert row["opp_name"] == "Minnesota Lynx"
+    assert row["home_away"] == "AWAY"
+
+
+def test_unresolved_team_blanks_opponent_and_flags():
+    # When the player's team cannot be resolved, a populated opponent column is
+    # worse than an empty one: 2026-07-18 the desk read opponent=MIN as the only
+    # team context on a PDX player's row. Blank the pair and flag it.
+    card = _ctx_card(
+        None, "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert not row["team"]
+    assert not row["team_name"]
+    assert not row["opponent"]
+    assert not row["opp_name"]
+    assert not row["home_away"]
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_player_prop_without_any_team_context_is_flagged():
+    # A player row where neither side resolved is still an enrichment failure.
+    card = _ctx_card(None, None, None)
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_resolved_team_context_is_not_flagged():
+    card = _ctx_card("LAS", "CHI", "CHI @ LAS")
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
+def test_gameline_without_team_context_is_not_flagged():
+    # Game totals carry no team on purpose; the guard must not fire there.
+    card = ev_card(market_type="GAMELINE", market="TOTAL", proposition="TOTAL",
+                   matchup="PDX @ MIN", line=160.5)
+    ev = [{
+        "market_id": "m1", "outcome_id": "o1", "book": "FD",
+        "book_odds": 110, "book_decimal_odds": 2.1, "calculated_ev_pct": 0.05,
+    }]
+    row = make_row(card, ev)
+    assert row is not None
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
 def test_market_label_disambiguates_terse_code():
     # 'PT' reads as basketball points but is Pitches Thrown; market_label spells it out.
     card = _ctx_card(
@@ -1603,3 +1662,137 @@ def test_home_away_unresolved_flag():
     row2 = make_row(card, [])
     assert row2["home_away"] == ""
     assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]
+
+
+def test_write_pack_validation_atomic(tmp_path):
+    # Bug 4 Regression Test: write_pack must not delete existing valid artifacts if validation fails.
+    out_dir = tmp_path / "packs" / "2026-07-20"
+    out_dir.mkdir(parents=True)
+    dossiers_dir = out_dir / "dossiers"
+    dossiers_dir.mkdir()
+    
+    # Seed with existing artifacts
+    (out_dir / "candidates.csv").write_text("dummy", encoding="utf-8")
+    (dossiers_dir / "test_dossier.md").write_text("dummy", encoding="utf-8")
+    
+    # Invalid candidate row that will trigger ValidationError
+    invalid_rows = [{"sport": "MLB"}]
+    
+    from outlier_scrapers.schema import ValidationError
+    with pytest.raises(ValidationError, match="Critical schema compatibility violation"):
+        write_pack(rows=invalid_rows, out_dir=out_dir)
+        
+    # Verify the artifacts are STILL THERE because validation failed BEFORE unlinking
+    assert (out_dir / "candidates.csv").exists()
+    assert (dossiers_dir / "test_dossier.md").exists()
+
+# historical_edge_pct: descriptive edge from the raw recency hit rate.
+def test_historical_edge_pct_column_position():
+    # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1]
+        == "historical_edge_pct"
+    )
+    # Must not displace the pinned last column.
+    assert CANDIDATES_HEADER[-1] == "source_timestamps"
+
+
+def test_historical_edge_pct_blank_when_hit_data_missing():
+    # Regression: signal_score() defaults hit_component to 50.0 when Outlier
+    # has no recency data. That sentinel must NOT leak into historical_edge_pct.
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 50.0, "hit_pct": None}
+    row = make_row(card, [])
+    assert row is not None
+    assert row["historical_edge_pct"] == ""
+
+
+def test_historical_edge_pct_populated_from_raw_hit_pct():
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 62.0, "hit_pct": 62.0}
+    row = make_row(card, [])
+    assert row is not None
+    dec = float(row["decimal_price"])
+    push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
+    expected = compute_historical_edge(0.62, dec, push)
+    assert expected is not None
+    assert row["historical_edge_pct"] != ""
+    assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)
+
+
+from unittest import mock
+from pathlib import Path
+from outlier_scrapers.pack import _swap_staged_pack, _restore_published_pack, _retry_replace, _retry_rmtree
+
+def test_swap_staged_pack_retries_on_permission_error(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+        # First call for backup succeeds, second call for swap fails once then succeeds
+        mock_replace.side_effect = [None, PermissionError("locked"), None]
+        backup_dir = _swap_staged_pack(staging_dir, out_dir)
+        
+        assert backup_dir is not None
+        assert mock_replace.call_count == 3
+        mock_sleep.assert_called_once()
+
+def test_swap_staged_pack_exhausts_retries(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+        # First call for backup fails consistently
+        mock_replace.side_effect = PermissionError("locked")
+        
+        with pytest.raises(PermissionError):
+            _swap_staged_pack(staging_dir, out_dir)
+            
+        assert mock_replace.call_count == 10
+        assert mock_sleep.call_count == 10
+
+def test_swap_staged_pack_immediate_rollback_on_other_error(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace:
+        def replace_side_effect(src, dst):
+            if str(src) == str(staging_dir):
+                raise ValueError("other error")
+            Path(src).rename(dst)
+            
+        mock_replace.side_effect = replace_side_effect
+        
+        with pytest.raises(ValueError):
+            _swap_staged_pack(staging_dir, out_dir)
+            
+        assert mock_replace.call_count == 3
+
+def test_restore_published_pack_with_transient_lock(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.shutil.rmtree") as mock_rmtree, \
+         mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+         
+        # simulate transient lock on rmtree then success
+        mock_rmtree.side_effect = [PermissionError("lock"), None]
+        # simulate transient lock on replace then success
+        mock_replace.side_effect = [PermissionError("lock"), None]
+        
+        _restore_published_pack(out_dir, backup_dir)
+        
+        assert mock_rmtree.call_count == 2
+        assert mock_replace.call_count == 2
+        assert mock_sleep.call_count == 2

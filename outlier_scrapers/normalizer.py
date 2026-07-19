@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import Any
 
 from .registry import SportConfig, normalize_market, normalize_team
+from .schema import (
+    ValidationError,
+    validate_raw_schedule,
+    validate_raw_player_props,
+    validate_raw_games,
+    validate_normalized_props,
+    validate_normalized_games,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _to_float(value: Any) -> float | None:
@@ -458,7 +469,30 @@ def build_normalized_payload(
     schedule_payload: dict[str, Any],
     source_url: str,
 ) -> dict[str, Any]:
+    # Schema validation gates
+    schedule_errors = validate_raw_schedule(schedule_payload)
+    if schedule_errors:
+        critical = [err for err in schedule_errors if err.startswith("Schedule payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical schedule schema violation: {'; '.join(critical)}")
+        for err in schedule_errors:
+            logger.warning("Schedule schema warning: %s", err)
+
+    props_errors = validate_raw_player_props(props_payload)
+    if props_errors:
+        critical = [err for err in props_errors if err.startswith("Player props payload") or "'props' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical player props schema violation: {'; '.join(critical)}")
+        for err in props_errors:
+            logger.warning("Player props schema warning: %s", err)
+
     rows = normalize_player_props(props_payload, schedule_payload, config)
+
+    normalized_errors = validate_normalized_props(rows)
+    if normalized_errors:
+        for err in normalized_errors:
+            logger.warning("Normalized props schema warning: %s", err)
+
     pagination = (
         props_payload.get("_page_summary")
         if isinstance(props_payload.get("_page_summary"), dict)
@@ -500,6 +534,23 @@ def normalize_games(
     events_payloads: list[dict[str, Any]],
     source_url: str,
 ) -> dict[str, Any]:
+    # Schema validation gates
+    schedule_errors = validate_raw_schedule(schedule_payload)
+    if schedule_errors:
+        critical = [err for err in schedule_errors if err.startswith("Schedule payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical schedule schema violation: {'; '.join(critical)}")
+        for err in schedule_errors:
+            logger.warning("Schedule schema warning: %s", err)
+
+    games_errors = validate_raw_games({"events": events_payloads})
+    if games_errors:
+        critical = [err for err in games_errors if err.startswith("Games payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical games schema violation: {'; '.join(critical)}")
+        for err in games_errors:
+            logger.warning("Games schema warning: %s", err)
+
     schedule_index = build_schedule_index(schedule_payload, config)
 
     rows: list[dict[str, Any]] = []
@@ -637,6 +688,11 @@ def normalize_games(
                     "stats": outcome.get("stats") or {},
                 }
                 rows.append(row)
+
+    normalized_errors = validate_normalized_games(rows)
+    if normalized_errors:
+        for err in normalized_errors:
+            logger.warning("Normalized games schema warning: %s", err)
 
     return {
         "generated_at": datetime.now().astimezone().isoformat(),

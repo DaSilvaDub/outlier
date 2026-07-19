@@ -232,3 +232,13 @@ def test_build_game_totals_merges_split_full_game_market_ids_into_one_ladder():
     rows = build_game_totals([], games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
     assert len(rows) == 1
     assert rows[0]['fair_total'] != ''
+
+def test_implied_prob_scaling_and_rounding():
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m_imp', 8.5, 'OVER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m_imp', 8.5, 'UNDER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}])]}
+    candidates = [{'market_id': 'm_imp', 'market_type': 'GAMELINE', 'player_id': '', 'line': 8.5, '_proposition': 'TOTAL'}]
+    rows = build_game_totals(candidates, games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
+    assert len(rows) == 1
+    row = rows[0]
+    # -110 implied prob is 52.380952...% -> 0.52380952...
+    # So 0.52381 when rounded to 5 decimal places.
+    assert row['implied_prob'] == 0.52381

@@ -1,6 +1,7 @@
 import argparse
 import re
 import shutil
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,6 +11,16 @@ DEFAULT_OUT_DIRS = [
     r"C:\Users\dasil\OneDrive\Desktop\today",
     r"G:\My Drive\today",
 ]
+
+
+def filter_candidates_text_for_ai(candidates: str) -> str:
+    """Apply the canonical AI-facing candidate projection in standalone runs."""
+    repo_root = Path(__file__).resolve().parents[4]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from outlier_scrapers.runner_common import filter_candidates_for_ai
+
+    return filter_candidates_for_ai(candidates.encode("utf-8")).decode("utf-8-sig")
 
 
 def clean_stray_files(out_dir: Path) -> None:
@@ -124,6 +135,7 @@ def main() -> None:
 
     with open(candidates_path, "r", encoding="utf-8") as f:
         candidates = f.read()
+    candidates = filter_candidates_text_for_ai(candidates)
 
     briefing = briefing.replace("- Use this pack ONLY. Do not use memory or the web.\n", "")
     briefing = briefing.replace("- If you need info not in the pack, list it under NEEDS — do not guess.\n", "")

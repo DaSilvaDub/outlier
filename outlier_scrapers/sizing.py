@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from math import isfinite
 
 
 @dataclass(frozen=True)
@@ -102,3 +103,35 @@ def compute_sizing(
         max_units=max_units,
         recommended_units_pre_news=recommended_units_pre_news,
     )
+
+
+def compute_historical_edge(
+    hit_rate_prob: float | None,
+    decimal_price: float | None,
+    push_prob: float | None = None,
+) -> float | None:
+    """Edge implied by the raw recency hit rate alone. Descriptive only.
+
+    Same convention as compute_sizing: probability inputs are fractions
+    and the result is a fraction (p_win * b - p_lose). Returns None when
+    inputs are missing, non-finite, or form an invalid partition.
+
+    Callers must convert the raw nullable hit rate (signal["hit_pct"],
+    expressed from 0 to 100) to a probability before calling. Never use
+    hit_rate_component: its 50.0 default stands in for missing data and
+    would fabricate an edge. This value must never feed sizing.
+    """
+    if hit_rate_prob is None or decimal_price is None:
+        return None
+    push = push_prob if push_prob is not None else 0.0
+    if not all(isfinite(value) for value in (hit_rate_prob, decimal_price, push)):
+        return None
+    if decimal_price <= 1.0:
+        return None
+    p_win = hit_rate_prob
+    if p_win < 0.0 or p_win > 1.0:
+        return None
+    p_lose = 1.0 - p_win - push
+    if push < 0.0 or p_lose < 0.0:
+        return None
+    return p_win * (decimal_price - 1.0) - p_lose

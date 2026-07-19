@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import shutil
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,8 @@ from outlier_scrapers.registry import (
     get_sport_config,
     team_display_name,
 )
-from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
+from outlier_scrapers.schema import ValidationError, validate_candidate_row
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ CANDIDATES_HEADER = [
     "push_prob",
     "implied_prob",
     "edge_pct",
+    "historical_edge_pct",
     "kelly_025_units",
     "max_units",
     "recommended_units_pre_news",
@@ -488,6 +491,13 @@ def build_row(
     matchup = card.get("matchup") or ref.get("matchup")
     team = card.get("team") or ref.get("team")
     opponent = card.get("opponent") or ref.get("opponent")
+    # A row whose own team is unresolved must not carry a populated opponent:
+    # the desk reads opponent-only context as the player's side (2026-07-18
+    # Carleton row showed her matchup's other team as the only team column).
+    is_player_row = has_player or str(market_type or "").upper() == "PLAYER_PROP"
+    team_enrichment_failed = not team and bool(opponent or is_player_row)
+    if team_enrichment_failed:
+        opponent = None
     try:
         config = get_sport_config(sport, allow_disabled=True)
     except ValueError:
@@ -626,6 +636,8 @@ def build_row(
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
+    if team_enrichment_failed:
+        dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
     # Stale-line edge gate: reverse line movement (line moved against this side)
@@ -664,6 +676,16 @@ def build_row(
         else ""
     )
     row["orf_component"] = signal.get("orf_component", "")
+    # Descriptive-only: edge implied by the raw recency hit rate. Reads
+    # signal["hit_pct"] (None when Outlier had no recency data), NOT
+    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
+    hist_edge = compute_historical_edge(
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
+        decimal_price=_to_float(row.get("decimal_price")),
+        push_prob=_to_float(row.get("push_prob")),
+    )
+    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     signal_flags: list[str] = []
     for value, flag in (
         (_to_float(row.get("hit_rate_component")), "hit_rate_support"),
@@ -1136,6 +1158,21 @@ def write_pack(
     coverage: dict[str, dict[str, int]] | None = None,
     opportunity_rows: list[dict[str, Any]] | None = None,
 ) -> None:
+    # Validate all candidate rows against schema constraints
+    for idx, row in enumerate(rows):
+        row_errors = validate_candidate_row(row, CANDIDATES_HEADER)
+        if row_errors:
+            # If a critical field is missing or empty, raise ValidationError
+            critical_mismatch = any(
+                "Critical field" in err or "dictionary" in err
+                for err in row_errors
+            )
+            if critical_mismatch:
+                raise ValidationError(f"Critical schema compatibility violation at row {idx}: {'; '.join(row_errors)}")
+            # Log minor issues as warnings
+            for err in row_errors:
+                logger.warning("Candidate row schema warning at index %d: %s", idx, err)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in DERIVED_PACK_OUTPUTS:
         (out_dir / name).unlink(missing_ok=True)
@@ -1143,6 +1180,7 @@ def write_pack(
     if dossiers_dir.exists():
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
@@ -1344,27 +1382,51 @@ def build_pack(
     return rows, target_date, games_norm
 
 
+def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) -> None:
+    last_err = None
+    for _ in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+    if last_err:
+        raise last_err
+
+def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
+    last_err = None
+    for _ in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+    if last_err:
+        raise last_err
+
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
 
     backup_dir = out_dir.parent / f".{out_dir.name}.feedback-backup-{uuid.uuid4().hex}"
     had_existing = out_dir.exists()
     if had_existing:
-        os.replace(out_dir, backup_dir)
+        _retry_replace(out_dir, backup_dir)
     try:
-        os.replace(staging_dir, out_dir)
+        _retry_replace(staging_dir, out_dir)
     except Exception:
         if had_existing and backup_dir.exists() and not out_dir.exists():
-            os.replace(backup_dir, out_dir)
+            _retry_replace(backup_dir, out_dir)
         raise
     return backup_dir if had_existing else None
 
 
 def _restore_published_pack(out_dir: Path, backup_dir: Path | None) -> None:
     if out_dir.exists():
-        shutil.rmtree(out_dir)
+        _retry_rmtree(out_dir)
     if backup_dir is not None and backup_dir.exists():
-        os.replace(backup_dir, out_dir)
+        _retry_replace(backup_dir, out_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> Path:
