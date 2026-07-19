@@ -1715,3 +1715,81 @@ def test_historical_edge_pct_populated_from_raw_hit_pct():
     assert expected is not None
     assert row["historical_edge_pct"] != ""
     assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)
+
+
+from unittest import mock
+from pathlib import Path
+from outlier_scrapers.pack import _swap_staged_pack, _restore_published_pack, _retry_replace, _retry_rmtree
+
+def test_swap_staged_pack_retries_on_permission_error(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+        # First call for backup succeeds, second call for swap fails once then succeeds
+        mock_replace.side_effect = [None, PermissionError("locked"), None]
+        backup_dir = _swap_staged_pack(staging_dir, out_dir)
+        
+        assert backup_dir is not None
+        assert mock_replace.call_count == 3
+        mock_sleep.assert_called_once()
+
+def test_swap_staged_pack_exhausts_retries(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+        # First call for backup fails consistently
+        mock_replace.side_effect = PermissionError("locked")
+        
+        with pytest.raises(PermissionError):
+            _swap_staged_pack(staging_dir, out_dir)
+            
+        assert mock_replace.call_count == 10
+        assert mock_sleep.call_count == 10
+
+def test_swap_staged_pack_immediate_rollback_on_other_error(tmp_path):
+    staging_dir = tmp_path / "staging"
+    out_dir = tmp_path / "out"
+    staging_dir.mkdir()
+    out_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace:
+        def replace_side_effect(src, dst):
+            if str(src) == str(staging_dir):
+                raise ValueError("other error")
+            Path(src).rename(dst)
+            
+        mock_replace.side_effect = replace_side_effect
+        
+        with pytest.raises(ValueError):
+            _swap_staged_pack(staging_dir, out_dir)
+            
+        assert mock_replace.call_count == 3
+
+def test_restore_published_pack_with_transient_lock(tmp_path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir()
+    
+    with mock.patch("outlier_scrapers.pack.shutil.rmtree") as mock_rmtree, \
+         mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
+         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+         
+        # simulate transient lock on rmtree then success
+        mock_rmtree.side_effect = [PermissionError("lock"), None]
+        # simulate transient lock on replace then success
+        mock_replace.side_effect = [PermissionError("lock"), None]
+        
+        _restore_published_pack(out_dir, backup_dir)
+        
+        assert mock_rmtree.call_count == 2
+        assert mock_replace.call_count == 2
+        assert mock_sleep.call_count == 2
