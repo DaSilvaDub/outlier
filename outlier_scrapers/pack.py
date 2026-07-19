@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import shutil
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -1356,27 +1357,51 @@ def build_pack(
     return rows, target_date, games_norm
 
 
+def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) -> None:
+    last_err = None
+    for _ in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+    if last_err:
+        raise last_err
+
+def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
+    last_err = None
+    for _ in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+    if last_err:
+        raise last_err
+
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
 
     backup_dir = out_dir.parent / f".{out_dir.name}.feedback-backup-{uuid.uuid4().hex}"
     had_existing = out_dir.exists()
     if had_existing:
-        os.replace(out_dir, backup_dir)
+        _retry_replace(out_dir, backup_dir)
     try:
-        os.replace(staging_dir, out_dir)
+        _retry_replace(staging_dir, out_dir)
     except Exception:
         if had_existing and backup_dir.exists() and not out_dir.exists():
-            os.replace(backup_dir, out_dir)
+            _retry_replace(backup_dir, out_dir)
         raise
     return backup_dir if had_existing else None
 
 
 def _restore_published_pack(out_dir: Path, backup_dir: Path | None) -> None:
     if out_dir.exists():
-        shutil.rmtree(out_dir)
+        _retry_rmtree(out_dir)
     if backup_dir is not None and backup_dir.exists():
-        os.replace(backup_dir, out_dir)
+        _retry_replace(backup_dir, out_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> Path:
