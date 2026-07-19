@@ -13,20 +13,7 @@ from typing import Any
 from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
 from outlier_scrapers.normalizer import detect_scope, implied_probability
 from outlier_scrapers.sizing import compute_sizing
-
-
-def _american_to_decimal(american: Any) -> float | None:
-    if american in (None, ""):
-        return None
-    try:
-        val = float(american)
-    except (ValueError, TypeError):
-        return None
-    if val > 0:
-        return (val / 100.0) + 1.0
-    if val < 0:
-        return (100.0 / abs(val)) + 1.0
-    return 2.0
+from outlier_scrapers.utils import _american_to_decimal, _decimal_to_american
 
 
 TOTAL_KIND_GAME = "game"
