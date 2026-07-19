@@ -402,6 +402,7 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "player": row.get("player"),
                 "player_id": row.get("player_id"),
                 "market": row.get("market") or row.get("market_raw"),
+                "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "proposition": row.get("proposition") or sctx.get("proposition"),
@@ -421,6 +422,7 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "event_id": row.get("event_id"),
                 "proposition": row.get("proposition"),
                 "market": row.get("market") or row.get("market_raw"),
+                "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "scope": row.get("scope") or sctx.get("scope"),
@@ -568,13 +570,19 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             rows_by_side[side].append(prop)
 
     main_row: dict[str, dict[str, Any]] = {}
-    alt_lines: dict[str, list[dict[str, Any]]] = {}
     for side, rws in rows_by_side.items():
         if not rws:
             continue
         side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
-        chosen = _pick_main_side_row(rws, movement.get(side), side_ev)
-        main_row[side] = chosen
+        main_row[side] = _pick_main_side_row(rws, movement.get(side), side_ev)
+
+    _align_main_lines(main_row, rows_by_side, ev_rows, movement, str(identity.get("proposition") or ""))
+
+    alt_lines: dict[str, list[dict[str, Any]]] = {}
+    for side, rws in rows_by_side.items():
+        if not rws or side not in main_row:
+            continue
+        chosen = main_row[side]
         alt_lines[side] = [
             {"line": r.get("line"), "best_odds": r.get("best_odds"), "book_count": len(r.get("books") or [])}
             for r in sorted(rws, key=lambda r: (_to_float(r.get("line")) or 0.0))
@@ -644,6 +652,56 @@ def _spread_sign_conflict(home_line: Any, away_line: Any) -> bool:
     return abs(home_f + away_f) > 1e-9
 
 
+def _align_main_lines(
+    main_row: dict[str, dict[str, Any]],
+    rows_by_side: dict[str, list[dict[str, Any]]],
+    ev_rows: list[dict[str, Any]],
+    movement: dict[str, Any],
+    proposition: str,
+) -> None:
+    """Force mirror-image spreads or matching totals when independent selection diverges."""
+    if len(main_row) != 2:
+        return
+
+    s1, s2 = list(main_row.keys())
+    r1, r2 = main_row[s1], main_row[s2]
+
+    # Local deferred import to avoid circular dependency
+    from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
+    is_spread = proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS
+
+    has_conflict = False
+    if is_spread:
+        has_conflict = _spread_sign_conflict(r1.get("line"), r2.get("line"))
+    else:
+        has_conflict = _to_float(r1.get("line")) != _to_float(r2.get("line"))
+
+    if not has_conflict:
+        return
+
+    def _strength(side: str, row: dict[str, Any]) -> int:
+        side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
+        line = _to_float(row.get("line"))
+        if any(_to_float(e.get("current_line")) == line for e in side_ev):
+            return 3
+        mv = movement.get(side)
+        if mv and _to_float(mv.get("current_line")) == line:
+            return 2
+        return 1
+
+    str1 = _strength(s1, r1)
+    str2 = _strength(s2, r2)
+
+    winner_s, loser_s = (s1, s2) if str1 >= str2 else (s2, s1)
+    winner_val = _to_float(main_row[winner_s].get("line"))
+
+    if winner_val is not None:
+        target_loser_val = -winner_val if is_spread else winner_val
+        exact = [r for r in rows_by_side[loser_s] if _to_float(r.get("line")) == target_loser_val]
+        if exact:
+            main_row[loser_s] = max(exact, key=lambda r: len(r.get("books") or []))
+
+
 def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     from .normalizer import game_sides
     props = idx.props_by_market.get(market_id, [])
@@ -666,13 +724,19 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             rows_by_side[pos].append(prop)
 
     main_row: dict[str, dict[str, Any]] = {}
-    alt_lines: dict[str, list[dict[str, Any]]] = {}
     for side, rws in rows_by_side.items():
         if not rws:
             continue
         side_ev = [r for r in ev_rows if str(r.get("side") or "").upper() == side]
-        chosen = _pick_main_side_row(rws, movement.get(side), side_ev)
-        main_row[side] = chosen
+        main_row[side] = _pick_main_side_row(rws, movement.get(side), side_ev)
+
+    _align_main_lines(main_row, rows_by_side, ev_rows, movement, proposition)
+
+    alt_lines: dict[str, list[dict[str, Any]]] = {}
+    for side, rws in rows_by_side.items():
+        if not rws or side not in main_row:
+            continue
+        chosen = main_row[side]
         alt_lines[side] = [
             {"line": r.get("line"), "best_odds": r.get("best_odds"), "book_count": len(r.get("books") or [])}
             for r in sorted(rws, key=lambda r: (_to_float(r.get("line")) or 0.0))
@@ -721,10 +785,30 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     # this conflict guard can never drift out of sync with the rendering fix.
     from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
 
-    if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS and _spread_sign_conflict(
-        main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
-    ):
-        card.setdefault("flags", []).append("spread_sign_conflict")
+    if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
+        headline = str(card.get("headline_side") or "")
+        opposite = "HOME" if headline == "AWAY" else "AWAY"
+        headline_line = _to_float(main_row.get(headline, {}).get("line"))
+        opposite_lines = [
+            _to_float(row.get("line")) for row in rows_by_side.get(opposite, [])
+        ]
+        has_mirror = (
+            headline_line is not None
+            and any(
+                other is not None and abs(headline_line + other) <= 1e-9
+                for other in opposite_lines
+            )
+        )
+        if not has_mirror and _spread_sign_conflict(
+            main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
+        ):
+            card.setdefault("flags", []).append("spread_sign_conflict")
+    headline = str(card.get("headline_side") or "")
+    if headline in main_row:
+        movement_line = _to_float((movement.get(headline) or {}).get("current_line"))
+        card_line = _to_float(main_row[headline].get("line"))
+        if movement_line is not None and card_line is not None and movement_line != card_line:
+            card.setdefault("flags", []).append("movement_line_mismatch")
     return card
 
 

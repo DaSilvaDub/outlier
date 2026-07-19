@@ -18,6 +18,13 @@ data/*
 !data/.gitkeep
 packs/ 
 
+# Permanent local feedback data and generated calibration reports.
+calibration/*.sqlite3
+calibration/*.sqlite3-shm
+calibration/*.sqlite3-wal
+calibration/reports/
+calibration/exports/
+
 # Local credentials for headless auth - never commit.
 .env
 *.env
@@ -31,5 +38,8 @@ scratch/
 
 # AI agent session logs / introspection (noise across ents, not part of source)
 .agent-log/
+
+# Local hookify rules (personal/local dev-time guardrails, not shared source)
+.claude/*.local.md
 
 .tmp.driveupload/

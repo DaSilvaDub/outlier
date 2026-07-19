@@ -1,3 +1,4 @@
+import csv
 import json
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _opportunity_key,
     _summarize_lm_status,
     american_to_decimal,
     build_briefing,
@@ -12,6 +14,7 @@ from outlier_scrapers.pack import (
     build_freshness_section,
     build_injuries,
     build_pack,
+    build_pack_with_coverage,
     build_row,
     index_ev_by_outcome,
     is_excluded_market,
@@ -22,8 +25,24 @@ from outlier_scrapers.pack import (
     select_date,
     write_pack,
 )
+from outlier_scrapers.sizing import compute_historical_edge
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
+
+
+def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
+    numeric = {
+        "sport": "WNBA",
+        "event_id": "e1",
+        "market_id": "m1",
+        "outcome_id": 0,
+        "selection": "OVER 10",
+        "line": 10.0,
+    }
+    serialized = {**numeric, "outcome_id": "0", "line": "10"}
+
+    assert _opportunity_key(numeric) == _opportunity_key(serialized)
+    assert _opportunity_key(numeric)[3] == "0"
 
 
 def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):
@@ -98,12 +117,30 @@ def test_ev_row_sized():
     ]
     row = make_row(card, ev)
     assert row["model_prob"] == 0.5
+    assert row["outcome_id"] == "o1"
+    assert row["market_consensus_prob"] == 0.5
+    assert row["independent_model_prob"] == ""
+    assert row["final_blended_prob"] == 0.5
     assert row["decimal_price"] == 2.1
     assert row["price"] == 110  # same row as the chosen book, not card best_odds
     assert row["book"] == "FD"
     assert isinstance(row["edge_pct"], float)
     assert row["recommended_units_pre_news"] == 1.0
     assert row["sizing_flags"] == ""
+
+
+def test_local_ev_probability_source_is_labeled_separately():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    card["sides"]["OVER"]["ev"]["ev_source"] = "LOCAL"
+    ev = [{
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "book": "FD",
+        "book_odds": 110,
+        "book_decimal_odds": 2.1,
+    }]
+    row = make_row(card, ev)
+    assert row["model_prob_source"] == "local_devig"
 
 
 # 3. EV price/book/decimal all come from the SAME (highest-decimal) record.
@@ -199,6 +236,51 @@ def test_no_ev_row():
     assert row["model_prob"] == ""
 
 
+def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_actionable():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "m2",
+        "market_type": "PLAYER_PROP",
+        "market": "AST",
+        "board": "B",
+        "sides": {
+            "OVER": {
+                "outcome_id": "o2",
+                "line": 7.5,
+                "best_odds": -144,
+                "signal": {
+                    "hit_component": 70.0,
+                    "insight_component": 60.0,
+                    "movement_corroboration": 1.0,
+                    "orf_component": 55.0,
+                    "insight_conflict": False,
+                },
+                "proxy_market_edge": {
+                    "book": "Prophetx",
+                    "odds": -144,
+                    "fair_prob_pct": 56.933,
+                    "source": "proxy_market",
+                },
+            }
+        },
+    }
+    row = make_row(card, [])
+    assert row["model_prob"] == pytest.approx(0.56933)
+    assert row["model_prob_source"] == "proxy_market_devig"
+    assert row["market_consensus_prob"] == pytest.approx(0.56933)
+    assert row["final_blended_prob"] == pytest.approx(0.56933)
+    assert row["board"] == "B"
+    assert row["movement_component"] == pytest.approx(75.0)
+    assert set(row["signal_flags"].split(";")) == {
+        "hit_rate_support", "insight_support", "orf_support", "movement_support"
+    }
+    assert isinstance(row["edge_pct"], float)
+    assert isinstance(row["kelly_025_units"], float)
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
+    assert "proxy_market_probability" in row["sizing_flags"]
+
+
 # 8b. Stale-line edge gate: RLM + thin_liquidity on an EV-sized row is a
 #     phantom-edge risk (see 2026-07-11 Bonner O10.5: pack recommended 3.0u with
 #     both flags already set). Withhold the unit recommendation and flag it, but
@@ -223,6 +305,8 @@ def test_stale_line_edge_gate_withholds_units():
     assert row["recommended_units_pre_news"] == ""  # stake withheld
     assert "edge_suspect_stale_line" in row["data_quality_flags"]
     assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
+    assert row["actionable"] == "false"
+    assert row["_board"] == "flagged"
 
 
 # 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
@@ -281,6 +365,8 @@ def test_spread_sign_conflict_withholds_units():
     assert row["recommended_units_pre_news"] == ""  # stake withheld
     assert "spread_sign_conflict" in row["data_quality_flags"]
     assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
+    assert row["actionable"] == "false"
+    assert row["_board"] == "flagged"
 
 
 # 8e. Without the flag, an otherwise-identical SPREAD row sizes normally.
@@ -301,6 +387,29 @@ def test_spread_row_without_conflict_sizes_normally():
     row = make_row(card, ev)
     assert row["recommended_units_pre_news"] != ""
     assert "spread_sign_conflict" not in row["data_quality_flags"]
+
+
+def test_card_vs_movement_line_mismatch_is_disqualifying_even_for_legacy_cards():
+    card = ev_card(
+        line=7.5,
+        market_type="GAMELINE",
+        market="SPREAD",
+        proposition="SPREAD",
+    )
+    card["sides"]["OVER"]["movement"] = {"open_line": 7.5, "current_line": 8.5}
+    ev = [{
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "book": "FD",
+        "book_odds": 115,
+        "book_decimal_odds": 2.15,
+        "calculated_ev_pct": 0.05,
+    }]
+    row = make_row(card, ev)
+    assert "movement_line_mismatch" in row["data_quality_flags"]
+    assert row["recommended_units_pre_news"] == ""
+    assert row["actionable"] == "false"
+    assert row["_board"] == "flagged"
 
 
 # 8f. Same gate for the other ROLE_BLOCK "stand it down" flags: a corrupt
@@ -492,6 +601,24 @@ def test_quota_ranking():
     assert out[0]["market_id"] == "a19"
 
 
+def test_flagged_audits_share_existing_ev_quota():
+    rows = [
+        {"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"}
+        for i in range(20)
+    ]
+    rows += [
+        {"_board": "flagged", "_rank_value": i + 0.5, "market_id": f"f{i}"}
+        for i in range(20)
+    ]
+    rows += [
+        {"_board": "board_b", "_rank_value": i, "market_id": f"b{i}"}
+        for i in range(10)
+    ]
+    out = rank_rows(rows, top_ev_n=15, top_signal_n=10)
+    assert len(out) == 25
+    assert sum(row["_board"] in {"board_a", "flagged"} for row in out) == 15
+
+
 # 15. Date selection: pick requested, fall back to latest, keep undated.
 def test_select_date():
     rows = [
@@ -624,7 +751,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         _league_fixture(tmp_path / "data" / lg, lg)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, target, games_norm = build_pack(["MLB", "WNBA"], None, 15, 10)
+    rows, target, games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
     # both streams represented: a player (board_b) and a game (board_a) row exist
@@ -637,8 +764,10 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert isinstance(game_rows[0]["edge_pct"], float)
 
     out_dir = tmp_path / "packs" / target
-    write_pack(rows, out_dir, games_norm_by_league=games_norm)
+    write_pack(rows, out_dir, games_norm_by_league=games_norm, coverage=coverage)
     assert (out_dir / "candidates.csv").exists()
+    assert (out_dir / "opportunities.csv").exists()
+    assert (out_dir / "candidate_coverage.json").exists()
     assert (out_dir / "game_totals.csv").exists()
     assert (out_dir / "team_totals.csv").exists()
     assert (out_dir / "sections" / "game_totals.md").exists()
@@ -652,6 +781,9 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert "Slate index" in briefing
     assert "### Game totals" in briefing
     assert "### Team totals" in briefing
+    assert "### Candidate Coverage" in briefing
+    assert coverage["MLB"]["emitted"] > 0
+    assert coverage["WNBA"]["emitted"] > 0
     # dossiers unique per (sport,event)
     dossiers = list((out_dir / "dossiers").glob("*.md"))
     assert len(dossiers) == len({d.name for d in dossiers})
@@ -679,6 +811,41 @@ def test_briefing_role_block():
     assert "first lock: n/a" in text
 
 
+def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():
+    signal = {
+        "_board": "board_b",
+        "sport": "WNBA",
+        "market_id": "tm1",
+        "selection": "LAS Team Total OVER 85.5",
+        "line": 85.5,
+        "event_id": "E1",
+    }
+    flagged = {
+        "_board": "flagged",
+        "sport": "WNBA",
+        "market_id": "spread1",
+        "selection": "LAS @ ATL Spread AWAY +7.5",
+        "line": "+7.5",
+        "price": 115,
+        "data_quality_flags": "spread_sign_conflict;movement_line_mismatch",
+    }
+    team_totals = [{
+        "sport": "WNBA",
+        "market_id": "tm1",
+        "selection": "LAS Team Total OVER 85.5",
+        "line": 85.5,
+        "price": -110,
+        "edge_pct": 0.01,
+        "actionable": "false",
+        "quality_flags": "SINGLE_BOOK",
+    }]
+    text = build_briefing([signal, flagged], "2026-07-13", team_totals_rows=team_totals)
+    assert text.count("tm1") == 1
+    assert "### Non-actionable flagged cards" in text
+    top_ev = text.split("### Top EV cards", 1)[1].split("### Top signal cards", 1)[0]
+    assert "spread1" not in top_ev
+
+
 # 18. Selection is human-readable (name + label + side + line), not just the side token.
 def test_selection_human_readable():
     card = ev_card(side="OVER", line=5.5, player="A. Judge", market="HITS", market_type="MONEYLINE")
@@ -695,6 +862,22 @@ def test_selection_human_readable():
     sel = make_row(card, ev)["selection"]
     assert "A. Judge" in sel and "OVER" in sel and "5.5" in sel
     assert sel != "OVER"
+
+
+def test_team_total_identity_is_not_rendered_as_generic_pts():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "tm1",
+        "proposition": "POINTS",
+        "market": "PTS",
+        "team": "LAS",
+        "matchup": "LAS @ ATL",
+        "board": "B",
+        "sides": {"OVER": {"outcome_id": "to", "line": 85.5, "best_odds": -110}},
+    }
+    row = make_row(card, [], sport="WNBA")
+    assert row["market_type"] == "TEAM_PROP"
+    assert row["selection"] == "LAS Team Total OVER 85.5"
 
 
 # 19. Public money / money% read the real card keys (percentage / money).
@@ -973,10 +1156,90 @@ def test_build_pack_drops_started_events(tmp_path, monkeypatch):
         )
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, _target, _games_norm = build_pack(["MLB", "WNBA"], None, 15, 10)
+    rows, _target, _games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
     ids = {r["market_id"] for r in rows}
     assert "p1" not in ids  # started event dropped
     assert "gm1" in ids  # independently verified future game remains
+    assert coverage["MLB"]["date_filtered"] == 1
+    assert coverage["WNBA"]["date_filtered"] == 1
+
+
+def test_build_pack_coverage_explains_zero_rows_from_missing_event_starts(tmp_path, monkeypatch):
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    root = tmp_path / "data" / "MLB"
+    _league_fixture(root, "MLB")
+    (root / "cards" / "mlb_games_cards_latest.json").write_text(
+        json.dumps({"generated_at": "GC", "board_a": [], "board_b": []})
+    )
+    (root / "normalized" / "mlb_props_latest.json").write_text(
+        json.dumps({"generated_at": "PN", "records": [{"event_id": "EP", "sport_context": {}}]})
+    )
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    rows, _target, _games_norm, coverage = build_pack_with_coverage(
+        ["MLB"], "2026-07-13", 15, 10
+    )
+
+    assert rows == []
+    assert coverage["MLB"] == {
+        "cards": 1,
+        "rows_built": 1,
+        "date_filtered": 0,
+        "started_dropped": 0,
+        "unverified_start_dropped": 1,
+        "emitted": 0,
+    }
+
+
+def test_combined_pack_counts_undated_mlb_as_unverified_not_wrong_date(tmp_path, monkeypatch):
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    for league in ("MLB", "WNBA"):
+        _league_fixture(tmp_path / "data" / league, league)
+    mlb = tmp_path / "data" / "MLB"
+    (mlb / "cards" / "mlb_games_cards_latest.json").write_text(
+        json.dumps({"generated_at": "GC", "board_a": [], "board_b": []})
+    )
+    (mlb / "normalized" / "mlb_props_latest.json").write_text(
+        json.dumps({"generated_at": "PN", "records": [{"event_id": "EP", "sport_context": {}}]})
+    )
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    rows, _target, _games_norm, coverage = build_pack_with_coverage(
+        ["MLB", "WNBA"], None, 15, 10
+    )
+
+    assert {row["sport"] for row in rows} == {"WNBA"}
+    assert coverage["MLB"]["date_filtered"] == 0
+    assert coverage["MLB"]["unverified_start_dropped"] == 1
+
+
+def test_build_pack_keeps_legacy_three_value_return(monkeypatch):
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.build_pack_with_coverage",
+        lambda *_args: ([{"market_id": "m"}], "2026-07-13", {"MLB": {}}, {"MLB": {}}),
+    )
+    rows, target, games_norm = build_pack(["MLB"], "2026-07-13", 15, 10)
+    assert rows == [{"market_id": "m"}]
+    assert target == "2026-07-13"
+    assert games_norm == {"MLB": {}}
 
 
 # 26. Briefing states the pregame-only / live-line house rule.
@@ -1005,6 +1268,12 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
     assert not (out_dir / "chatgpt_a.md").exists()
     assert not (dossiers / "stale-event.md").exists()
     assert (out_dir / "keep-me.txt").read_text() == "unrelated"
+    with (out_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == [
+            "decision_id", "snapshot_id", "pipeline_verdict", "A_verdict",
+            "B_verdict", "C_verdict", "D_verdict", "final_verdict", "units",
+            "kill_reason", "news_override",
+        ]
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.
@@ -1076,6 +1345,64 @@ def test_context_columns_populated_with_full_names():
     assert row["home_away"] == "HOME"  # LAS is the home token in 'CHI @ LAS'
     assert row["matchup"] == "CHI @ LAS"
     assert "Rebounds" in row["market_label"]
+
+
+def test_portland_fire_context_resolves_full_names():
+    # Expansion team must resolve like any other: PDX -> Portland Fire, AWAY side
+    # of 'PDX @ MIN' (regression for the 2026-07-18 Carleton blank-team row).
+    card = _ctx_card(
+        "PDX", "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert row["team"] == "PDX"
+    assert row["team_name"] == "Portland Fire"
+    assert row["opponent"] == "MIN"
+    assert row["opp_name"] == "Minnesota Lynx"
+    assert row["home_away"] == "AWAY"
+
+
+def test_unresolved_team_blanks_opponent_and_flags():
+    # When the player's team cannot be resolved, a populated opponent column is
+    # worse than an empty one: 2026-07-18 the desk read opponent=MIN as the only
+    # team context on a PDX player's row. Blank the pair and flag it.
+    card = _ctx_card(
+        None, "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert not row["team"]
+    assert not row["team_name"]
+    assert not row["opponent"]
+    assert not row["opp_name"]
+    assert not row["home_away"]
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_player_prop_without_any_team_context_is_flagged():
+    # A player row where neither side resolved is still an enrichment failure.
+    card = _ctx_card(None, None, None)
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_resolved_team_context_is_not_flagged():
+    card = _ctx_card("LAS", "CHI", "CHI @ LAS")
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
+def test_gameline_without_team_context_is_not_flagged():
+    # Game totals carry no team on purpose; the guard must not fire there.
+    card = ev_card(market_type="GAMELINE", market="TOTAL", proposition="TOTAL",
+                   matchup="PDX @ MIN", line=160.5)
+    ev = [{
+        "market_id": "m1", "outcome_id": "o1", "book": "FD",
+        "book_odds": 110, "book_decimal_odds": 2.1, "calculated_ev_pct": 0.05,
+    }]
+    row = make_row(card, ev)
+    assert row is not None
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
 
 
 def test_market_label_disambiguates_terse_code():
@@ -1355,3 +1682,36 @@ def test_write_pack_validation_atomic(tmp_path):
     # Verify the artifacts are STILL THERE because validation failed BEFORE unlinking
     assert (out_dir / "candidates.csv").exists()
     assert (dossiers_dir / "test_dossier.md").exists()
+
+# historical_edge_pct: descriptive edge from the raw recency hit rate.
+def test_historical_edge_pct_column_position():
+    # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1]
+        == "historical_edge_pct"
+    )
+    # Must not displace the pinned last column.
+    assert CANDIDATES_HEADER[-1] == "source_timestamps"
+
+
+def test_historical_edge_pct_blank_when_hit_data_missing():
+    # Regression: signal_score() defaults hit_component to 50.0 when Outlier
+    # has no recency data. That sentinel must NOT leak into historical_edge_pct.
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 50.0, "hit_pct": None}
+    row = make_row(card, [])
+    assert row is not None
+    assert row["historical_edge_pct"] == ""
+
+
+def test_historical_edge_pct_populated_from_raw_hit_pct():
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 62.0, "hit_pct": 62.0}
+    row = make_row(card, [])
+    assert row is not None
+    dec = float(row["decimal_price"])
+    push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
+    expected = compute_historical_edge(0.62, dec, push)
+    assert expected is not None
+    assert row["historical_edge_pct"] != ""
+    assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)

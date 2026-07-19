@@ -105,6 +105,114 @@ def test_assemble_game_card_no_flag_for_valid_mirror_pair():
     assert "spread_sign_conflict" not in card["flags"]
 
 
+def test_assemble_game_card_flags_card_vs_movement_line_mismatch():
+    ev = [{
+        "market_id": "gm1",
+        "side": "AWAY",
+        "current_line": 7.5,
+        "outcome_id": "oAWAY",
+        "calculated_ev_pct": 0.05,
+        "calculated_ev_method": cards.EV_METHOD,
+        "ev_source": "NATIVE",
+        "devig_decimal": 2.0,
+        "record_id": "ev1",
+    }]
+    idx = build_indexes(
+        [_spread_prop_row("HOME", -7.5), _spread_prop_row("AWAY", 7.5)],
+        [
+            {
+                "market_id": "gm1",
+                "side": "AWAY",
+                "current_line": 8.5,
+                "open_line": 7.5,
+            }
+        ],
+        ev,
+        [],
+    )
+    card = assemble_game_card("gm1", idx)
+    assert "movement_line_mismatch" in card["flags"]
+
+
+def test_spread_conflict_uses_headline_mirror_anywhere_in_opposite_ladder():
+    home_main = _spread_prop_row("HOME", -8.5)
+    home_alt = _spread_prop_row("HOME", -7.5)
+    away_ev = _spread_prop_row("AWAY", 7.5)
+    ev = [{
+        "market_id": "gm1",
+        "side": "AWAY",
+        "current_line": 7.5,
+        "outcome_id": "oAWAY",
+        "calculated_ev_pct": 0.05,
+        "calculated_ev_method": cards.EV_METHOD,
+        "ev_source": "NATIVE",
+        "devig_decimal": 2.0,
+        "record_id": "ev1",
+    }]
+    movement = [
+        {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
+        {"market_id": "gm1", "side": "AWAY", "current_line": 8.5},
+    ]
+    card = assemble_game_card(
+        "gm1", build_indexes([home_main, home_alt, away_ev], movement, ev, [])
+    )
+    assert card["headline_side"] == "AWAY"
+    assert "spread_sign_conflict" not in card["flags"]
+    assert "movement_line_mismatch" in card["flags"]
+
+
+def test_opposite_side_movement_mismatch_does_not_flag_matching_headline():
+    ev = [{
+        "market_id": "gm1",
+        "side": "AWAY",
+        "current_line": 7.5,
+        "outcome_id": "oAWAY",
+        "calculated_ev_pct": 0.05,
+        "calculated_ev_method": cards.EV_METHOD,
+        "ev_source": "NATIVE",
+        "devig_decimal": 2.0,
+        "record_id": "ev1",
+    }]
+    movement = [
+        {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
+        {"market_id": "gm1", "side": "AWAY", "current_line": 7.5},
+    ]
+    card = assemble_game_card(
+        "gm1",
+        build_indexes(
+            [_spread_prop_row("HOME", -7.5), _spread_prop_row("AWAY", 7.5)],
+            movement,
+            ev,
+            [],
+        ),
+    )
+    assert card["headline_side"] == "AWAY"
+    assert "movement_line_mismatch" not in card["flags"]
+
+
+def test_game_card_preserves_normalized_market_type():
+    rows = [
+        {
+            **_spread_prop_row("OVER", 85.5),
+            "position": "OVER",
+            "proposition": "POINTS",
+            "market": "PTS",
+            "market_type": "TEAM_PROP",
+            "team": "LAS",
+        },
+        {
+            **_spread_prop_row("UNDER", 85.5),
+            "position": "UNDER",
+            "proposition": "POINTS",
+            "market": "PTS",
+            "market_type": "TEAM_PROP",
+            "team": "LAS",
+        },
+    ]
+    card = assemble_game_card("gm1", build_indexes(rows, [], [], []))
+    assert card["market_type"] == "TEAM_PROP"
+
+
 def test_movement_corroboration_direction():
     toward = movement_corroboration("OVER", {"line_delta_from_open": -1.0, "odds_delta_from_open": -10})
     against = movement_corroboration("OVER", {"line_delta_from_open": 1.0, "odds_delta_from_open": 20})

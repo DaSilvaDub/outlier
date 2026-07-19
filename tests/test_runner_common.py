@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import io
 
 import pytest
 
@@ -39,6 +40,32 @@ def test_validate_candidates_returns_bytes_and_hash(tmp_path):
     raw, digest = runner_common.validate_candidates(tmp_path)
     assert digest == hashlib.sha256(raw).hexdigest()
     assert b"data" in raw
+
+
+def test_validate_candidates_excludes_historical_edge_from_ai_bytes(tmp_path):
+    f = tmp_path / "candidates.csv"
+    with open(f, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=pack.CANDIDATES_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in pack.CANDIDATES_HEADER}
+        row.update(
+            {
+                "_event_starts_at": "2099-12-31T00:00:00Z",
+                "market_id": "m1",
+                "edge_pct": "0.10",
+                "historical_edge_pct": "0.25",
+            }
+        )
+        writer.writerow(row)
+
+    raw, _ = runner_common.validate_candidates(tmp_path)
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+    rows = list(reader)
+
+    assert "historical_edge_pct" in f.read_text(encoding="utf-8").splitlines()[0]
+    assert "historical_edge_pct" not in (reader.fieldnames or [])
+    assert rows[0]["edge_pct"] == "0.10"
+    assert "0.25" not in raw.decode("utf-8-sig")
 
 
 def test_validate_candidates_drops_locked_events(tmp_path):
@@ -81,7 +108,12 @@ def test_validate_candidates_allows_header_only_for_actionable_totals(tmp_path):
 
     raw, digest = runner_common.validate_candidates(tmp_path, allow_empty=True)
     assert digest == hashlib.sha256(raw).hexdigest()
-    assert raw.decode("utf-8-sig").splitlines() == [",".join(pack.CANDIDATES_HEADER)]
+    expected_header = [
+        field
+        for field in pack.CANDIDATES_HEADER
+        if field not in runner_common.AI_EXCLUDED_CANDIDATE_FIELDS
+    ]
+    assert raw.decode("utf-8-sig").splitlines() == [",".join(expected_header)]
 
 
 def test_has_actionable_game_totals():

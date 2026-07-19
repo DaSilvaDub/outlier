@@ -96,6 +96,47 @@ def test_unknown_team_yields_none_team_but_preserves_team_raw():
     assert row["opponent_raw"] == "QQQ"
 
 
+def test_wnba_expansion_team_portland_resolves_team_and_opponent():
+    # Regression: 2026-07-18 Bridget Carleton (PDX @ MIN). PDX was missing from
+    # WNBA_TEAM_ALIASES, so team came back None while opponent resolved to MIN —
+    # the candidates row then showed the player's own opponent as her only team
+    # context. Both expansion sides must canonicalize.
+    schedule = {
+        "events": [
+            {
+                "eventId": "evt-pdx",
+                "away": {"alias": "PDX", "teamId": "t-pdx", "name": "Fire", "market": "Portland"},
+                "home": {"alias": "MIN", "teamId": "t-min", "name": "Lynx", "market": "Minnesota"},
+            }
+        ]
+    }
+    props = {
+        "props": [
+            {
+                "outcome": {
+                    "eventId": "evt-pdx",
+                    "teamId": "t-pdx",
+                    "position": "UNDER",
+                    "line": 12.5,
+                    "marketLabel": "Bridget Carleton - Points",
+                    "proposition": "POINTS",
+                    "marketId": "m-pts",
+                    "bestOdds": 115,
+                    "books": [],
+                    "bookOdds": {},
+                },
+                "stats": {},
+            }
+        ]
+    }
+    rows = normalize_player_props(props, schedule, get_sport_config("WNBA"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["team"] == "PDX"
+    assert row["opponent"] == "MIN"
+    assert row["matchup"] == "PDX @ MIN"
+
+
 def test_unicode_minus_odds_parse_to_int_best_odds():
     schedule = {"events": [{"eventId": "evt-u", "away": {"alias": "NYY", "teamId": "1"},
         "home": {"alias": "BOS", "teamId": "2"}}]}

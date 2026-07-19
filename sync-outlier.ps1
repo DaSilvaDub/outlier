@@ -53,7 +53,11 @@ $knownFullClones = @(
 
 # 1. Ensure we have a real GitHub remote (cross-ent glue). Prefer "origin".
 $githubUrl = 'https://github.com/DaSilvaDub/outlier.git'
-$originUrl = (git remote get-url origin 2>$null) -or ''
+# NOTE: -or would coerce the URL to a boolean ('True'), which made this branch
+# fire on EVERY run: remote remove deleted all origin/* refs each pass, and any
+# transient fetch failure then surfaced as "No origin/master" (2026-07-15 incident).
+$originUrl = git remote get-url origin 2>$null
+if (-not $originUrl) { $originUrl = '' }
 if (-not $originUrl -or $originUrl -notlike '*github.com*DaSilvaDub/outlier*') {
   Write-Info "Setting origin to GitHub (was '$originUrl')."
   git remote remove origin 2>$null | Out-Null
@@ -115,8 +119,13 @@ if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
 
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
 #    Also materialize the sync tooling itself so every tree gets the latest bootstrap.
-Write-Info "Materializing key files (pack, daily, tests, prompts, sync tooling)..."
-git checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+#    NOTE: the WHOLE outlier_scrapers package is materialized (not just pack.py/daily_job.py).
+#    Partial materialization caused the 2026-07-17 ImportError: master pack.py imported
+#    compute_historical_edge from sizing.py, but sizing.py was left at the branch version.
+#    pack.py/daily_job.py transitively import ~29 of the 33 package modules, so the package
+#    directory is the correct sync boundary; a curated file list rots on the next new import.
+Write-Info "Materializing key files (outlier_scrapers package, tests, prompts, sync tooling)..."
+git checkout -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
 
 # 5. Touch the files (helps OneDrive Files-On-Demand hydrate the content for this view)
 try {
@@ -158,7 +167,7 @@ Write-Info "Sync complete. Every ent that runs this (or equivalent fetch+reset f
 #    does not move HEAD or change branch. Master/detached worktrees also get the files synced.
 #    This is the practical hammer against "d05eb21 only visible in one tree".
 if ($SyncAllWorktrees) {
-  Write-Info "=== SyncAllWorktrees: materializing core files (pack, daily, sync tooling) from origin/master into all registered worktrees ==="
+  Write-Info "=== SyncAllWorktrees: materializing core files (outlier_scrapers package, sync tooling) from origin/master into all registered worktrees ==="
   $porcelain = git worktree list --porcelain 2>$null
   $currentWt = $here
   $aligned = 0
@@ -175,7 +184,9 @@ if ($SyncAllWorktrees) {
         git -C $wtPath fetch origin --prune --tags 2>$null
         # Non-destructive for the files we care about (the ones that were invisible before).
         # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
-        git -C $wtPath checkout origin/master -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+        # Whole outlier_scrapers package: syncing pack.py without its imports (sizing.py etc.)
+        # caused the 2026-07-17 "cannot import name 'compute_historical_edge'" ImportError.
+        git -C $wtPath checkout origin/master -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
         try {
           $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
         } catch {}
@@ -197,7 +208,7 @@ if ($SyncAllWorktrees) {
       Write-Info "Aligning full clone: $fc"
       git -C $fc fetch origin --prune --tags 2>$null
       git -C $fc reset --hard origin/master 2>$null
-      git -C $fc checkout -- outlier_scrapers/pack.py outlier_scrapers/daily_job.py tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+      git -C $fc checkout -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
       try {
         $null = Get-Content -Raw (Join-Path $fc 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
       } catch {}
