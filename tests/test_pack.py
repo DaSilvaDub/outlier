@@ -1332,3 +1332,26 @@ def test_home_away_unresolved_flag():
     row2 = make_row(card, [])
     assert row2["home_away"] == ""
     assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]
+
+
+def test_write_pack_validation_atomic(tmp_path):
+    # Bug 4 Regression Test: write_pack must not delete existing valid artifacts if validation fails.
+    out_dir = tmp_path / "packs" / "2026-07-20"
+    out_dir.mkdir(parents=True)
+    dossiers_dir = out_dir / "dossiers"
+    dossiers_dir.mkdir()
+    
+    # Seed with existing artifacts
+    (out_dir / "candidates.csv").write_text("dummy", encoding="utf-8")
+    (dossiers_dir / "test_dossier.md").write_text("dummy", encoding="utf-8")
+    
+    # Invalid candidate row that will trigger ValidationError
+    invalid_rows = [{"sport": "MLB"}]
+    
+    from outlier_scrapers.schema import ValidationError
+    with pytest.raises(ValidationError, match="Critical schema compatibility violation"):
+        write_pack(rows=invalid_rows, out_dir=out_dir)
+        
+    # Verify the artifacts are STILL THERE because validation failed BEFORE unlinking
+    assert (out_dir / "candidates.csv").exists()
+    assert (dossiers_dir / "test_dossier.md").exists()

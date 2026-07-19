@@ -472,15 +472,17 @@ def build_normalized_payload(
     # Schema validation gates
     schedule_errors = validate_raw_schedule(schedule_payload)
     if schedule_errors:
-        if "Schedule payload must be a dictionary" in schedule_errors or "Schedule payload is missing 'events' key" in schedule_errors:
-            raise ValidationError(f"Critical schedule schema violation: {'; '.join(schedule_errors)}")
+        critical = [err for err in schedule_errors if err.startswith("Schedule payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical schedule schema violation: {'; '.join(critical)}")
         for err in schedule_errors:
             logger.warning("Schedule schema warning: %s", err)
 
     props_errors = validate_raw_player_props(props_payload)
     if props_errors:
-        if "Player props payload must be a dictionary" in props_errors or "Player props payload is missing 'props' key" in props_errors:
-            raise ValidationError(f"Critical player props schema violation: {'; '.join(props_errors)}")
+        critical = [err for err in props_errors if err.startswith("Player props payload") or "'props' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical player props schema violation: {'; '.join(critical)}")
         for err in props_errors:
             logger.warning("Player props schema warning: %s", err)
 
@@ -535,15 +537,17 @@ def normalize_games(
     # Schema validation gates
     schedule_errors = validate_raw_schedule(schedule_payload)
     if schedule_errors:
-        if "Schedule payload must be a dictionary" in schedule_errors or "Schedule payload is missing 'events' key" in schedule_errors:
-            raise ValidationError(f"Critical schedule schema violation: {'; '.join(schedule_errors)}")
+        critical = [err for err in schedule_errors if err.startswith("Schedule payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical schedule schema violation: {'; '.join(critical)}")
         for err in schedule_errors:
             logger.warning("Schedule schema warning: %s", err)
 
     games_errors = validate_raw_games({"events": events_payloads})
     if games_errors:
-        if "Games payload must be a dictionary" in games_errors or "Games payload is missing 'events' key" in games_errors:
-            raise ValidationError(f"Critical games schema violation: {'; '.join(games_errors)}")
+        critical = [err for err in games_errors if err.startswith("Games payload") or "'events' must be a list" in err]
+        if critical:
+            raise ValidationError(f"Critical games schema violation: {'; '.join(critical)}")
         for err in games_errors:
             logger.warning("Games schema warning: %s", err)
 

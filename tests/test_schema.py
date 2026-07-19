@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 
 from outlier_scrapers.schema import (
     ValidationError,

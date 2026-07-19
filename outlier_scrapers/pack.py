@@ -958,20 +958,13 @@ def write_pack(
     *,
     games_norm_by_league: dict[str, Any] | None = None,
 ) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name in DERIVED_PACK_OUTPUTS:
-        (out_dir / name).unlink(missing_ok=True)
-    dossiers_dir = out_dir / "dossiers"
-    if dossiers_dir.exists():
-        for stale_dossier in dossiers_dir.glob("*.md"):
-            stale_dossier.unlink()
     # Validate all candidate rows against schema constraints
     for idx, row in enumerate(rows):
         row_errors = validate_candidate_row(row, CANDIDATES_HEADER)
         if row_errors:
             # If a critical field is missing or empty, raise ValidationError
             critical_mismatch = any(
-                "Critical field" in err or "must be a dictionary" in err
+                "Critical field" in err or "dictionary" in err
                 for err in row_errors
             )
             if critical_mismatch:
@@ -979,6 +972,14 @@ def write_pack(
             # Log minor issues as warnings
             for err in row_errors:
                 logger.warning("Candidate row schema warning at index %d: %s", idx, err)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name in DERIVED_PACK_OUTPUTS:
+        (out_dir / name).unlink(missing_ok=True)
+    dossiers_dir = out_dir / "dossiers"
+    if dossiers_dir.exists():
+        for stale_dossier in dossiers_dir.glob("*.md"):
+            stale_dossier.unlink()
 
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
