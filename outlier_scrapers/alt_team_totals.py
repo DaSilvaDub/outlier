@@ -19,14 +19,20 @@ from pathlib import Path
 from typing import Any
 
 from outlier_scrapers.game_totals import (
-    _american_to_decimal,
     _best_book_offer,
-    _decimal_to_american,
     _to_float,
     build_market_ladder,
     is_full_game_total,
     logical_market_key,
     period_identity,
+)
+from outlier_scrapers.utils import (
+    _american_to_decimal,
+    _decimal_to_american,
+    _local_date,
+    drop_locked_events,
+    _write_csv,
+    _price_text,
 )
 from outlier_scrapers.normalizer import implied_probability, percent_number
 from outlier_scrapers.paths import league_paths
@@ -170,9 +176,7 @@ def _is_integer_line(line: float) -> bool:
 
 def _event_started(rec: dict[str, Any], now: datetime) -> bool:
     """Pregame-only house rule: unverifiable start times count as started."""
-    from outlier_scrapers import pack as pack_module
-
-    kept, _dropped = pack_module.drop_locked_events(
+    kept, _dropped = drop_locked_events(
         [
             {
                 "event_id": rec.get("event_id"),
@@ -201,8 +205,6 @@ def build_alt_team_total_board(
     bounds the board to that slate — the games feed can span multiple days.
     Inactive markets are dropped fail-closed.
     """
-    from outlier_scrapers import pack as pack_module
-
     now = now or datetime.now().astimezone()
     records = (games_norm or {}).get("records") or []
     as_of = (games_norm or {}).get("generated_at") or ""
@@ -219,7 +221,7 @@ def build_alt_team_total_board(
             continue
         if (
             target_date is not None
-            and pack_module._local_date(rec.get("event_starts_at")) != target_date
+            and _local_date(rec.get("event_starts_at")) != target_date
         ):
             continue
         grouped.setdefault(logical_market_key(rec), []).append(rec)
@@ -319,12 +321,6 @@ def _parlay_eligible(row: dict[str, Any]) -> bool:
     return row.get("decimal_price") not in (None, "")
 
 
-def _price_text(price: Any) -> str:
-    """American odds display: leading + on plus-money prices."""
-    if isinstance(price, (int, float)):
-        return f"+{price:g}" if price > 0 else f"{price:g}"
-    return str(price)
-
 
 def _leg_text(row: dict[str, Any]) -> str:
     record = (
@@ -417,16 +413,10 @@ def format_alt_team_totals_md(
         lines.append(
             f"- {parlay['legs']} => dec {parlay['combined_decimal']} "
             f"({_price_text(parlay['combined_american'])}) "
-            f"naive L10 {parlay['naive_l10_prob']}%{sgp}"
+            f"naive L10 {parlay['naive_l10_prob']}% (uncorrelated){sgp}"
         )
     return "\n".join(lines)
 
-
-def _write_csv(path: Path, header: list[str], rows: list[dict[str, Any]]) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=header, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def export_alt_team_totals_for_league(

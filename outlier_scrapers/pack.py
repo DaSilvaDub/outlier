@@ -30,6 +30,7 @@ from outlier_scrapers.registry import (
 )
 from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
 from outlier_scrapers.schema import ValidationError, validate_candidate_row
+from outlier_scrapers.utils import _local_date, _parse_start, drop_locked_events, _write_csv
 
 logger = logging.getLogger(__name__)
 
@@ -722,13 +723,7 @@ def build_row(
 
     return row
 
-def _local_date(iso_ts: str | None) -> str | None:
-    if not iso_ts:
-        return None
-    try:
-        return datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        return None
+
 
 def process_stream(
     cards_payload: dict | None,
@@ -784,37 +779,7 @@ def select_date(
         logger.warning("Requested date %s has no events; emitting empty pack for that date.", requested)
     return kept, target
 
-def _parse_start(ts: Any) -> datetime | None:
-    if not ts:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    return parsed if parsed.tzinfo else None
 
-def drop_locked_events(
-    rows: list[dict[str, Any]], now: datetime | None = None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """House rule: only pack markets proven to be pregame.
-
-    Once an event locks, its markets go live: alt-line ladders re-center on the
-    in-game state, settled lines 404 off the API, and EV disappears — numbers
-    that read downstream as corrupt pregame lines (see slate 2026-07-06). Rows
-    without a parseable start time are also dropped because their pregame state
-    cannot be verified. Returns (kept, dropped) as new lists; rows are not
-    mutated.
-    """
-    now = now or datetime.now().astimezone()
-    kept: list[dict[str, Any]] = []
-    dropped: list[dict[str, Any]] = []
-    for row in rows:
-        start = _parse_start(row.get("_event_starts_at"))
-        if start is None or start <= now:
-            dropped.append(row)
-        else:
-            kept.append(row)
-    return kept, dropped
 
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
     # Immutability: do not mutate caller's rows. Create new objects (AGENTS.md).
@@ -1256,7 +1221,6 @@ def write_pack(
     from outlier_scrapers.alt_team_totals import (
         ALT_TEAM_TOTAL_PARLAYS_HEADER,
         ALT_TEAM_TOTALS_HEADER,
-        _write_csv,
         build_alt_team_total_board,
         build_alt_team_total_parlays,
         format_alt_team_totals_md,

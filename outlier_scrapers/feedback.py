@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from outlier_scrapers import paths
+from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
 logger = logging.getLogger(__name__)
 
@@ -360,15 +361,7 @@ def _coalesce(*values: Any) -> Any:
     return None
 
 
-def _american_to_decimal(price: Any) -> float | None:
-    value = _float(price, field="price")
-    if value is None:
-        return None
-    if value > 0:
-        return 1.0 + value / 100.0
-    if value < 0:
-        return 1.0 + 100.0 / abs(value)
-    return 2.0
+
 
 
 def _append_flag(flags: Any, flag: str) -> str:
@@ -723,12 +716,7 @@ def _read_csv(path: Path, required: Iterable[str] = ()) -> list[dict[str, str]]:
         return list(reader)
 
 
-def _write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+
 
 
 def _pack_fallback_timestamp(pack_dir: Path) -> str:
