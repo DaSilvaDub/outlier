@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -85,6 +86,14 @@ EXCLUDED_MARKETS = {
 # House rule: plus-money longshots (e.g. a Hits Over at +181) are hard-filtered
 # from packs. Any candidate priced at +LONGSHOT_AMERICAN_PRICE or longer is dropped.
 LONGSHOT_AMERICAN_PRICE = 150
+
+# data_quality_flags that ROLE_BLOCK explicitly tells every reasoning pass to
+# "stand the market/row down" on: the line or market itself is proven or
+# presumed corrupt, so a stake recommendation would contradict our own
+# instruction to the desk. Exact-match flags; cross_sport_market carries a
+# dynamic ":<LEAGUE>" suffix and is matched by prefix below.
+DISQUALIFYING_DQ_FLAGS = {"spread_sign_conflict", "implausible_line", "non_numeric_line"}
+CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
 def american_to_decimal(american: float | int | str | None) -> float | None:
     if american is None or american == "":
@@ -251,6 +260,12 @@ def _fmt_line(line: Any) -> str:
     try:
         f = float(line)
     except (ValueError, TypeError):
+        return str(line)
+    # NaN/inf can reach here from an upstream feed (market_validation_flags
+    # already flags it non_numeric_line) — int(f) raises ValueError on either,
+    # which would crash pack generation for the whole slate over one bad row.
+    # Fall back to the raw repr, same as an unparseable string above.
+    if not math.isfinite(f):
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
@@ -531,6 +546,16 @@ def build_row(
     ):
         dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
+    # Any single disqualifying flag (line/market proven or presumed corrupt)
+    # withholds the stake on its own — no second flag needed, unlike the
+    # stale-line gate above. edge_pct stays visible; the number just can't be
+    # trusted enough to size (2026-07-13 LAS @ ATL shipped units=1.5 on a
+    # spread_sign_conflict row before this gate existed).
+    if row.get("recommended_units_pre_news") not in ("", None) and (
+        not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
+        or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
+    ):
+        row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     row["_board"] = "board_a" if card.get("board") == "A" else "board_b"
@@ -768,12 +793,12 @@ ROLE_BLOCK = [
     " event's first lock, its lines are LIVE/in-play — treat the whole event as a data error"
     " and stand it down.",
     "",
-    "REASONING PASSES (A, D):",
+    "REASONING PASSES (pack-only):",
     "- Use this pack ONLY. Do not use memory or the web.",
     "- Never invent or recall odds/lines. Every verdict quotes the exact market_id + line/price from the pack.",
     "- If you need info not in the pack, list it under NEEDS — do not guess.",
     "",
-    "RESEARCH PASSES (B, C):",
+    "RESEARCH PASSES (web-enabled):",
     "- You MAY use current web sources (last 24h).",
     "- Do NOT invent, quote, or update any betting line/price. The pack's lines are the only lines.",
     "- Tie every finding back to a quoted market_id + line/price from the pack.",
