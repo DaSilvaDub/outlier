@@ -101,7 +101,7 @@ def test_align_main_lines_mirrors_spread_to_stronger_side():
     _align_main_lines(
         main,
         {"HOME": [home], "AWAY": [away_main, away_mirror]},
-        [],
+        {},
         {"HOME": {"current_line": -8.5}},
         "SPREAD",
     )
@@ -118,7 +118,7 @@ def test_align_main_lines_matches_total_to_stronger_side():
     _align_main_lines(
         main,
         {"OVER": [over], "UNDER": [under_main, under_match]},
-        [],
+        {},
         {"OVER": {"current_line": 180.5}},
         "TOTAL",
     )
@@ -136,7 +136,7 @@ def test_align_main_lines_ev_priority_beats_movement():
     _align_main_lines(
         main,
         {"HOME": [home, home_for_away], "AWAY": [away, away_for_home]},
-        [{"side": "HOME", "current_line": -7.5}],
+        {"HOME": [{"side": "HOME", "current_line": -7.5}]},
         {"AWAY": {"current_line": 8.5}},
         "SPREAD",
     )
@@ -153,7 +153,7 @@ def test_align_main_lines_movement_priority_beats_default():
     _align_main_lines(
         main,
         {"HOME": [home], "AWAY": [away, away_for_home]},
-        [],
+        {},
         {"HOME": {"current_line": -7.5}},
         "SPREAD",
     )
@@ -171,7 +171,7 @@ def test_align_main_lines_uses_most_books_for_target_line():
     _align_main_lines(
         main,
         {"HOME": [home], "AWAY": [away, thin_target, deep_target]},
-        [{"side": "HOME", "current_line": -7.5}],
+        {"HOME": [{"side": "HOME", "current_line": -7.5}]},
         {},
         "SPREAD",
     )
@@ -188,7 +188,7 @@ def test_align_main_lines_missing_line_cannot_gain_ev_priority_and_none_proposit
     _align_main_lines(
         main,
         {"OVER": [missing, matching], "UNDER": [under]},
-        [{"side": "OVER", "current_line": None}],
+        {"OVER": [{"side": "OVER", "current_line": None}]},
         {"UNDER": {"current_line": 8.5}},
         None,
     )

@@ -570,9 +570,13 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         if side in rows_by_side:
             rows_by_side[side].append(prop)
 
-    main_row = _select_main_rows(rows_by_side, movement, ev_rows)
+    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ev_rows:
+        ev_by_side[str(row.get("side") or "").upper()].append(row)
 
-    _align_main_lines(main_row, rows_by_side, ev_rows, movement, str(identity.get("proposition") or ""))
+    main_row = _select_main_rows(rows_by_side, movement, ev_by_side)
+
+    _align_main_lines(main_row, rows_by_side, ev_by_side, movement, str(identity.get("proposition") or ""))
 
     alt_lines: dict[str, list[dict[str, Any]]] = {}
     for side, rws in rows_by_side.items():
@@ -657,12 +661,9 @@ def _line_values_equal(left: Any, right: Any, *, epsilon: float = 1e-9) -> bool:
 def _select_main_rows(
     rows_by_side: dict[str, list[dict[str, Any]]],
     movement: dict[str, Any],
-    ev_rows: list[dict[str, Any]],
+    ev_by_side: dict[str, list[dict[str, Any]]],
 ) -> dict[str, dict[str, Any]]:
     """Select each side's primary row using the shared EV/movement priority rules."""
-    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in ev_rows:
-        ev_by_side[str(row.get("side") or "").upper()].append(row)
     return {
         side: _pick_main_side_row(side_rows, movement.get(side), ev_by_side.get(side, []))
         for side, side_rows in rows_by_side.items()
@@ -673,7 +674,7 @@ def _select_main_rows(
 def _align_main_lines(
     main_row: dict[str, dict[str, Any]],
     rows_by_side: dict[str, list[dict[str, Any]]],
-    ev_rows: list[dict[str, Any]],
+    ev_by_side: dict[str, list[dict[str, Any]]],
     movement: dict[str, Any],
     proposition: Any,
 ) -> None:
@@ -696,10 +697,6 @@ def _align_main_lines(
 
     if not has_conflict:
         return
-
-    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for ev_row in ev_rows:
-        ev_by_side[str(ev_row.get("side") or "").upper()].append(ev_row)
 
     def _strength(side: str, row: dict[str, Any]) -> int:
         line = _to_float(row.get("line"))
@@ -750,9 +747,13 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         elif pos in rows_by_side:
             rows_by_side[pos].append(prop)
 
-    main_row = _select_main_rows(rows_by_side, movement, ev_rows)
+    ev_by_side: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in ev_rows:
+        ev_by_side[str(row.get("side") or "").upper()].append(row)
 
-    _align_main_lines(main_row, rows_by_side, ev_rows, movement, proposition)
+    main_row = _select_main_rows(rows_by_side, movement, ev_by_side)
+
+    _align_main_lines(main_row, rows_by_side, ev_by_side, movement, proposition)
 
     alt_lines: dict[str, list[dict[str, Any]]] = {}
     for side, rws in rows_by_side.items():
