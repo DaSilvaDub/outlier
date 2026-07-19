@@ -224,6 +224,83 @@ def test_parlays_exclude_flagged_and_non_best_rows():
     assert parlays == []  # only Aces is eligible; no pair possible
 
 
+def test_board_target_date_scoping_and_no_cross_date_parlays():
+    from outlier_scrapers.pack import _local_date
+
+    other_start = "2026-07-16T23:00:00+00:00"
+    records = [
+        _tt_record(80.5, team="Aces"),
+        _tt_record(75.5, team="Mercury", market_id="m2", event_id="E2",
+                   matchup="Sky @ Mercury", event_starts_at=other_start),
+    ]
+    target = _local_date(FUTURE_START)
+    rows = build_alt_team_total_board(
+        _games_norm(records), league="WNBA", now=NOW, target_date=target
+    )
+    assert [r["team"] for r in rows] == ["Aces"]
+    assert build_alt_team_total_parlays(rows) == []
+    # Without a date bound both slates are emitted (CLI/pack always pass one).
+    unbounded = build_alt_team_total_board(_games_norm(records), league="WNBA", now=NOW)
+    assert {r["team"] for r in unbounded} == {"Aces", "Mercury"}
+
+
+def test_board_drops_inactive_markets():
+    records = [
+        _tt_record(80.5, team="Aces", is_active=False),
+        _tt_record(75.5, team="Mercury", market_id="m2", event_id="E2",
+                   matchup="Sky @ Mercury", is_active=True),
+        _tt_record(70.5, team="Wings", market_id="m3", event_id="E3",
+                   matchup="Wings @ Lynx",
+                   stats=_l10_stats(10, side="awaySummaryStat")),  # unknown stays
+    ]
+    rows = build_alt_team_total_board(_games_norm(records), league="WNBA", now=NOW)
+    assert {r["team"] for r in rows} == {"Mercury", "Wings"}
+    parlays = build_alt_team_total_parlays(rows)
+    assert all("Aces" not in p["legs"] for p in parlays)
+
+
+def test_parlays_exclude_short_sample_rows():
+    records = [
+        _tt_record(84.5, team="Aces", stats=_l10_stats(10)),
+        _tt_record(75.5, team="Mercury", market_id="m2", event_id="E2",
+                   matchup="Sky @ Mercury", stats=_l10_stats(10)),
+        _tt_record(70.5, team="Wings", market_id="m3", event_id="E3",
+                   matchup="Wings @ Lynx",
+                   stats={"awaySummaryStat": {"l10Results": [True]}}),  # 1/1
+    ]
+    rows = build_alt_team_total_board(_games_norm(records), league="WNBA", now=NOW)
+    wings = next(r for r in rows if r["team"] == "Wings")
+    assert "SHORT_SAMPLE" in wings["quality_flags"]
+    assert wings["l10_hits"] == 1 and wings["l10_total"] == 1
+    parlays = build_alt_team_total_parlays(rows)
+    assert len(parlays) == 1  # only Aces + Mercury
+    assert all("Wings" not in p["legs"] for p in parlays)
+
+
+def test_write_pack_scopes_alt_board_to_pack_date(tmp_path):
+    import csv
+
+    from outlier_scrapers.pack import _local_date, write_pack
+
+    # write_pack filters against the real clock, so use far-future starts.
+    pack_start = "2099-07-14T23:00:00+00:00"
+    other_start = "2099-07-16T23:00:00+00:00"
+    records = [
+        _tt_record(80.5, team="Aces", event_starts_at=pack_start),
+        _tt_record(75.5, team="Mercury", market_id="m2", event_id="E2",
+                   matchup="Sky @ Mercury", event_starts_at=other_start),
+    ]
+    target = _local_date(pack_start)
+    assert target is not None
+    out_dir = tmp_path / "packs" / target
+    write_pack([], out_dir, games_norm_by_league={"WNBA": _games_norm(records)})
+    with open(out_dir / "alt_team_totals.csv", newline="", encoding="utf-8") as fh:
+        board = list(csv.DictReader(fh))
+    assert [r["team"] for r in board] == ["Aces"]
+    with open(out_dir / "alt_team_total_parlays.csv", newline="", encoding="utf-8") as fh:
+        assert list(csv.DictReader(fh)) == []
+
+
 def test_markdown_report():
     rows = _board_rows()
     parlays = build_alt_team_total_parlays(rows)

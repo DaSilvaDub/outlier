@@ -1,6 +1,6 @@
 ## Handoff — `claude/sgp-parlay-alt-totals-vcelz5` (PR #39)
 
-**Last Product Commit SHA:** `2af86ec` (`feat: alt team-total L10 board with SGP/parlay suggestions (WNBA + MLB)`)
+**Last Product Commit SHA:** see branch head (`fix: address PR 39 blocking review`); merged `origin/master` (post-PR 36).
 
 **PR Link:** https://github.com/DaSilvaDub/outlier/pull/39
 
@@ -23,6 +23,11 @@ staged games feed; probed missing/malformed feed, bad league, started events.
 `--no-feedback-ledger` fails in `feedback._probability` — `game_totals.py`
 writes `implied_prob` as 0-100 while the feedback ledger validates 0-1
 (`implied_prob must be between 0 and 1, got 85.401`). Needs a follow-up fix.
+
+**Review fixes (blocking review, all reproduced+regressed):** board now scoped
+to the pack/CLI target date (`--date`, default today local; `write_pack` passes
+`out_dir.name`); `is_active=False` records dropped fail-closed; `SHORT_SAMPLE`
+rows stay on the board but are parlay-ineligible.
 
 **Next steps:** confirm MLB team-total proposition token (POINTS vs RUNS) on a
 live slate; optional follow-ups: cross-league parlays, 3-leg combos.

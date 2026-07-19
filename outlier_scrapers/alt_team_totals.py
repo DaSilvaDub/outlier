@@ -189,6 +189,7 @@ def build_alt_team_total_board(
     *,
     league: str,
     now: datetime | None = None,
+    target_date: str | None = None,
     min_hit_pct: float = MIN_HIT_PCT,
     max_hit_pct: float = MAX_HIT_PCT,
 ) -> list[dict[str, Any]]:
@@ -196,8 +197,12 @@ def build_alt_team_total_board(
 
     One row per (team-total market, line) whose l10 hit rate falls inside
     [min_hit_pct, max_hit_pct]; the highest qualifying line per logical market
-    is stamped ``is_best_line=true``.
+    is stamped ``is_best_line=true``. ``target_date`` (local ``YYYY-MM-DD``)
+    bounds the board to that slate — the games feed can span multiple days.
+    Inactive markets are dropped fail-closed.
     """
+    from outlier_scrapers import pack as pack_module
+
     now = now or datetime.now().astimezone()
     records = (games_norm or {}).get("records") or []
     as_of = (games_norm or {}).get("generated_at") or ""
@@ -209,6 +214,13 @@ def build_alt_team_total_board(
         if not str(rec.get("event_id") or "").strip():
             continue
         if not str(rec.get("team") or rec.get("team_raw") or "").strip():
+            continue
+        if rec.get("is_active") is False:
+            continue
+        if (
+            target_date is not None
+            and pack_module._local_date(rec.get("event_starts_at")) != target_date
+        ):
             continue
         grouped.setdefault(logical_market_key(rec), []).append(rec)
 
@@ -291,11 +303,18 @@ def build_alt_team_total_board(
     return rows
 
 
+PARLAY_BLOCKING_FLAGS = (
+    FLAG_INTEGER_LINE_PUSH_RISK,
+    FLAG_NO_PRICE,
+    FLAG_SHORT_SAMPLE,
+)
+
+
 def _parlay_eligible(row: dict[str, Any]) -> bool:
     if row.get("is_best_line") != "true":
         return False
     flags = str(row.get("quality_flags") or "")
-    if FLAG_INTEGER_LINE_PUSH_RISK in flags or FLAG_NO_PRICE in flags:
+    if any(flag in flags for flag in PARLAY_BLOCKING_FLAGS):
         return False
     return row.get("decimal_price") not in (None, "")
 
@@ -410,15 +429,18 @@ def _write_csv(path: Path, header: list[str], rows: list[dict[str, Any]]) -> Non
         writer.writerows(rows)
 
 
-def export_alt_team_totals_for_league(league: str) -> dict[str, Any]:
+def export_alt_team_totals_for_league(
+    league: str, *, target_date: str | None = None
+) -> dict[str, Any]:
     token = league.strip().upper()
+    target_date = target_date or datetime.now().astimezone().strftime("%Y-%m-%d")
     paths = league_paths(token).ensure()
     games_path = paths.games_normalized_latest()
     if not games_path.exists():
         raise FileNotFoundError(f"missing normalized games feed: {games_path}")
     games_norm = json.loads(games_path.read_text("utf-8"))
 
-    rows = build_alt_team_total_board(games_norm, league=token)
+    rows = build_alt_team_total_board(games_norm, league=token, target_date=target_date)
     parlays = build_alt_team_total_parlays(rows)
 
     board_csv = paths.reports / f"{token.lower()}_alt_team_totals_latest.csv"
@@ -434,6 +456,7 @@ def export_alt_team_totals_for_league(league: str) -> dict[str, Any]:
         "league": token,
         "status": "ok",
         "generated_at": datetime.now().astimezone().isoformat(),
+        "target_date": target_date,
         "games_normalized_latest": str(games_path),
         "board_csv": str(board_csv),
         "parlays_csv": str(parlays_csv),
@@ -452,6 +475,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Alt team-total L10 board + parlay suggestions"
     )
     parser.add_argument("--league", choices=supported_leagues(), required=True)
+    parser.add_argument(
+        "--date",
+        help="Slate date (local YYYY-MM-DD); defaults to today.",
+    )
     return parser.parse_args(argv)
 
 
@@ -459,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     token = args.league.strip().upper()
     try:
-        status = export_alt_team_totals_for_league(token)
+        status = export_alt_team_totals_for_league(token, target_date=args.date)
     except (FileNotFoundError, ValueError, json.JSONDecodeError, OSError) as exc:
         paths = league_paths(token).ensure()
         report = {

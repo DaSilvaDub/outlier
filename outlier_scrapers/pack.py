@@ -1265,7 +1265,9 @@ def write_pack(
     alt_tt_rows: list[dict[str, Any]] = []
     alt_tt_parlays: list[dict[str, Any]] = []
     for lg, payload in (games_norm_by_league or {}).items():
-        league_rows = build_alt_team_total_board(payload, league=lg)
+        league_rows = build_alt_team_total_board(
+            payload, league=lg, target_date=out_dir.name
+        )
         alt_tt_rows.extend(league_rows)
         alt_tt_parlays.extend(build_alt_team_total_parlays(league_rows))
     _write_csv(out_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, alt_tt_rows)
