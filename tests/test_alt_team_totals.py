@@ -73,8 +73,7 @@ def test_record_filter_league_propositions():
     # market alias, but never the GAMELINE game total or WNBA runs tokens.
     assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL_RUNS"), league="MLB")
     assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL"), league="MLB")
-    r_alias = _tt_record(4.5, proposition="")
-    r_alias["market"] = "R"
+    r_alias = _tt_record(4.5, proposition="", market="R")
     assert is_alt_team_total_record(r_alias, league="MLB")
     assert not is_alt_team_total_record(
         _tt_record(8.5, market_type="GAMELINE", proposition="TOTAL"), league="MLB"
