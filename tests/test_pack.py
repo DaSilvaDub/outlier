@@ -1,3 +1,4 @@
+import csv
 import json
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _opportunity_key,
     _summarize_lm_status,
     american_to_decimal,
     build_briefing,
@@ -23,8 +25,24 @@ from outlier_scrapers.pack import (
     select_date,
     write_pack,
 )
+from outlier_scrapers.sizing import compute_historical_edge
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
+
+
+def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
+    numeric = {
+        "sport": "WNBA",
+        "event_id": "e1",
+        "market_id": "m1",
+        "outcome_id": 0,
+        "selection": "OVER 10",
+        "line": 10.0,
+    }
+    serialized = {**numeric, "outcome_id": "0", "line": "10"}
+
+    assert _opportunity_key(numeric) == _opportunity_key(serialized)
+    assert _opportunity_key(numeric)[3] == "0"
 
 
 def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):
@@ -99,6 +117,10 @@ def test_ev_row_sized():
     ]
     row = make_row(card, ev)
     assert row["model_prob"] == 0.5
+    assert row["outcome_id"] == "o1"
+    assert row["market_consensus_prob"] == 0.5
+    assert row["independent_model_prob"] == ""
+    assert row["final_blended_prob"] == 0.5
     assert row["decimal_price"] == 2.1
     assert row["price"] == 110  # same row as the chosen book, not card best_odds
     assert row["book"] == "FD"
@@ -226,6 +248,13 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
                 "outcome_id": "o2",
                 "line": 7.5,
                 "best_odds": -144,
+                "signal": {
+                    "hit_component": 70.0,
+                    "insight_component": 60.0,
+                    "movement_corroboration": 1.0,
+                    "orf_component": 55.0,
+                    "insight_conflict": False,
+                },
                 "proxy_market_edge": {
                     "book": "Prophetx",
                     "odds": -144,
@@ -238,6 +267,13 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
     row = make_row(card, [])
     assert row["model_prob"] == pytest.approx(0.56933)
     assert row["model_prob_source"] == "proxy_market_devig"
+    assert row["market_consensus_prob"] == pytest.approx(0.56933)
+    assert row["final_blended_prob"] == pytest.approx(0.56933)
+    assert row["board"] == "B"
+    assert row["movement_component"] == pytest.approx(75.0)
+    assert set(row["signal_flags"].split(";")) == {
+        "hit_rate_support", "insight_support", "orf_support", "movement_support"
+    }
     assert isinstance(row["edge_pct"], float)
     assert isinstance(row["kelly_025_units"], float)
     assert row["actionable"] == "false"
@@ -730,6 +766,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     out_dir = tmp_path / "packs" / target
     write_pack(rows, out_dir, games_norm_by_league=games_norm, coverage=coverage)
     assert (out_dir / "candidates.csv").exists()
+    assert (out_dir / "opportunities.csv").exists()
     assert (out_dir / "candidate_coverage.json").exists()
     assert (out_dir / "game_totals.csv").exists()
     assert (out_dir / "team_totals.csv").exists()
@@ -1231,6 +1268,12 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
     assert not (out_dir / "chatgpt_a.md").exists()
     assert not (dossiers / "stale-event.md").exists()
     assert (out_dir / "keep-me.txt").read_text() == "unrelated"
+    with (out_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
+        assert next(csv.reader(handle)) == [
+            "decision_id", "snapshot_id", "pipeline_verdict", "A_verdict",
+            "B_verdict", "C_verdict", "D_verdict", "final_verdict", "units",
+            "kill_reason", "news_override",
+        ]
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.
@@ -1302,6 +1345,64 @@ def test_context_columns_populated_with_full_names():
     assert row["home_away"] == "HOME"  # LAS is the home token in 'CHI @ LAS'
     assert row["matchup"] == "CHI @ LAS"
     assert "Rebounds" in row["market_label"]
+
+
+def test_portland_fire_context_resolves_full_names():
+    # Expansion team must resolve like any other: PDX -> Portland Fire, AWAY side
+    # of 'PDX @ MIN' (regression for the 2026-07-18 Carleton blank-team row).
+    card = _ctx_card(
+        "PDX", "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert row["team"] == "PDX"
+    assert row["team_name"] == "Portland Fire"
+    assert row["opponent"] == "MIN"
+    assert row["opp_name"] == "Minnesota Lynx"
+    assert row["home_away"] == "AWAY"
+
+
+def test_unresolved_team_blanks_opponent_and_flags():
+    # When the player's team cannot be resolved, a populated opponent column is
+    # worse than an empty one: 2026-07-18 the desk read opponent=MIN as the only
+    # team context on a PDX player's row. Blank the pair and flag it.
+    card = _ctx_card(
+        None, "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        market_label="Bridget Carleton - Points",
+    )
+    row = make_row(card, [], sport="WNBA")
+    assert not row["team"]
+    assert not row["team_name"]
+    assert not row["opponent"]
+    assert not row["opp_name"]
+    assert not row["home_away"]
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_player_prop_without_any_team_context_is_flagged():
+    # A player row where neither side resolved is still an enrichment failure.
+    card = _ctx_card(None, None, None)
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" in row["data_quality_flags"].split(";")
+
+
+def test_resolved_team_context_is_not_flagged():
+    card = _ctx_card("LAS", "CHI", "CHI @ LAS")
+    row = make_row(card, [], sport="WNBA")
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
+def test_gameline_without_team_context_is_not_flagged():
+    # Game totals carry no team on purpose; the guard must not fire there.
+    card = ev_card(market_type="GAMELINE", market="TOTAL", proposition="TOTAL",
+                   matchup="PDX @ MIN", line=160.5)
+    ev = [{
+        "market_id": "m1", "outcome_id": "o1", "book": "FD",
+        "book_odds": 110, "book_decimal_odds": 2.1, "calculated_ev_pct": 0.05,
+    }]
+    row = make_row(card, ev)
+    assert row is not None
+    assert "team_enrichment_failed" not in row["data_quality_flags"]
 
 
 def test_market_label_disambiguates_terse_code():
@@ -1558,3 +1659,59 @@ def test_home_away_unresolved_flag():
     row2 = make_row(card, [])
     assert row2["home_away"] == ""
     assert "HOME_AWAY_UNRESOLVED" in row2["data_quality_flags"]
+
+
+def test_write_pack_validation_atomic(tmp_path):
+    # Bug 4 Regression Test: write_pack must not delete existing valid artifacts if validation fails.
+    out_dir = tmp_path / "packs" / "2026-07-20"
+    out_dir.mkdir(parents=True)
+    dossiers_dir = out_dir / "dossiers"
+    dossiers_dir.mkdir()
+    
+    # Seed with existing artifacts
+    (out_dir / "candidates.csv").write_text("dummy", encoding="utf-8")
+    (dossiers_dir / "test_dossier.md").write_text("dummy", encoding="utf-8")
+    
+    # Invalid candidate row that will trigger ValidationError
+    invalid_rows = [{"sport": "MLB"}]
+    
+    from outlier_scrapers.schema import ValidationError
+    with pytest.raises(ValidationError, match="Critical schema compatibility violation"):
+        write_pack(rows=invalid_rows, out_dir=out_dir)
+        
+    # Verify the artifacts are STILL THERE because validation failed BEFORE unlinking
+    assert (out_dir / "candidates.csv").exists()
+    assert (dossiers_dir / "test_dossier.md").exists()
+
+# historical_edge_pct: descriptive edge from the raw recency hit rate.
+def test_historical_edge_pct_column_position():
+    # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1]
+        == "historical_edge_pct"
+    )
+    # Must not displace the pinned last column.
+    assert CANDIDATES_HEADER[-1] == "source_timestamps"
+
+
+def test_historical_edge_pct_blank_when_hit_data_missing():
+    # Regression: signal_score() defaults hit_component to 50.0 when Outlier
+    # has no recency data. That sentinel must NOT leak into historical_edge_pct.
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 50.0, "hit_pct": None}
+    row = make_row(card, [])
+    assert row is not None
+    assert row["historical_edge_pct"] == ""
+
+
+def test_historical_edge_pct_populated_from_raw_hit_pct():
+    card = ev_card()
+    card["sides"]["OVER"]["signal"] = {"hit_component": 62.0, "hit_pct": 62.0}
+    row = make_row(card, [])
+    assert row is not None
+    dec = float(row["decimal_price"])
+    push = float(row["push_prob"]) if row["push_prob"] not in ("", None) else 0.0
+    expected = compute_historical_edge(0.62, dec, push)
+    assert expected is not None
+    assert row["historical_edge_pct"] != ""
+    assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -12,6 +13,9 @@ from datetime import datetime
 from typing import Any
 
 from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
+from .schema import validate_raw_line_movement
+
+logger = logging.getLogger(__name__)
 from .normalizer import (
     game_sides,
     _to_float,
@@ -997,6 +1001,10 @@ def _build_local_ev_records(
             dec_odds = _to_float(book_entry.get("decimal"))
             if not dec_odds:
                 continue
+            # book_entry is a single per-book odds dict, not an outcome with an
+            # "odds" list, so read its American price directly (as _ev_book_rows
+            # does) instead of via _best_american_price.
+            book_american = _to_int(book_entry.get("american"))
                 
             devig_decimal = 1.0 / cons_f if cons_f > 0 else 0.0
             ev = (cons_f * dec_odds) - 1.0
@@ -1017,7 +1025,14 @@ def _build_local_ev_records(
             outcome_id = str(outcome.get("outcomeId") or "")
             ev_source = "LOCAL"
             record_id = hashlib.sha256(f"{league}|{market_id}|{outcome_id}|{tb['normalized']}|{ev_source}".encode()).hexdigest()
-            
+            # Same side resolution as normalize_ev_records: without a side the
+            # record can never join a card side (cards._ev_for_side drops it).
+            side = _side_for_source(
+                outcome.get("position") or outcome.get("label"),
+                str(market.get("proposition") or ""),
+                source,
+            )
+
             base_row = {
                 "record_id": record_id,
                 "ev_source": ev_source,
@@ -1025,6 +1040,7 @@ def _build_local_ev_records(
                 "league": get_sport_config(league).league_id,
                 "market_id": market_id,
                 "outcome_id": outcome_id,
+                "side": side or None,
                 "player": props_context.get("player"),
                 "player_raw": props_context.get("player_raw"),
                 "player_id": props_context.get("player_id"),
@@ -1043,13 +1059,13 @@ def _build_local_ev_records(
                 "scope": props_context.get("scope"),
                 "is_active": props_context.get("is_active"),
                 "current_line": _to_float(line_val),
-                "current_odds": _best_american_price(book_entry),
-                "current_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "current_odds": book_american,
+                "current_ip_pct": implied_probability(book_american),
                 "book": tb["normalized"],
                 "book_raw": tb["bname"],
-                "book_odds": _best_american_price(book_entry),
+                "book_odds": book_american,
                 "book_decimal_odds": dec_odds,
-                "book_ip_pct": implied_probability(_best_american_price(book_entry)),
+                "book_ip_pct": implied_probability(book_american),
                 "book_state": book_entry.get("state"),
                 "max_bet": _to_float(book_entry.get("maxBet")),
                 "calculated_ev_method": "LOCAL_PROPORTIONAL",
@@ -1143,6 +1159,12 @@ def build_line_movement_payload(
             rows.extend(market_rows)
         else:
             markets_without_records.append(market_id)
+
+    # Validate the generated EV records schema compatibility
+    lm_errors = validate_raw_line_movement({"ev_records": ev_rows})
+    if lm_errors:
+        for err in lm_errors:
+            logger.warning("Line movement schema warning: %s", err)
 
     return {
         "generated_at": datetime.now().astimezone().isoformat(),

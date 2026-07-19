@@ -68,6 +68,18 @@ def test_build_game_totals_actionable_at_three_pct_edge():
     assert row['fair_total'] != ''
     if row['edge_pct'] != '' and float(row['edge_pct']) >= MIN_EDGE_TOTALS:
         assert row['actionable'] == 'true'
+        assert row['recommended_units_pre_news'] not in ('', None)
+    expected_book = 'fd' if row['best_side'] == 'OVER' else 'dk'
+    assert row['book'] == expected_book
+    assert row['outcome_id'] == row['totals_id']
+    assert row['independent_model_prob'] == ''
+    side_probability = (
+        row['projected_over_prob']
+        if row['best_side'] == 'OVER'
+        else row['projected_under_prob']
+    )
+    assert row['market_consensus_prob'] == side_probability
+    assert row['final_blended_prob'] == side_probability
 
 def test_build_game_totals_single_book_not_actionable():
     games_norm = {'records': [_norm_record('m2', 174.5, 'OVER', [{'book': 'DK', 'odds': -110}]), _norm_record('m2', 174.5, 'UNDER', [{'book': 'DK', 'odds': -110}])]}
@@ -98,12 +110,14 @@ def test_build_game_totals_integer_line_with_push_prob():
     side = row['best_side']
     p_over, _, _ = aggregate_line_p_over({'DK': -110, 'FD': -110}, {'DK': -110, 'FD': -110})
     assert p_over is not None
-    p_side = p_over if side == 'OVER' else 1.0 - p_over
+    p_side_conditional = p_over if side == 'OVER' else 1.0 - p_over
     decimal = float(row['decimal_price'])
     push = float(row['push_prob'])
+    p_side = p_side_conditional * (1.0 - push)
     expected = compute_sizing(decimal_price=decimal, model_prob=p_side, push_prob=push)
     assert expected.edge_pct is not None
     assert float(row['edge_pct']) == pytest.approx(round(expected.edge_pct, 4))
+    assert float(row['market_consensus_prob']) == pytest.approx(round(p_side, 4))
     two_way_edge, _ = compute_side_edge(side, p_over, row['best_price'])
     assert two_way_edge is not None
     assert float(row['edge_pct']) != pytest.approx(two_way_edge)

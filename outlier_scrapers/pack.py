@@ -14,6 +14,9 @@ import csv
 import json
 import logging
 import math
+import os
+import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -24,7 +27,8 @@ from outlier_scrapers.registry import (
     get_sport_config,
     team_display_name,
 )
-from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
+from outlier_scrapers.schema import ValidationError, validate_candidate_row
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,7 @@ CANDIDATES_HEADER = [
     "event_id",
     "_event_starts_at",
     "market_id",
+    "outcome_id",
     "market_type",
     "player_id",
     "matchup",
@@ -51,14 +56,24 @@ CANDIDATES_HEADER = [
     "as_of",
     "model_prob",
     "model_prob_source",
+    "market_consensus_prob",
+    "independent_model_prob",
+    "final_blended_prob",
     "push_prob",
     "implied_prob",
     "edge_pct",
+    "historical_edge_pct",
     "kelly_025_units",
     "max_units",
     "recommended_units_pre_news",
     "sizing_flags",
     "data_quality_flags",
+    "board",
+    "signal_flags",
+    "hit_rate_component",
+    "insight_component",
+    "movement_component",
+    "orf_component",
     "actionable",
     "outlier_ev_pct",
     "outlier_kelly_pct",
@@ -275,6 +290,19 @@ def _fmt_line(line: Any) -> str:
         return str(line)
     return str(int(f)) if f == int(f) else str(f)
 
+
+def _opportunity_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """Return the normalized identity used to mark full-board rows as selected."""
+
+    return (
+        str(_coalesce(row.get("sport"), "")),
+        str(_coalesce(row.get("event_id"), "")),
+        str(_coalesce(row.get("market_id"), "")),
+        str(_coalesce(row.get("outcome_id"), "")),
+        str(_coalesce(row.get("selection"), "")),
+        _fmt_line(row.get("line")),
+    )
+
 # Propositions where the line is a signed margin (point spread / run line / puck
 # line) rather than a magnitude. A positive value here means the side is getting
 # a cushion, not that it's the favorite — the same "1.5" that's unambiguous on a
@@ -417,6 +445,7 @@ def build_row(
     ev_summary = side_view.get("ev")
     matched = match_ev_records(market_id, outcome_id, headline_side, line, ev_records, by_outcome)
     ref = matched[0] if matched else {}
+    outcome_id = outcome_id or ref.get("outcome_id")
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
@@ -435,6 +464,7 @@ def build_row(
     row["sport"] = sport
     row["event_id"] = event_id
     row["market_id"] = market_id
+    row["outcome_id"] = outcome_id
     row["market_type"] = market_type
     row["player_id"] = card.get("player_id") or ref.get("player_id")
     is_team_total = (
@@ -460,6 +490,13 @@ def build_row(
     matchup = card.get("matchup") or ref.get("matchup")
     team = card.get("team") or ref.get("team")
     opponent = card.get("opponent") or ref.get("opponent")
+    # A row whose own team is unresolved must not carry a populated opponent:
+    # the desk reads opponent-only context as the player's side (2026-07-18
+    # Carleton row showed her matchup's other team as the only team column).
+    is_player_row = has_player or str(market_type or "").upper() == "PLAYER_PROP"
+    team_enrichment_failed = not team and bool(opponent or is_player_row)
+    if team_enrichment_failed:
+        opponent = None
     try:
         config = get_sport_config(sport, allow_disabled=True)
     except ValueError:
@@ -513,6 +550,8 @@ def build_row(
         devig = (ev_summary or {}).get("devig_decimal")
         model_prob = (1.0 / devig) if devig else None
         row["model_prob"] = model_prob
+        row["market_consensus_prob"] = model_prob
+        row["final_blended_prob"] = model_prob
         if model_prob is not None:
             row["model_prob_source"] = (
                 "local_devig"
@@ -556,6 +595,8 @@ def build_row(
                 decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob
             )
             row["model_prob"] = model_prob
+            row["market_consensus_prob"] = model_prob
+            row["final_blended_prob"] = model_prob
             row["model_prob_source"] = "proxy_market_devig"
             row["implied_prob"] = sizing.implied_prob
             row["edge_pct"] = sizing.edge_pct
@@ -594,6 +635,8 @@ def build_row(
     dq_flags += market_validation_flags(
         sport, card, ref, market_token, market_type, row.get("player_id"), line
     )
+    if team_enrichment_failed:
+        dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
     # Stale-line edge gate: reverse line movement (line moved against this side)
@@ -622,10 +665,49 @@ def build_row(
     row["actionable"] = "true" if card.get("board") == "A" and units is not None and units > 0 else "false"
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
+    signal = side_view.get("signal") or {}
+    movement_corroboration = _to_float(signal.get("movement_corroboration"))
+    row["hit_rate_component"] = signal.get("hit_component", "")
+    row["insight_component"] = signal.get("insight_component", "")
+    row["movement_component"] = (
+        50.0 + 25.0 * movement_corroboration
+        if movement_corroboration is not None
+        else ""
+    )
+    row["orf_component"] = signal.get("orf_component", "")
+    # Descriptive-only: edge implied by the raw recency hit rate. Reads
+    # signal["hit_pct"] (None when Outlier had no recency data), NOT
+    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
+    hist_edge = compute_historical_edge(
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
+        decimal_price=_to_float(row.get("decimal_price")),
+        push_prob=_to_float(row.get("push_prob")),
+    )
+    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
+    signal_flags: list[str] = []
+    for value, flag in (
+        (_to_float(row.get("hit_rate_component")), "hit_rate_support"),
+        (_to_float(row.get("insight_component")), "insight_support"),
+        (_to_float(row.get("orf_component")), "orf_support"),
+    ):
+        if value is not None and value > 50.0:
+            signal_flags.append(flag)
+    if movement_corroboration is not None:
+        if movement_corroboration > 0:
+            signal_flags.append("movement_support")
+        elif movement_corroboration < 0:
+            signal_flags.append("movement_against")
+    if signal.get("insight_conflict"):
+        signal_flags.append("insight_conflict")
+    row["signal_flags"] = ";".join(dict.fromkeys(signal_flags))
+
     if card.get("board") == "A":
         row["_board"] = "board_a" if row["actionable"] == "true" else "flagged"
+        row["board"] = "A" if row["actionable"] == "true" else "A_FLAGGED"
     else:
         row["_board"] = "board_b"
+        row["board"] = "B"
     row["_rank_value"] = card.get("rank_value") or 0.0
     row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
     row["_slug"] = _slug(card.get("matchup") or ref.get("matchup"))
@@ -1073,7 +1155,23 @@ def write_pack(
     *,
     games_norm_by_league: dict[str, Any] | None = None,
     coverage: dict[str, dict[str, int]] | None = None,
+    opportunity_rows: list[dict[str, Any]] | None = None,
 ) -> None:
+    # Validate all candidate rows against schema constraints
+    for idx, row in enumerate(rows):
+        row_errors = validate_candidate_row(row, CANDIDATES_HEADER)
+        if row_errors:
+            # If a critical field is missing or empty, raise ValidationError
+            critical_mismatch = any(
+                "Critical field" in err or "dictionary" in err
+                for err in row_errors
+            )
+            if critical_mismatch:
+                raise ValidationError(f"Critical schema compatibility violation at row {idx}: {'; '.join(row_errors)}")
+            # Log minor issues as warnings
+            for err in row_errors:
+                logger.warning("Candidate row schema warning at index %d: %s", idx, err)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in DERIVED_PACK_OUTPUTS:
         (out_dir / name).unlink(missing_ok=True)
@@ -1081,10 +1179,25 @@ def write_pack(
     if dossiers_dir.exists():
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+    selected_keys = {_opportunity_key(row) for row in rows}
+    opportunity_output: list[dict[str, Any]] = []
+    for source_row in opportunity_rows if opportunity_rows is not None else rows:
+        row = dict(source_row)
+        key = _opportunity_key(row)
+        row["selected"] = "true" if key in selected_keys else "false"
+        opportunity_output.append(row)
+    with open(out_dir / "opportunities.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=[*CANDIDATES_HEADER, "selected"], extrasaction="ignore"
+        )
+        writer.writeheader()
+        writer.writerows(opportunity_output)
         
     from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
 
@@ -1119,8 +1232,10 @@ def write_pack(
         (dossiers_dir / f"{sport}_{eid}_{slug}.md").write_text(
             build_dossier(erows, sport), encoding="utf-8"
         )
+    from outlier_scrapers.feedback import DECISION_FIELDS
+
     with open(out_dir / "decisions.csv", "w", newline="", encoding="utf-8") as df:
-        df.write("date,market_id,event_id,selection,decision,line_taken,price_taken,units,rationale\n")
+        csv.DictWriter(df, fieldnames=DECISION_FIELDS).writeheader()
 
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(exist_ok=True)
@@ -1138,7 +1253,12 @@ def write_pack(
     (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
 
 def build_pack_with_coverage(
-    leagues: Sequence[str], requested_date: str | None, top_ev_n: int, top_signal_n: int
+    leagues: Sequence[str],
+    requested_date: str | None,
+    top_ev_n: int,
+    top_signal_n: int,
+    *,
+    opportunity_rows_out: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
@@ -1218,6 +1338,8 @@ def build_pack_with_coverage(
             sample,
             " ..." if len(locked_ids) > len(sample) else "",
         )
+    if opportunity_rows_out is not None:
+        opportunity_rows_out.extend(dict(row) for row in kept)
     final_rows = rank_rows(kept, top_ev_n, top_signal_n)
     for lg, stats in coverage.items():
         stats["emitted"] = sum(1 for row in final_rows if row.get("sport") == lg)
@@ -1233,26 +1355,118 @@ def build_pack(
     )
     return rows, target_date, games_norm
 
+
+def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
+    """Publish staging while retaining the prior pack for transaction rollback."""
+
+    backup_dir = out_dir.parent / f".{out_dir.name}.feedback-backup-{uuid.uuid4().hex}"
+    had_existing = out_dir.exists()
+    if had_existing:
+        os.replace(out_dir, backup_dir)
+    try:
+        os.replace(staging_dir, out_dir)
+    except Exception:
+        if had_existing and backup_dir.exists() and not out_dir.exists():
+            os.replace(backup_dir, out_dir)
+        raise
+    return backup_dir if had_existing else None
+
+
+def _restore_published_pack(out_dir: Path, backup_dir: Path | None) -> None:
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    if backup_dir is not None and backup_dir.exists():
+        os.replace(backup_dir, out_dir)
+
+
 def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
     parser.add_argument("--leagues", default="MLB,WNBA")
     parser.add_argument("--date")
     parser.add_argument("--top-ev-n", type=int, default=15)
     parser.add_argument("--top-signal-n", type=int, default=10)
+    parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument(
+        "--no-feedback-ledger",
+        action="store_true",
+        help="Build pack artifacts without writing the permanent feedback database.",
+    )
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
+    opportunity_rows: list[dict[str, Any]] = []
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
-        leagues, args.date, args.top_ev_n, args.top_signal_n
+        leagues,
+        args.date,
+        args.top_ev_n,
+        args.top_signal_n,
+        opportunity_rows_out=opportunity_rows,
     )
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
-    write_pack(
-        final_rows,
-        out_dir,
-        freshness,
-        games_norm_by_league=games_norm,
-        coverage=coverage,
-    )
+    if args.no_feedback_ledger:
+        write_pack(
+            final_rows,
+            out_dir,
+            freshness,
+            games_norm_by_league=games_norm,
+            coverage=coverage,
+            opportunity_rows=opportunity_rows,
+        )
+    else:
+        from outlier_scrapers import feedback
+
+        feedback_db = args.feedback_db or (
+            paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+        )
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
+        if out_dir.exists():
+            shutil.copytree(out_dir, staging_dir)
+        conn = None
+        backup_dir: Path | None = None
+        published = False
+        try:
+            write_pack(
+                final_rows,
+                staging_dir,
+                freshness,
+                games_norm_by_league=games_norm,
+                coverage=coverage,
+                opportunity_rows=opportunity_rows,
+            )
+            conn = feedback.open_database(feedback_db)
+            conn.execute("BEGIN IMMEDIATE")
+            stats = feedback.capture_pack(
+                staging_dir,
+                feedback_db,
+                recorded_pack_path=out_dir,
+                connection=conn,
+            )
+            backup_dir = _swap_staged_pack(staging_dir, out_dir)
+            published = True
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            if published:
+                _restore_published_pack(out_dir, backup_dir)
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
+        if backup_dir is not None and backup_dir.exists():
+            try:
+                shutil.rmtree(backup_dir)
+            except OSError as exc:
+                logger.warning("Could not remove prior pack backup %s: %s", backup_dir, exc)
+        logger.info(
+            "Captured %d feedback snapshots and %d decisions in %s",
+            stats.snapshots,
+            stats.decisions,
+            feedback_db,
+        )
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
     return out_dir
 

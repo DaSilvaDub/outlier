@@ -1,6 +1,7 @@
 import argparse
 import re
 import shutil
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,6 +11,16 @@ DEFAULT_OUT_DIRS = [
     r"C:\Users\dasil\OneDrive\Desktop\today",
     r"G:\My Drive\today",
 ]
+
+
+def filter_candidates_text_for_ai(candidates: str) -> str:
+    """Apply the canonical AI-facing candidate projection in standalone runs."""
+    repo_root = Path(__file__).resolve().parents[4]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from outlier_scrapers.runner_common import filter_candidates_for_ai
+
+    return filter_candidates_for_ai(candidates.encode("utf-8")).decode("utf-8-sig")
 
 
 def clean_stray_files(out_dir: Path) -> None:
@@ -69,11 +80,23 @@ CRITICAL INSTRUCTIONS FOR YOU:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(prompt)
 
+    desk2_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts\desk2")
+    desk2_count = 0
+    if desk2_dir.exists():
+        for p in desk2_dir.glob("*.md"):
+            with open(p, "r", encoding="utf-8") as pf:
+                p_text = pf.read()
+            full_prompt = f"{p_text}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
+            out_file = out_dir / f"{p.stem}_pack_{date_str}.txt"
+            with open(out_file, "w", encoding="utf-8") as f:
+                f.write(full_prompt)
+            desk2_count += 1
+
     current_date = date.fromisoformat(date_str)
     keep_dates = {date_str, (current_date - timedelta(days=1)).isoformat()}
     archive_old_packs(out_dir, keep_dates)
 
-    print(f"Successfully generated {len(models)} prompt files in {out_dir} (archived anything older than {min(keep_dates)})")
+    print(f"Successfully generated {len(models)} generic and {desk2_count} desk2 prompt files in {out_dir} (archived anything older than {min(keep_dates)})")
 
 
 def main() -> None:
@@ -112,6 +135,7 @@ def main() -> None:
 
     with open(candidates_path, "r", encoding="utf-8") as f:
         candidates = f.read()
+    candidates = filter_candidates_text_for_ai(candidates)
 
     briefing = briefing.replace("- Use this pack ONLY. Do not use memory or the web.\n", "")
     briefing = briefing.replace("- If you need info not in the pack, list it under NEEDS — do not guess.\n", "")
