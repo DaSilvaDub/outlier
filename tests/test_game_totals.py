@@ -236,6 +236,39 @@ def test_build_game_totals_merges_split_full_game_market_ids_into_one_ladder():
     assert len(rows) == 1
     assert rows[0]['fair_total'] != ''
 
+def _l10_stats(home_hits: int, away_hits: int | None = None) -> dict:
+    def blob(hits: int) -> dict:
+        return {'l10': hits / 10.0, 'l10Results': [True] * hits + [False] * (10 - hits)}
+    stats = {'homeSummaryStat': blob(home_hits)}
+    if away_hits is not None:
+        stats['awaySummaryStat'] = blob(away_hits)
+    return stats
+
+def test_build_game_totals_blends_l10_into_edge_and_columns():
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m1', 8.5, 'OVER', [{'book': 'DK', 'odds': -120}, {'book': 'FD', 'odds': -120}], stats=_l10_stats(8, 6)), _norm_record('m1', 8.5, 'UNDER', [{'book': 'DK', 'odds': 100}, {'book': 'FD', 'odds': 100}])]}
+    rows = build_game_totals([], games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['best_side'] == 'OVER'
+    assert float(row['independent_model_prob']) == pytest.approx(0.7)
+    consensus = float(row['market_consensus_prob'])
+    blended = float(row['final_blended_prob'])
+    assert blended == pytest.approx(round(0.75 * consensus + 0.25 * 0.7, 4), abs=1e-3)
+    expected = compute_sizing(decimal_price=float(row['decimal_price']), model_prob=blended, push_prob=0.0)
+    assert expected.edge_pct is not None
+    assert float(row['edge_pct']) == pytest.approx(expected.edge_pct, abs=1e-3)
+
+def test_build_game_totals_l10_can_flip_best_side_to_over():
+    # Market prices favor UNDER; a 10/10 L10 over-record flips the pick.
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m1', 8.5, 'OVER', [{'book': 'DK', 'odds': -125}, {'book': 'FD', 'odds': -125}], stats=_l10_stats(10, 10)), _norm_record('m1', 8.5, 'UNDER', [{'book': 'DK', 'odds': 105}, {'book': 'FD', 'odds': 105}])]}
+    rows = build_game_totals([], games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
+    row = rows[0]
+    no_stats = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m1', 8.5, 'OVER', [{'book': 'DK', 'odds': -125}, {'book': 'FD', 'odds': -125}]), _norm_record('m1', 8.5, 'UNDER', [{'book': 'DK', 'odds': 105}, {'book': 'FD', 'odds': 105}])]}
+    market_row = build_game_totals([], no_stats, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))[0]
+    assert market_row['best_side'] == 'UNDER'
+    assert market_row['independent_model_prob'] == ''
+    assert row['best_side'] == 'OVER'
+
 def test_implied_prob_scaling_and_rounding():
     games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m_imp', 8.5, 'OVER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m_imp', 8.5, 'UNDER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}])]}
     candidates = [{'market_id': 'm_imp', 'market_type': 'GAMELINE', 'player_id': '', 'line': 8.5, '_proposition': 'TOTAL'}]

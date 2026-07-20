@@ -28,14 +28,14 @@ from outlier_scrapers.utils import (
     _american_to_decimal,
     _decimal_to_american,
     _local_date,
+    _summary_stat_for_team,
     drop_locked_events,
     _write_csv,
     _price_text,
 )
-from outlier_scrapers.normalizer import implied_probability
+from outlier_scrapers.normalizer import implied_probability, percent_number
 from outlier_scrapers.paths import league_paths
 from outlier_scrapers.registry import supported_leagues
-from outlier_scrapers.totals_model import extract_l10, FLAG_SHORT_SAMPLE
 
 MIN_HIT_PCT = 90.0
 MAX_HIT_PCT = 100.0
@@ -89,7 +89,8 @@ ALT_TEAM_TOTAL_PARLAYS_HEADER = [
     "as_of",
 ]
 
-
+FLAG_SHORT_SAMPLE = "SHORT_SAMPLE"
+FLAG_AMBIGUOUS_STATS_SIDE = "AMBIGUOUS_STATS_SIDE"
 FLAG_INTEGER_LINE_PUSH_RISK = "INTEGER_LINE_PUSH_RISK"
 FLAG_NO_PRICE = "NO_PRICE"
 
@@ -109,6 +110,32 @@ def is_alt_team_total_record(rec: dict[str, Any], *, league: str) -> bool:
         return False
     prop = str(rec.get("proposition") or rec.get("market") or "").upper()
     return prop in team_total_propositions(league)
+
+
+def extract_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """L10 hit rate for one OVER outcome at its line.
+
+    Prefers the exact ``l10Results`` boolean array; falls back to the ``l10``
+    fraction. Returns None when no usable l10 signal exists.
+    """
+    stat, flag = _summary_stat_for_team(rec)
+    if stat is None:
+        return {"flag": flag} if flag else None
+    results = stat.get("l10Results")
+    if isinstance(results, list) and results:
+        bools = [bool(v) for v in results]
+        hits, total = sum(bools), len(bools)
+        return {
+            "hits": hits,
+            "total": total,
+            "pct": round(100.0 * hits / total, 3),
+            "source": "l10Results",
+            "flag": FLAG_SHORT_SAMPLE if total < 10 else None,
+        }
+    pct = percent_number(stat.get("l10"))
+    if pct is None:
+        return None
+    return {"hits": None, "total": None, "pct": pct, "source": "l10", "flag": None}
 
 
 def _is_integer_line(line: float) -> bool:
