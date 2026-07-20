@@ -71,8 +71,10 @@ def test_record_filter_league_propositions():
     )
     # MLB team totals are total runs: accept the raw variants and the canonical
     # market alias, but never the GAMELINE game total or WNBA runs tokens.
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="POINTS"), league="MLB")
     assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL_RUNS"), league="MLB")
     assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL"), league="MLB")
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="total_runs"), league="MLB")
     r_alias = _tt_record(4.5, proposition="", market="R")
     assert is_alt_team_total_record(r_alias, league="MLB")
     assert not is_alt_team_total_record(
@@ -81,6 +83,10 @@ def test_record_filter_league_propositions():
     assert not is_alt_team_total_record(
         _tt_record(80.5, proposition="TOTAL_RUNS"), league="WNBA"
     )
+    for prop in ("RUNS", "R", "TOTAL_RUNS", "TOTAL"):
+        assert not is_alt_team_total_record(
+            _tt_record(4.5, market_type="PLAYER_PROP", proposition=prop), league="MLB"
+        )
 
 
 def test_board_emits_mlb_total_runs_ladder():
