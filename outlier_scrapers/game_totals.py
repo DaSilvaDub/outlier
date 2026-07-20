@@ -608,6 +608,12 @@ def build_totals(
         if actionable == "true" and sizing is not None:
             recommended_units = sizing.recommended_units_pre_news or 0.0
 
+        # push_prob is blank ("") when push-blocked with no honest push mass
+        # (push_capable_no_prob); treat that as zero for the probability
+        # blend multiplier below, same as the non-push-blocked path already
+        # does via push_prob=0.0.
+        push_prob_frac = float(push_prob) if isinstance(push_prob, (int, float)) else 0.0
+
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
         name = matchup if total_kind == "game" else (team or matchup)
@@ -633,9 +639,9 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(p_side_conditional_consensus * (1.0 - push_prob), 4) if p_side_conditional_consensus is not None else "",
-                "independent_model_prob": round(p_side_conditional_l10 * (1.0 - push_prob), 4) if p_side_conditional_l10 is not None else "",
-                "final_blended_prob": round(p_side_conditional_blended * (1.0 - push_prob), 4) if p_side_conditional_blended is not None else "",
+                "market_consensus_prob": round(p_side_conditional_consensus * (1.0 - push_prob_frac), 4) if p_side_conditional_consensus is not None else "",
+                "independent_model_prob": round(p_side_conditional_l10 * (1.0 - push_prob_frac), 4) if p_side_conditional_l10 is not None else "",
+                "final_blended_prob": round(p_side_conditional_blended * (1.0 - push_prob_frac), 4) if p_side_conditional_blended is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
