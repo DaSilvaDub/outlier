@@ -46,15 +46,17 @@
 
 ## PR #52 learned probability blending
 
-**Last Commit SHA**: `f210319ef2de9581c3501676db0f5bb6c19a5183`
+**Last Product Commit SHA**: `7e8883a618e20730150efa7f2374b6ca7db7e07b` (plus the handoff-only commit that records this summary)
 
 **Files Touched**:
 - `outlier_scrapers/probability_blend.py`
 - `outlier_scrapers/pack.py`
 - `outlier_scrapers/feedback.py`
+- `outlier_scrapers/game_totals.py`
 - `tests/test_probability_blend.py`
 - `tests/test_pack.py`
 - `tests/test_feedback.py`
+- `tests/test_game_totals.py`
 - `docs/probability-blending.md`
 
 **Summary of Work**:
@@ -63,9 +65,12 @@
 - Added versioned artifact loading, cold-start and historical-cutoff safeguards,
   pack sizing integration, ledger provenance, and v4 segment migration.
 - Opened PR #52: https://github.com/DaSilvaDub/outlier/pull/52
-- Verified 169 offline tests plus Ruff, mypy, pyright, and diff checks.
+- Fixed the inherited integer-total serialization failure by leaving market, model,
+  and blended probabilities blank whenever push mass is unknown.
+- Verified the exact offline suite (496 tests), the focused blend/totals suite
+  (159 tests), full mypy and pyright, touched-file Ruff, and diff checks.
 
 **Next Steps**:
-- Review and merge PR #52 after hosted checks complete.
+- Review and merge PR #52 after the refreshed hosted checks pass.
 - Continue capturing and settling rows; run `feedback fit-blend` once each desired
   segment has enough eligible pregame history.
