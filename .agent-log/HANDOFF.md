@@ -41,3 +41,38 @@
 
 **Next Steps**:
 - The user has been doing bottom-up merges of PRs (started with #23, then #34, #36, and now #39). The next agent should await the user's instructions for the next task (likely the next PR in the queue).
+
+---
+
+## PR #52 learned probability blending
+
+**Last Product Commit SHA**: `a783d15576fd1d83d0598828bb0820220e68950c` (plus the handoff-only commit that records this summary)
+
+**Files Touched**:
+- `outlier_scrapers/probability_blend.py`
+- `outlier_scrapers/pack.py`
+- `outlier_scrapers/feedback.py`
+- `outlier_scrapers/game_totals.py`
+- `tests/test_probability_blend.py`
+- `tests/test_pack.py`
+- `tests/test_feedback.py`
+- `tests/test_game_totals.py`
+- `docs/probability-blending.md`
+
+**Summary of Work**:
+- Added Brier-loss market/model blend fitting with learned weights for league, market
+  type, odds range, time before game, and data-quality tier.
+- Added versioned artifact loading, cold-start and historical-cutoff safeguards,
+  pack sizing integration, ledger provenance, and v4 segment migration.
+- Opened PR #52: https://github.com/DaSilvaDub/outlier/pull/52
+- Fixed the inherited integer-total serialization failure by leaving market, model,
+  and blended probabilities blank whenever push mass is unknown.
+- Reconciled PR #52 with the post-PR50 revert/current master and resolved the
+  `game_totals.py` conflict without reintroducing the reverted implementation.
+- Verified the exact offline suite (517 tests), the focused blend/totals suite
+  (161 tests), full mypy and pyright, touched-file Ruff, and diff checks.
+
+**Next Steps**:
+- Review and merge PR #52 after the refreshed hosted checks pass.
+- Continue capturing and settling rows; run `feedback fit-blend` once each desired
+  segment has enough eligible pregame history.

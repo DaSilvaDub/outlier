@@ -115,6 +115,107 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
 
 
+def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
+    rows = [
+        _candidate(market_id="m1", outcome_id="o1"),
+        _candidate(market_id="m2", outcome_id="o2"),
+    ]
+    for row in rows:
+        row.update(
+            {
+                "independent_model_prob": 0.40,
+                "_event_starts_at": "2026-07-13T20:00:00+00:00",
+                "data_quality_tier": "HIGH",
+                "blend_market_weight": 0.70,
+                "blend_model_weight": 0.30,
+                "blend_weight_source": "learned:market_type",
+                "blend_model_version": "blend-test",
+            }
+        )
+    pack_dir = _pack(tmp_path, rows)
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        captured = conn.execute(
+            "SELECT hours_before_game, odds_range, time_before_game, "
+            "data_quality_tier, blend_market_weight FROM market_snapshots "
+            "ORDER BY market_id"
+        ).fetchall()
+        identities = conn.execute(
+            "SELECT d.decision_id, s.snapshot_id, s.outcome_id, s.event_id, s.market_id "
+            "FROM decisions d JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id "
+            "ORDER BY s.market_id"
+        ).fetchall()
+        for index, identity in enumerate(identities):
+            decision_id, snapshot_id, outcome_id, event_id, market_id = identity
+            conn.execute(
+                "INSERT INTO settlements ("
+                "settlement_id, decision_id, snapshot_id, outcome_id, event_id, "
+                "market_id, win_loss_push, settled_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"settlement-{index}",
+                    decision_id,
+                    snapshot_id,
+                    outcome_id,
+                    event_id,
+                    market_id,
+                    "W" if index == 0 else "L",
+                    "2026-07-14T00:00:00+00:00",
+                ),
+            )
+
+    assert captured == [(4.0, "-100_TO_+100", "1_TO_6H", "HIGH", 0.7)] * 2
+    output = tmp_path / "blend_weights.json"
+    artifact = feedback.fit_blend_weights(
+        db_path, output, min_samples=2, prior_strength=0
+    )
+    assert output.exists()
+    assert artifact["status"] == "active"
+    assert artifact["global"]["market_weight"] == pytest.approx(0.5)
+    assert artifact["dimensions"]["league"]["WNBA"]["n"] == 2
+
+
+def test_v4_migration_recovers_segments_for_frozen_history(tmp_path):
+    row = _candidate()
+    row.update(
+        {
+            "independent_model_prob": 0.40,
+            "_event_starts_at": "2026-07-13T20:00:00+00:00",
+            "data_quality_flags": "thin_liquidity",
+        }
+    )
+    pack_dir = _pack(tmp_path, [row])
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE decisions SET final_verdict = 'PLAY'")
+        conn.execute(
+            "UPDATE market_snapshots SET data_quality_tier = NULL, "
+            "event_starts_at = NULL, hours_before_game = NULL, odds_range = NULL, "
+            "time_before_game = NULL"
+        )
+        conn.execute("PRAGMA user_version = 3")
+
+    feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        recovered = conn.execute(
+            "SELECT data_quality_tier, event_starts_at, hours_before_game, "
+            "odds_range, time_before_game FROM market_snapshots"
+        ).fetchone()
+        verdict = conn.execute("SELECT final_verdict FROM decisions").fetchone()[0]
+    assert recovered == (
+        "MEDIUM",
+        "2026-07-13T20:00:00+00:00",
+        4.0,
+        "-100_TO_+100",
+        "1_TO_6H",
+    )
+    assert verdict == "PLAY"
+
+
 def test_capture_pack_deduplicates_repeated_opportunity_decisions(tmp_path):
     repeated = _candidate()
     pack_dir = _pack(tmp_path, [repeated, repeated.copy()])

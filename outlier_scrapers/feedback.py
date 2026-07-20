@@ -25,14 +25,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import paths
+from outlier_scrapers import paths, probability_blend
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
 DEFAULT_REPORT_DIR = paths.PROJECT_ROOT / "calibration" / "reports" / "latest"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MARKET_SNAPSHOT_FIELDS = [
     "snapshot_id",
@@ -49,9 +49,19 @@ MARKET_SNAPSHOT_FIELDS = [
     "market_consensus_prob",
     "independent_model_prob",
     "final_blended_prob",
+    "blend_market_weight",
+    "blend_model_weight",
+    "blend_weight_source",
+    "blend_model_version",
+    "blend_segment",
     "push_prob",
     "edge",
     "data_quality_flags",
+    "data_quality_tier",
+    "event_starts_at",
+    "hours_before_game",
+    "odds_range",
+    "time_before_game",
     # Required for the requested segmentation and future weight fitting.
     "market_type",
     "model_prob_source",
@@ -130,9 +140,19 @@ MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
     "market_consensus_prob": "REAL",
     "independent_model_prob": "REAL",
     "final_blended_prob": "REAL",
+    "blend_market_weight": "REAL",
+    "blend_model_weight": "REAL",
+    "blend_weight_source": "TEXT",
+    "blend_model_version": "TEXT",
+    "blend_segment": "TEXT",
     "push_prob": "REAL",
     "edge": "REAL",
     "data_quality_flags": "TEXT",
+    "data_quality_tier": "TEXT",
+    "event_starts_at": "TEXT",
+    "hours_before_game": "REAL",
+    "odds_range": "TEXT",
+    "time_before_game": "TEXT",
     "market_type": "TEXT",
     "model_prob_source": "TEXT",
     "decimal_price": "REAL",
@@ -207,9 +227,19 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "market_consensus_prob": "ALTER TABLE market_snapshots ADD COLUMN market_consensus_prob REAL",
         "independent_model_prob": "ALTER TABLE market_snapshots ADD COLUMN independent_model_prob REAL",
         "final_blended_prob": "ALTER TABLE market_snapshots ADD COLUMN final_blended_prob REAL",
+        "blend_market_weight": "ALTER TABLE market_snapshots ADD COLUMN blend_market_weight REAL",
+        "blend_model_weight": "ALTER TABLE market_snapshots ADD COLUMN blend_model_weight REAL",
+        "blend_weight_source": "ALTER TABLE market_snapshots ADD COLUMN blend_weight_source TEXT",
+        "blend_model_version": "ALTER TABLE market_snapshots ADD COLUMN blend_model_version TEXT",
+        "blend_segment": "ALTER TABLE market_snapshots ADD COLUMN blend_segment TEXT",
         "push_prob": "ALTER TABLE market_snapshots ADD COLUMN push_prob REAL",
         "edge": "ALTER TABLE market_snapshots ADD COLUMN edge REAL",
         "data_quality_flags": "ALTER TABLE market_snapshots ADD COLUMN data_quality_flags TEXT",
+        "data_quality_tier": "ALTER TABLE market_snapshots ADD COLUMN data_quality_tier TEXT",
+        "event_starts_at": "ALTER TABLE market_snapshots ADD COLUMN event_starts_at TEXT",
+        "hours_before_game": "ALTER TABLE market_snapshots ADD COLUMN hours_before_game REAL",
+        "odds_range": "ALTER TABLE market_snapshots ADD COLUMN odds_range TEXT",
+        "time_before_game": "ALTER TABLE market_snapshots ADD COLUMN time_before_game TEXT",
         "market_type": "ALTER TABLE market_snapshots ADD COLUMN market_type TEXT",
         "model_prob_source": "ALTER TABLE market_snapshots ADD COLUMN model_prob_source TEXT",
         "decimal_price": "ALTER TABLE market_snapshots ADD COLUMN decimal_price REAL",
@@ -405,6 +435,72 @@ def _ensure_table_columns(
             conn.execute(statements[column])
 
 
+def _migrate_blend_segments(conn: sqlite3.Connection, prior_schema_version: int) -> None:
+    """Backfill v4 segment metadata from frozen pack artifacts when available."""
+
+    if prior_schema_version >= 4:
+        return
+    rows = conn.execute(
+        """
+        SELECT snapshot_id, pack_path, price, data_quality_flags,
+               data_quality_tier, event_starts_at, hours_before_game,
+               odds_range, time_before_game
+        FROM market_snapshots
+        """
+    ).fetchall()
+    pack_cache: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        snapshot = dict(row)
+        recovered: dict[str, Any] = {}
+        pack_path = _text(snapshot.get("pack_path"))
+        if pack_path:
+            if pack_path not in pack_cache:
+                recovered_by_id: dict[str, dict[str, Any]] = {}
+                pack_dir = Path(pack_path)
+                try:
+                    fallback = _pack_fallback_timestamp(pack_dir)
+                    for source, pack_row in _load_pack_rows(pack_dir):
+                        candidate = _snapshot_from_pack_row(
+                            source, pack_row, pack_dir, fallback, pack_dir
+                        )
+                        recovered_by_id[candidate["snapshot_id"]] = candidate
+                except (FeedbackError, OSError):
+                    recovered_by_id = {}
+                pack_cache[pack_path] = recovered_by_id
+            recovered = pack_cache[pack_path].get(_text(snapshot.get("snapshot_id")), {})
+
+        event_starts_at = _coalesce(
+            snapshot.get("event_starts_at"), recovered.get("event_starts_at")
+        )
+        hours_to_game = _coalesce(
+            snapshot.get("hours_before_game"), recovered.get("hours_before_game")
+        )
+        odds = _coalesce(
+            snapshot.get("odds_range"),
+            recovered.get("odds_range"),
+            probability_blend.odds_range(snapshot.get("price")),
+        )
+        tier = _coalesce(
+            snapshot.get("data_quality_tier"),
+            recovered.get("data_quality_tier"),
+            probability_blend.data_quality_tier(snapshot.get("data_quality_flags")),
+        )
+        time_bucket = _coalesce(
+            snapshot.get("time_before_game"),
+            recovered.get("time_before_game"),
+            probability_blend.time_before_game_bucket(hours_to_game),
+        )
+        conn.execute(
+            """
+            UPDATE market_snapshots
+            SET data_quality_tier = ?, event_starts_at = ?, hours_before_game = ?,
+                odds_range = ?, time_before_game = ?
+            WHERE snapshot_id = ?
+            """,
+            (tier, event_starts_at, hours_to_game, odds, time_bucket, snapshot["snapshot_id"]),
+        )
+
+
 def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,9 +527,19 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 market_consensus_prob REAL,
                 independent_model_prob REAL,
                 final_blended_prob REAL,
+                blend_market_weight REAL,
+                blend_model_weight REAL,
+                blend_weight_source TEXT,
+                blend_model_version TEXT,
+                blend_segment TEXT,
                 push_prob REAL,
                 edge REAL,
                 data_quality_flags TEXT,
+                data_quality_tier TEXT,
+                event_starts_at TEXT,
+                hours_before_game REAL,
+                odds_range TEXT,
+                time_before_game TEXT,
                 market_type TEXT,
                 model_prob_source TEXT,
                 decimal_price REAL,
@@ -489,6 +595,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         _ensure_table_columns(conn, "market_snapshots", MARKET_SNAPSHOT_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "decisions", DECISION_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "settlements", SETTLEMENT_COLUMN_DEFINITIONS)
+        _migrate_blend_segments(conn, prior_schema_version)
         _validate_decision_snapshot_identities(conn)
         _migrate_probability_semantics(conn, prior_schema_version)
         conn.execute("DROP INDEX IF EXISTS idx_decisions_snapshot")
@@ -498,13 +605,17 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             "ON market_snapshots(event_id, market_id, outcome_id, captured_at)",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_segment "
             "ON market_snapshots(sport, market_type, book)",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_blend_segment "
+            "ON market_snapshots("
+            "sport, market_type, odds_range, time_before_game, data_quality_tier"
+            ")",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_snapshot ON decisions(snapshot_id)",
             "CREATE INDEX IF NOT EXISTS idx_settlements_market "
             "ON settlements(event_id, market_id, outcome_id)",
             "CREATE INDEX IF NOT EXISTS idx_settlements_decision ON settlements(decision_id)",
         ):
             conn.execute(statement)
-        conn.execute("PRAGMA user_version = 3")
+        conn.execute("PRAGMA user_version = 4")
     return db_path
 
 
@@ -819,6 +930,10 @@ def _snapshot_from_pack_row(
         data_quality_flags = _append_flag(data_quality_flags, "synthetic_outcome_id")
 
     captured_at = _text(row.get("as_of")) or fallback_timestamp
+    event_starts_at = _text(row.get("_event_starts_at") or row.get("event_starts_at"))
+    hours_to_game = _float(row.get("hours_before_game"), field="hours_before_game")
+    if hours_to_game is None:
+        hours_to_game = probability_blend.hours_before_game(captured_at, event_starts_at)
     market_type = _text(row.get("market_type"))
     board = _text(row.get("board"))
     model_prob_source = _text(row.get("model_prob_source"))
@@ -891,9 +1006,28 @@ def _snapshot_from_pack_row(
         "market_consensus_prob": market_consensus,
         "independent_model_prob": independent,
         "final_blended_prob": final_blended,
+        "blend_market_weight": _probability(
+            row.get("blend_market_weight"), field="blend_market_weight"
+        ),
+        "blend_model_weight": _probability(
+            row.get("blend_model_weight"), field="blend_model_weight"
+        ),
+        "blend_weight_source": _text(row.get("blend_weight_source")),
+        "blend_model_version": _text(row.get("blend_model_version")),
+        "blend_segment": _text(row.get("blend_segment")),
         "push_prob": _probability(row.get("push_prob"), field="push_prob"),
         "edge": _float(_coalesce(row.get("edge"), row.get("edge_pct")), field="edge"),
         "data_quality_flags": data_quality_flags,
+        "data_quality_tier": _text(row.get("data_quality_tier"))
+        or probability_blend.data_quality_tier(
+            data_quality_flags, row.get("projection_quality_flags")
+        ),
+        "event_starts_at": event_starts_at,
+        "hours_before_game": hours_to_game,
+        "odds_range": _text(row.get("odds_range"))
+        or probability_blend.odds_range(price),
+        "time_before_game": _text(row.get("time_before_game"))
+        or probability_blend.time_before_game_bucket(hours_to_game),
         "market_type": market_type,
         "model_prob_source": model_prob_source,
         "decimal_price": decimal_price,
@@ -972,14 +1106,16 @@ def capture_pack(
                 INSERT INTO market_snapshots (
                     snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
                     player_id, selection, line, price, book, market_consensus_prob,
-                    independent_model_prob, final_blended_prob, push_prob, edge,
-                    data_quality_flags, market_type, model_prob_source, decimal_price,
+                    independent_model_prob, final_blended_prob, blend_market_weight,
+                    blend_model_weight, blend_weight_source, blend_model_version,
+                    blend_segment, push_prob, edge, data_quality_flags,
+                    data_quality_tier, event_starts_at, hours_before_game, odds_range,
+                    time_before_game, market_type, model_prob_source, decimal_price,
                     implied_prob, board, selected, signal_flags, hit_rate_component,
-                    insight_component, movement_component, orf_component, pack_path,
-                    created_at
+                    insight_component, movement_component, orf_component, pack_path, created_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
@@ -991,8 +1127,18 @@ def capture_pack(
                     final_blended_prob = COALESCE(
                         excluded.final_blended_prob, market_snapshots.final_blended_prob
                     ),
+                    blend_market_weight = excluded.blend_market_weight,
+                    blend_model_weight = excluded.blend_model_weight,
+                    blend_weight_source = excluded.blend_weight_source,
+                    blend_model_version = excluded.blend_model_version,
+                    blend_segment = excluded.blend_segment,
                     edge = excluded.edge,
                     data_quality_flags = excluded.data_quality_flags,
+                    data_quality_tier = excluded.data_quality_tier,
+                    event_starts_at = excluded.event_starts_at,
+                    hours_before_game = excluded.hours_before_game,
+                    odds_range = excluded.odds_range,
+                    time_before_game = excluded.time_before_game,
                     market_type = excluded.market_type,
                     model_prob_source = excluded.model_prob_source,
                     decimal_price = excluded.decimal_price,
@@ -1348,8 +1494,11 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 s.snapshot_id, s.captured_at, s.sport, s.event_id, s.market_id,
                 s.outcome_id, s.player_id, s.selection, s.line, s.price, s.book,
                 s.market_consensus_prob, s.independent_model_prob,
-                s.final_blended_prob, s.push_prob, s.edge, s.data_quality_flags,
-                s.market_type, s.model_prob_source, s.decimal_price,
+                s.final_blended_prob, s.blend_market_weight, s.blend_model_weight,
+                s.blend_weight_source, s.blend_model_version, s.blend_segment,
+                s.push_prob, s.edge, s.data_quality_flags, s.data_quality_tier,
+                s.event_starts_at, s.hours_before_game, s.odds_range,
+                s.time_before_game, s.market_type, s.model_prob_source, s.decimal_price,
                 s.implied_prob, s.board, s.selected, s.signal_flags,
                 s.hit_rate_component, s.insight_component,
                 s.movement_component, s.orf_component
@@ -1360,6 +1509,24 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             """
         )
     ]
+
+
+def fit_blend_weights(
+    db_path: Path = DEFAULT_DB_PATH,
+    output_path: Path = probability_blend.DEFAULT_WEIGHTS_PATH,
+    *,
+    min_samples: int = 30,
+    prior_strength: float = 30.0,
+) -> dict[str, Any]:
+    """Fit a versioned blend artifact from pregame, settled ledger snapshots."""
+
+    with _connect(Path(db_path)) as conn:
+        rows = _joined_rows(conn)
+    artifact = probability_blend.fit_weight_artifact(
+        rows, min_samples=min_samples, prior_strength=prior_strength
+    )
+    probability_blend.write_weight_artifact(artifact, Path(output_path))
+    return artifact
 
 
 def _mean(values: Iterable[float | None]) -> float | None:
@@ -1633,8 +1800,12 @@ def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
                 SELECT snapshot_id, captured_at, sport, event_id, market_id,
                        outcome_id, player_id, selection, line, price, book,
                        market_consensus_prob, independent_model_prob,
-                       final_blended_prob, push_prob, edge, data_quality_flags,
-                       market_type, model_prob_source, decimal_price, implied_prob,
+                       final_blended_prob, blend_market_weight, blend_model_weight,
+                       blend_weight_source, blend_model_version, blend_segment,
+                       push_prob, edge, data_quality_flags, data_quality_tier,
+                       event_starts_at, hours_before_game, odds_range,
+                       time_before_game, market_type, model_prob_source,
+                       decimal_price, implied_prob,
                        board, selected, signal_flags, hit_rate_component,
                        insight_component, movement_component, orf_component, pack_path
                 FROM market_snapshots
@@ -1869,6 +2040,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser = subparsers.add_parser("report", help="Generate all feedback reports.")
     report_parser.add_argument("--output", type=Path, default=DEFAULT_REPORT_DIR)
 
+    blend_parser = subparsers.add_parser(
+        "fit-blend", help="Fit market/model weights from settled pregame snapshots."
+    )
+    blend_parser.add_argument(
+        "--output", type=Path, default=probability_blend.DEFAULT_WEIGHTS_PATH
+    )
+    blend_parser.add_argument("--min-samples", type=int, default=30)
+    blend_parser.add_argument("--prior-strength", type=float, default=30.0)
+
     export_parser = subparsers.add_parser("export", help="Export the three permanent ledgers.")
     export_parser.add_argument("--output", type=Path, required=True)
 
@@ -1892,12 +2072,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(settlement_stats.__dict__, sort_keys=True))
         elif args.command == "report":
             print(generate_report(args.db, args.output))
+        elif args.command == "fit-blend":
+            artifact = fit_blend_weights(
+                args.db,
+                args.output,
+                min_samples=args.min_samples,
+                prior_strength=args.prior_strength,
+            )
+            print(
+                json.dumps(
+                    {
+                        "output": str(args.output),
+                        "status": artifact["status"],
+                        "model_version": artifact["model_version"],
+                        "eligible_samples": artifact["eligible_samples"],
+                    },
+                    sort_keys=True,
+                )
+            )
         elif args.command == "export":
             print(json.dumps(export_ledgers(args.db, args.output), sort_keys=True))
         elif args.command == "templates":
             write_templates(args.output)
             print(args.output)
-    except (FeedbackError, OSError, sqlite3.Error) as exc:
+    except (FeedbackError, OSError, sqlite3.Error, ValueError) as exc:
         logger.error("Feedback tool failed: %s", exc)
         return 1
     return 0

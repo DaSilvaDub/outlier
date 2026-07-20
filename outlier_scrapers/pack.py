@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from outlier_scrapers import paths
+from outlier_scrapers import paths, probability_blend
 from outlier_scrapers.registry import (
     classify_foreign_market,
     get_sport_config,
@@ -63,6 +63,11 @@ CANDIDATES_HEADER = [
     "independent_push_prob",
     "independent_edge_pct",
     "final_blended_prob",
+    "blend_market_weight",
+    "blend_model_weight",
+    "blend_weight_source",
+    "blend_model_version",
+    "blend_segment",
     "push_prob",
     "implied_prob",
     "edge_pct",
@@ -72,6 +77,10 @@ CANDIDATES_HEADER = [
     "recommended_units_pre_news",
     "sizing_flags",
     "data_quality_flags",
+    "data_quality_tier",
+    "odds_range",
+    "time_before_game",
+    "hours_before_game",
     "board",
     "signal_flags",
     "hit_rate_component",
@@ -504,6 +513,48 @@ def apply_shadow_projection(
     return []
 
 
+def apply_learned_probability_blend(
+    row: dict[str, Any], artifact: dict[str, Any] | None
+) -> None:
+    """Apply an offline-fitted blend and refresh sizing when it is safe to do so."""
+
+    if row.get("projection_quality_flags"):
+        return
+    blended = probability_blend.blend_probabilities(
+        row.get("market_consensus_prob"),
+        row.get("independent_model_prob"),
+        artifact,
+        row,
+    )
+    if blended is None:
+        return
+    row["blend_market_weight"] = blended["market_weight"]
+    row["blend_model_weight"] = blended["model_weight"]
+    row["blend_weight_source"] = blended["source"]
+    row["blend_model_version"] = blended["model_version"]
+    row["blend_segment"] = json.dumps(blended.get("segment") or {}, sort_keys=True)
+    row["final_blended_prob"] = blended["final_probability"]
+
+    if blended["model_weight"] <= 0:
+        return
+    row["model_prob"] = blended["final_probability"]
+    row["model_prob_source"] = f"learned_blend:{blended['model_version']}"
+    decimal_price = _to_float(row.get("decimal_price"))
+    push_prob = _to_float(row.get("push_prob"))
+    if decimal_price is None or push_prob is None:
+        return
+    sizing = compute_sizing(
+        decimal_price=decimal_price,
+        model_prob=blended["final_probability"],
+        push_prob=push_prob,
+    )
+    row["implied_prob"] = sizing.implied_prob
+    row["edge_pct"] = sizing.edge_pct
+    row["kelly_025_units"] = sizing.kelly_025_units
+    row["max_units"] = sizing.max_units
+    row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
+
+
 def build_row(
     card: dict[str, Any],
     ev_records: list[dict[str, Any]],
@@ -515,6 +566,7 @@ def build_row(
     event_starts: dict[str, str],
     injuries: dict[str, str],
     projections_by_outcome: dict[str, dict[str, Any]] | None = None,
+    blend_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     headline_side = card.get("headline_side")
     if headline_side is None:
@@ -731,6 +783,24 @@ def build_row(
         dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
+    event_starts_at = event_starts.get(str(event_id)) if event_id else None
+    row["_event_starts_at"] = event_starts_at
+    hours_to_game = probability_blend.hours_before_game(row.get("as_of"), event_starts_at)
+    row["hours_before_game"] = (
+        round(hours_to_game, 4) if hours_to_game is not None else ""
+    )
+    row["time_before_game"] = probability_blend.time_before_game_bucket(hours_to_game)
+    row["odds_range"] = probability_blend.odds_range(row.get("price"))
+    disqualifying = (
+        not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
+        or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
+    )
+    row["data_quality_tier"] = probability_blend.data_quality_tier(
+        ";".join(dict.fromkeys(dq_flags)),
+        row.get("projection_quality_flags"),
+        disqualifying=disqualifying,
+    )
+    apply_learned_probability_blend(row, blend_artifact)
     # Stale-line edge gate: reverse line movement (line moved against this side)
     # plus thin liquidity means the devigged edge is a phantom — the market moved
     # sharply on prices we can't trust. The RLM/thin flags alone were already
@@ -801,7 +871,6 @@ def build_row(
         row["_board"] = "board_b"
         row["board"] = "B"
     row["_rank_value"] = card.get("rank_value") or 0.0
-    row["_event_starts_at"] = event_starts.get(str(event_id)) if event_id else None
     row["_slug"] = _slug(card.get("matchup") or ref.get("matchup"))
 
     # Preserve any _raw_* or other upstream passthrough fields from card/ref/ev (AGENTS.md).
@@ -825,6 +894,7 @@ def process_stream(
     event_starts: dict[str, str],
     injuries: dict[str, str],
     projections_payload: dict[str, Any] | None = None,
+    blend_artifact: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -858,6 +928,7 @@ def process_stream(
             event_starts,
             injuries,
             projections_by_outcome,
+            blend_artifact,
         )
         if row is not None:
             row["_stream"] = stream
@@ -1374,6 +1445,7 @@ def build_pack_with_coverage(
     top_signal_n: int,
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
+    blend_artifact: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
@@ -1404,6 +1476,7 @@ def build_pack_with_coverage(
             event_starts,
             injuries,
             projections_payload,
+            blend_artifact,
         )
         games_rows = process_stream(
             games_cards,
@@ -1415,6 +1488,7 @@ def build_pack_with_coverage(
             event_starts,
             injuries,
             projections_payload,
+            blend_artifact,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
@@ -1545,19 +1619,29 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--top-signal-n", type=int, default=10)
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument(
+        "--blend-weights",
+        type=Path,
+        default=probability_blend.DEFAULT_WEIGHTS_PATH,
+        help="Versioned learned-weight artifact; missing/insufficient history stays market-only.",
+    )
+    parser.add_argument(
         "--no-feedback-ledger",
         action="store_true",
         help="Build pack artifacts without writing the permanent feedback database.",
     )
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
+    blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
     opportunity_rows: list[dict[str, Any]] = []
+    build_kwargs: dict[str, Any] = {"opportunity_rows_out": opportunity_rows}
+    if blend_artifact is not None:
+        build_kwargs["blend_artifact"] = blend_artifact
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
         leagues,
         args.date,
         args.top_ev_n,
         args.top_signal_n,
-        opportunity_rows_out=opportunity_rows,
+        **build_kwargs,
     )
     projection_records = load_projection_records(leagues)
     freshness = build_freshness_section(leagues)

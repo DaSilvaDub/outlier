@@ -94,6 +94,9 @@ def test_build_game_totals_integer_line_push_blocked():
     assert row['sizing_flags'] == 'push_capable_no_prob'
     assert row['actionable'] == 'false'
     assert row['edge_pct'] == ''
+    assert row['market_consensus_prob'] == ''
+    assert row['independent_model_prob'] == ''
+    assert row['final_blended_prob'] == ''
 
 def test_build_game_totals_integer_line_with_push_prob():
     games_norm = {'records': [_norm_record('m3', 7.5, 'OVER', [{'book': 'DK', 'odds': -140}, {'book': 'FD', 'odds': -140}]), _norm_record('m3', 7.5, 'UNDER', [{'book': 'DK', 'odds': 120}, {'book': 'FD', 'odds': 120}]), _norm_record('m3', 8.0, 'OVER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m3', 8.0, 'UNDER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m3', 8.5, 'OVER', [{'book': 'DK', 'odds': 110}, {'book': 'FD', 'odds': 110}]), _norm_record('m3', 8.5, 'UNDER', [{'book': 'DK', 'odds': -130}, {'book': 'FD', 'odds': -130}])]}

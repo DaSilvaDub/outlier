@@ -662,6 +662,9 @@ def build_totals(
                     edge_pct = None
             else:
                 push_prob = ""
+                model_win_prob = None
+                consensus_win_prob = None
+                independent_win_prob = None
                 sizing_flags = "push_capable_no_prob"
                 # No honest push mass → blank the push-contaminated two-way edge.
                 edge_pct = None
