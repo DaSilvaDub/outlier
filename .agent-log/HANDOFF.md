@@ -46,7 +46,7 @@
 
 ## PR #52 learned probability blending
 
-**Last Product Commit SHA**: `7e8883a618e20730150efa7f2374b6ca7db7e07b` (plus the handoff-only commit that records this summary)
+**Last Product Commit SHA**: `a783d15576fd1d83d0598828bb0820220e68950c` (plus the handoff-only commit that records this summary)
 
 **Files Touched**:
 - `outlier_scrapers/probability_blend.py`
@@ -67,8 +67,10 @@
 - Opened PR #52: https://github.com/DaSilvaDub/outlier/pull/52
 - Fixed the inherited integer-total serialization failure by leaving market, model,
   and blended probabilities blank whenever push mass is unknown.
-- Verified the exact offline suite (496 tests), the focused blend/totals suite
-  (159 tests), full mypy and pyright, touched-file Ruff, and diff checks.
+- Reconciled PR #52 with the post-PR50 revert/current master and resolved the
+  `game_totals.py` conflict without reintroducing the reverted implementation.
+- Verified the exact offline suite (517 tests), the focused blend/totals suite
+  (161 tests), full mypy and pyright, touched-file Ruff, and diff checks.
 
 **Next Steps**:
 - Review and merge PR #52 after the refreshed hosted checks pass.
