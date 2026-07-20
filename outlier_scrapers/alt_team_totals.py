@@ -10,12 +10,10 @@ normalized games feed; no API calls.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from datetime import datetime
 from itertools import combinations
-from pathlib import Path
 from typing import Any
 
 from outlier_scrapers.game_totals import (
@@ -34,9 +32,10 @@ from outlier_scrapers.utils import (
     _write_csv,
     _price_text,
 )
-from outlier_scrapers.normalizer import implied_probability, percent_number
+from outlier_scrapers.normalizer import implied_probability
 from outlier_scrapers.paths import league_paths
 from outlier_scrapers.registry import supported_leagues
+from outlier_scrapers.totals_model import extract_l10, FLAG_SHORT_SAMPLE
 
 MIN_HIT_PCT = 90.0
 MAX_HIT_PCT = 100.0
@@ -90,8 +89,7 @@ ALT_TEAM_TOTAL_PARLAYS_HEADER = [
     "as_of",
 ]
 
-FLAG_SHORT_SAMPLE = "SHORT_SAMPLE"
-FLAG_AMBIGUOUS_STATS_SIDE = "AMBIGUOUS_STATS_SIDE"
+
 FLAG_INTEGER_LINE_PUSH_RISK = "INTEGER_LINE_PUSH_RISK"
 FLAG_NO_PRICE = "NO_PRICE"
 
@@ -111,63 +109,6 @@ def is_alt_team_total_record(rec: dict[str, Any], *, league: str) -> bool:
         return False
     prop = str(rec.get("proposition") or rec.get("market") or "").upper()
     return prop in team_total_propositions(league)
-
-
-def _summary_stat_for_team(rec: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """Pick the home/away summary-stat blob matching the record's team.
-
-    Returns (stat_dict, flag). Ambiguous side -> (None, AMBIGUOUS_STATS_SIDE);
-    missing stats -> (None, None).
-    """
-    stats = rec.get("stats")
-    if not isinstance(stats, dict):
-        return None, None
-    home = stats.get("homeSummaryStat")
-    away = stats.get("awaySummaryStat")
-    home = home if isinstance(home, dict) else None
-    away = away if isinstance(away, dict) else None
-    if home is None and away is None:
-        return None, None
-    if home is not None and away is None:
-        return home, None
-    if away is not None and home is None:
-        return away, None
-    # Both present: match team against "away @ home" matchup.
-    team = str(rec.get("team") or "").strip().lower()
-    matchup = str(rec.get("matchup") or "")
-    if team and " @ " in matchup:
-        away_name, _, home_name = matchup.partition(" @ ")
-        if team == away_name.strip().lower():
-            return away, None
-        if team == home_name.strip().lower():
-            return home, None
-    return None, FLAG_AMBIGUOUS_STATS_SIDE
-
-
-def extract_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
-    """L10 hit rate for one OVER outcome at its line.
-
-    Prefers the exact ``l10Results`` boolean array; falls back to the ``l10``
-    fraction. Returns None when no usable l10 signal exists.
-    """
-    stat, flag = _summary_stat_for_team(rec)
-    if stat is None:
-        return {"flag": flag} if flag else None
-    results = stat.get("l10Results")
-    if isinstance(results, list) and results:
-        bools = [bool(v) for v in results]
-        hits, total = sum(bools), len(bools)
-        return {
-            "hits": hits,
-            "total": total,
-            "pct": round(100.0 * hits / total, 3),
-            "source": "l10Results",
-            "flag": FLAG_SHORT_SAMPLE if total < 10 else None,
-        }
-    pct = percent_number(stat.get("l10"))
-    if pct is None:
-        return None
-    return {"hits": None, "total": None, "pct": pct, "source": "l10", "flag": None}
 
 
 def _is_integer_line(line: float) -> bool:

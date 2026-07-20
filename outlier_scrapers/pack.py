@@ -1253,6 +1253,19 @@ def write_pack(
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
 
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+    from outlier_scrapers.totals_model import backfill_candidate_totals
+
+    totals_rows: list[dict[str, Any]] = []
+    team_totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+
+    backfill_candidate_totals(rows, totals_rows + team_totals_rows)
+    if opportunity_rows is not None:
+        backfill_candidate_totals(opportunity_rows, totals_rows + team_totals_rows)
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
@@ -1276,14 +1289,7 @@ def write_pack(
         for projection in projection_records or []:
             projection_file.write(json.dumps(projection, sort_keys=True) + "\n")
         
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
 
-    totals_rows: list[dict[str, Any]] = []
-    team_totals_rows: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
-        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
-        
     (out_dir / "briefing.md").write_text(
         build_briefing(
             rows, 
