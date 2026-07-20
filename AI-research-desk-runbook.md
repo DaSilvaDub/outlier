@@ -11,9 +11,10 @@
 
 | Model | Role | Why |
 |---|---|---|
-| **ChatGPT** (GPT-5.5 xhigh API + Deep Research) | Automated stress-tester (A, pack-only) + per-game news (C, web) | Prompt A uses fixed `gpt-5.5`/`xhigh` without web tools; Deep Research pulls late injury/lineup/weather news per game. |
-| **Gemini** (Pro + Deep Research) | Wide scanner (B, web) | Largest context — ingest the full pack + raw odds; broad multi-source web sweep across the whole slate. |
-| **Claude** (extended thinking) | Synthesizer + red-team (D pack-only, E synthesis) | Calibrated uncertainty; runs the provenance/validation pass; writes the final guide. |
+| **GPT-5.6 Sol** | Automated stress-tester (A, pack-only) | OpenAI's flagship model; unmatched at pure logic, probability math, and strictly following complex rule constraints without hallucinating. |
+| **Gemini 3.1 Pro** | Wide scanner (B, web) | Google's top model for complex reasoning with a massive context window and native Google Search integration for broad sweeps. |
+| **Grok 4.5** | Deep per-game news (C, web) | xAI's flagship; provides real-time access to the X firehose for breaking sports news, lineup changes, and late scratches. |
+| **Claude Fable 5** | Red-team (D, pack-only) & Synthesizer (E) | Anthropic's most capable model; highest calibration for finding logical flaws, plus the most professional writing style for the final guide. |
 
 **Key principle:** the desk's job is *as much about killing bad pipeline cards as confirming good ones*. A stand-down is a win. Consensus across models is a filter, not proof — weight independent **sourced information** (deep-research news) above **opinion**.
 
@@ -26,8 +27,8 @@ Times are relative to the **first market lock** of the slate (e.g. first pitch /
 | When | Step | Tool |
 |---|---|---|
 | **T‑180 min** | Run pipeline → produce today's EV/signal cards **with sizing fields** (§4). Build the **briefing pack** (§2). | Pipeline + export script |
-| **T‑170** | Kick off both grounded research passes: Gemini wide-scan (Prompt B) and injury/lineup research (Prompt C). | Gemini + Google Search |
-| **T‑160** | While they run, execute **Prompt A** through `daily_job --run-reasoning` (paid, opt-in). Paste **Prompt D** into Claude. | GPT-5.5 xhigh API + Claude |
+| **T‑170** | Kick off both grounded research passes: Gemini wide-scan (Prompt B) and injury/lineup research (Prompt C). | Gemini 3.1 Pro + Grok 4.5 |
+| **T‑160** | While they run, execute **Prompt A** through `daily_job --analysis-profile openai`. Paste **Prompt D** into Claude. | GPT-5.6 Sol + Claude Fable 5 |
 | **T‑140** | Collect all four structured outputs (A–D). | — |
 | **T‑130** | Paste **Prompt E** (synthesis) + the four outputs into Claude → **final guide**. | Claude |
 | **T‑30** | **Line re-check / kill pass** against the §4 stale-line kill criteria. | Pipeline / book |
