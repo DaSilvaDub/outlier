@@ -10,12 +10,10 @@ normalized games feed; no API calls.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from datetime import datetime
 from itertools import combinations
-from pathlib import Path
 from typing import Any
 
 from outlier_scrapers.game_totals import (
@@ -30,6 +28,7 @@ from outlier_scrapers.utils import (
     _american_to_decimal,
     _decimal_to_american,
     _local_date,
+    _summary_stat_for_team,
     drop_locked_events,
     _write_csv,
     _price_text,
@@ -111,37 +110,6 @@ def is_alt_team_total_record(rec: dict[str, Any], *, league: str) -> bool:
         return False
     prop = str(rec.get("proposition") or rec.get("market") or "").upper()
     return prop in team_total_propositions(league)
-
-
-def _summary_stat_for_team(rec: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """Pick the home/away summary-stat blob matching the record's team.
-
-    Returns (stat_dict, flag). Ambiguous side -> (None, AMBIGUOUS_STATS_SIDE);
-    missing stats -> (None, None).
-    """
-    stats = rec.get("stats")
-    if not isinstance(stats, dict):
-        return None, None
-    home = stats.get("homeSummaryStat")
-    away = stats.get("awaySummaryStat")
-    home = home if isinstance(home, dict) else None
-    away = away if isinstance(away, dict) else None
-    if home is None and away is None:
-        return None, None
-    if home is not None and away is None:
-        return home, None
-    if away is not None and home is None:
-        return away, None
-    # Both present: match team against "away @ home" matchup.
-    team = str(rec.get("team") or "").strip().lower()
-    matchup = str(rec.get("matchup") or "")
-    if team and " @ " in matchup:
-        away_name, _, home_name = matchup.partition(" @ ")
-        if team == away_name.strip().lower():
-            return away, None
-        if team == home_name.strip().lower():
-            return home, None
-    return None, FLAG_AMBIGUOUS_STATS_SIDE
 
 
 def extract_l10(rec: dict[str, Any]) -> dict[str, Any] | None:

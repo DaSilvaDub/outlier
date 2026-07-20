@@ -1146,6 +1146,18 @@ def write_pack(
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
 
+    # Totals rows (game + team) rarely carry an Outlier EV devig, which left
+    # every OVER total with a blank model_prob/edge_pct. Fill them from the
+    # two-sided book ladder blended with the recent-games L10 signal.
+    if games_norm_by_league:
+        from outlier_scrapers.totals_model import backfill_totals_probabilities
+
+        rows = backfill_totals_probabilities(rows, games_norm_by_league)
+        if opportunity_rows is not None:
+            opportunity_rows = backfill_totals_probabilities(
+                opportunity_rows, games_norm_by_league
+            )
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
