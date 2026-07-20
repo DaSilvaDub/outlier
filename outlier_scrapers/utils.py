@@ -56,6 +56,37 @@ def drop_locked_events(
     return kept, dropped
 
 
+def _summary_stat_for_team(rec: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Pick the home/away summary-stat blob matching the record's team.
+
+    Returns (stat_dict, flag). Ambiguous side -> (None, "AMBIGUOUS_STATS_SIDE");
+    missing stats -> (None, None).
+    """
+    stats = rec.get("stats")
+    if not isinstance(stats, dict):
+        return None, None
+    home = stats.get("homeSummaryStat")
+    away = stats.get("awaySummaryStat")
+    home = home if isinstance(home, dict) else None
+    away = away if isinstance(away, dict) else None
+    if home is None and away is None:
+        return None, None
+    if home is not None and away is None:
+        return home, None
+    if away is not None and home is None:
+        return away, None
+    # Both present: match team against "away @ home" matchup.
+    team = str(rec.get("team") or "").strip().lower()
+    matchup = str(rec.get("matchup") or "")
+    if team and " @ " in matchup:
+        away_name, _, home_name = matchup.partition(" @ ")
+        if team == away_name.strip().lower():
+            return away, None
+        if team == home_name.strip().lower():
+            return home, None
+    return None, "AMBIGUOUS_STATS_SIDE"
+
+
 def _write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict[str, Any]]) -> None:
     """Write an iterable of dictionaries to a CSV file, creating parents if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)

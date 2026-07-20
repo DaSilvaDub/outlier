@@ -11,9 +11,12 @@ from datetime import datetime
 from typing import Any
 
 from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
-from outlier_scrapers.normalizer import detect_scope, implied_probability
+from outlier_scrapers.normalizer import detect_scope, implied_probability, percent_number
 from outlier_scrapers.sizing import compute_sizing
-from outlier_scrapers.utils import _american_to_decimal, _decimal_to_american
+from outlier_scrapers.utils import (
+    _american_to_decimal,
+    _summary_stat_for_team,
+)
 
 
 TOTAL_KIND_GAME = "game"
@@ -149,6 +152,74 @@ def median_prob(values: list[float]) -> float | None:
     if not values:
         return None
     return float(statistics.median(values))
+
+
+# Weight given to a full 10-game L10 sample when blending with the market
+# consensus; ten games is a high-variance signal, so the market stays dominant.
+BASE_INDEPENDENT_WEIGHT = 0.25
+_FULL_SAMPLE_GAMES = 10.0
+
+
+def _l10_over_for_record(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """Side-specific L10 signal for one OVER outcome at its line.
+
+    Team totals use the matching team's summary blob; game totals combine the
+    home and away samples (each team's last 10 games grade the same line).
+    Returns {"hits", "total", "pct"} with pct as a 0-1 fraction, or None.
+    """
+    stats = rec.get("stats")
+    if not isinstance(stats, dict) or not stats:
+        return None
+    if str(rec.get("market_type") or "").upper() == "TEAM_PROP":
+        blob, _flag = _summary_stat_for_team(rec)
+        blobs = [blob] if isinstance(blob, dict) else []
+    else:
+        blobs = [
+            b
+            for b in (stats.get("homeSummaryStat"), stats.get("awaySummaryStat"))
+            if isinstance(b, dict)
+        ]
+    if not blobs:
+        return None
+
+    hits = 0
+    total = 0
+    fractions: list[float] = []
+    all_have_results = True
+    for blob in blobs:
+        results = blob.get("l10Results")
+        if isinstance(results, list) and results:
+            blob_hits = sum(bool(v) for v in results)
+            hits += blob_hits
+            total += len(results)
+            fractions.append(blob_hits / len(results))
+        else:
+            all_have_results = False
+            pct = percent_number(blob.get("l10"))
+            if pct is not None:
+                fractions.append(float(pct) / 100.0)
+    if not fractions:
+        return None
+    if all_have_results:
+        return {"hits": hits, "total": total, "pct": hits / total}
+    return {"hits": None, "total": None, "pct": sum(fractions) / len(fractions)}
+
+
+def blend_over_probability(
+    p_over_market: float, l10_over: dict[str, Any] | None
+) -> tuple[float, bool]:
+    """Blend market devig with the L10 signal, weighted by sample size.
+
+    Returns (blended p_over, whether the L10 signal was used). A missing or
+    empty L10 signal returns the market probability unchanged.
+    """
+    if not l10_over or l10_over.get("pct") is None:
+        return p_over_market, False
+    total = _to_float(l10_over.get("total"))
+    sample = min(total, _FULL_SAMPLE_GAMES) / _FULL_SAMPLE_GAMES if total else 1.0
+    weight = BASE_INDEPENDENT_WEIGHT * sample
+    blended = (1.0 - weight) * p_over_market + weight * float(l10_over["pct"])
+    return blended, True
 
 
 def period_identity(rec: dict[str, Any]) -> str:
@@ -503,18 +574,51 @@ def build_totals(
             over_books, fallback_book=cand.get("book"), fallback_price=cand.get("price")
         )
         under_book, under_price = _best_book_offer(under_books)
+
+        # Recent-games signal: the OVER outcome at the headline line carries the
+        # per-line L10 hit rate; blend it into the market devig before picking a
+        # side so a strong recent OVER trend can surface the OVER play.
+        l10_over = None
+        for rec in market_records:
+            if str(rec.get("position") or "").upper() != "OVER":
+                continue
+            if _to_float(rec.get("line")) != headline_line:
+                continue
+            l10_over = _l10_over_for_record(rec)
+            if l10_over is not None:
+                break
+        blended_over, used_l10 = (
+            blend_over_probability(p_over_headline, l10_over)
+            if p_over_headline is not None
+            else (None, False)
+        )
+
         best_side, best_price, edge_pct = (
-            pick_best_side(p_over_headline, over_price, under_price) if p_over_headline is not None else ("OVER", over_price, None)
+            pick_best_side(blended_over, over_price, under_price) if blended_over is not None else ("OVER", over_price, None)
         )
         best_book = under_book if best_side == "UNDER" else over_book
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
-        p_side_conditional = (
+        p_side_market = (
             p_over_headline
             if best_side == "OVER"
             else (1.0 - p_over_headline if p_over_headline is not None else None)
         )
+        p_side_conditional = (
+            blended_over
+            if best_side == "OVER"
+            else (1.0 - blended_over if blended_over is not None else None)
+        )
+        p_side_independent = None
+        if used_l10 and l10_over is not None:
+            p_side_independent = (
+                float(l10_over["pct"])
+                if best_side == "OVER"
+                else 1.0 - float(l10_over["pct"])
+            )
         model_win_prob = p_side_conditional
+        consensus_win_prob = p_side_market
+        independent_win_prob = p_side_independent
         decimal_price = _american_to_decimal(best_price)
         _implied_pct_val = implied_probability(best_price)
         implied_prob = round(_implied_pct_val / 100.0, 5) if _implied_pct_val is not None else None
@@ -531,9 +635,18 @@ def build_totals(
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
+                no_push = 1.0 - float(push_prob)
                 model_win_prob = (
-                    p_side_conditional * (1.0 - float(push_prob))
+                    p_side_conditional * no_push
                     if p_side_conditional is not None
+                    else None
+                )
+                consensus_win_prob = (
+                    p_side_market * no_push if p_side_market is not None else None
+                )
+                independent_win_prob = (
+                    p_side_independent * no_push
+                    if p_side_independent is not None
                     else None
                 )
                 if decimal_price is not None and model_win_prob is not None:
@@ -613,8 +726,8 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
-                "independent_model_prob": "",
+                "market_consensus_prob": round(consensus_win_prob, 4) if consensus_win_prob is not None else "",
+                "independent_model_prob": round(independent_win_prob, 4) if independent_win_prob is not None else "",
                 "final_blended_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
