@@ -61,8 +61,13 @@ class ProjectionDistribution:
         if normalized_side not in {"OVER", "UNDER"}:
             raise ValueError("side must be OVER or UNDER")
         push = self.pmf.get(int(line), 0.0) if line.is_integer() else 0.0
+        maximum = max(self.pmf, default=0)
+        if self.tail_mass > 1e-12 and line > maximum:
+            raise ValueError("line exceeds bounded PMF support while tail mass remains")
         if normalized_side == "OVER":
-            win = sum(probability for outcome, probability in self.pmf.items() if outcome > line)
+            win = self.tail_mass + sum(
+                probability for outcome, probability in self.pmf.items() if outcome > line
+            )
         else:
             win = sum(probability for outcome, probability in self.pmf.items() if outcome < line)
         return {"win_prob": win, "push_prob": push, "loss_prob": max(0.0, 1.0 - win - push)}
@@ -288,7 +293,17 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
 
 def project_rows(rows: Iterable[Mapping[str, object]], sport: str) -> list[dict[str, object]]:
     if sport.upper() != "MLB":
-        return [{"status": "shadow_only", "reason": "WNBA_model_phase_two"}]
+        return [
+            {
+                "status": "shadow_only",
+                "reason": "WNBA_model_phase_two",
+                "sport": sport.upper(),
+                "row_id": row.get("outcome_id"),
+                "event_id": row.get("event_id"),
+                "market_id": row.get("market_id"),
+            }
+            for row in rows
+        ]
     return [project_mlb_row(row) for row in rows]
 
 

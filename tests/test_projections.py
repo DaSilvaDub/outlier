@@ -26,6 +26,20 @@ def test_negative_binomial_distribution_is_bounded_and_calibrated():
     assert distribution.mean == pytest.approx(4.0, abs=0.01)
 
 
+def test_over_partition_includes_omitted_upper_tail_mass():
+    distribution = negative_binomial_distribution(4.0, 8.0, maximum=4)
+    partition = distribution.partition(3.5, "OVER")
+    expected = distribution.tail_mass + distribution.pmf[4]
+    assert partition["win_prob"] == pytest.approx(expected)
+    assert sum(partition.values()) == pytest.approx(1.0)
+
+
+def test_partition_rejects_line_beyond_truncated_support():
+    distribution = negative_binomial_distribution(4.0, 8.0, maximum=4)
+    with pytest.raises(ValueError, match="bounded PMF support"):
+        distribution.partition(5.5, "OVER")
+
+
 def test_strikeouts_mix_stochastic_workload():
     distribution = mlb_strikeout_distribution(18.0, 0.27)
     assert_valid_distribution(distribution)
@@ -89,3 +103,14 @@ def test_first_inning_yes_no_sides_map_to_over_under_partition():
     assert projection["side"] == "YES"
     assert projection["distribution"]["side"] == "OVER"
     assert projection["distribution"]["push_prob"] == 0.0
+
+
+def test_non_mlb_shadow_rows_preserve_input_cardinality_and_identity():
+    rows = [
+        {"outcome_id": "w1", "event_id": "g1", "market_id": "m1"},
+        {"outcome_id": "w2", "event_id": "g1", "market_id": "m2"},
+    ]
+    projections = project_rows(rows, "WNBA")
+    assert len(projections) == len(rows)
+    assert [projection["row_id"] for projection in projections] == ["w1", "w2"]
+    assert {projection["status"] for projection in projections} == {"shadow_only"}

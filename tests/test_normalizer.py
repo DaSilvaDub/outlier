@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from outlier_scrapers.normalizer import detect_scope, normalize_games, normalize_player_props
 from outlier_scrapers.registry import get_sport_config
 
@@ -49,6 +51,53 @@ def test_first_inning_game_props_are_not_dropped_by_normalizer():
     assert rows["record_count"] == 2
     assert {row["market_type"] for row in rows["records"]} == {"GAME_PROP"}
     assert {row["proposition"] for row in rows["records"]} == {"FIRST_INNING_RUN"}
+
+
+@pytest.mark.parametrize("period_label", ["1st inning", "1st inn", "1I"])
+def test_first_inning_period_label_variants_are_admitted(period_label):
+    rows = normalize_games(
+        config=get_sport_config("MLB"),
+        schedule_payload=load_fixture("mlb_schedule.json"),
+        events_payloads=[
+            {
+                "eventId": "mlb-event-1",
+                "markets": [
+                    {
+                        "marketType": "GAME_PROP",
+                        "proposition": "RUN_SCORED",
+                        "label": "Run scored",
+                        "periodLabel": period_label,
+                        "outcomes": [{"outcomeId": "yes", "position": "YES", "line": 0.5}],
+                    }
+                ],
+            }
+        ],
+        source_url="fixture://game-props",
+    )
+    assert rows["record_count"] == 1
+
+
+def test_non_first_inning_game_props_remain_excluded():
+    rows = normalize_games(
+        config=get_sport_config("MLB"),
+        schedule_payload=load_fixture("mlb_schedule.json"),
+        events_payloads=[
+            {
+                "eventId": "mlb-event-1",
+                "markets": [
+                    {
+                        "marketType": "GAME_PROP",
+                        "proposition": "ALTERNATE_TOTAL",
+                        "label": "Alternate game total",
+                        "periodLabel": "Full game",
+                        "outcomes": [{"outcomeId": "over", "position": "OVER", "line": 8.5}],
+                    }
+                ],
+            }
+        ],
+        source_url="fixture://game-props",
+    )
+    assert rows["record_count"] == 0
 
 
 def test_mlb_unknown_market_is_preserved_with_raw_fields():
