@@ -60,6 +60,8 @@ CANDIDATES_HEADER = [
     "model_prob_source",
     "market_consensus_prob",
     "independent_model_prob",
+    "independent_push_prob",
+    "independent_edge_pct",
     "final_blended_prob",
     "push_prob",
     "implied_prob",
@@ -87,6 +89,13 @@ CANDIDATES_HEADER = [
     "money_pct",
     "injury_flags",
     "research_leverage",
+    "projection_distribution",
+    "projection_mean",
+    "projection_variance",
+    "projection_quantiles",
+    "projection_model_version",
+    "projection_feature_hash",
+    "projection_quality_flags",
     "source_timestamps",
 ]
 
@@ -424,6 +433,77 @@ def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: An
         parts.append(fl)
     return " ".join(parts) if parts else (side_s if side_s else "")
 
+
+def index_projections(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Index eligible shadow projections by normalized outcome id."""
+
+    indexed: dict[str, dict[str, Any]] = {}
+    ambiguous: set[str] = set()
+    for projection in (payload or {}).get("projections") or []:
+        if not isinstance(projection, dict) or projection.get("status") != "eligible":
+            continue
+        outcome_id = projection.get("row_id") or projection.get("outcome_id")
+        if outcome_id not in (None, ""):
+            key = str(outcome_id)
+            if key in indexed:
+                ambiguous.add(key)
+            else:
+                indexed[key] = projection
+    for key in ambiguous:
+        indexed.pop(key, None)
+    return indexed
+
+
+def apply_shadow_projection(
+    row: dict[str, Any], projection: dict[str, Any] | None, expected_side: Any
+) -> list[str]:
+    """Populate independent fields without touching consensus or sizing fields."""
+
+    if not projection:
+        return []
+    distribution = projection.get("distribution")
+    if not isinstance(distribution, dict):
+        return ["projection_invalid_distribution"]
+    if projection.get("event_id") not in (None, "", row.get("event_id")):
+        return ["projection_event_mismatch"]
+    if projection.get("market_id") not in (None, "", row.get("market_id")):
+        return ["projection_market_mismatch"]
+    if str(projection.get("sport") or "").upper() not in (
+        "",
+        str(row.get("sport") or "").upper(),
+    ):
+        return ["projection_sport_mismatch"]
+    projection_line = _to_float(distribution.get("line", projection.get("line")))
+    row_line = _to_float(row.get("line"))
+    if projection_line is not None and row_line is not None and projection_line != row_line:
+        return ["projection_line_mismatch"]
+    projection_side = str(distribution.get("side") or projection.get("side") or "").upper()
+    side_aliases = {"YES": "OVER", "NO": "UNDER"}
+    normalized_side = str(expected_side or "").upper()
+    if side_aliases.get(normalized_side, normalized_side) not in ("", projection_side):
+        return ["projection_side_mismatch"]
+    win_prob = _to_float(distribution.get("win_prob"))
+    push_prob = _to_float(distribution.get("push_prob"))
+    if win_prob is None or not 0.0 <= win_prob <= 1.0:
+        return ["projection_invalid_probability"]
+    row["independent_model_prob"] = win_prob
+    row["independent_push_prob"] = push_prob if push_prob is not None else ""
+    implied_prob = _to_float(row.get("implied_prob"))
+    if implied_prob is None:
+        decimal_price = _to_float(row.get("decimal_price"))
+        implied_prob = 1.0 / decimal_price if decimal_price and decimal_price > 0 else None
+    if implied_prob is not None:
+        row["independent_edge_pct"] = (win_prob - implied_prob) * 100.0
+    row["projection_distribution"] = "discrete_pmf"
+    row["projection_mean"] = distribution.get("mean", "")
+    row["projection_variance"] = distribution.get("variance", "")
+    quantiles = distribution.get("quantiles")
+    row["projection_quantiles"] = json.dumps(quantiles, sort_keys=True) if quantiles else ""
+    row["projection_model_version"] = distribution.get("model_version", "")
+    row["projection_feature_hash"] = projection.get("feature_snapshot_hash", "")
+    return []
+
+
 def build_row(
     card: dict[str, Any],
     ev_records: list[dict[str, Any]],
@@ -434,6 +514,7 @@ def build_row(
     source_ts: dict[str, str | None],
     event_starts: dict[str, str],
     injuries: dict[str, str],
+    projections_by_outcome: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     headline_side = card.get("headline_side")
     if headline_side is None:
@@ -617,6 +698,15 @@ def build_row(
     if row.get("decimal_price") is not None and row["decimal_price"] <= 1.20:
         return None
 
+    projection_flags = apply_shadow_projection(
+        row,
+        (projections_by_outcome or {}).get(str(outcome_id))
+        if outcome_id not in (None, "")
+        else None,
+        headline_side,
+    )
+    row["projection_quality_flags"] = ";".join(projection_flags)
+
     # Surface card-level quality flags and, for an EV alt-line fallback, the line
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
     # so the desk sees the mismatch instead of silently trusting the shown line.
@@ -734,6 +824,7 @@ def process_stream(
     stream: str,
     event_starts: dict[str, str],
     injuries: dict[str, str],
+    projections_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -747,13 +838,27 @@ def process_stream(
         source_ts[norm_key] = norm_payload.get("generated_at")
     if enrichment_payload:
         source_ts["games_enrichment"] = enrichment_payload.get("generated_at")
+    if projections_payload:
+        source_ts["projections"] = projections_payload.get("generated_at")
     odds_ts = lm_payload.get("generated_at") if lm_payload else None
     norm_ts = norm_payload.get("generated_at") if norm_payload else None
     ev_records = lm_payload.get("ev_records", []) if lm_payload else []
     by_outcome = index_ev_by_outcome(ev_records)
+    projections_by_outcome = index_projections(projections_payload)
     rows: list[dict[str, Any]] = []
     for card in (cards_payload.get("board_a") or []) + (cards_payload.get("board_b") or []):
-        row = build_row(card, ev_records, by_outcome, sport, odds_ts, norm_ts, source_ts, event_starts, injuries)
+        row = build_row(
+            card,
+            ev_records,
+            by_outcome,
+            sport,
+            odds_ts,
+            norm_ts,
+            source_ts,
+            event_starts,
+            injuries,
+            projections_by_outcome,
+        )
         if row is not None:
             row["_stream"] = stream
             rows.append(row)
@@ -949,6 +1054,7 @@ DERIVED_PACK_OUTPUTS = (
     "mlb_betting_report.md",
     "reasoning_status.json",
     "manifest.json",
+    "projections.jsonl",
 )
 
 FRESH_COVERAGE_WARN = 0.9
@@ -1122,6 +1228,7 @@ def write_pack(
     games_norm_by_league: dict[str, Any] | None = None,
     coverage: dict[str, dict[str, int]] | None = None,
     opportunity_rows: list[dict[str, Any]] | None = None,
+    projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
     # Validate all candidate rows against schema constraints
     for idx, row in enumerate(rows):
@@ -1146,6 +1253,19 @@ def write_pack(
         for stale_dossier in dossiers_dir.glob("*.md"):
             stale_dossier.unlink()
 
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+    from outlier_scrapers.totals_model import backfill_candidate_totals
+
+    totals_rows: list[dict[str, Any]] = []
+    team_totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+
+    backfill_candidate_totals(rows, totals_rows + team_totals_rows)
+    if opportunity_rows is not None:
+        backfill_candidate_totals(opportunity_rows, totals_rows + team_totals_rows)
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
@@ -1164,15 +1284,12 @@ def write_pack(
         )
         writer.writeheader()
         writer.writerows(opportunity_output)
-        
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
 
-    totals_rows: list[dict[str, Any]] = []
-    team_totals_rows: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
-        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+    with open(out_dir / "projections.jsonl", "w", encoding="utf-8") as projection_file:
+        for projection in projection_records or []:
+            projection_file.write(json.dumps(projection, sort_keys=True) + "\n")
         
+
     (out_dir / "briefing.md").write_text(
         build_briefing(
             rows, 
@@ -1266,6 +1383,7 @@ def build_pack_with_coverage(
         games_norm = load_json(norm / f"{low}_games_latest.json")
         games_norm_by_league[lg] = games_norm
         props_norm = load_json(norm / f"{low}_props_latest.json")
+        projections_payload = load_json(norm / f"{low}_projections_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
         props_cards = load_json(cards_dir / f"{low}_cards_latest.json")
@@ -1279,6 +1397,7 @@ def build_pack_with_coverage(
             "props",
             event_starts,
             injuries,
+            projections_payload,
         )
         games_rows = process_stream(
             games_cards,
@@ -1289,6 +1408,7 @@ def build_pack_with_coverage(
             "games",
             event_starts,
             injuries,
+            projections_payload,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
@@ -1372,6 +1492,22 @@ def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
     if last_err:
         raise last_err
 
+
+def load_projection_records(leagues: Sequence[str]) -> list[dict[str, Any]]:
+    """Load the league projection artifacts for pack-local audit freezing."""
+
+    records: list[dict[str, Any]] = []
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        league_paths = paths.league_paths(league)
+        payload = load_json(
+            league_paths.normalized / f"{league.lower()}_projections_latest.json"
+        )
+        records.extend((payload or {}).get("projections") or [])
+    return records
+
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
 
@@ -1417,6 +1553,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
         args.top_signal_n,
         opportunity_rows_out=opportunity_rows,
     )
+    projection_records = load_projection_records(leagues)
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:
@@ -1427,6 +1564,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             games_norm_by_league=games_norm,
             coverage=coverage,
             opportunity_rows=opportunity_rows,
+            projection_records=projection_records,
         )
     else:
         from outlier_scrapers import feedback
@@ -1449,6 +1587,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 games_norm_by_league=games_norm,
                 coverage=coverage,
                 opportunity_rows=opportunity_rows,
+                projection_records=projection_records,
             )
             conn = feedback.open_database(feedback_db)
             conn.execute("BEGIN IMMEDIATE")

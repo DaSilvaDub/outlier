@@ -16,10 +16,12 @@ from outlier_scrapers.pack import (
     build_pack,
     build_pack_with_coverage,
     build_row,
+    index_projections,
     index_ev_by_outcome,
     is_excluded_market,
     is_longshot_price,
     is_no_push_market,
+    load_projection_records,
     market_validation_flags,
     rank_rows,
     select_date,
@@ -45,7 +47,7 @@ def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
     assert _opportunity_key(numeric)[3] == "0"
 
 
-def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):
+def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None, projections=None):
     return build_row(
         card,
         ev_records,
@@ -56,6 +58,7 @@ def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None):
         SOURCE_TS,
         event_starts or {},
         injuries or {},
+        projections or {},
     )
 
 
@@ -100,6 +103,18 @@ def test_header_canonical_with_flags():
         "home_away", "market_label", "priced_line",
     ):
         assert col in CANDIDATES_HEADER
+    for col in (
+        "independent_push_prob",
+        "independent_edge_pct",
+        "projection_distribution",
+        "projection_mean",
+        "projection_variance",
+        "projection_quantiles",
+        "projection_model_version",
+        "projection_feature_hash",
+        "projection_quality_flags",
+    ):
+        assert col in CANDIDATES_HEADER
 
 
 # 2. EV happy path: book_decimal_odds present, no-push -> fully sized.
@@ -127,6 +142,98 @@ def test_ev_row_sized():
     assert isinstance(row["edge_pct"], float)
     assert row["recommended_units_pre_news"] == 1.0
     assert row["sizing_flags"] == ""
+
+
+def test_shadow_projection_populates_reserved_fields_without_changing_consensus_or_sizing():
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="K",
+        event_id="game-1",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    baseline = make_row(card, ev)
+    projection = {
+        "status": "eligible",
+        "sport": "MLB",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "line": 5.5,
+        "side": "OVER",
+        "feature_snapshot_hash": "features-123",
+        "distribution": {
+            "line": 5.5,
+            "side": "OVER",
+            "win_prob": 0.62,
+            "push_prob": 0.0,
+            "mean": 6.1,
+            "variance": 4.2,
+            "quantiles": {"0.5": 6, "0.9": 9},
+            "model_version": "projection-v1",
+        },
+    }
+    row = make_row(card, ev, projections={"o1": projection})
+
+    assert row["independent_model_prob"] == 0.62
+    assert row["independent_push_prob"] == 0.0
+    assert row["independent_edge_pct"] == pytest.approx((0.62 - 1 / 2.1) * 100)
+    assert row["projection_model_version"] == "projection-v1"
+    assert row["projection_feature_hash"] == "features-123"
+    assert row["projection_quality_flags"] == ""
+    for field in (
+        "model_prob",
+        "market_consensus_prob",
+        "final_blended_prob",
+        "edge_pct",
+        "kelly_025_units",
+        "recommended_units_pre_news",
+        "actionable",
+    ):
+        assert row[field] == baseline[field]
+
+
+def test_shadow_projection_mismatch_fails_closed_without_touching_consensus():
+    card = ev_card(line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1")
+    ev = [{
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "book": "FD",
+        "book_odds": 110,
+        "book_decimal_odds": 2.1,
+    }]
+    projection = {
+        "status": "eligible",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "line": 6.5,
+        "side": "OVER",
+        "distribution": {"win_prob": 0.62, "push_prob": 0.0, "line": 6.5, "side": "OVER"},
+    }
+    row = make_row(card, ev, projections={"o1": projection})
+    assert row["independent_model_prob"] == ""
+    assert row["projection_quality_flags"] == "projection_line_mismatch"
+    assert row["market_consensus_prob"] == row["final_blended_prob"] == row["model_prob"]
+
+
+def test_duplicate_projection_outcome_ids_are_rejected_as_ambiguous():
+    payload = {
+        "projections": [
+            {"status": "eligible", "row_id": "o1", "event_id": "game-1"},
+            {"status": "eligible", "row_id": "o1", "event_id": "game-2"},
+        ]
+    }
+    assert index_projections(payload) == {}
 
 
 def test_local_ev_probability_source_is_labeled_separately():
@@ -734,6 +841,34 @@ def _league_fixture(root, lg):
     (root / "normalized" / f"{low}_games_latest.json").write_text(
         json.dumps({"generated_at": "GN", "context": game_cards["context"]})
     )
+    (root / "normalized" / f"{low}_projections_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "PROJ",
+                "projections": [
+                    {
+                        "status": "eligible",
+                        "sport": lg.upper(),
+                        "row_id": "go",
+                        "event_id": "EG",
+                        "market_id": "gm1",
+                        "line": 8.5,
+                        "side": "OVER",
+                        "distribution": {
+                            "line": 8.5,
+                            "side": "OVER",
+                            "win_prob": 0.58,
+                            "push_prob": 0.0,
+                            "mean": 8.9,
+                            "variance": 6.0,
+                            "quantiles": {"0.5": 9},
+                            "model_version": "projection-v1",
+                        },
+                    }
+                ],
+            }
+        )
+    )
 
 
 def test_end_to_end(tmp_path, monkeypatch):
@@ -751,7 +886,10 @@ def test_end_to_end(tmp_path, monkeypatch):
         _league_fixture(tmp_path / "data" / lg, lg)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, target, games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
+    rows, target, games_norm, coverage = build_pack_with_coverage(
+        ["MLB", "WNBA"], None, 15, 10
+    )
+    projection_records = load_projection_records(["MLB", "WNBA"])
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
     # both streams represented: a player (board_b) and a game (board_a) row exist
@@ -762,11 +900,23 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert game_rows and game_rows[0]["event_id"] == "EG"
     assert game_rows[0]["injury_flags"] == "Hurt Guy"
     assert isinstance(game_rows[0]["edge_pct"], float)
+    assert game_rows[0]["independent_model_prob"] == 0.58
+    assert game_rows[0]["market_consensus_prob"] == game_rows[0]["final_blended_prob"]
+    assert json.loads(game_rows[0]["source_timestamps"])["projections"] == "PROJ"
 
     out_dir = tmp_path / "packs" / target
-    write_pack(rows, out_dir, games_norm_by_league=games_norm, coverage=coverage)
+    write_pack(
+        rows,
+        out_dir,
+        games_norm_by_league=games_norm,
+        coverage=coverage,
+        projection_records=projection_records,
+    )
     assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "opportunities.csv").exists()
+    projection_lines = (out_dir / "projections.jsonl").read_text().splitlines()
+    assert len(projection_lines) == 2
+    assert json.loads(projection_lines[0])["row_id"] == "go"
     assert (out_dir / "candidate_coverage.json").exists()
     assert (out_dir / "game_totals.csv").exists()
     assert (out_dir / "team_totals.csv").exists()

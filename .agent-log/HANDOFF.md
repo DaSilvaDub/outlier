@@ -1,5 +1,27 @@
 # Handoff Summary
 
+## PR #40 independent projection layer
+
+**Last Commit SHA**: `d194ff9898606439677a45b363d0f92eec26a841`
+
+**Files Touched**:
+- `outlier_scrapers/normalizer.py`
+- `outlier_scrapers/pack.py`
+- `outlier_scrapers/projections.py`
+- `tests/test_normalizer.py`
+- `tests/test_pack.py`
+- `tests/test_projections.py`
+
+**Summary of Work**:
+- Rebuilt the contaminated PR #40 branch from current `master` as a six-file projection-only diff.
+- Resolved tail-mass, first-inning token/side, non-MLB cardinality, and shadow-pack integration blockers.
+- Squash-merged PR #40 after hosted tests, typecheck, and Codacy passed.
+
+**Next Steps**:
+- Continue the independent projection plan with cached MLB feature/provider adapters.
+
+---
+
 **Last Commit SHA**: `4fe871d0760315167579cfd89c23bad88690b3e7` (plus this handoff commit)
 
 **Files Touched**:
