@@ -596,12 +596,26 @@ def normalize_games(
                 continue
 
             market_type = str(market.get("marketType") or "")
-            if market_type in {"PLAYER_PROP", "GAME_PROP"}:
-                continue
-
             proposition = str(market.get("proposition") or "")
             market_label = market.get("label")
             market_raw = parse_market_descriptor(market)
+            first_inning_text = " ".join(
+                str(value or "")
+                for value in (proposition, market_label, market_raw, market.get("periodLabel"))
+            ).upper()
+            is_first_inning_game_prop = bool(
+                re.search(
+                    r"\b(?:NRFI|YRFI|FIRST[ _-]?INNING|1ST[ _-]?(?:INNING|INN)|1I)\b",
+                    first_inning_text,
+                )
+            )
+            # Player props are normalized by the player-prop path below.  Only
+            # first-inning game props are admitted here for NRFI/YRFI; unrelated
+            # GAME_PROP markets remain excluded until their model contracts exist.
+            if market_type == "PLAYER_PROP" or (
+                market_type == "GAME_PROP" and not is_first_inning_game_prop
+            ):
+                continue
             # periodLabel is often the only partial-game signal (e.g. "6I", "F5")
             # while label/raw stay "Total".
             scope = detect_scope(market_label, market_raw, market.get("periodLabel"))
