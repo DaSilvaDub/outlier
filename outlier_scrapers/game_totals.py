@@ -13,8 +13,7 @@ from typing import Any
 from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
 from outlier_scrapers.normalizer import detect_scope, implied_probability
 from outlier_scrapers.sizing import compute_sizing
-from outlier_scrapers.utils import _american_to_decimal
-from outlier_scrapers.totals_model import compute_blended_prob, extract_l10
+from outlier_scrapers.utils import _american_to_decimal, _decimal_to_american
 
 
 TOTAL_KIND_GAME = "game"
@@ -500,41 +499,22 @@ def build_totals(
         if p_over_headline is None:
             flags.append("INSUFFICIENT_DATA")
 
-        over_records = [r for r in market_records if _to_float(r.get("line")) == headline_line and str(r.get("position") or "").upper() == "OVER"]
-        l10_stat = extract_l10(over_records[0]) if over_records else None
-        p_l10_over = None
-        l10_total = None
-        if l10_stat and l10_stat.get("pct") is not None:
-            p_l10_over = float(l10_stat["pct"]) / 100.0
-            l10_total = l10_stat.get("total")
-
-        p_over_blended = compute_blended_prob(p_over_headline, p_l10_over, l10_total)
-
         over_book, over_price = _best_book_offer(
             over_books, fallback_book=cand.get("book"), fallback_price=cand.get("price")
         )
         under_book, under_price = _best_book_offer(under_books)
         best_side, best_price, edge_pct = (
-            pick_best_side(p_over_blended, over_price, under_price) if p_over_blended is not None else ("OVER", over_price, None)
+            pick_best_side(p_over_headline, over_price, under_price) if p_over_headline is not None else ("OVER", over_price, None)
         )
         best_book = under_book if best_side == "UNDER" else over_book
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
-        p_side_conditional_consensus = (
-            p_over_headline if best_side == "OVER" else p_under
+        p_side_conditional = (
+            p_over_headline
+            if best_side == "OVER"
+            else (1.0 - p_over_headline if p_over_headline is not None else None)
         )
-
-        p_under_l10 = (1.0 - p_l10_over) if p_l10_over is not None else None
-        p_side_conditional_l10 = (
-            p_l10_over if best_side == "OVER" else p_under_l10
-        )
-
-        p_under_blended = (1.0 - p_over_blended) if p_over_blended is not None else None
-        p_side_conditional_blended = (
-            p_over_blended if best_side == "OVER" else p_under_blended
-        )
-
-        model_win_prob = p_side_conditional_blended
+        model_win_prob = p_side_conditional
         decimal_price = _american_to_decimal(best_price)
         _implied_pct_val = implied_probability(best_price)
         implied_prob = round(_implied_pct_val / 100.0, 5) if _implied_pct_val is not None else None
@@ -552,8 +532,8 @@ def build_totals(
             if derived is not None:
                 push_prob = round(derived, 4)
                 model_win_prob = (
-                    p_side_conditional_blended * (1.0 - float(push_prob))
-                    if p_side_conditional_blended is not None
+                    p_side_conditional * (1.0 - float(push_prob))
+                    if p_side_conditional is not None
                     else None
                 )
                 if decimal_price is not None and model_win_prob is not None:
@@ -633,9 +613,9 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(p_side_conditional_consensus * (1.0 - push_prob), 4) if p_side_conditional_consensus is not None else "",
-                "independent_model_prob": round(p_side_conditional_l10 * (1.0 - push_prob), 4) if p_side_conditional_l10 is not None else "",
-                "final_blended_prob": round(p_side_conditional_blended * (1.0 - push_prob), 4) if p_side_conditional_blended is not None else "",
+                "market_consensus_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
+                "independent_model_prob": "",
+                "final_blended_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
