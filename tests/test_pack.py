@@ -47,18 +47,28 @@ def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
     assert _opportunity_key(numeric)[3] == "0"
 
 
-def make_row(card, ev_records, sport="MLB", event_starts=None, injuries=None, projections=None):
+def make_row(
+    card,
+    ev_records,
+    sport="MLB",
+    event_starts=None,
+    injuries=None,
+    projections=None,
+    blend_artifact=None,
+    odds_ts="ODDS_TS",
+):
     return build_row(
         card,
         ev_records,
         index_ev_by_outcome(ev_records),
         sport,
-        "ODDS_TS",
+        odds_ts,
         "NORM_TS",
         SOURCE_TS,
         event_starts or {},
         injuries or {},
         projections or {},
+        blend_artifact,
     )
 
 
@@ -113,6 +123,15 @@ def test_header_canonical_with_flags():
         "projection_model_version",
         "projection_feature_hash",
         "projection_quality_flags",
+        "blend_market_weight",
+        "blend_model_weight",
+        "blend_weight_source",
+        "blend_model_version",
+        "blend_segment",
+        "data_quality_tier",
+        "odds_range",
+        "time_before_game",
+        "hours_before_game",
     ):
         assert col in CANDIDATES_HEADER
 
@@ -200,6 +219,61 @@ def test_shadow_projection_populates_reserved_fields_without_changing_consensus_
         "actionable",
     ):
         assert row[field] == baseline[field]
+
+
+def test_active_learned_blend_updates_final_probability_and_sizing():
+    card = ev_card(
+        line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1"
+    )
+    ev = [{
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "book": "FD",
+        "book_odds": 110,
+        "book_decimal_odds": 2.1,
+    }]
+    projection = {
+        "status": "eligible",
+        "sport": "MLB",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "line": 5.5,
+        "side": "OVER",
+        "distribution": {
+            "line": 5.5,
+            "side": "OVER",
+            "win_prob": 0.62,
+            "push_prob": 0.0,
+        },
+    }
+    artifact = {
+        "schema_version": 1,
+        "status": "active",
+        "generated_at": "2026-07-19T00:00:00+00:00",
+        "model_version": "blend-test",
+        "prior_strength": 30,
+        "global": {"market_weight": 0.7, "n": 100},
+        "dimensions": {},
+    }
+
+    row = make_row(
+        card,
+        ev,
+        event_starts={"game-1": "2026-07-20T02:00:00+00:00"},
+        projections={"o1": projection},
+        blend_artifact=artifact,
+        odds_ts="2026-07-20T00:00:00+00:00",
+    )
+
+    expected = 0.7 * 0.5 + 0.3 * 0.62
+    assert row["final_blended_prob"] == pytest.approx(expected)
+    assert row["model_prob"] == pytest.approx(expected)
+    assert row["blend_market_weight"] == pytest.approx(0.7)
+    assert row["blend_model_weight"] == pytest.approx(0.3)
+    assert row["blend_weight_source"] == "learned:global"
+    assert row["model_prob_source"] == "learned_blend:blend-test"
+    assert row["edge_pct"] != pytest.approx((0.5 - 1 / 2.1) * 100)
 
 
 def test_shadow_projection_mismatch_fails_closed_without_touching_consensus():
