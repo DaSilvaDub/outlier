@@ -41,3 +41,31 @@
 
 **Next Steps**:
 - The user has been doing bottom-up merges of PRs (started with #23, then #34, #36, and now #39). The next agent should await the user's instructions for the next task (likely the next PR in the queue).
+
+---
+
+## PR #52 learned probability blending
+
+**Last Commit SHA**: `f210319ef2de9581c3501676db0f5bb6c19a5183`
+
+**Files Touched**:
+- `outlier_scrapers/probability_blend.py`
+- `outlier_scrapers/pack.py`
+- `outlier_scrapers/feedback.py`
+- `tests/test_probability_blend.py`
+- `tests/test_pack.py`
+- `tests/test_feedback.py`
+- `docs/probability-blending.md`
+
+**Summary of Work**:
+- Added Brier-loss market/model blend fitting with learned weights for league, market
+  type, odds range, time before game, and data-quality tier.
+- Added versioned artifact loading, cold-start and historical-cutoff safeguards,
+  pack sizing integration, ledger provenance, and v4 segment migration.
+- Opened PR #52: https://github.com/DaSilvaDub/outlier/pull/52
+- Verified 169 offline tests plus Ruff, mypy, pyright, and diff checks.
+
+**Next Steps**:
+- Review and merge PR #52 after hosted checks complete.
+- Continue capturing and settling rows; run `feedback fit-blend` once each desired
+  segment has enough eligible pregame history.
