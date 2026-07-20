@@ -541,6 +541,7 @@ def build_totals(
 
         push_blocked = _is_integer_line(headline_line)
         push_prob: float | str = "" if push_blocked else 0.0
+        non_push_mass = None if push_prob == "" else 1.0 - float(push_prob)
         sizing_flags = ""
         sizing = None
         if push_blocked:
@@ -551,6 +552,7 @@ def build_totals(
             derived = derive_push_prob(headline_line, ladder_p)
             if derived is not None:
                 push_prob = round(derived, 4)
+                non_push_mass = 1.0 - float(push_prob)
                 model_win_prob = (
                     p_side_conditional_blended * (1.0 - float(push_prob))
                     if p_side_conditional_blended is not None
@@ -633,9 +635,9 @@ def build_totals(
                 "best_price": best_price,
                 "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(p_side_conditional_consensus * (1.0 - push_prob), 4) if p_side_conditional_consensus is not None else "",
-                "independent_model_prob": round(p_side_conditional_l10 * (1.0 - push_prob), 4) if p_side_conditional_l10 is not None else "",
-                "final_blended_prob": round(p_side_conditional_blended * (1.0 - push_prob), 4) if p_side_conditional_blended is not None else "",
+                "market_consensus_prob": round(p_side_conditional_consensus * non_push_mass, 4) if p_side_conditional_consensus is not None and non_push_mass is not None else "",
+                "independent_model_prob": round(p_side_conditional_l10 * non_push_mass, 4) if p_side_conditional_l10 is not None and non_push_mass is not None else "",
+                "final_blended_prob": round(p_side_conditional_blended * non_push_mass, 4) if p_side_conditional_blended is not None and non_push_mass is not None else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
