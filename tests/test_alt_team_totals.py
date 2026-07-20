@@ -69,6 +69,39 @@ def test_record_filter_league_propositions():
     assert not is_alt_team_total_record(
         _tt_record(40.5, scope="2H", period_label="2H"), league="WNBA"
     )
+    # MLB team totals are total runs: accept the raw variants and the canonical
+    # market alias, but never the GAMELINE game total or WNBA runs tokens.
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="POINTS"), league="MLB")
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL_RUNS"), league="MLB")
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="TOTAL"), league="MLB")
+    assert is_alt_team_total_record(_tt_record(4.5, proposition="total_runs"), league="MLB")
+    r_alias = _tt_record(4.5, proposition="", market="R")
+    assert is_alt_team_total_record(r_alias, league="MLB")
+    assert not is_alt_team_total_record(
+        _tt_record(8.5, market_type="GAMELINE", proposition="TOTAL"), league="MLB"
+    )
+    assert not is_alt_team_total_record(
+        _tt_record(80.5, proposition="TOTAL_RUNS"), league="WNBA"
+    )
+    for prop in ("RUNS", "R", "TOTAL_RUNS", "TOTAL"):
+        assert not is_alt_team_total_record(
+            _tt_record(4.5, market_type="PLAYER_PROP", proposition=prop), league="MLB"
+        )
+
+
+def test_board_emits_mlb_total_runs_ladder():
+    records = [
+        _tt_record(2.5, proposition="TOTAL_RUNS", team="Yankees",
+                   matchup="Yankees @ Red Sox",
+                   stats=_l10_stats(10, side="awaySummaryStat")),
+        _tt_record(3.5, proposition="TOTAL_RUNS", team="Yankees",
+                   matchup="Yankees @ Red Sox",
+                   stats=_l10_stats(9, side="awaySummaryStat")),
+    ]
+    rows = build_alt_team_total_board(_games_norm(records), league="MLB", now=NOW)
+    assert [r["line"] for r in rows] == [3.5, 2.5]
+    assert [r["l10_hits"] for r in rows] == [9, 10]
+    assert rows[0]["is_best_line"] == "true"
 
 
 def test_extract_l10_prefers_results_array():

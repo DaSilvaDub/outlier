@@ -41,11 +41,13 @@ MIN_HIT_PCT = 90.0
 MAX_HIT_PCT = 100.0
 PARLAY_LEGS = 2
 
-# Board-verified for WNBA (TEAM_PROP/POINTS). MLB team totals have been seen
-# as POINTS but RUNS is accepted defensively until confirmed on a live slate.
+# Board-verified for WNBA (TEAM_PROP/POINTS). MLB team totals are total runs
+# (user-confirmed); accept the raw proposition variants plus the canonical
+# market alias R (registry: RUNS -> R). TOTAL under TEAM_PROP is unambiguous —
+# game totals arrive as GAMELINE, so no cross-stream false positives.
 TEAM_TOTAL_PROPOSITIONS: dict[str, frozenset[str]] = {
     "WNBA": frozenset({"POINTS"}),
-    "MLB": frozenset({"POINTS", "RUNS"}),
+    "MLB": frozenset({"POINTS", "RUNS", "R", "TOTAL_RUNS", "TOTAL"}),
 }
 DEFAULT_TEAM_TOTAL_PROPOSITIONS = frozenset({"POINTS"})
 
