@@ -76,3 +76,89 @@
 - Review and merge PR #52 after the refreshed hosted checks pass.
 - Continue capturing and settling rows; run `feedback fit-blend` once each desired
   segment has enough eligible pregame history.
+
+---
+
+## Canonical path migration: Laptop is now CANONICAL (not OneDrive)
+
+**Date**: 2026-07-21 (session continued from 2026-07-20)
+**Agent**: Grok
+**Product commit SHA**: `3b5e2764a38525ea67215d9eb941ac9e3566146b`
+  (`chore(sync): make laptop Dev\GitHub\outlier the canonical path`)
+
+### Layout (authoritative)
+
+| Role | Path |
+|------|------|
+| **CANONICAL (do real work here)** | `C:\Users\dasil\Dev\GitHub\outlier` |
+| **GitHub SSOT for commits** | `https://github.com/DaSilvaDub/outlier.git` |
+| **OneDrive mirror** | `C:\Users\dasil\OneDrive\Documents\outlier-mirror` |
+| **Google My Drive mirror** | `C:\Users\dasil\My Drive (dasilvadub@gmail.com)\Sports_Analytics\outlier` |
+| **ai-runners full clone** | `C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners` |
+
+### Continuous sync
+
+- Task: **`Outlier-Quad-Sync`** (every 10 min + logon)
+- Engine: `C:\Users\dasil\Scripts\sync_outlier_quad.ps1`
+- Installer: `C:\Users\dasil\Scripts\install_outlier_quad_sync.ps1`
+- Log: `C:\Users\dasil\Scripts\outlier_quad_sync.log`
+- Status JSON: `C:\Users\dasil\Scripts\outlier_quad_sync_status.json`
+- Docs: `C:\Users\dasil\Scripts\OUTLIER_QUAD_SYNC.md`
+- Behavior:
+  - Laptop canonical: fetch; **push** commits when ahead; **never hard-reset** if dirty (WIP protected)
+  - OneDrive + My Drive + ai-runners: force-reset to `origin/master` every cycle (read-only mirrors)
+
+### Agent STEP 0 (new path — mandatory)
+
+```powershell
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
+```
+
+Updated in-repo: `report-sync.ps1`, `sync-outlier.ps1`, `scripts/verify-sync.ps1`,
+`AGENTS.md`, `CLAUDE.md`, `GROK.md`, `GEMINI.md`, `SYNC.md`, `README.md`,
+`docs/ENT-SYNC-GLOBAL-PROMPT.md`.
+
+Also updated global harness files:
+- `C:\Users\dasil\.grok\Agents.md`
+- `C:\Users\dasil\.claude\Claude.md`
+- `C:\Users\dasil\Agents.md`
+
+### What happened during the move
+
+1. User requested 4-way always-on sync (Laptop + My Drive + OneDrive + GitHub).
+2. User then required **Laptop** as canonical, not OneDrive.
+3. A full physical move of the OneDrive tree failed (folder locked by OneDrive /
+   open processes). A partial `robocopy /MOVE` **corrupted** both the OneDrive and
+   intermediate laptop `.git` directories.
+4. Recovery used the healthy pre-move laptop mirror backup
+   (`outlier.mirror-bak` → promoted to `Dev\GitHub\outlier`).
+5. WIP was rescued from the broken OneDrive working tree into laptop:
+   - `outlier_scrapers/{pack,daily_job,games,refresh}.py`
+   - `dashboard.html`, `calibration/feedback.sqlite3`
+   - `scripts/run_wnba_specific.py`
+6. Path canonicalization committed and pushed as `3b5e276`.
+7. OneDrive primary path `C:\Users\dasil\OneDrive\Documents\outlier` remains a
+   **broken leftover** (invalid `.git`). Sync uses **`outlier-mirror`** instead.
+   Delete/rename the broken folder when unlocked (reboot if needed).
+
+### Worktrees
+
+- Old Codex/Gemini linked worktrees under `.codex/worktrees/*/outlier` were tied to
+  the broken OneDrive main `.git` and are **orphaned**.
+- Create new worktrees only from laptop canonical:
+
+```powershell
+cd C:\Users\dasil\Dev\GitHub\outlier
+git worktree add <path> -b <branch>
+```
+
+### Next agent rules
+
+- [ ] **Develop only** in `C:\Users\dasil\Dev\GitHub\outlier`
+- [ ] **Never** treat OneDrive or My Drive mirrors as write targets (they hard-reset)
+- [ ] STEP 0 always uses the **Dev\GitHub** `report-sync.ps1` path
+- [ ] Optional cleanup: remove locked `OneDrive\Documents\outlier` broken tree when
+      Windows unlocks it; keep `outlier-mirror` as the OneDrive tracking clone
+- [ ] Optional: re-create needed agent worktrees from laptop canonical
+- [ ] Local WIP may still be dirty on laptop (scraper edits / sqlite / dashboard) —
+      commit when ready so mirrors receive it via the next push cycle
