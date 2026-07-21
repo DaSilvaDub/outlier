@@ -15,7 +15,7 @@
     5. Explicitly explains why d05eb21 will never be found.
 
   Usage (from ANY ent / worktree / clone — always use the canonical path):
-    & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"
+    & "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"
 
   NEVER paste ad-hoc "Search result processed" blocks built from ls / Get-ChildItem / cat / grep / git log loops.
   If a user or another ent shows you raw one-liner output, tell them to run THIS script instead.
@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Continue'
 
-$canonicalRoot = 'C:\Users\dasil\OneDrive\Documents\outlier'
+$canonicalRoot = 'C:\Users\dasil\Dev\GitHub\outlier'
 $canonicalBootstrap = Join-Path $canonicalRoot 'sync-outlier.ps1'
 
 # Guard against the exact anti-pattern that keeps causing "d05eb21 not found" confusion
@@ -31,7 +31,7 @@ $inv = $MyInvocation.Line
 if ($inv -match 'Select-String|Out-String|Select -First| \| ' -or $Host.UI.RawUI.WindowSize.Width -lt 200) {
     Write-Host '!!! FORBIDDEN: This verify-sync.ps1 was invoked with piping, Select-String, Out-String, Select -First, or truncation.' -ForegroundColor Red
     Write-Host '!!! Every "I searched every branch/worktree" or status report MUST be the complete, unfiltered output of a direct call.' -ForegroundColor Red
-    Write-Host '!!! Correct:  & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"'
+    Write-Host '!!! Correct:  & "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"'
     Write-Host '!!! Then paste EVERY line. No pipes. No filters. No -First.'
 }
 
@@ -140,7 +140,12 @@ if ($badWts.Count -gt 0) {
 # Dedicated section for known full clones (independent .git). These are the source of many
 # "commit not found" problems because they can lag independently of linked worktrees.
 Write-Section 'Known full clones (separate .git, e.g. ai-runners)'
-$knownFullClones = @('C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners')
+$knownFullClones = @(
+  'C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners',
+  'C:\Users\dasil\OneDrive\Documents\outlier',
+  'C:\Users\dasil\OneDrive\Documents\outlier-mirror',
+  'C:\Users\dasil\My Drive (dasilvadub@gmail.com)\Sports_Analytics\outlier'
+)
 foreach ($fc in $knownFullClones) {
   if (Test-Path (Join-Path $fc '.git')) {
     $fcHead = (git -C $fc rev-parse --short HEAD 2>$null)
@@ -189,10 +194,10 @@ Write-Section 'Protocol files present at canonical'
 Get-ChildItem -Name sync-outlier.ps1, scripts/verify-sync.ps1, SYNC.md, AGENTS.md, CLAUDE.md, GROK.md
 
 Write-Section 'Remediation recipe (if any worktree ever reports MISSING)'
-Write-Host '1. From canonical (C:\Users\dasil\OneDrive\Documents\outlier):'
-Write-Host '     & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees'
+Write-Host '1. From canonical (C:\Users\dasil\Dev\GitHub\outlier):'
+Write-Host '     & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -SyncAllWorktrees'
 Write-Host '2. In the affected ent/worktree, run:'
-Write-Host '     & "C:\Users\dasil\OneDrive\Documents\outlier\scripts\verify-sync.ps1"'
+Write-Host '     & "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"'
 Write-Host '3. If still bad: the ent is on a non-linked full clone — delete it and start from'
 Write-Host '   git clone https://github.com/DaSilvaDub/outlier.git then run the script.'
 

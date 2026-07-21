@@ -12,9 +12,9 @@
   impossible.
 
   Usage:
-    & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
-    & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
-    & "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees   # from canonical: align every registered worktree
+    & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1"
+    & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -ValidateOnly
+    & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -SyncAllWorktrees   # from canonical: align every registered worktree
 #>
 
 [CmdletBinding()]
@@ -41,7 +41,7 @@ Write-Info "Repo root: $here"
 
 $aiRunnersPath = 'C:\Users\dasil\OneDrive\Documents\outlier-worktrees\ai-runners'
 if ($here -eq $aiRunnersPath -or $here -like '*outlier-worktrees*ai-runners*') {
-  Write-Info "NOTE: Running inside the ai-runners full clone. This is a secondary tracking clone. Canonical (C:\Users\dasil\OneDrive\Documents\outlier) + GitHub remain SSOT. Always prefer invoking report-sync via the canonical path."
+  Write-Info "NOTE: Running inside the ai-runners full clone. This is a secondary tracking clone. Canonical (C:\Users\dasil\Dev\GitHub\outlier) + GitHub remain SSOT. Always prefer invoking report-sync via the canonical path."
 }
 
 # Known sibling full clones (separate .git directories, not linked worktrees).

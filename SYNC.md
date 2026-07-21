@@ -10,7 +10,7 @@ The commit d05eb21 (and its materialization 88083ff etc.) and all follow-ups mus
    - Every ent that can reach the internet MUST be able to fetch from here.
    - This is what makes "d05eb21 lineage" visible to a Gemini in the cloud or a fresh Codex session.
 
-2. **Canonical (local fast path + worktree owner)**: `C:\Users\dasil\OneDrive\Documents\outlier`
+2. **Canonical (local fast path + worktree owner)**: `C:\Users\dasil\Dev\GitHub\outlier`
    - Owns the real .git directory.
    - All local Codex/Gemini worktrees under `.codex/worktrees/.../outlier` and `.gemini/...` are **linked** to it (share objects/refs).
    - **WARNING**: Still on OneDrive. Hydration, CRLF, and placeholder issues are the #1 recurring cause of "commit invisible" and size mismatches. Set the folder to "Always keep on this device".
@@ -22,7 +22,7 @@ The commit d05eb21 (and its materialization 88083ff etc.) and all follow-ups mus
 **STEP 0 from ANY directory / ent / harness**:
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 ```
 
 Always use the *canonical full path*. Do not rely on CWD, local copy in ai-runners, or relative ./report-sync.ps1.
@@ -45,7 +45,7 @@ They share the canonical .git. After the canonical (or any worktree) does a succ
 
 ```powershell
 cd C:\Users\dasil\.codex\worktrees\XXXX\outlier   # or gemini equivalent
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1"
 ```
 
 If still stale after that: the worktree list on canonical is out of date or OneDrive has not propagated objects. Re-run from the canonical once, then from the worktree.
@@ -64,7 +64,7 @@ git push origin HEAD
 From canonical:
 
 ```powershell
-cd C:\Users\dasil\OneDrive\Documents\outlier
+cd C:\Users\dasil\Dev\GitHub\outlier
 git worktree add ..\..\.codex\worktrees\my-task\outlier -b my-task
 ```
 
@@ -110,9 +110,9 @@ You are working in the outlier repo. MULTI-ENT SYNC IS MANDATORY.
 
 STEP 0 (ABSOLUTE FIRST, before reading files, git log, or planning):
 Execute exactly:
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1"
 # or for gate:
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -ValidateOnly
+& "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -ValidateOnly
 
 Report the *full* console output. You may only continue when the output shows VALIDATE: OK, recent HEAD match, and all pipeline upgrade markers (player_id / CANDIDATES_HEADER / round_robin / decisions.csv / locks). If not OK, re-run and/or escalate.
 
@@ -126,14 +126,14 @@ They share the canonical .git. After a successful sync + push from canonical or 
 
 ```powershell
 cd C:\Users\dasil\.codex\worktrees\XXXX\outlier   # or gemini equivalent
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1"
 ```
 
 **From canonical, align / materialize all registered worktrees in one shot (recommended after any push of core changes):**
 
 ```powershell
-cd C:\Users\dasil\OneDrive\Documents\outlier
-& "C:\Users\dasil\OneDrive\Documents\outlier\sync-outlier.ps1" -SyncAllWorktrees
+cd C:\Users\dasil\Dev\GitHub\outlier
+& "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -SyncAllWorktrees
 ```
 
 The -SyncAllWorktrees uses safe `checkout origin/master -- <files>` so feature branches (codex/prompt-*, gemini fix-*) keep their HEAD/branch but receive the blessed versions of pack.py, daily_job.py, the sync script, etc.

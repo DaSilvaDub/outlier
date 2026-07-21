@@ -6,7 +6,7 @@ You are agent `grok` in this repo. Multiple AI agents share this codebase.
 **Use the canonical path no matter the ent or CWD you landed in.**
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 ```
 
 (This does bootstrap + -SyncAllWorktrees (including ai-runners full clone) + the complete standardized report with d05eb21 explanation.)

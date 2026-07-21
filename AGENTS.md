@@ -30,7 +30,7 @@ d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pac
 **No matter the ent or starting directory** (ai-runners full clone, a .codex worktree at 90ca8c3, gemini tree, or canonical):
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 ```
 
 Use the canonical absolute path always. This runs bootstrap + -SyncAllWorktrees (which now hard-aligns ai-runners too) + produces the complete standardized report.

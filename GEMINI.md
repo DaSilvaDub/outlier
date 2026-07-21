@@ -1,7 +1,7 @@
 # Outlier multi-ent global instructions (auto-installed from docs/ENT-SYNC-GLOBAL-PROMPT.md)
 
 **Scope:** Apply fully when the working tree is the outlier repo
-(`C:\Users\dasil\OneDrive\Documents\outlier` or any clone/worktree of
+(`C:\Users\dasil\Dev\GitHub\outlier` or any clone/worktree of
 https://github.com/DaSilvaDub/outlier.git). Outside that repo, ignore STEP 0 /
 report-sync; still obey the reasoning-off default if you are about to invoke
 `outlier_scrapers.reasoning|run_desk|...` by accident.
@@ -24,12 +24,12 @@ NO MATTER which ent (Grok/Claude/Codex/Gemini), which starting CWD (worktree, ai
 
 ALWAYS execute EXACTLY (full canonical path; do not use a local ./report-sync or relative path):
 
-& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 
 # Thin wrapper -> canonical bootstrap + -SyncAllWorktrees (which now also hard-resets ai-runners) + full verify report.
 # Never pipe | Select-String | Out-String | Select -First | grep etc. The guard will flag it.
 
-cd 'C:\Users\dasil\OneDrive\Documents\outlier' first if you like, then the command above.
+cd 'C:\Users\dasil\Dev\GitHub\outlier' first if you like, then the command above.
 Report the *full* untruncated console output (every line from [sync] through the final Rule).
 
 You may only continue when the output contains:
@@ -40,7 +40,7 @@ You may only continue when the output contains:
 - "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
 
 For ANY question about "does commit X exist", "I searched every branch + .codex/.gemini worktree", "closest commit is d756cb4", "d05eb21 not found", sizes, or state:
-- Run & "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"  (or the scripts/verify... directly)
+- Run & "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"  (or the scripts/verify... directly)
 - Paste its ENTIRE output.
 - NEVER build your own report with git log / rev-parse / Get-ChildItem / Select-String loops. Those are why the original problem existed.
 

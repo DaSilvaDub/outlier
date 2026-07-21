@@ -6,7 +6,7 @@ You are agent **`claude`** in this repo. Multiple AI agents share this codebase.
 **Canonical path, every ent, every start dir:**
 
 ```powershell
-& "C:\Users\dasil\OneDrive\Documents\outlier\report-sync.ps1"
+& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 ```
 
 Runs full bootstrap + SyncAll (now covers ai-runners) + authoritative report (includes explicit d05eb21 section).

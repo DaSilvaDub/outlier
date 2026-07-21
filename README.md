@@ -136,7 +136,7 @@ To run this daily at ~8:00 AM local time via Windows Task Scheduler, create a ba
 Example Task Scheduler action:
 - **Program/script**: `C:\path\to\your\venv\Scripts\python.exe`
 - **Add arguments**: `-m outlier_scrapers.daily_job --leagues MLB,WNBA`
-- **Start in**: `C:\Users\dasil\OneDrive\Documents\outlier`
+- **Start in**: `C:\Users\dasil\Dev\GitHub\outlier`
 
 ## Triage cards
 
