@@ -31,8 +31,8 @@ from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
-DEFAULT_REPORT_DIR = paths.PROJECT_ROOT / "calibration" / "reports" / "latest"
+DEFAULT_DB_PATH = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3")
+DEFAULT_REPORT_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\reports\latest")
 SCHEMA_VERSION = 4
 
 MARKET_SNAPSHOT_FIELDS = [
