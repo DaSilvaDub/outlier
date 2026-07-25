@@ -46,9 +46,20 @@ Copy-Item .claude\hooks\check-sync.ps1      "$env:USERPROFILE\.claude\hooks\outl
 
 Enforces the `AGENTS.md` house rule "Never run reasoning models unless explicitly asked."
 
-Replaces `.claude/hookify.no-reasoning-unless-asked.local.md`, which was
-`action: warn` (advisory only) and matched `.gitignore`'s `.claude/*.local.md`, so it
-never reached another ent or a fresh clone. This version is committed and denies.
+Replaces `.claude/hookify.no-reasoning-unless-asked.local.md`, whose decisive defect was
+`action: warn` — advisory only, so nothing actually stopped a paid command. This version denies.
+
+That old rule's distribution is a subtlety worth recording, because it is easy to get
+backwards: `.gitignore:43` (`.claude/*.local.md`) *does* match the filename, so it looks
+local-only. But the file was already **tracked** when `b070caa` introduced that rule, and
+`.gitignore` has no effect on already-tracked paths — so it is committed and does reach every
+ent and every fresh clone. Plain `git check-ignore` reports "not ignored" for exactly this
+reason (it respects the index); only `--no-index` shows the rule matching.
+
+Practical upshot: the old rule is now redundant with this hook. Making `b070caa`'s intent
+real requires `git rm --cached` on it, the same treatment #55 gave the tracked sqlite file.
+Left in place for now because hookify rules may be consumed by non-Claude ents, which this
+`PreToolUse` hook does not cover.
 
 **Matcher covers `PowerShell` as well as `Bash`.** A `Bash`-only guard is bypassed by
 running the same command through the PowerShell tool.
