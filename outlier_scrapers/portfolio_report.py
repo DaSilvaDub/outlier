@@ -1,0 +1,151 @@
+import argparse
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
+
+def parse_args(args=None):
+    parser = argparse.ArgumentParser(description="Portfolio Risk Shadow Report")
+    parser.add_argument("--from", dest="from_date", required=True, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--to", dest="to_date", required=True, help="End date (YYYY-MM-DD)")
+    parser.add_argument("--packs-dir", dest="packs_dir", default="packs", help="Path to packs directory")
+    return parser.parse_args(args)
+
+def run_report(from_date: str, to_date: str, packs_dir: str) -> dict:
+    start_date = datetime.strptime(from_date, "%Y-%m-%d")
+    end_date = datetime.strptime(to_date, "%Y-%m-%d")
+    
+    packs_path = Path(packs_dir)
+    
+    report = {
+        "valid_days": 0,
+        "rejected_days": 0,
+        "gaps": [],
+        "legacy_total_units": 0.0,
+        "shadow_total_units": 0.0,
+        "unit_retention_ratio": 0.0,
+        "caps_binding": {},
+        "zeroed_rows": 0,
+        "quantization_differences": 0,
+        "missing_identity_counts": 0,
+        "duplicate_collapse_counts": 0,
+        "book_source_exposure": {},
+        "order_invariance_hashes": set(),
+        "policy_fingerprints": set(),
+        "consecutive_shadow_days": 0,
+        "max_consecutive_shadow_days": 0
+    }
+    
+    current_date = start_date
+    consecutive = 0
+    
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y-%m-%d")
+        sidecar_path = packs_path / date_str / "portfolio_risk.json"
+        
+        is_valid = False
+        if sidecar_path.exists():
+            try:
+                with open(sidecar_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                git_sha = data.get("code_git_sha")
+                if git_sha and isinstance(git_sha, str) and git_sha.strip() and git_sha != "unknown":
+                    is_valid = True
+                    report["valid_days"] += 1
+                    report["legacy_total_units"] += float(data.get("legacy_total_units", 0))
+                    report["shadow_total_units"] += float(data.get("shadow_total_units", 0))
+                    
+                    for cap, count in data.get("caps_binding", {}).items():
+                        report["caps_binding"][cap] = report["caps_binding"].get(cap, 0) + count
+                        
+                    report["zeroed_rows"] += int(data.get("zeroed_rows", 0))
+                    report["quantization_differences"] += int(data.get("quantization_differences", 0))
+                    report["missing_identity_counts"] += int(data.get("missing_identity_counts", 0))
+                    report["duplicate_collapse_counts"] += int(data.get("duplicate_collapse_counts", 0))
+                    
+                    for book, exposure in data.get("book_source_exposure", {}).items():
+                        report["book_source_exposure"][book] = report["book_source_exposure"].get(book, 0) + float(exposure)
+                        
+                    hash_val = data.get("order_invariance_hash")
+                    if hash_val:
+                        report["order_invariance_hashes"].add(hash_val)
+                        
+                    fingerprint = data.get("policy_fingerprint")
+                    if fingerprint:
+                        report["policy_fingerprints"].add(fingerprint)
+            except Exception:
+                pass
+                
+        if is_valid:
+            consecutive += 1
+            if consecutive > report["max_consecutive_shadow_days"]:
+                report["max_consecutive_shadow_days"] = consecutive
+        else:
+            consecutive = 0
+            report["rejected_days"] += 1
+            report["gaps"].append(date_str)
+            
+        current_date += timedelta(days=1)
+        
+    report["consecutive_shadow_days"] = report["max_consecutive_shadow_days"]
+    del report["max_consecutive_shadow_days"]
+    
+    if report["legacy_total_units"] > 0:
+        report["unit_retention_ratio"] = report["shadow_total_units"] / report["legacy_total_units"]
+        
+    report["order_invariance_hashes"] = list(report["order_invariance_hashes"])
+    report["policy_fingerprints"] = list(report["policy_fingerprints"])
+    
+    return report
+
+def generate_text_report(report: dict) -> str:
+    lines = [
+        "Shadow Report & Activation Evidence",
+        "===================================",
+        f"Valid Days: {report['valid_days']}",
+        f"Rejected/Gap Days: {report['rejected_days']}",
+        f"Gaps: {', '.join(report['gaps']) if report['gaps'] else 'None'}",
+        f"Max Consecutive Shadow Days: {report['consecutive_shadow_days']} (Needs 14 for gate)",
+        "",
+        "--- Metrics ---",
+        f"Legacy Total Units: {report['legacy_total_units']:.2f}",
+        f"Shadow Total Units: {report['shadow_total_units']:.2f}",
+        f"Unit Retention Ratio: {report['unit_retention_ratio']:.4f}",
+        f"Zeroed Rows: {report['zeroed_rows']}",
+        f"Quantization Differences: {report['quantization_differences']}",
+        f"Missing Identity Counts: {report['missing_identity_counts']}",
+        f"Duplicate Collapse Counts: {report['duplicate_collapse_counts']}",
+        "",
+        "--- Caps Binding ---"
+    ]
+    for cap, count in report.get("caps_binding", {}).items():
+        lines.append(f"  {cap}: {count}")
+        
+    lines.append("")
+    lines.append("--- Book Source Exposure ---")
+    for book, exp in report.get("book_source_exposure", {}).items():
+        lines.append(f"  {book}: {exp:.2f}")
+        
+    lines.append("")
+    lines.append("--- Stability ---")
+    hashes = report.get('order_invariance_hashes', [])
+    lines.append(f"Order Invariance Hashes ({len(hashes)} unique):")
+    for h in hashes:
+        lines.append(f"  - {h}")
+        
+    fingerprints = report.get('policy_fingerprints', [])
+    lines.append(f"Policy Fingerprints ({len(fingerprints)} unique):")
+    for f in fingerprints:
+        lines.append(f"  - {f}")
+        
+    return "\n".join(lines)
+
+def main():
+    args = parse_args()
+    report = run_report(args.from_date, args.to_date, args.packs_dir)
+    print(generate_text_report(report))
+    print("\n--- JSON ---")
+    print(json.dumps(report, indent=2))
+
+if __name__ == "__main__":
+    main()
