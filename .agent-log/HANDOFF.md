@@ -322,3 +322,34 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 - Do **not** edit `mode` to `enforce` until 14-day gate is green.
 - When ready: flip only `config/portfolio_risk.json` `"mode": "enforce"` after checklist re-review.
 
+---
+
+## R2–R5 Desk Contradictions, Proxy Devig Rules & Mandatory Stand-Down Reconciliation
+
+**Date**: 2026-07-25  
+**Agent**: Gemini 3.6 Flash  
+**Branch**: `fix/r2-r5-desk-integrity-and-totals-reconciliation`  
+**Last Commit SHA**: `ea9ac64` (`fix(pack): refine plus_money_speculative_edge scope to proxy_market_devig rows`)
+
+### Files Touched:
+- `outlier_scrapers/game_totals.py`
+- `outlier_scrapers/pack.py`
+- `prompts/desk2/Q_chatgpt.md`
+
+### Summary of Work:
+1. **Game Totals & Side Resolution Alignment**:
+   - Updated `game_totals.py` to flag `UNINDEXED_SLATE_GAME` when a game is missing from candidate indexing, and `SIDE_RESOLUTION_CONFLICT` + `SOURCE_INTEGRITY_FLAG` when candidate headline side conflicts with the book ladder side (e.g. candidate OVER vs board UNDER).
+2. **Candidate Actionable & Sizing Invariants**:
+   - Added `edge_suspect_thin_liquidity` flag for small edges (edge_pct <= 0.035) on `thin_liquidity` markets, withholding pre-news units.
+   - Tagged `plus_money_speculative_edge` on `proxy_market_devig` rows with plus-money price and near coin-flip probability (~0.50-0.525).
+3. **Desk Instruction Guardrails (`ROLE_BLOCK` & `Q_chatgpt.md`)**:
+   - Updated `ROLE_BLOCK` in `outlier_scrapers/pack.py` and `prompts/desk2/Q_chatgpt.md` to mandate `PASS` / stand-down on any non-actionable or quality-flagged row (`movement_line_mismatch`, `ev_line_fallback`, `edge_suspect_stale_line`, `SOURCE_INTEGRITY_FLAG`, `UNINDEXED_SLATE_GAME`, `SIDE_RESOLUTION_CONFLICT`).
+   - Explicitly prohibited double-counting `proxy_market_devig` as independent model support.
+   - Added quantitative capping for thin-liquidity edges and plus-money speculative edges in Phase Q.
+4. **Verification**:
+   - Full offline unit test suite passed: **565 passed**.
+
+### Next Steps:
+- Open PR for `fix/r2-r5-desk-integrity-and-totals-reconciliation` to merge into `master`.
+
+
