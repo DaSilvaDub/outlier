@@ -1499,7 +1499,8 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
         assert next(csv.reader(handle)) == [
             "decision_id", "snapshot_id", "pipeline_verdict", "A_verdict",
             "B_verdict", "C_verdict", "D_verdict", "final_verdict", "units",
-            "kill_reason", "news_override",
+            "kill_reason", "news_override", "policy_fingerprint", 
+            "portfolio_mode", "pre_cap_units", "portfolio_units", "cap_reasons",
         ]
 
 

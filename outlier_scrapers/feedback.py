@@ -76,6 +76,11 @@ MARKET_SNAPSHOT_FIELDS = [
     "movement_component",
     "orf_component",
     "pack_path",
+    "policy_fingerprint",
+    "portfolio_mode",
+    "pre_cap_units",
+    "portfolio_units",
+    "cap_reasons",
 ]
 
 DECISION_FIELDS = [
@@ -90,6 +95,11 @@ DECISION_FIELDS = [
     "units",
     "kill_reason",
     "news_override",
+    "policy_fingerprint",
+    "portfolio_mode",
+    "pre_cap_units",
+    "portfolio_units",
+    "cap_reasons",
 ]
 
 SETTLEMENT_REQUIRED_FIELDS = [
@@ -166,6 +176,11 @@ MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
     "movement_component": "REAL",
     "orf_component": "REAL",
     "pack_path": "TEXT",
+    "policy_fingerprint": "TEXT",
+    "portfolio_mode": "TEXT",
+    "pre_cap_units": "REAL",
+    "portfolio_units": "REAL",
+    "cap_reasons": "TEXT",
     "created_at": "TEXT NOT NULL DEFAULT ''",
 }
 
@@ -181,6 +196,11 @@ DECISION_COLUMN_DEFINITIONS = {
     "units": "REAL",
     "kill_reason": "TEXT",
     "news_override": "TEXT",
+    "policy_fingerprint": "TEXT",
+    "portfolio_mode": "TEXT",
+    "pre_cap_units": "REAL",
+    "portfolio_units": "REAL",
+    "cap_reasons": "TEXT",
     "created_at": "TEXT NOT NULL DEFAULT ''",
     "updated_at": "TEXT NOT NULL DEFAULT ''",
 }
@@ -253,6 +273,11 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "movement_component": "ALTER TABLE market_snapshots ADD COLUMN movement_component REAL",
         "orf_component": "ALTER TABLE market_snapshots ADD COLUMN orf_component REAL",
         "pack_path": "ALTER TABLE market_snapshots ADD COLUMN pack_path TEXT",
+        "policy_fingerprint": "ALTER TABLE market_snapshots ADD COLUMN policy_fingerprint TEXT",
+        "portfolio_mode": "ALTER TABLE market_snapshots ADD COLUMN portfolio_mode TEXT",
+        "pre_cap_units": "ALTER TABLE market_snapshots ADD COLUMN pre_cap_units REAL",
+        "portfolio_units": "ALTER TABLE market_snapshots ADD COLUMN portfolio_units REAL",
+        "cap_reasons": "ALTER TABLE market_snapshots ADD COLUMN cap_reasons TEXT",
         "created_at": "ALTER TABLE market_snapshots ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
     },
     "decisions": {
@@ -267,6 +292,11 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "units": "ALTER TABLE decisions ADD COLUMN units REAL",
         "kill_reason": "ALTER TABLE decisions ADD COLUMN kill_reason TEXT",
         "news_override": "ALTER TABLE decisions ADD COLUMN news_override TEXT",
+        "policy_fingerprint": "ALTER TABLE decisions ADD COLUMN policy_fingerprint TEXT",
+        "portfolio_mode": "ALTER TABLE decisions ADD COLUMN portfolio_mode TEXT",
+        "pre_cap_units": "ALTER TABLE decisions ADD COLUMN pre_cap_units REAL",
+        "portfolio_units": "ALTER TABLE decisions ADD COLUMN portfolio_units REAL",
+        "cap_reasons": "ALTER TABLE decisions ADD COLUMN cap_reasons TEXT",
         "created_at": "ALTER TABLE decisions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE decisions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
     },
@@ -292,7 +322,8 @@ TABLE_COLUMN_ADD_STATEMENTS = {
 SELECT_DECISION_BY_ID_SQL = """
     SELECT decision_id, snapshot_id, pipeline_verdict,
            A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
-           units, kill_reason, news_override
+           units, kill_reason, news_override,
+           policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons
     FROM decisions
     WHERE decision_id = ?
 """
@@ -553,6 +584,11 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 movement_component REAL,
                 orf_component REAL,
                 pack_path TEXT,
+                policy_fingerprint TEXT,
+                portfolio_mode TEXT,
+                pre_cap_units REAL,
+                portfolio_units REAL,
+                cap_reasons TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -568,6 +604,11 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 units REAL,
                 kill_reason TEXT,
                 news_override TEXT,
+                policy_fingerprint TEXT,
+                portfolio_mode TEXT,
+                pre_cap_units REAL,
+                portfolio_units REAL,
+                cap_reasons TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -1041,6 +1082,11 @@ def _snapshot_from_pack_row(
         "movement_component": movement,
         "orf_component": orf,
         "pack_path": str((recorded_pack_path or pack_dir).resolve()),
+        "policy_fingerprint": _text(row.get("_policy_fingerprint")),
+        "portfolio_mode": _text(row.get("_portfolio_mode")),
+        "pre_cap_units": _float(row.get("_pre_cap_units"), field="pre_cap_units"),
+        "portfolio_units": _float(row.get("_portfolio_units"), field="portfolio_units"),
+        "cap_reasons": _text(row.get("_cap_reasons")),
     }
 
 
@@ -1062,6 +1108,11 @@ def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, A
         if play
         else (snapshot["data_quality_flags"] or "not_selected_or_actionable"),
         "news_override": "",
+        "policy_fingerprint": snapshot.get("policy_fingerprint", ""),
+        "portfolio_mode": snapshot.get("portfolio_mode", ""),
+        "pre_cap_units": snapshot.get("pre_cap_units"),
+        "portfolio_units": snapshot.get("portfolio_units"),
+        "cap_reasons": snapshot.get("cap_reasons", ""),
     }
 
 
@@ -1113,10 +1164,13 @@ def capture_pack(
                     data_quality_tier, event_starts_at, hours_before_game, odds_range,
                     time_before_game, market_type, model_prob_source, decimal_price,
                     implied_prob, board, selected, signal_flags, hit_rate_component,
-                    insight_component, movement_component, orf_component, pack_path, created_at
+                    insight_component, movement_component, orf_component, pack_path,
+                    policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
+                    created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
@@ -1147,6 +1201,11 @@ def capture_pack(
                     board = excluded.board,
                     selected = excluded.selected,
                     pack_path = excluded.pack_path,
+                    policy_fingerprint = excluded.policy_fingerprint,
+                    portfolio_mode = excluded.portfolio_mode,
+                    pre_cap_units = excluded.pre_cap_units,
+                    portfolio_units = excluded.portfolio_units,
+                    cap_reasons = excluded.cap_reasons,
                     push_prob = COALESCE(excluded.push_prob, market_snapshots.push_prob),
                     signal_flags = excluded.signal_flags,
                     hit_rate_component = excluded.hit_rate_component,
@@ -1172,8 +1231,10 @@ def capture_pack(
                 INSERT INTO decisions (
                     decision_id, snapshot_id, pipeline_verdict,
                     A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
-                    units, kill_reason, news_override, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    units, kill_reason, news_override,
+                    policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(decision_id) DO UPDATE SET
                     pipeline_verdict = excluded.pipeline_verdict,
                     units = CASE
@@ -1184,6 +1245,11 @@ def capture_pack(
                         WHEN COALESCE(decisions.final_verdict, '') = '' THEN excluded.kill_reason
                         ELSE decisions.kill_reason
                     END,
+                    policy_fingerprint = excluded.policy_fingerprint,
+                    portfolio_mode = excluded.portfolio_mode,
+                    pre_cap_units = excluded.pre_cap_units,
+                    portfolio_units = excluded.portfolio_units,
+                    cap_reasons = excluded.cap_reasons,
                     updated_at = excluded.updated_at
                 WHERE COALESCE(decisions.final_verdict, '') = ''
                   AND NOT EXISTS (
@@ -1264,8 +1330,10 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                 INSERT INTO decisions (
                     decision_id, snapshot_id, pipeline_verdict,
                     A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
-                    units, kill_reason, news_override, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    units, kill_reason, news_override,
+                    policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(decision_id) DO UPDATE SET
                     snapshot_id = excluded.snapshot_id,
                     pipeline_verdict = excluded.pipeline_verdict,
@@ -1277,6 +1345,11 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                     units = excluded.units,
                     kill_reason = excluded.kill_reason,
                     news_override = excluded.news_override,
+                    policy_fingerprint = excluded.policy_fingerprint,
+                    portfolio_mode = excluded.portfolio_mode,
+                    pre_cap_units = excluded.pre_cap_units,
+                    portfolio_units = excluded.portfolio_units,
+                    cap_reasons = excluded.cap_reasons,
                     updated_at = excluded.updated_at
                 WHERE COALESCE(decisions.final_verdict, '') = ''
                   AND NOT EXISTS (

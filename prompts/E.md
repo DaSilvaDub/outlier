@@ -493,23 +493,13 @@ Then apply portfolio adjustment.
 
 If the pack supplies an explicit correlation or portfolio-sizing method, use it exactly.
 
-If no method is supplied, use this disclosed conservative heuristic:
-
-* 2 recommended bets in the same event: reduce their combined exposure by 20%
-* 3 or more recommended bets in the same event: reduce their combined exposure by 30%
-
-Allocate the reduction proportionally across the affected bets.
-
-Do not claim that these discounts represent measured correlation coefficients.
+`recommended_units_pre_news` is the authoritative maximum stake; qualitative news may reduce or stand down, but must never increase it.
 
 For every affected event, report:
 
 * shared `event_id`
 * participating markets
 * likely correlation direction when reasonably inferable
-* raw combined units
-* discount applied
-* correlation-adjusted combined units
 * final adjusted stake for each position
 
 # 13. PARLAY / SGP RULES

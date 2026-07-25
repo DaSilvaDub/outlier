@@ -1301,6 +1301,62 @@ def write_pack(
     opportunity_rows: list[dict[str, Any]] | None = None,
     projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
+    from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
+    import json
+    import hashlib
+
+    # Load policy (if exists, else default)
+    policy_path = paths.PROJECT_ROOT / "config" / "portfolio_risk.json"
+    portfolio_mode = "shadow"
+    policy_fingerprint = ""
+    try:
+        with open(policy_path, "r", encoding="utf-8") as f:
+            policy_data = json.load(f)
+        portfolio_mode = policy_data.get("mode", "shadow")
+        policy_fingerprint = hashlib.sha256(json.dumps(policy_data, sort_keys=True).encode()).hexdigest()
+        policy = PortfolioPolicy(
+            stake_increment=policy_data.get("stake_increment", 0.5),
+            max_wager_units=policy_data.get("max_wager_units", 3.0),
+            max_daily_units=policy_data.get("max_daily_units", 20.0),
+            max_event_units=policy_data.get("max_event_units", 4.0),
+            max_player_units=policy_data.get("max_player_units", 3.0),
+            max_team_units=policy_data.get("max_team_units", 5.0),
+            max_market_type_units=policy_data.get("max_market_type_units", 6.0),
+            max_correlated_cluster_units=policy_data.get("max_correlated_cluster_units", 5.0),
+            max_book_units=policy_data.get("max_book_units", 8.0),
+        )
+    except Exception:
+        policy = PortfolioPolicy(0.5, 3.0, 20.0, 4.0, 3.0, 5.0, 6.0, 5.0, 8.0)
+
+    alloc_result = allocate_portfolio_risk(rows, policy)
+    for row in rows:
+        wager_id = row.get("stable_wager_id") or str(row.get("market_id", ""))
+        pre_cap = float(row.get("units") or row.get("recommended_units_pre_news") or 0.0)
+        port_units = alloc_result.allocated_units.get(wager_id, 0.0)
+        reasons = alloc_result.cap_reasons.get(wager_id, [])
+        
+        row["_policy_fingerprint"] = policy_fingerprint
+        row["_portfolio_mode"] = portfolio_mode
+        row["_pre_cap_units"] = pre_cap
+        row["_portfolio_units"] = port_units
+        row["_cap_reasons"] = ";".join(reasons)
+        
+        # Track A9 requirements
+        if portfolio_mode == "enforce":
+            if not row.get("stable_wager_id"):
+                row["actionable"] = "false"
+                row["_board"] = "flagged"
+                dq = str(row.get("data_quality_flags") or "")
+                row["data_quality_flags"] = ";".join(filter(None, [dq, "missing_risk_identity"]))
+                row["recommended_units_pre_news"] = 0.0
+            else:
+                row["recommended_units_pre_news"] = port_units
+                if port_units == 0.0 and str(row.get("actionable")).lower() == "true":
+                    row["actionable"] = "false"
+                    row["_board"] = "flagged"
+                    dq = str(row.get("data_quality_flags") or "")
+                    row["data_quality_flags"] = ";".join(filter(None, [dq, "zeroed_by_portfolio_cap"]))
+
     # Validate all candidate rows against schema constraints
     for idx, row in enumerate(rows):
         row_errors = validate_candidate_row(row, CANDIDATES_HEADER)

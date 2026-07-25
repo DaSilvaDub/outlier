@@ -797,14 +797,14 @@ Explicitly identify uncorroborated X leads.
 
 ## F. CORRELATION AND PORTFOLIO RISK
 
+`recommended_units_pre_news` is the authoritative maximum stake; qualitative news may reduce or stand down, but must never increase it.
+
 For each event containing multiple final BETs, show:
 
 * `event_id`
 * affected markets
 * likely correlation direction
 * raw pre-news exposure
-* post-news exposure before correlation
-* discount method
 * final combined exposure
 
 If none:
