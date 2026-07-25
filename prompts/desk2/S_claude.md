@@ -614,17 +614,6 @@ Then apply the correlation adjustment.
 
 If the pack supplies an explicit correlation or portfolio-sizing methodology, use it exactly.
 
-## Fallback Method
-
-If no pack method exists, use:
-
-* 2 final bets in one event → reduce combined post-news exposure by 20%
-* 3 or more final bets in one event → reduce combined post-news exposure by 30%
-
-Allocate the reduction proportionally across the affected bets.
-
-These are portfolio-risk heuristics.
-
 Do not describe them as measured correlation coefficients.
 
 Report:

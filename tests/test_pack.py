@@ -2021,3 +2021,108 @@ def test_restore_published_pack_with_transient_lock(tmp_path):
         assert mock_rmtree.call_count == 2
         assert mock_replace.call_count == 2
         assert mock_sleep.call_count == 2
+
+def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
+    out_dir = tmp_path / "2026-07-25"
+    out_dir.mkdir()
+    sidecar_path = out_dir / "portfolio_risk.json"
+    sidecar_path.write_text('{"mode": "enforce"}', encoding="utf-8")
+    
+    # Mock config to be enforce
+    import json
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    policy_path = config_dir / "portfolio_risk.json"
+    policy_path.write_text("""{
+    "schema_version": "1.0",
+    "policy_version": "1.0",
+    "mode": "enforce",
+    "streams_in_scope": ["candidates", "game_totals", "team_totals"],
+    "stake_increment": 0.5,
+    "max_wager_units": 1.0,
+    "max_daily_units": 20.0,
+    "max_event_units": 4.0,
+    "max_player_units": 3.0,
+    "max_team_units": 5.0,
+    "max_market_type_units": 6.0,
+    "max_correlated_cluster_units": 5.0,
+    "max_book_units": 8.0,
+    "non_authoritative_book_policy": "flag_and_report_only",
+    "shadow_multipliers_neutral": true
+}""", encoding="utf-8")
+    
+    import outlier_scrapers.paths as P
+    original_project_root = P.PROJECT_ROOT
+    P.PROJECT_ROOT = tmp_path
+    
+    try:
+        with pytest.raises(ValueError, match="Enforce pack already exists"):
+            write_pack([], out_dir)
+    finally:
+        P.PROJECT_ROOT = original_project_root
+
+def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
+    out_dir = tmp_path / "2026-07-25"
+    out_dir.mkdir()
+    
+    import json
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    policy_path = config_dir / "portfolio_risk.json"
+    policy_path.write_text("""{
+    "schema_version": "1.0",
+    "policy_version": "1.0",
+    "mode": "enforce",
+    "streams_in_scope": ["candidates", "game_totals", "team_totals"],
+    "stake_increment": 0.5,
+    "max_wager_units": 1.0,
+    "max_daily_units": 20.0,
+    "max_event_units": 4.0,
+    "max_player_units": 3.0,
+    "max_team_units": 5.0,
+    "max_market_type_units": 6.0,
+    "max_correlated_cluster_units": 5.0,
+    "max_book_units": 8.0,
+    "non_authoritative_book_policy": "flag_and_report_only",
+    "shadow_multipliers_neutral": true
+}""", encoding="utf-8")
+    
+    import outlier_scrapers.paths as P
+    original_project_root = P.PROJECT_ROOT
+    P.PROJECT_ROOT = tmp_path
+    
+    try:
+        with pytest.raises(ValueError, match="feedback.sqlite3 not found"):
+            write_pack([], out_dir)
+            
+        # Create an empty db
+        db_dir = tmp_path / "calibration"
+        db_dir.mkdir()
+        db_path = db_dir / "feedback.sqlite3"
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE market_snapshots (captured_at TEXT)")
+            
+        with pytest.raises(ValueError, match="only 0 days of shadow history found"):
+            write_pack([], out_dir)
+            
+        # Insert 13 days
+        with sqlite3.connect(db_path) as conn:
+            for i in range(1, 14):
+                conn.execute(f"INSERT INTO market_snapshots VALUES ('2026-07-{i:02d}T12:00:00Z')")
+                
+        with pytest.raises(ValueError, match="only 13 days of shadow history found"):
+            write_pack([], out_dir)
+            
+        # Insert 14th day
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("INSERT INTO market_snapshots VALUES ('2026-07-14T12:00:00Z')")
+            
+        # Should not raise ValueError about 14 days
+        try:
+            write_pack([], out_dir)
+        except Exception as e:
+            if "shadow history" in str(e):
+                pytest.fail(f"Unexpected error: {e}")
+    finally:
+        P.PROJECT_ROOT = original_project_root

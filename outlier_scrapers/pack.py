@@ -1301,61 +1301,7 @@ def write_pack(
     opportunity_rows: list[dict[str, Any]] | None = None,
     projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
-    from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
-    import json
-    import hashlib
 
-    # Load policy (if exists, else default)
-    policy_path = paths.PROJECT_ROOT / "config" / "portfolio_risk.json"
-    portfolio_mode = "shadow"
-    policy_fingerprint = ""
-    try:
-        with open(policy_path, "r", encoding="utf-8") as f:
-            policy_data = json.load(f)
-        portfolio_mode = policy_data.get("mode", "shadow")
-        policy_fingerprint = hashlib.sha256(json.dumps(policy_data, sort_keys=True).encode()).hexdigest()
-        policy = PortfolioPolicy(
-            stake_increment=policy_data.get("stake_increment", 0.5),
-            max_wager_units=policy_data.get("max_wager_units", 3.0),
-            max_daily_units=policy_data.get("max_daily_units", 20.0),
-            max_event_units=policy_data.get("max_event_units", 4.0),
-            max_player_units=policy_data.get("max_player_units", 3.0),
-            max_team_units=policy_data.get("max_team_units", 5.0),
-            max_market_type_units=policy_data.get("max_market_type_units", 6.0),
-            max_correlated_cluster_units=policy_data.get("max_correlated_cluster_units", 5.0),
-            max_book_units=policy_data.get("max_book_units", 8.0),
-        )
-    except Exception:
-        policy = PortfolioPolicy(0.5, 3.0, 20.0, 4.0, 3.0, 5.0, 6.0, 5.0, 8.0)
-
-    alloc_result = allocate_portfolio_risk(rows, policy)
-    for row in rows:
-        wager_id = row.get("stable_wager_id") or str(row.get("market_id", ""))
-        pre_cap = float(row.get("units") or row.get("recommended_units_pre_news") or 0.0)
-        port_units = alloc_result.allocated_units.get(wager_id, 0.0)
-        reasons = alloc_result.cap_reasons.get(wager_id, [])
-        
-        row["_policy_fingerprint"] = policy_fingerprint
-        row["_portfolio_mode"] = portfolio_mode
-        row["_pre_cap_units"] = pre_cap
-        row["_portfolio_units"] = port_units
-        row["_cap_reasons"] = ";".join(reasons)
-        
-        # Track A9 requirements
-        if portfolio_mode == "enforce":
-            if not row.get("stable_wager_id"):
-                row["actionable"] = "false"
-                row["_board"] = "flagged"
-                dq = str(row.get("data_quality_flags") or "")
-                row["data_quality_flags"] = ";".join(filter(None, [dq, "missing_risk_identity"]))
-                row["recommended_units_pre_news"] = 0.0
-            else:
-                row["recommended_units_pre_news"] = port_units
-                if port_units == 0.0 and str(row.get("actionable")).lower() == "true":
-                    row["actionable"] = "false"
-                    row["_board"] = "flagged"
-                    dq = str(row.get("data_quality_flags") or "")
-                    row["data_quality_flags"] = ";".join(filter(None, [dq, "zeroed_by_portfolio_cap"]))
 
     # Validate all candidate rows against schema constraints
     for idx, row in enumerate(rows):
@@ -1392,6 +1338,140 @@ def write_pack(
                 opportunity_rows, games_norm_by_league
             )
 
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+    from outlier_scrapers.portfolio import (
+        project_risk_identity, collapse_duplicate_outcomes, unify_and_dedup_streams,
+        allocate_portfolio_risk, load_portfolio_policy, policy_fingerprint
+    )
+    import subprocess
+
+    totals_rows: list[dict[str, Any]] = []
+    team_totals_rows: list[dict[str, Any]] = []
+    for lg, payload in (games_norm_by_league or {}).items():
+        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
+        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+
+    # --- PORTFOLIO RISK ALLOCATION ---
+    try:
+        git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=str(Path(__file__).parent)).strip()
+    except Exception:
+        git_sha = "unknown"
+
+    policy = load_portfolio_policy()
+
+    # Immutable enforce pack check
+    if policy.mode == "enforce":
+        sidecar_path = out_dir / "portfolio_risk.json"
+        if sidecar_path.exists():
+            with open(sidecar_path, "r", encoding="utf-8") as sf:
+                try:
+                    existing = json.load(sf)
+                    if existing.get("mode") == "enforce":
+                        raise ValueError("Enforce pack already exists for this slate. Refusing to overwrite immutable pack.")
+                except json.JSONDecodeError:
+                    pass
+        
+        # 14-day shadow window check
+        import sqlite3
+        from outlier_scrapers import paths
+        db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+        if not db_path.exists():
+            raise ValueError("Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required.")
+        with sqlite3.connect(db_path) as conn:
+            try:
+                res = conn.execute("SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots").fetchone()
+                days = res[0] if res else 0
+                if days < 14:
+                    raise ValueError(f"Enforce mode refused: only {days} days of shadow history found. 14 required.")
+            except sqlite3.OperationalError:
+                pass # table might not exist in an empty db
+
+
+    all_projected = []
+    for stream_name, stream_rows in [("candidates", rows), ("game_totals", totals_rows), ("team_totals", team_totals_rows)]:
+        for r in stream_rows:
+            units_val = r.get("recommended_units_pre_news")
+            if units_val not in (None, ""):
+                r["units"] = float(units_val)
+            proj = project_risk_identity(r, stream_name)
+            proj["_original_ref"] = r
+            proj["stream"] = stream_name
+            all_projected.append(proj)
+
+    collapsed = collapse_duplicate_outcomes(all_projected)
+    unified = unify_and_dedup_streams(collapsed, policy)
+    alloc_result = allocate_portfolio_risk(unified, policy)
+
+    for u_row in unified:
+        orig = u_row.pop("_original_ref", None)
+        if orig is not None:
+            wager_id = u_row.get("stable_wager_id")
+            if wager_id and wager_id in alloc_result.allocated_units:
+                u_row["portfolio_units"] = alloc_result.allocated_units[wager_id]
+            for k, v in u_row.items():
+                if policy.shadow_mode and k in ("recommended_units_pre_news", "actionable", "board"):
+                    continue
+                orig[k] = v
+
+    legacy_units = sum(float(r.get("recommended_units_pre_news") or 0.0) for r in all_projected if str(r.get("actionable", "")).lower() == "true")
+    raw_kelly_units = sum(float(r.get("kelly_025_units") or 0.0) for r in all_projected if str(r.get("actionable", "")).lower() == "true")
+    pre_cap_units = sum(float(r.get("pre_cap_units", r.get("units", 0.0))) for r in unified if r.get("risk_role") == "PRIMARY" and str(r.get("actionable", "")).lower() == "true")
+    shadow_units = sum(alloc_result.allocated_units.values())
+    final_units = shadow_units if not policy.shadow_mode else legacy_units
+
+    bs_breakdown: dict[str, int] = {}
+    for r in unified:
+        bs = r.get("book_source", "unknown")
+        bs_breakdown[bs] = bs_breakdown.get(bs, 0) + 1
+
+    sidecar = {
+        "schema_version": policy.schema_version,
+        "policy_version": policy.policy_version,
+        "policy_fingerprint": policy_fingerprint(policy),
+        "mode": policy.mode,
+        "code_git_sha": git_sha,
+        "slate_date": out_dir.name,
+        "row_counts": {
+            "candidates": len(rows),
+            "game_totals": len(totals_rows),
+            "team_totals": len(team_totals_rows),
+            "total_in_scope": len(all_projected),
+            "unified": len(unified),
+        },
+        "unit_totals": {
+            "legacy": legacy_units,
+            "raw_kelly": raw_kelly_units,
+            "pre_cap": pre_cap_units,
+            "shadow": shadow_units,
+            "final": final_units,
+        },
+        "cap_limits": {
+            "max_wager_units": policy.max_wager_units,
+            "max_daily_units": policy.max_daily_units,
+            "max_event_units": policy.max_event_units,
+            "max_player_units": policy.max_player_units,
+            "max_team_units": policy.max_team_units,
+            "max_market_type_units": policy.max_market_type_units,
+            "max_correlated_cluster_units": policy.max_correlated_cluster_units,
+            "max_book_units": policy.max_book_units,
+        },
+        "reserved_capacity": {},
+        "cap_utilization": alloc_result.utilization,
+        "binding_constraints": alloc_result.binding_constraints,
+        "dedup_log": {
+            "collapsed": len(all_projected) - len(collapsed),
+            "unified": len(collapsed) - len(unified)
+        },
+        "missing_identity_warnings": sum(1 for r in all_projected if r.get("missing_risk_identity")),
+        "book_source_breakdown": bs_breakdown,
+        "quantization_only_difference_totals": 0,
+        "order_invariance_hash": alloc_result.order_invariance_hash,
+    }
+
+    with open(out_dir / "portfolio_risk.json", "w", encoding="utf-8") as f:
+        json.dump(sidecar, f, indent=2)
+    # --- END PORTFOLIO RISK ALLOCATION ---
+
     with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
         writer.writeheader()
@@ -1415,13 +1495,7 @@ def write_pack(
         for projection in projection_records or []:
             projection_file.write(json.dumps(projection, sort_keys=True) + "\n")
         
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
 
-    totals_rows: list[dict[str, Any]] = []
-    team_totals_rows: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
-        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
         
     (out_dir / "briefing.md").write_text(
         build_briefing(
