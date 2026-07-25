@@ -24,6 +24,31 @@
 
 This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prompt block), `CLAUDE.md`, `GROK.md`, and the desk skill. Keep them in sync when changing the rule.
 
+### Mechanical enforcement (Claude Code) — and how to legitimately run the desk
+
+For the Claude ent this rule is no longer prose-only. `.claude/settings.json` registers a
+`PreToolUse` hook on `Bash|PowerShell` — [`.claude/hooks/block-reasoning.ps1`](.claude/hooks/block-reasoning.ps1) —
+that **denies** the commands listed above instead of merely warning. It supersedes the old
+`.claude/hookify.no-reasoning-unless-asked.local.md`, which was `action: warn` and was matched by
+`.gitignore`'s `.claude/*.local.md`, so it protected exactly one machine and no fresh clone.
+
+**When the user HAS explicitly asked this turn, append the token `DESK_OK` to the command:**
+
+```powershell
+python -m outlier_scrapers.run_desk   # DESK_OK
+```
+
+Without that token the command is refused, so do not silently retry a blocked desk command —
+either the user asked (add the token) or they did not (do something offline instead, or ask).
+Every block and every bypass is appended to `~/.claude/reasoning-guard.log`, so an
+unexplained bypass is auditable after the fact.
+
+A second hook, [`.claude/hooks/check-sync.ps1`](.claude/hooks/check-sync.ps1), runs on
+`SessionStart` and verifies sync state **read-only** (no fetch-reset, no `-SyncAllWorktrees`).
+It does not replace STEP 0 below — it tells you when STEP 0 is needed, and in particular it
+catches being launched from a directory git cannot read, where a sync silently no-ops while
+still printing a `MATCH` line. See [`.claude/hooks/README.md`](.claude/hooks/README.md).
+
 d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pack.py + daily_job.py, player_id/CANDIDATES_HEADER etc) only existed in one stray full clone at one time. It was invisible on GitHub, other branches, .codex worktrees, and .gemini worktrees until explicitly materialized (88083ff) and bootstrapped. Similar-titled commits (d756cb4/4eea080) touched different files (c_research/run_desk) and are not the pack upgrade. We never want "commit not found in my tree" again no matter the ent.
 
 ## STEP 0 — ABSOLUTE FIRST ACTION (before any read, log, plan, or edit)
