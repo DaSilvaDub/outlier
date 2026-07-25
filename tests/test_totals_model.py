@@ -389,3 +389,12 @@ def test_write_pack_backfills_over_total_opportunities(tmp_path):
     assert out["edge_pct"] != ""
     assert out["model_prob_source"] == SOURCE_BLEND
     assert out["independent_model_prob"] != ""
+
+
+def test_backfill_flags_totals_model_divergence():
+    # Market consensus is 50/50, but L10 hit rate is 8/10 (0.80) -> divergence >= 0.15
+    norm = _norm_by_league(_two_sided(stats=_l10_stats(10, 6)))
+    row = _opportunity_row(selection="OVER 8.5")
+    out = backfill_totals_probabilities([row], norm)
+    assert "totals_model_divergence" in out[0]["sizing_flags"]
+
