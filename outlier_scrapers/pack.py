@@ -1126,6 +1126,7 @@ DERIVED_PACK_OUTPUTS = (
     "reasoning_status.json",
     "manifest.json",
     "projections.jsonl",
+    "portfolio_risk.json",
 )
 
 FRESH_COVERAGE_WARN = 0.9
@@ -1318,6 +1319,48 @@ def write_pack(
             for err in row_errors:
                 logger.warning("Candidate row schema warning at index %d: %s", idx, err)
 
+    from outlier_scrapers.portfolio import load_portfolio_policy
+    import json
+    policy = load_portfolio_policy()
+    # Immutable enforce pack check
+    if policy.mode == "enforce":
+        sidecar_path = out_dir / "portfolio_risk.json"
+        if sidecar_path.exists():
+            with open(sidecar_path, "r", encoding="utf-8") as sf:
+                try:
+                    existing = json.load(sf)
+                    if existing.get("mode") == "enforce":
+                        raise ValueError("Enforce pack already exists for this slate. Refusing to overwrite immutable pack.")
+                except json.JSONDecodeError:
+                    pass
+
+        # 14-day shadow window check
+        import sqlite3
+        from outlier_scrapers import paths
+        db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+        if not db_path.exists():
+            raise ValueError("Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required.")
+        try:
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(decisions)")
+                columns = {row[1] for row in cursor.fetchall()}
+                if "portfolio_mode" in columns:
+                    query = """
+                        SELECT COUNT(DISTINCT SUBSTR(m.captured_at, 1, 10))
+                        FROM market_snapshots m
+                        JOIN decisions d ON m.snapshot_id = d.snapshot_id
+                        WHERE d.portfolio_mode = 'shadow'
+                    """
+                else:
+                    query = "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
+                cursor.execute(query)
+                shadow_days = cursor.fetchone()[0]
+        except Exception as e:
+            raise ValueError(f"Enforce mode refused: failed to query shadow window: {e}")
+        if shadow_days < 14:
+            raise ValueError(f"Enforce mode refused: only {shadow_days} days of shadow history found. 14 required.")
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for name in DERIVED_PACK_OUTPUTS:
         (out_dir / name).unlink(missing_ok=True)
@@ -1408,6 +1451,8 @@ def write_pack(
             wager_id = u_row.get("stable_wager_id")
             if wager_id and wager_id in alloc_result.allocated_units:
                 u_row["portfolio_units"] = alloc_result.allocated_units[wager_id]
+                if not policy.shadow_mode:
+                    u_row["recommended_units_pre_news"] = u_row["portfolio_units"]
             for k, v in u_row.items():
                 if policy.shadow_mode and k in ("recommended_units_pre_news", "actionable", "board"):
                     continue
