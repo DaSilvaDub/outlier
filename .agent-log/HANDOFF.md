@@ -162,3 +162,91 @@ git worktree add <path> -b <branch>
 - [ ] Optional: re-create needed agent worktrees from laptop canonical
 - [ ] Local WIP may still be dirty on laptop (scraper edits / sqlite / dashboard) —
       commit when ready so mirrors receive it via the next push cycle
+
+---
+
+## Track C — calibration, uncertainty, drawdown (C1–C4)
+
+**Date**: 2026-07-25  
+**Agent**: Grok  
+**Branch**: `risk-opt/c1-stake-calibration`  
+**Commit SHA**: `6061fe9`  
+**Base**: `origin/master` at `538a093` (includes B3 settlement ops, B4 portfolio replay, A0b ledger path)
+
+### Prior session context (Antigravity handoff)
+
+- B3 settlement ingestion: fixed on `risk-opt/b3-settlement-operations` → landed as `7cf4a14` on master.
+- B4 chronological portfolio replay: already on master as `89f6380`.
+- A0b authoritative ledger path: `538a093`.
+- Next work requested: **Ticket C** (full Track C: C1→C4).
+
+### What landed
+
+| Ticket | Module / surface | Status |
+|--------|------------------|--------|
+| **C1** | `outlier_scrapers/stake_calibration.py` — `fit_stake_calibration`, `resolve_stake_calibration`, artifact load/write/validate | Done (library + CLI) |
+| **C2** | Same module — `resolve_probability_uncertainty`, Wilson one-sided LB, `uncertainty_multiplier` | Done |
+| **C3** | `outlier_scrapers/drawdown.py` — `compute_drawdown_state`, tier resolution, state load/write | Done |
+| **C4** | `outlier_scrapers/learned_multipliers.py` — `apply_learned_multipliers` (shadow-neutral by default) | Done (integration hooks; pack enforce path not activated) |
+
+Supporting:
+
+- `outlier_scrapers/feedback.py`: CLI `fit-stake-calibration`, `compute-drawdown`; `settled_at` in `_joined_rows`.
+- `config/portfolio_risk.json`: force-added (normally under `config/*` gitignore) with Track C blocks disabled / shadow neutral.
+- Tests: `tests/test_stake_calibration.py`, `tests/test_drawdown.py`, `tests/test_learned_multipliers.py`.
+
+### Invariants implemented
+
+- Multipliers ∈ [0, 1]; never raise stakes above raw Kelly.
+- Calibration uses Kelly ratio, not hit-rate stake scalar.
+- Never raise calibrated probability above source for staking (better-than-predicted reported via raw factor but multiplier capped at 1.0).
+- Pushes excluded from binary fit; push mass retained for Kelly recomputation.
+- Artifacts reject future cutoffs and wrong `source_probability_column`.
+- Cold-start / missing artifact → neutral multipliers in shadow.
+- Drawdown uses settled **placed** PnL only; PROPOSED/PLACED/future rows ignored.
+- `shadow_multipliers_neutral=true` forces cal/uncertainty/drawdown multipliers to 1.0 while still computing diagnostic probabilities.
+
+### Verification
+
+```text
+pytest tests/test_stake_calibration.py tests/test_drawdown.py tests/test_learned_multipliers.py  → 23 passed
+pytest tests (full offline suite) → 560 passed
+python -m outlier_scrapers.feedback fit-stake-calibration --help  OK
+python -m outlier_scrapers.feedback compute-drawdown --help       OK
+```
+
+No paid reasoning / live desk paths run.
+
+### Explicitly NOT done (remaining gates)
+
+- [ ] Wire `apply_learned_multipliers` into pack `write_pack` / allocator pre-cap path (still shadow library only).
+- [ ] Sidecar fields for calibration/uncertainty/drawdown artifact versions in `portfolio_risk.json` pack output.
+- [ ] Activate learned multipliers (`shadow_multipliers_neutral: false` + policy enable flags) — requires sample thresholds, OOS review, product sign-off.
+- [ ] Drawdown tier thresholds product sign-off (defaults are provisional).
+- [ ] A9 enforce flip still blocked on 14-day shadow window + A0a + placed-exposure policy.
+- [ ] Branch not pushed / no PR opened yet (await user).
+
+### How to operate offline
+
+```powershell
+cd C:\Users\dasil\Dev\GitHub\outlier
+
+# Fit stake calibration from ledger (writes calibration/stake_calibration.json)
+python -m outlier_scrapers.feedback fit-stake-calibration `
+  --db calibration/feedback.sqlite3 `
+  --min-samples 30 --prior-strength 30 --confidence-level 0.80 `
+  --as-of 2026-07-25T00:00:00+00:00
+
+# Compute drawdown equity state (writes calibration/drawdown_state.json)
+python -m outlier_scrapers.feedback compute-drawdown `
+  --db calibration/feedback.sqlite3 `
+  --as-of 2026-07-25T00:00:00+00:00
+```
+
+### Next agent steps
+
+1. Open PR from `risk-opt/c1-stake-calibration` (or split C2/C3/C4 branches if desired — currently one commit for whole Track C library).
+2. Optional next coding: pack shadow integration of learned multipliers + sidecar provenance (still non-authoritative until activation).
+3. Or resume A9 enforce path once shadow window / A0a gates close.
+4. Do not enable Track C in enforce without checklist items in the final execution plan §12.
+
