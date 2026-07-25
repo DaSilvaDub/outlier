@@ -285,3 +285,40 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 5. Gate checklist §12 with evidence
 6. Only then flip `mode` to enforce
 
+---
+
+## Ticket A9 v2 review (2026-07-25) — APPROVED for shadow; do not flip yet
+
+**Agent**: Grok  
+**Walkthrough**: `C:\Users\dasil\.gemini\antigravity\brain\55b45821-bb5d-489f-b152-64131643484c\walkthrough.md`  
+**Branch**: `risk-opt/a9-enforce-v2`  
+**Commit**: `b86f947` feat: Implement Ticket A9 (Enforce Flip v2) without final flip  
+**Merge status**: **Already on `origin/master`** (master == branch tip `b86f947`). No further merge action required.
+
+### Review against prior blockers
+| Prior blocker | v2 status |
+|---------------|-----------|
+| Missing `stable_wager_id` / identity | **Fixed** — `project_risk_identity` + mapping in `write_pack` |
+| Allocator field mismatch | **Fixed** — maps `recommended_units_pre_news` → `units`, uses projected identity |
+| Immutable second enforce pack | **Fixed** — raises if enforce sidecar exists; tested |
+| 14-day shadow gate | **Fixed** — enforce refused if &lt;14 distinct snapshot days; tested |
+| S_claude 20%/30% residual | **Fixed** — fallback heuristic removed |
+| Final mode flip to enforce | **Correctly blocked** — stays `shadow` |
+
+### Verification (this review)
+- Offline suite: **562 passed**
+- `config/portfolio_risk.json` mode: **`shadow`**
+- Ledger distinct capture days: **6 / 14** (need ~8 more complete days)
+- Identity smoke: `project_risk_identity` produces `stable_wager_id` for a candidate prop
+
+### Residual follow-ups **before** flipping to enforce
+1. Register `portfolio_risk.json` in `DERIVED_PACK_OUTPUTS` (plan A7/A9: remove before regen).
+2. On enforce path, write allocated units into `recommended_units_pre_news` (currently sets `portfolio_units` only; shadow preserves legacy columns correctly).
+3. Prefer counting **shadow-mode** days (policy_mode/portfolio_mode) rather than raw snapshot days if mixed history appears.
+4. Keep accumulating consecutive complete shadow days until 14; then product re-check §12 before `mode: enforce`.
+
+### Operating guidance
+- Continue daily packs in **shadow**.
+- Do **not** edit `mode` to `enforce` until 14-day gate is green.
+- When ready: flip only `config/portfolio_risk.json` `"mode": "enforce"` after checklist re-review.
+
