@@ -250,3 +250,38 @@ python -m outlier_scrapers.feedback compute-drawdown `
 3. Or resume A9 enforce path once shadow window / A0a gates close.
 4. Do not enable Track C in enforce without checklist items in the final execution plan §12.
 
+---
+
+## Ticket A9 review (2026-07-25) — BLOCKED, not approved
+
+**Agent**: Grok  
+**Reviewed commit**: `fca9e28` Implement Ticket A9: Enforce Flip  
+**Verdict**: **DO NOT merge / do not leave enforce active**  
+**Safety fix**: PR #58 merged (`2a9dfc3`) — `config/portfolio_risk.json` mode forced back to **`shadow`**
+
+### Already on master before review
+`fca9e28` was already the tip of `origin/master` (branch `risk-opt/a9-enforce` identical). No clean PR merge path; review was of landed code.
+
+### Critical production bug
+Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidates never set that field → **all recommended units become 0.0** under mode=enforce. Allocator also requires `units` (not `recommended_units_pre_news`) and `board == "A"`.
+
+### Entry gates unmet
+- No 14-day shadow window evidence (only `packs/2026-07-07`)
+- No immutable second-enforce refusal / reserved exposure wiring
+- `prompts/desk2/S_claude.md` still has 20%/30% same-event discount
+- A0a / product cap sign-off / book policy sign-off not evidenced
+- No focused A9 tests for fail-closed identity or second pack write
+
+### Partial credit kept on master (under shadow)
+- Ledger provenance columns for policy/portfolio units
+- A/B/D/E prompt discount removed + stake-contract sentence
+- write_pack enforce hook (inert while mode=shadow)
+
+### Required before re-attempting A9
+1. A3 identity on pack rows (`stable_wager_id` etc.)
+2. Correct allocator input mapping from pack fields
+3. Placed-exposure **or** immutable single-pack + required test
+4. Finish S_claude prompt cleanup
+5. Gate checklist §12 with evidence
+6. Only then flip `mode` to enforce
+
