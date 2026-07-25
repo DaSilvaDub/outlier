@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from outlier_scrapers import paths, probability_blend
+from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
 logger = logging.getLogger(__name__)
@@ -2014,6 +2015,95 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     return output_dir
 
 
+def replay_portfolio(
+    db_conn_or_path: Path | str | sqlite3.Connection,
+    start_date: str,
+    end_date: str,
+    policy_path: Path | str,
+    as_of_strict: bool = True,
+) -> dict[str, Any]:
+    with open(policy_path, "r", encoding="utf-8") as f:
+        policy_data = json.load(f)
+        
+    policy = PortfolioPolicy(
+        stake_increment=policy_data.get("stake_increment", 0.1),
+        max_wager_units=policy_data.get("max_wager_units", 1.0),
+        max_daily_units=policy_data.get("max_daily_units", 10.0),
+        max_event_units=policy_data.get("max_event_units", 3.0),
+        max_player_units=policy_data.get("max_player_units", 1.0),
+        max_team_units=policy_data.get("max_team_units", 2.0),
+        max_market_type_units=policy_data.get("max_market_type_units", 5.0),
+        max_correlated_cluster_units=policy_data.get("max_correlated_cluster_units", 2.0),
+        max_book_units=policy_data.get("max_book_units", 5.0),
+    )
+
+    if isinstance(db_conn_or_path, (str, Path)):
+        conn = sqlite3.connect(db_conn_or_path)
+        conn.row_factory = sqlite3.Row
+        close_conn = True
+    else:
+        conn = db_conn_or_path
+        close_conn = False
+
+    try:
+        query = """
+            SELECT s.*, d.units as legacy_units, d.decision_id
+            FROM market_snapshots s
+            JOIN decisions d ON s.snapshot_id = d.snapshot_id
+            WHERE SUBSTR(s.captured_at, 1, 10) >= ? AND SUBSTR(s.captured_at, 1, 10) <= ?
+            ORDER BY s.captured_at
+        """
+        rows = conn.execute(query, (start_date, end_date)).fetchall()
+        
+        # Group by date
+        grouped_by_date = defaultdict(list)
+        for row in rows:
+            date_str = _text(row["captured_at"])[:10]
+            grouped_by_date[date_str].append(dict(row))
+            
+        summary = {}
+        for date_str, daily_rows in sorted(grouped_by_date.items()):
+            # Map for allocate_portfolio_risk
+            allocation_rows = []
+            for r in daily_rows:
+                allocation_rows.append({
+                    "stable_wager_id": r["snapshot_id"],
+                    "actionable": str(r.get("board") == "A").lower(),
+                    "board": r.get("board"),
+                    "units": r.get("legacy_units", 0.0) if as_of_strict else policy.max_wager_units,
+                    "event_id": r.get("event_id"),
+                    "player_id": r.get("player_id"),
+                    "team": None,
+                    "market_type": r.get("market_type"),
+                    "cluster_id": None,
+                    "sportsbook": r.get("book"),
+                    "edge_pct": r.get("edge", 0.0),
+                })
+                
+            result = allocate_portfolio_risk(allocation_rows, policy)
+            
+            legacy_total = sum(r.get("legacy_units") or 0.0 for r in daily_rows)
+            replayed_total = sum(result.allocated_units.values())
+            
+            summary[date_str] = {
+                "legacy_total_units": round(legacy_total, 4),
+                "replayed_total_units": round(replayed_total, 4),
+                "binding_constraints": result.binding_constraints,
+                "utilization": result.utilization,
+            }
+            
+            print(f"--- Replay Date: {date_str} ---")
+            print(f"Legacy Units: {legacy_total:.4f} | Replayed Units: {replayed_total:.4f}")
+            if result.binding_constraints:
+                print(f"Binding constraints: {', '.join(result.binding_constraints)}")
+            print()
+            
+        return summary
+    finally:
+        if close_conn:
+            conn.close()
+
+
 def write_templates(output_dir: Path) -> None:
     output_dir = Path(output_dir)
     _write_csv(output_dir / "decisions_template.csv", DECISION_FIELDS, [])
@@ -2057,6 +2147,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     template_parser.add_argument("--output", type=Path, required=True)
 
+    replay_parser = subparsers.add_parser("replay-portfolio", help="Chronological portfolio replay.")
+    replay_parser.add_argument("--from", dest="start_date", required=True, help="YYYY-MM-DD")
+    replay_parser.add_argument("--to", dest="end_date", required=True, help="YYYY-MM-DD")
+    replay_parser.add_argument("--policy", type=Path, required=True, help="Path to portfolio risk policy JSON")
+    replay_parser.add_argument("--as-of-strict", action="store_true", default=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -2095,6 +2191,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "templates":
             write_templates(args.output)
             print(args.output)
+        elif args.command == "replay-portfolio":
+            summary = replay_portfolio(
+                args.db,
+                args.start_date,
+                args.end_date,
+                args.policy,
+                as_of_strict=args.as_of_strict
+            )
+            print(json.dumps(summary, indent=2, sort_keys=True))
     except (FeedbackError, OSError, sqlite3.Error, ValueError) as exc:
         logger.error("Feedback tool failed: %s", exc)
         return 1
