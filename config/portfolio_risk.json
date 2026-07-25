@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "policy_version": "1.0",
+  "mode": "shadow",
+  "streams_in_scope": [
+    "candidates",
+    "game_totals",
+    "team_totals"
+  ],
+  "stake_increment": 0.5,
+  "max_wager_units": 3.0,
+  "max_daily_units": 20.0,
+  "max_event_units": 4.0,
+  "max_player_units": 3.0,
+  "max_team_units": 5.0,
+  "max_market_type_units": 6.0,
+  "max_correlated_cluster_units": 5.0,
+  "max_book_units": 8.0,
+  "non_authoritative_book_policy": "flag_and_report_only",
+  "shadow_multipliers_neutral": true,
+  "calibration": {
+    "enabled": false,
+    "source_probability_column": "final_blended_prob",
+    "min_samples": 30,
+    "prior_strength": 30.0,
+    "artifact_path": "calibration/stake_calibration.json"
+  },
+  "uncertainty": {
+    "enabled": false,
+    "confidence_level": 0.8,
+    "method": "wilson_one_sided"
+  },
+  "drawdown": {
+    "enabled": false,
+    "state_path": "calibration/drawdown_state.json",
+    "tiers": [
+      {"name": "neutral", "max_drawdown_pct": 0.05, "multiplier": 1.0},
+      {"name": "reduced", "max_drawdown_pct": 0.10, "multiplier": 0.7},
+      {"name": "strongly_reduced", "max_drawdown_pct": 0.15, "multiplier": 0.4},
+      {"name": "stand_down", "max_drawdown_pct": 1.0, "multiplier": 0.0}
+    ]
+  }
+}

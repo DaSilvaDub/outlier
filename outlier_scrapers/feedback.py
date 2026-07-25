@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
@@ -1486,7 +1486,7 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             SELECT
                 t.settlement_id, t.decision_id, t.actual_result, t.win_loss_push,
                 t.closing_line, t.closing_price, t.clv_line, t.clv_price,
-                t.pnl, t.would_have_result,
+                t.pnl, t.would_have_result, t.settled_at,
                 d.pipeline_verdict, d.A_verdict, d.B_verdict, d.C_verdict,
                 d.D_verdict, d.final_verdict, d.units, d.kill_reason,
                 d.news_override,
@@ -1526,6 +1526,72 @@ def fit_blend_weights(
     )
     probability_blend.write_weight_artifact(artifact, Path(output_path))
     return artifact
+
+
+def fit_stake_calibration_from_db(
+    db_path: Path = DEFAULT_DB_PATH,
+    output_path: Path = stake_calibration.DEFAULT_ARTIFACT_PATH,
+    *,
+    as_of: datetime | None = None,
+    source_probability_column: str = stake_calibration.DEFAULT_SOURCE_PROBABILITY_COLUMN,
+    min_samples: int = stake_calibration.DEFAULT_MIN_SAMPLES,
+    prior_strength: float = stake_calibration.DEFAULT_PRIOR_STRENGTH,
+    confidence_level: float = stake_calibration.DEFAULT_CONFIDENCE_LEVEL,
+    policy_fingerprint: str = "",
+) -> dict[str, Any]:
+    """Fit a stake-calibration artifact from settled ledger rows (Track C1)."""
+
+    cutoff = as_of or datetime.now(timezone.utc)
+    with _connect(Path(db_path)) as conn:
+        rows = _joined_rows(conn)
+    artifact = stake_calibration.fit_stake_calibration(
+        rows,
+        as_of=cutoff,
+        source_probability_column=source_probability_column,
+        min_samples=min_samples,
+        prior_strength=prior_strength,
+        confidence_level=confidence_level,
+        policy_fingerprint=policy_fingerprint,
+    )
+    stake_calibration.write_stake_calibration_artifact(artifact, Path(output_path))
+    return artifact
+
+
+def compute_drawdown_from_db(
+    db_path: Path = DEFAULT_DB_PATH,
+    output_path: Path = drawdown.DEFAULT_STATE_PATH,
+    *,
+    as_of: datetime | None = None,
+) -> drawdown.DrawdownState:
+    """Compute drawdown state from settled placed ledger rows (Track C3)."""
+
+    cutoff = as_of or datetime.now(timezone.utc)
+    with _connect(Path(db_path)) as conn:
+        rows = _joined_rows(conn)
+    # Treat decision units + settlement pnl as placed when settlement exists.
+    executions: list[dict[str, Any]] = []
+    for row in rows:
+        result = _text(row.get("win_loss_push")).upper()
+        if result not in {"W", "L", "PUSH"}:
+            continue
+        units = _float(row.get("units"), field="units")
+        if units is None or units <= 0:
+            continue
+        executions.append(
+            {
+                "decision_id": row.get("decision_id"),
+                "snapshot_id": row.get("snapshot_id"),
+                "execution_status": "SETTLED",
+                "settled_at": row.get("settled_at") or row.get("captured_at"),
+                "pnl": row.get("pnl"),
+                "placed_units": units,
+                "units": units,
+                "win_loss_push": result,
+            }
+        )
+    state = drawdown.compute_drawdown_state(executions, as_of=cutoff)
+    drawdown.write_drawdown_state(state, Path(output_path))
+    return state
 
 
 def _mean(values: Iterable[float | None]) -> float | None:
@@ -2137,6 +2203,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     blend_parser.add_argument("--min-samples", type=int, default=30)
     blend_parser.add_argument("--prior-strength", type=float, default=30.0)
 
+    stake_cal_parser = subparsers.add_parser(
+        "fit-stake-calibration",
+        help="Fit stake-calibration artifact from settled chronological rows (Track C1).",
+    )
+    stake_cal_parser.add_argument(
+        "--output", type=Path, default=stake_calibration.DEFAULT_ARTIFACT_PATH
+    )
+    stake_cal_parser.add_argument("--min-samples", type=int, default=30)
+    stake_cal_parser.add_argument("--prior-strength", type=float, default=30.0)
+    stake_cal_parser.add_argument("--confidence-level", type=float, default=0.80)
+    stake_cal_parser.add_argument(
+        "--source-column",
+        default=stake_calibration.DEFAULT_SOURCE_PROBABILITY_COLUMN,
+        help="Probability column that drove historical recommendations.",
+    )
+    stake_cal_parser.add_argument(
+        "--as-of",
+        default=None,
+        help="ISO timestamp training cutoff (default: now UTC).",
+    )
+
+    drawdown_parser = subparsers.add_parser(
+        "compute-drawdown",
+        help="Compute drawdown equity state from settled placed wagers (Track C3).",
+    )
+    drawdown_parser.add_argument(
+        "--output", type=Path, default=drawdown.DEFAULT_STATE_PATH
+    )
+    drawdown_parser.add_argument(
+        "--as-of",
+        default=None,
+        help="ISO timestamp equity cutoff (default: now UTC).",
+    )
+
     export_parser = subparsers.add_parser("export", help="Export the three permanent ledgers.")
     export_parser.add_argument("--output", type=Path, required=True)
 
@@ -2184,6 +2284,48 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+        elif args.command == "fit-stake-calibration":
+            as_of = None
+            if args.as_of:
+                as_of_text = args.as_of
+                if as_of_text.endswith("Z"):
+                    as_of_text = f"{as_of_text[:-1]}+00:00"
+                as_of = datetime.fromisoformat(as_of_text)
+                if as_of.tzinfo is None:
+                    as_of = as_of.replace(tzinfo=timezone.utc)
+            artifact = fit_stake_calibration_from_db(
+                args.db,
+                args.output,
+                as_of=as_of,
+                source_probability_column=args.source_column,
+                min_samples=args.min_samples,
+                prior_strength=args.prior_strength,
+                confidence_level=args.confidence_level,
+            )
+            print(
+                json.dumps(
+                    {
+                        "output": str(args.output),
+                        "status": artifact["status"],
+                        "artifact_version": artifact["artifact_version"],
+                        "eligible_samples": artifact["eligible_samples"],
+                        "source_probability_column": artifact["source_probability_column"],
+                        "training_cutoff": artifact["training_cutoff"],
+                    },
+                    sort_keys=True,
+                )
+            )
+        elif args.command == "compute-drawdown":
+            as_of = None
+            if args.as_of:
+                as_of_text = args.as_of
+                if as_of_text.endswith("Z"):
+                    as_of_text = f"{as_of_text[:-1]}+00:00"
+                as_of = datetime.fromisoformat(as_of_text)
+                if as_of.tzinfo is None:
+                    as_of = as_of.replace(tzinfo=timezone.utc)
+            state = compute_drawdown_from_db(args.db, args.output, as_of=as_of)
+            print(json.dumps(state.to_dict(), sort_keys=True))
         elif args.command == "export":
             print(json.dumps(export_ledgers(args.db, args.output), sort_keys=True))
         elif args.command == "templates":
