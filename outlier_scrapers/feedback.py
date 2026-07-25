@@ -1331,110 +1331,121 @@ def _computed_pnl(result: str, units: float, decimal_price: float | None, *, pla
     return units * (decimal_price - 1.0)
 
 
-def _resolve_settlement_decision(
-    conn: sqlite3.Connection, row: dict[str, Any], row_number: int, input_path: Path
-) -> sqlite3.Row | None:
-    decision_id = _text(row.get("decision_id"))
-    snapshot_id = _text(row.get("snapshot_id"))
-    outcome_id = _text(row.get("outcome_id"))
-    if decision_id:
-        match = conn.execute(SETTLEMENT_DECISION_SELECT_SQL, (decision_id,)).fetchone()
-        if match is None:
-            raise FeedbackError(
-                f"{input_path}:{row_number} references unknown decision_id {decision_id!r}"
-            )
-        return match
-    if snapshot_id:
-        matches = conn.execute(SETTLEMENT_SNAPSHOT_SELECT_SQL, (snapshot_id,)).fetchall()
-        if not matches:
-            raise FeedbackError(
-                f"{input_path}:{row_number} references unknown snapshot_id {snapshot_id!r}"
-            )
-    else:
-        event_id = _text(row.get("event_id"))
-        market_id = _text(row.get("market_id"))
-        if outcome_id:
-            matches = conn.execute(
-                SETTLEMENT_OUTCOME_SELECT_SQL, (event_id, market_id, outcome_id)
-            ).fetchall()
-        else:
-            matches = conn.execute(SETTLEMENT_MARKET_SELECT_SQL, (event_id, market_id)).fetchall()
-    if len(matches) > 1:
-        raise FeedbackError(
-            f"{input_path}:{row_number} matches {len(matches)} decisions; add decision_id, "
-            "snapshot_id, or outcome_id to disambiguate alternate lines"
-        )
-    return matches[0] if matches else None
-
-
-def _validate_settlement_identity(
-    matched: sqlite3.Row, row: dict[str, Any], row_number: int, input_path: Path
-) -> None:
-    for field in ("snapshot_id", "event_id", "market_id", "outcome_id"):
-        supplied = _text(row.get(field))
-        expected = _text(matched[field])
-        if supplied and supplied != expected:
-            raise FeedbackError(
-                f"{input_path}:{row_number} {field}={supplied!r} contradicts "
-                f"the resolved decision snapshot ({expected!r})"
-            )
-
-
-def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> ImportStats:
-    input_path = Path(input_path)
-    rows = _read_csv(input_path, SETTLEMENT_REQUIRED_FIELDS)
+def import_settlements(
+    db_path_or_conn: Path | str | sqlite3.Connection,
+    settlement_data: list[dict[str, Any]],
+) -> dict[str, int]:
     now = _utc_now()
-    unlinked = 0
-    with _connect(Path(db_path)) as conn:
-        for row_number, row in enumerate(rows, start=2):
-            result = _normal_result(row.get("win_loss_push"))
-            matched = _resolve_settlement_decision(conn, row, row_number, input_path)
-            if matched is None:
-                unlinked += 1
+    summary = {
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 0,
+    }
+    connection_context = (
+        nullcontext(db_path_or_conn)
+        if isinstance(db_path_or_conn, sqlite3.Connection)
+        else _connect(Path(db_path_or_conn))
+    )
+    with connection_context as conn:
+        for row in settlement_data:
+            result = _normal_result(row.get("win_loss_push") or "")
+
+            decision_id = _text(row.get("decision_id"))
+            snapshot_id = _text(row.get("snapshot_id"))
+            outcome_id = _text(row.get("outcome_id"))
+            
+            sport = _text(row.get("sport"))
+            event_id = _text(row.get("event_id"))
+            market_id = _text(row.get("market_id")) or _text(row.get("market_family"))
+            player_id = _text(row.get("player_id")) or _text(row.get("subject_id"))
+            line = _text(row.get("line"))
+            book = _text(row.get("book"))
+            
+            # Robust matching logic
+            matches = []
+            if decision_id:
+                matches = conn.execute(SETTLEMENT_DECISION_SELECT_SQL, (decision_id,)).fetchall()
+            elif snapshot_id:
+                matches = conn.execute(SETTLEMENT_SNAPSHOT_SELECT_SQL, (snapshot_id,)).fetchall()
             else:
-                _validate_settlement_identity(matched, row, row_number, input_path)
-            decision_id = _text(row.get("decision_id")) or (
-                _text(matched["decision_id"]) if matched else ""
+                # Match by durable identity
+                query = """
+                    SELECT d.*, s.event_id, s.market_id, s.outcome_id, s.selection, s.line,
+                           s.decimal_price, s.sport, s.player_id, s.book
+                    FROM decisions d
+                    JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+                    WHERE COALESCE(s.sport, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.sport, '') END
+                      AND s.event_id = ? AND s.market_id = ? 
+                      AND COALESCE(s.player_id, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.player_id, '') END
+                      AND COALESCE(s.line, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.line, '') END
+                      AND COALESCE(s.book, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.book, '') END
+                """
+                matches = conn.execute(
+                    query, 
+                    (sport, sport, event_id, market_id, player_id, player_id, line, line, book, book)
+                ).fetchall()
+
+            if not matches:
+                summary["unmatched_count"] += 1
+                continue
+            elif len(matches) > 1:
+                summary["ambiguous_count"] += 1
+                continue
+            
+            matched = matches[0]
+
+            matched_decision_id = _text(matched["decision_id"])
+            matched_snapshot_id = _text(matched["snapshot_id"])
+            matched_outcome_id = _text(matched["outcome_id"])
+            matched_event_id = _text(matched["event_id"])
+            matched_market_id = _text(matched["market_id"])
+
+            # Validate that provided row identity does not contradict matched identity
+            contradicts = False
+            if event_id and event_id != matched_event_id:
+                contradicts = True
+            if market_id and market_id != matched_market_id:
+                contradicts = True
+            if outcome_id and outcome_id != matched_outcome_id:
+                contradicts = True
+            
+            if contradicts:
+                summary["unmatched_count"] += 1
+                continue
+
+            settlement_id = _text(row.get("settlement_id")) or _stable_id(
+                "settlement",
+                matched_decision_id or matched_snapshot_id or (matched_event_id, matched_market_id, matched_outcome_id),
             )
-            snapshot_id = _text(row.get("snapshot_id")) or (
-                _text(matched["snapshot_id"]) if matched else ""
-            )
-            outcome_id = _text(row.get("outcome_id")) or (
-                _text(matched["outcome_id"]) if matched else ""
-            )
-            event_id = _text(matched["event_id"]) if matched else _text(row.get("event_id"))
-            market_id = _text(matched["market_id"]) if matched else _text(row.get("market_id"))
-            if not event_id or not market_id:
-                raise FeedbackError(f"{input_path}:{row_number} needs event_id and market_id")
+
+            # Idempotent re-import check
+            existing = conn.execute("SELECT 1 FROM settlements WHERE settlement_id = ?", (settlement_id,)).fetchone()
+            if existing:
+                summary["duplicate_count"] += 1
+                continue
 
             clv_line = _float(row.get("clv_line"), field="clv_line")
             clv_price = _float(row.get("clv_price"), field="clv_price")
             pnl = _float(row.get("pnl"), field="pnl")
             closing_line = _text(row.get("closing_line"))
             closing_price = _float(row.get("closing_price"), field="closing_price")
-            if matched is not None:
-                if clv_line is None:
-                    clv_line = compute_clv_line(
-                        _text(matched["selection"]), matched["line"], closing_line
-                    )
-                if clv_price is None:
-                    clv_price = compute_clv_price(matched["decimal_price"], closing_price)
-                if pnl is None:
-                    units = _float(matched["units"], field="units") or 0.0
-                    pnl = _computed_pnl(
-                        result,
-                        units,
-                        _float(matched["decimal_price"], field="decimal_price"),
-                        play=_is_play(matched["final_verdict"], matched["pipeline_verdict"], units),
-                    )
+            
+            if clv_line is None:
+                clv_line = compute_clv_line(_text(matched["selection"]), matched["line"], closing_line)
+            if clv_price is None:
+                clv_price = compute_clv_price(matched["decimal_price"], closing_price)
+            if pnl is None:
+                units = _float(matched["units"], field="units") or 0.0
+                pnl = _computed_pnl(
+                    result,
+                    units,
+                    _float(matched["decimal_price"], field="decimal_price"),
+                    play=_is_play(matched["final_verdict"], matched["pipeline_verdict"], units),
+                )
 
-            would_have = _normal_result(
-                row.get("would_have_result") or result, field="would_have_result"
-            )
-            settlement_id = _text(row.get("settlement_id")) or _stable_id(
-                "settlement",
-                decision_id or snapshot_id or (event_id, market_id, outcome_id),
-            )
+            would_have = _normal_result(row.get("would_have_result") or result, field="would_have_result")
+
             conn.execute(
                 """
                 INSERT INTO settlements (
@@ -1443,29 +1454,14 @@ def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Imp
                     closing_line, closing_price, clv_line, clv_price, pnl,
                     would_have_result, settled_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(settlement_id) DO UPDATE SET
-                    decision_id = excluded.decision_id,
-                    snapshot_id = excluded.snapshot_id,
-                    outcome_id = excluded.outcome_id,
-                    event_id = excluded.event_id,
-                    market_id = excluded.market_id,
-                    actual_result = excluded.actual_result,
-                    win_loss_push = excluded.win_loss_push,
-                    closing_line = excluded.closing_line,
-                    closing_price = excluded.closing_price,
-                    clv_line = excluded.clv_line,
-                    clv_price = excluded.clv_price,
-                    pnl = excluded.pnl,
-                    would_have_result = excluded.would_have_result,
-                    settled_at = excluded.settled_at
                 """,
                 (
                     settlement_id,
-                    decision_id or None,
-                    snapshot_id or None,
-                    outcome_id,
-                    event_id,
-                    market_id,
+                    matched_decision_id or None,
+                    matched_snapshot_id or None,
+                    matched_outcome_id,
+                    matched_event_id,
+                    matched_market_id,
                     _text(row.get("actual_result")),
                     result,
                     closing_line,
@@ -1477,7 +1473,9 @@ def import_settlements(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Imp
                     now,
                 ),
             )
-    return ImportStats(imported=len(rows), unlinked=unlinked)
+            summary["updated_count"] += 1
+            
+    return summary
 
 
 def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:

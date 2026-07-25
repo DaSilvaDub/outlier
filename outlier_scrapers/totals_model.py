@@ -206,12 +206,14 @@ def backfill_totals_probabilities(
         row["market_consensus_prob"] = consensus
         row["final_blended_prob"] = model_prob
         row["model_prob_source"] = SOURCE_BLEND if used_l10 else SOURCE_DEVIG
+        extra_flags = [FLAG_MODEL]
         if used_l10:
             l10 = entry["l10_over"]
             l10_side = l10["pct"] if side == "OVER" else 1.0 - l10["pct"]
             row["independent_model_prob"] = l10_side * no_push_factor
+            if abs(p_side_market - l10_side) >= 0.1499:
+                extra_flags.append("totals_model_divergence")
 
-        extra_flags = [FLAG_MODEL]
         if int(entry.get("book_count") or 0) < 2:
             extra_flags.append(FLAG_SINGLE_BOOK)
 

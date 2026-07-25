@@ -798,8 +798,8 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     )
     settlement_input = tmp_path / "settlements.csv"
     _write_csv(settlement_input, feedback.SETTLEMENT_FIELDS, [settlement])
-    stats = feedback.import_settlements(settlement_input, db_path)
-    assert stats == feedback.ImportStats(imported=1, unlinked=0)
+    stats = feedback.import_settlements(db_path, [settlement])
+    assert stats == {"unmatched_count": 0, "ambiguous_count": 0, "duplicate_count": 0, "updated_count": 1}
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
@@ -866,8 +866,8 @@ def test_settlement_requires_identifier_when_alt_lines_are_ambiguous(tmp_path):
     settlement_input = tmp_path / "ambiguous.csv"
     _write_csv(settlement_input, feedback.SETTLEMENT_FIELDS, [settlement])
 
-    with pytest.raises(feedback.FeedbackError, match="matches 2 decisions"):
-        feedback.import_settlements(settlement_input, db_path)
+    stats = feedback.import_settlements(db_path, [settlement])
+    assert stats["ambiguous_count"] == 1
 
 
 def test_settlement_rejects_identity_that_contradicts_decision(tmp_path):
@@ -891,8 +891,8 @@ def test_settlement_rejects_identity_that_contradicts_decision(tmp_path):
     input_path = tmp_path / "contradictory.csv"
     _write_csv(input_path, feedback.SETTLEMENT_FIELDS, [settlement])
 
-    with pytest.raises(feedback.FeedbackError, match="contradicts"):
-        feedback.import_settlements(input_path, db_path)
+    stats = feedback.import_settlements(db_path, [settlement])
+    assert stats["unmatched_count"] == 1
 
 
 @pytest.mark.parametrize(
