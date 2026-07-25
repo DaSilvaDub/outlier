@@ -99,6 +99,11 @@ bootstrap + `-SyncAllWorktrees` before it will inspect anything, which hard-alig
 `ai-runners` full clone. Running that automatically at every session start could overwrite
 another ent's uncommitted work with no human in the loop. So it checks and reports instead:
 
+0. **Relevance gate.** Because this hook is also registered at user scope it fires in every
+   project. It exits silently unless the session plausibly concerns outlier — cwd path matches
+   `outlier` (which still catches the OneDrive mirror, whose `.git` is unreadable) or the
+   checkout's `origin` is the outlier remote. Without this, unrelated sessions would each pay
+   for a network fetch.
 1. Is the session's cwd a git checkout of the outlier remote? (catches the OneDrive trap)
 2. `git fetch origin` — remote-tracking refs only — then canonical branch / HEAD / `origin/master`
 3. Is canonical *behind* `origin/master`? (ahead is normal on a feature branch)

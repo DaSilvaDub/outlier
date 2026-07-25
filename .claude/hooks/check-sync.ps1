@@ -64,6 +64,20 @@ function Invoke-Git {
 try {
     $cwd = (Get-Location).Path
 
+    # ---- 0. Relevance gate --------------------------------------------------
+    # This hook is also registered at user scope (~/.claude/settings.json) so it
+    # fires regardless of cwd -- including in projects that have nothing to do
+    # with outlier. Without this gate every unrelated session would pay for a
+    # network fetch against the outlier remote. Exit silently unless this session
+    # plausibly concerns outlier: either the path says so (covers the OneDrive
+    # mirror, whose .git git cannot read) or the checkout's remote says so.
+    $looksOutlier = $cwd -match '(?i)outlier'
+    if (-not $looksOutlier) {
+        $probeRemote = Invoke-Git -RepoPath $cwd -GitArgs @('remote', 'get-url', 'origin')
+        if ($probeRemote -match $OriginRegex) { $looksOutlier = $true }
+    }
+    if (-not $looksOutlier) { exit 0 }
+
     # ---- 1. Is the session's own directory a usable outlier checkout? --------
     $cwdRoot   = Invoke-Git -RepoPath $cwd -GitArgs @('rev-parse', '--show-toplevel')
     $cwdRemote = Invoke-Git -RepoPath $cwd -GitArgs @('remote', 'get-url', 'origin')
@@ -100,7 +114,14 @@ try {
                 if ($behind -gt 0) {
                     $problems.Add("Canonical HEAD is $behind commit(s) BEHIND origin/master.")
                 } elseif ($ahead -gt 0) {
-                    $findings.Add("canonical is $ahead commit(s) ahead of origin/master (expected on a feature branch).")
+                    if ($branch -eq 'master') {
+                        # Ahead on master means unpushed commits on the trunk itself.
+                        # AGENTS.md reserves direct-to-master for coordination files,
+                        # so this is worth surfacing rather than waving through.
+                        $findings.Add("canonical master has $ahead UNPUSHED commit(s) vs origin/master - confirm they are coordination-file-only per AGENTS.md, and push them.")
+                    } else {
+                        $findings.Add("canonical is $ahead commit(s) ahead of origin/master (normal on feature branch '$branch').")
+                    }
                 } else {
                     $findings.Add('canonical matches origin/master.')
                 }
