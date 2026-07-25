@@ -831,10 +831,17 @@ def build_row(
         row["recommended_units_pre_news"] = ""
     model_p = _to_float(row.get("model_prob"))
     dec_price = _to_float(row.get("decimal_price"))
-    if model_p is not None and model_p <= 0.525 and dec_price is not None and dec_price >= 2.0:
+    if (
+        model_p is not None
+        and model_p <= 0.525
+        and dec_price is not None
+        and dec_price >= 2.0
+        and str(row.get("model_prob_source") or "").lower() == "proxy_market_devig"
+    ):
         existing_flags = str(row.get("sizing_flags") or "")
         if "plus_money_speculative_edge" not in existing_flags:
             row["sizing_flags"] = f"{existing_flags};plus_money_speculative_edge".strip(";")
+
 
     disqualifying = (
         not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
