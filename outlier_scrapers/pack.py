@@ -133,8 +133,16 @@ DISQUALIFYING_DQ_FLAGS = {
     "movement_line_mismatch",
     "implausible_line",
     "non_numeric_line",
+    "ev_line_fallback",
+    "edge_suspect_stale_line",
+    "edge_suspect_thin_liquidity",
+    "SOURCE_INTEGRITY_FLAG",
+    "LOCKED_OR_UNVERIFIED_EVENT",
+    "SIDE_RESOLUTION_CONFLICT",
+    "UNINDEXED_SLATE_GAME",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
+
 
 def american_to_decimal(american: float | int | str | None) -> float | None:
     if american is None or american == "":
@@ -813,19 +821,42 @@ def build_row(
     ):
         dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
-    # Any single disqualifying flag (line/market proven or presumed corrupt)
-    # withholds the stake on its own — no second flag needed, unlike the
-    # stale-line gate above. edge_pct stays visible; the number just can't be
-    # trusted enough to size (2026-07-13 LAS @ ATL shipped units=1.5 on a
-    # spread_sign_conflict row before this gate existed).
-    if row.get("recommended_units_pre_news") not in ("", None) and (
+    edge_pct_val = _to_float(row.get("edge_pct"))
+    if (
+        edge_pct_val is not None
+        and edge_pct_val <= 0.035
+        and "thin_liquidity" in dq_flags
+    ):
+        dq_flags.append("edge_suspect_thin_liquidity")
+        row["recommended_units_pre_news"] = ""
+    model_p = _to_float(row.get("model_prob"))
+    dec_price = _to_float(row.get("decimal_price"))
+    if model_p is not None and model_p <= 0.525 and dec_price is not None and dec_price >= 2.0:
+        existing_flags = str(row.get("sizing_flags") or "")
+        if "plus_money_speculative_edge" not in existing_flags:
+            row["sizing_flags"] = f"{existing_flags};plus_money_speculative_edge".strip(";")
+
+    disqualifying = (
         not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
         or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
-    ):
+        or any(f == "ev_line_fallback" or f.startswith("ev_line_fallback:") for f in dq_flags)
+    )
+    if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
+
     units = _to_float(row.get("recommended_units_pre_news"))
-    row["actionable"] = "true" if card.get("board") == "A" and units is not None and units > 0 else "false"
+    is_actionable = (
+        card.get("board") == "A"
+        and units is not None
+        and units > 0
+        and edge_pct_val is not None
+        and edge_pct_val > 0
+        and not disqualifying
+        and not dq_flags
+    )
+    row["actionable"] = "true" if is_actionable else "false"
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
+
 
     signal = side_view.get("signal") or {}
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
@@ -1058,18 +1089,16 @@ ROLE_BLOCK = [
     "- If a row has priced_line set (or a data_quality_flags entry like"
     " ev_line_fallback:priced_at=…), the EV/price were derived at priced_line, not the shown"
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
-    "- data_quality_flags may also carry cross_sport_market:<LEAGUE> (the market belongs to"
-    " another sport — treat the row as a data artifact and stand it down), implausible_line /"
-    " non_numeric_line (the line is likely corrupt — verify before quoting), or"
-    " spread_sign_conflict (the market's two sides did not price as mirror-image lines —"
-    " treat the line as corrupt and stand the market down), or movement_line_mismatch"
-    " (the card line disagrees with line_now — stand the market down).",
-    "- edge_suspect_stale_line means reverse movement plus thin liquidity invalidated EV"
-    " eligibility. The row is retained for audit only and actionable=false.",
+    "- data_quality_flags may also carry cross_sport_market:<LEAGUE>, implausible_line,"
+    " non_numeric_line, spread_sign_conflict, movement_line_mismatch,"
+    " edge_suspect_stale_line, edge_suspect_thin_liquidity, SOURCE_INTEGRITY_FLAG,"
+    " SIDE_RESOLUTION_CONFLICT, or UNINDEXED_SLATE_GAME — treat any such row as a"
+    " data artifact with actionable=false and verdict PASS / STAND-DOWN.",
     "- model_prob_source distinguishes Outlier EV devig from proxy_market_devig. The proxy"
     " source fills probability/edge/Kelly for auditability but is market-implied context,"
-    " not an independent predictive model, cannot satisfy a 75% true-hit SGP gate, and"
-    " never makes a signal-only row actionable.",
+    " NOT an independent predictive model confirmation. Reasoning models MUST NOT double-count"
+    " proxy market devigs as independent corroboration of an EV play.",
+
     "- Spread / run line / puck line rows already carry an explicit sign (e.g. '+1.5' or"
     " '-1.5' in the line and selection) — never re-derive or flip it from model_prob or"
     " the favorite/underdog assumption. model_prob on these rows is the probability that"

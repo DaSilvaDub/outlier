@@ -531,6 +531,8 @@ def build_totals(
             flags.append("LOCKED_OR_UNVERIFIED_EVENT")
         if identity.get("is_active") is False:
             flags.append("MARKET_INACTIVE")
+        if not cand or not cand.get("market_id"):
+            flags.append("UNINDEXED_SLATE_GAME")
         if cand.get("data_quality_flags"):
             flags.append("SOURCE_INTEGRITY_FLAG")
 
@@ -596,7 +598,12 @@ def build_totals(
         best_side, best_price, edge_pct = (
             pick_best_side(blended_over, over_price, under_price) if blended_over is not None else ("OVER", over_price, None)
         )
+        cand_side = str(cand.get("headline_side") or cand.get("best_side") or "").strip().upper()
+        if cand_side and best_side and cand_side != best_side:
+            flags.append("SIDE_RESOLUTION_CONFLICT")
+            flags.append("SOURCE_INTEGRITY_FLAG")
         best_book = under_book if best_side == "UNDER" else over_book
+
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         p_side_market = (
