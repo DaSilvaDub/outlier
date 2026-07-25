@@ -29,8 +29,16 @@ This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prom
 For the Claude ent this rule is no longer prose-only. `.claude/settings.json` registers a
 `PreToolUse` hook on `Bash|PowerShell` — [`.claude/hooks/block-reasoning.ps1`](.claude/hooks/block-reasoning.ps1) —
 that **denies** the commands listed above instead of merely warning. It supersedes the old
-`.claude/hookify.no-reasoning-unless-asked.local.md`, which was `action: warn` and was matched by
-`.gitignore`'s `.claude/*.local.md`, so it protected exactly one machine and no fresh clone.
+`.claude/hookify.no-reasoning-unless-asked.local.md`, whose defect was `action: warn` —
+advisory only, nothing actually stopped a paid command — and which also lacked `PowerShell`
+and `run_desk2` coverage.
+
+(That rule *is* distributed, contrary to what an earlier version of this section claimed:
+`.gitignore:43` `.claude/*.local.md` matches it, but the file was already tracked when
+`b070caa` added that rule, and `.gitignore` never untracks. So it reaches every ent and every
+fresh clone — it just never blocked anything. It is now redundant with the deny hook; if you
+want `b070caa`'s intent to actually take effect, it needs `git rm --cached`, as was done for
+the sqlite file in #55.)
 
 **When the user HAS explicitly asked this turn, append the token `DESK_OK` to the command:**
 
