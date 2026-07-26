@@ -395,4 +395,31 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 - No repository work remains. Refresh the document after a material Codex command/skill inventory change.
 
 
+---
+
+## Cross-agent exported-prompt report skill (2026-07-26)
+
+**Last Commit SHA**: `4f87210b096403f4ea6c040c6db0a95871570ebf`
+
+**PR**: https://github.com/DaSilvaDub/outlier/pull/64
+
+**Files Touched**:
+- `.agents/skills/analyze-outlier-prompt/`
+- `.agents/skills/export-manual-outlier-packs/`
+- `AGENTS.md`, `CLAUDE.md`, `GROK.md`, `GEMINI.md`
+- `docs/ENT-SYNC-GLOBAL-PROMPT.md`
+- `tests/test_analyze_outlier_prompt_skill.py`
+
+**Summary of Work**:
+- Added one canonical skill that tells each agent how to analyze an exact exported prompt with its native model and save a provenance-labeled Markdown report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`.
+- Added a collision-safe resolver for Desktop master prompts and dated `paste_*.md` Desk 2 prompts; ambiguous latest prompts fail closed.
+- Wired the existing manual exporter to the skill and corrected its source paths from the unreadable OneDrive checkout to the canonical repo.
+- Installed thin prompt-handoff pointers in all live Grok, Claude, Codex, and Gemini global instruction files. These machine-local edits are not part of the PR.
+- Verified the skill validator, 5 focused tests, Ruff, and Pyright. No reasoning model or scraper was run.
+
+**Next Steps**:
+- Review and merge PR #64.
+- Start fresh agent sessions after merge so each harness reloads its instruction/skill context.
+- Invoke the skill with an exact generated prompt path when a report is wanted; prompt creation alone remains non-authorizing.
+
 
