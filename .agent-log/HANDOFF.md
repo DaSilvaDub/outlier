@@ -375,5 +375,24 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 ### Next Steps:
 - Review and merge PR #60 into `master`.
 
+---
+
+## Codex command reference document (2026-07-25)
+
+**Last Commit SHA**: `5e164464db4145831feb18ba0cc64a3c5d8afbbc`
+
+**Files Touched**:
+- `C:\Users\dasil\OneDrive\Desktop\Codex Commands - Outlier Pipeline Map.docx` (user artifact; outside the repo)
+- `.agent-log/HANDOFF.md` (this ignored coordination note)
+
+**Summary of Work**:
+- Created a 12-page Word reference covering current desktop shortcuts, IDE and CLI slash commands, CLI top-level commands, and all installed user-invocable skills.
+- Added an Outlier relationship only where a concrete pipeline or repository workflow connection exists; unrelated relationship cells are blank.
+- Included the explicit-ask-only A/B/C/D/E Research Desk safety boundary and an Outlier command key.
+- Rendered the document through Microsoft Word and visually inspected every page; corrected the terminal shortcut rendering.
+
+**Next Steps**:
+- No repository work remains. Refresh the document after a material Codex command/skill inventory change.
+
 
 
