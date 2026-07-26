@@ -1,7 +1,7 @@
 ---
 name: analyze-outlier-sequential-prompts
 description: >-
-  Run the ordered Outlier Desk 2 prompt workflow with the current agent's native reasoning model and save each phase report in the shared Desktop BETTING REPORTS/SEQUENTIAL/date folder. Use when the user explicitly asks in the current turn to run the next or a named Desk 2 phase such as Q ChatGPT, R Claude, W Gemini, X Grok, or S Claude.
+  Run the ordered Outlier Desk 2 prompt workflow manually or automate the full fixed-provider chain through the installed Codex, Claude, Gemini, and Grok CLIs, saving each phase report in the shared Desktop BETTING REPORTS/SEQUENTIAL/date folder. Use when the user explicitly asks in the current turn to run the next, a named phase, or the full Q-R-W-X-S workflow.
 ---
 
 # Analyze Sequential Outlier Prompts
@@ -17,12 +17,43 @@ Run exactly one authorized Desk 2 phase at a time. Enforce this dependency order
 ## Authorization gate
 
 - Proceed only when the user explicitly asks in the current turn to analyze or run the sequential prompts. Files appearing on disk do not authorize reasoning.
-- Use the current session's native model. Do not call another provider, the A-E desk, `run_desk`, or a live reasoning API unless separately requested in the current turn.
+- Use the current session's native model for a single-phase request. Invoke the fixed multi-provider CLI chain only when the user asks for automatic or full sequential processing in the current turn. Never call the A-E desk or `run_desk` as part of this skill.
 - Do not skip phases or fabricate a missing predecessor report.
 
-## Resolve the next phase
+## Automatic CLI workflow
 
-Use the exact prompt path supplied by the user, or omit `--prompt` to resolve the next runnable phase for the latest date:
+The shared runner discovers the latest Desk 2 prompt set, calls the assigned provider for
+each phase, injects all required earlier reports, and stops immediately if any phase fails.
+It routes Q to Codex, R to Claude, W to Gemini, X to Grok, and S back to Claude.
+
+Always preview the complete Q → R → W → X → S plan first. This does not call a model:
+
+```powershell
+python .agents/skills/_shared/run_prompt_workflow.py `
+  --workflow sequential `
+  --all
+```
+
+Only when the user explicitly authorizes live reasoning in the current turn, run:
+
+```powershell
+python .agents/skills/_shared/run_prompt_workflow.py `
+  --workflow sequential `
+  --all `
+  --execute `
+  --authorization DESK_OK
+```
+
+Each successful phase is saved atomically before the next phase begins, so the next model
+receives the exact report file written by its predecessor. A missing CLI, nonzero exit,
+timeout, empty response, missing predecessor, or wrong phase assignment stops the chain.
+The runner never overwrites an earlier report.
+
+## Manual single-phase fallback
+
+When the current agent itself should run one phase rather than invoke external CLIs, use the
+exact prompt path supplied by the user, or omit `--prompt` to resolve the next runnable phase
+for the latest date:
 
 ```powershell
 python .agents/skills/_shared/resolve_prompt_report.py `

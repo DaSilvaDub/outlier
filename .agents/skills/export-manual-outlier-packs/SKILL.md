@@ -30,11 +30,11 @@ The script structures the output into two pipelines:
 
 Each run archives old pack files into an `archive/` subfolder.
 
-### 3. Hand Off for Analysis
+### 3. Run or Hand Off for Analysis
 
 If the user also explicitly asks in the current turn to analyze generated prompts, route by folder:
 
-- `Desk1_Automated/`: follow `.agents/skills/analyze-outlier-generic-prompts/SKILL.md`. Save reports under `BETTING REPORTS/GENERIC/YYYY-MM-DD`.
-- `Desk2_Manual/`: follow `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`. Run Q → R → W → X → S and save phase reports under `BETTING REPORTS/SEQUENTIAL/YYYY-MM-DD`.
+- `Desk1_Automated/`: follow `.agents/skills/analyze-outlier-generic-prompts/SKILL.md`. Its shared CLI runner can send all latest master prompts to Codex, Claude, Gemini, and Grok, then save reports under `BETTING REPORTS/GENERIC/YYYY-MM-DD`.
+- `Desk2_Manual/`: follow `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`. Its shared CLI runner executes Q → R → W → X → S with the fixed provider assignments and saves phase reports under `BETTING REPORTS/SEQUENTIAL/YYYY-MM-DD`.
 
 If the user requested only data and prompt export, stop after reporting the generated paths. Prompt creation by itself does not authorize reasoning-model use.
