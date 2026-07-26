@@ -27,6 +27,8 @@ Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and no
 
 **HOUSE RULE (all ents):** Never run reasoning models / the AI Research Desk (A–E, `run_desk`, `daily_job --run-reasoning`, live OpenAI/Anthropic/Gemini desk calls, or provider-hitting reasoning tests) unless the user **explicitly asks this turn**. Default offline. If unsure, ask first. Full text: `AGENTS.md` → "Never run reasoning models unless explicitly asked".
 
+**EXPORTED PROMPT HANDOFF:** When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `.agents/skills/analyze-outlier-prompt/SKILL.md`. Use Grok's native reasoning, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+
 On start (after bootstrap): read `.agent-log/SUMMARY.md`, the latest `.agent-log/` entries, and
 `git log --oneline -15`.
 On end: commit with an `Agent: grok` trailer, write a `.agent-log/` session

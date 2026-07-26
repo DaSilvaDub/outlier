@@ -18,6 +18,9 @@ Allowed without asking: pack/scrapers, offline unit tests, code/docs/git work, r
 If unsure whether the user asked: do NOT run reasoning — ask first.
 Full rule text: AGENTS.md section "HOUSE RULE — Never run reasoning models unless explicitly asked".
 
+EXPORTED PROMPT HANDOFF (all ents):
+When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `C:\Users\dasil\Dev\GitHub\outlier\.agents\skills\analyze-outlier-prompt\SKILL.md`. Use Gemini's native reasoning, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+
 STEP 0 (ABSOLUTE FIRST ACTION — before reading any files, git log, planning, or running commands):
 
 NO MATTER which ent (Grok/Claude/Codex/Gemini), which starting CWD (worktree, ai-runners full clone, or stray dir), or how the harness launches you:

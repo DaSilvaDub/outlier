@@ -24,6 +24,10 @@
 
 This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prompt block), `CLAUDE.md`, `GROK.md`, and the desk skill. Keep them in sync when changing the rule.
 
+## EXPORTED PROMPT HANDOFF (ALL ENTS)
+
+When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `.agents/skills/analyze-outlier-prompt/SKILL.md`. Use the current agent's native model, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+
 ### Mechanical enforcement (Claude Code) — and how to legitimately run the desk
 
 For the Claude ent this rule is no longer prose-only. `.claude/settings.json` registers a

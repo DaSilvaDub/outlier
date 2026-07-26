@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -120,9 +121,8 @@ def load_prompt_template(filename: str) -> str:
     """Read a prompt template from prompts directory."""
     repo_root = Path(__file__).resolve().parents[4]
     candidate_paths = [
-        Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / filename,
-        Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts") / filename,
         repo_root / "prompts" / filename,
+        Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / filename,
     ]
     for p in candidate_paths:
         if p.exists():
@@ -193,9 +193,8 @@ def generate_for_dir(
         "S_claude": (5, "PhaseS"),
     }
 
-    src_desk2_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts\desk2")
-    if not src_desk2_dir.exists():
-        src_desk2_dir = Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts\desk2")
+    repo_root = Path(__file__).resolve().parents[4]
+    src_desk2_dir = repo_root / "prompts" / "desk2"
 
     desk2_count = 0
     if src_desk2_dir.exists():
@@ -233,7 +232,8 @@ def main() -> None:
     args = parser.parse_args()
 
     out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
-    packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
+    repo_root = Path(__file__).resolve().parents[4]
+    packs_dir = repo_root / "packs"
 
     subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
     if not subdirs:

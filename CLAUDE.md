@@ -27,6 +27,8 @@ Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and no
 
 **HOUSE RULE (all ents):** Never run reasoning models / the AI Research Desk (A–E, `run_desk`, `daily_job --run-reasoning`, live OpenAI/Anthropic/Gemini desk calls, or provider-hitting reasoning tests) unless the user **explicitly asks this turn**. Default offline. If unsure, ask first. Full text: `AGENTS.md` → "Never run reasoning models unless explicitly asked".
 
+**EXPORTED PROMPT HANDOFF:** When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `.agents/skills/analyze-outlier-prompt/SKILL.md`. Use Claude's native reasoning, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+
 1. On session start (after bootstrap): read `.agent-log/HANDOFF.md` to see where the last agent left off, and `git log --oneline -15`.
 2. On session end: commit your work to your **feature branch** (see AGENTS.md "Feature Branch Workflow"), push it, open a PR to `master` via `gh pr create`, then write a brief handoff summary to `.agent-log/HANDOFF.md` (last commit, PR link, next steps). Direct commits to `master` are allowed only for coordination files (AGENTS.md, CLAUDE.md, .agent-log/).
 

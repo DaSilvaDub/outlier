@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Outlier Prompt"
+  short_description: "Turn exported prompts into shared reports"
+  default_prompt: "Use $analyze-outlier-prompt to analyze an exact exported Outlier prompt with your model and save the report in the shared Betting Reports folder."

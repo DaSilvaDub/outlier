@@ -14,6 +14,9 @@ Allowed without asking: pack/scrapers, offline unit tests, code/docs/git work, r
 If unsure whether the user asked: do NOT run reasoning — ask first.
 Full rule text: AGENTS.md section "HOUSE RULE — Never run reasoning models unless explicitly asked".
 
+EXPORTED PROMPT HANDOFF (all ents):
+When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `C:\Users\dasil\Dev\GitHub\outlier\.agents\skills\analyze-outlier-prompt\SKILL.md`. Use the current agent's native model, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+
 STEP 0 (ABSOLUTE FIRST ACTION — before reading any files, git log, planning, or running commands):
 
 NO MATTER which ent (Grok/Claude/Codex/Gemini), which starting CWD (worktree, ai-runners full clone, or stray dir), or how the harness launches you:
@@ -100,7 +103,7 @@ The d05eb21 (~624 line pipeline upgrade touching pack.py + daily_job.py) was a t
 
 Run `& "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"` yourself to see the live authoritative cross-worktree report (lists all ~16 worktrees + marker status + explicit d05eb21 explanation).
 
-Last updated: 2026-07-26 (REPORT STATUS/RUN-NONCE verdict from PR #61; re-installed
+Last updated: 2026-07-26 (shared exported-prompt report handoff; REPORT STATUS/RUN-NONCE verdict from PR #61; re-installed
 into all 6 harness global files and corrected 3 that had drifted to the unreadable
 OneDrive mirror path). Previously: 2026-07-12 (added permanent "no reasoning models
 unless asked" house rule).
