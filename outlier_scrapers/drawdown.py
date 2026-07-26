@@ -185,7 +185,10 @@ def compute_drawdown_state(
     fp = tiers_fingerprint(cleaned_tiers)
 
     rows = [dict(row) for row in settled_executions if _is_settled_placed(row)]
-    usable: list[Mapping[str, Any]] = []
+    # Narrower than Mapping on purpose: every element comes from `rows`, which is a
+    # list of dicts. Declaring Mapping here made `row` rebind from dict to Mapping at
+    # the second loop below, which mypy rejects.
+    usable: list[dict[str, Any]] = []
     for row in rows:
         settled = _parse_timestamp(
             row.get("settled_at") or row.get("placed_at") or row.get("as_of")

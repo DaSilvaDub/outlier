@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
+from typing import Any
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Portfolio Risk Shadow Report")
@@ -10,93 +11,109 @@ def parse_args(args=None):
     parser.add_argument("--packs-dir", dest="packs_dir", default="packs", help="Path to packs directory")
     return parser.parse_args(args)
 
-def run_report(from_date: str, to_date: str, packs_dir: str) -> dict:
+def run_report(from_date: str, to_date: str, packs_dir: str) -> dict[str, Any]:
+    # Accumulate into typed locals rather than into the result dict directly.
+    # A heterogeneous dict literal (int / float / list / dict / set values) infers as
+    # dict[str, object], and `object` supports neither `+=` nor `.get`/`.add`/`.append`,
+    # which is what produced 20 mypy errors here. Locals also let the two set->list
+    # conversions and the max_consecutive->consecutive rename happen without mutating a
+    # value's type in place, which no dict annotation (or TypedDict) can express.
     start_date = datetime.strptime(from_date, "%Y-%m-%d")
     end_date = datetime.strptime(to_date, "%Y-%m-%d")
-    
+
     packs_path = Path(packs_dir)
-    
-    report = {
-        "valid_days": 0,
-        "rejected_days": 0,
-        "gaps": [],
-        "legacy_total_units": 0.0,
-        "shadow_total_units": 0.0,
-        "unit_retention_ratio": 0.0,
-        "caps_binding": {},
-        "zeroed_rows": 0,
-        "quantization_differences": 0,
-        "missing_identity_counts": 0,
-        "duplicate_collapse_counts": 0,
-        "book_source_exposure": {},
-        "order_invariance_hashes": set(),
-        "policy_fingerprints": set(),
-        "consecutive_shadow_days": 0,
-        "max_consecutive_shadow_days": 0
-    }
-    
+
+    valid_days = 0
+    rejected_days = 0
+    gaps: list[str] = []
+    legacy_total_units = 0.0
+    shadow_total_units = 0.0
+    caps_binding: dict[str, int] = {}
+    zeroed_rows = 0
+    quantization_differences = 0
+    missing_identity_counts = 0
+    duplicate_collapse_counts = 0
+    book_source_exposure: dict[str, float] = {}
+    order_invariance_hashes: set[str] = set()
+    policy_fingerprints: set[str] = set()
+    max_consecutive_shadow_days = 0
+
     current_date = start_date
     consecutive = 0
-    
+
     while current_date <= end_date:
         date_str = current_date.strftime("%Y-%m-%d")
         sidecar_path = packs_path / date_str / "portfolio_risk.json"
-        
+
         is_valid = False
         if sidecar_path.exists():
             try:
                 with open(sidecar_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                
+
                 git_sha = data.get("code_git_sha")
                 if git_sha and isinstance(git_sha, str) and git_sha.strip() and git_sha != "unknown":
                     is_valid = True
-                    report["valid_days"] += 1
-                    report["legacy_total_units"] += float(data.get("legacy_total_units", 0))
-                    report["shadow_total_units"] += float(data.get("shadow_total_units", 0))
-                    
+                    valid_days += 1
+                    legacy_total_units += float(data.get("legacy_total_units", 0))
+                    shadow_total_units += float(data.get("shadow_total_units", 0))
+
                     for cap, count in data.get("caps_binding", {}).items():
-                        report["caps_binding"][cap] = report["caps_binding"].get(cap, 0) + count
-                        
-                    report["zeroed_rows"] += int(data.get("zeroed_rows", 0))
-                    report["quantization_differences"] += int(data.get("quantization_differences", 0))
-                    report["missing_identity_counts"] += int(data.get("missing_identity_counts", 0))
-                    report["duplicate_collapse_counts"] += int(data.get("duplicate_collapse_counts", 0))
-                    
+                        caps_binding[cap] = caps_binding.get(cap, 0) + count
+
+                    zeroed_rows += int(data.get("zeroed_rows", 0))
+                    quantization_differences += int(data.get("quantization_differences", 0))
+                    missing_identity_counts += int(data.get("missing_identity_counts", 0))
+                    duplicate_collapse_counts += int(data.get("duplicate_collapse_counts", 0))
+
                     for book, exposure in data.get("book_source_exposure", {}).items():
-                        report["book_source_exposure"][book] = report["book_source_exposure"].get(book, 0) + float(exposure)
-                        
+                        book_source_exposure[book] = book_source_exposure.get(book, 0) + float(exposure)
+
                     hash_val = data.get("order_invariance_hash")
                     if hash_val:
-                        report["order_invariance_hashes"].add(hash_val)
-                        
+                        order_invariance_hashes.add(hash_val)
+
                     fingerprint = data.get("policy_fingerprint")
                     if fingerprint:
-                        report["policy_fingerprints"].add(fingerprint)
+                        policy_fingerprints.add(fingerprint)
             except Exception:
                 pass
-                
+
         if is_valid:
             consecutive += 1
-            if consecutive > report["max_consecutive_shadow_days"]:
-                report["max_consecutive_shadow_days"] = consecutive
+            if consecutive > max_consecutive_shadow_days:
+                max_consecutive_shadow_days = consecutive
         else:
             consecutive = 0
-            report["rejected_days"] += 1
-            report["gaps"].append(date_str)
-            
+            rejected_days += 1
+            gaps.append(date_str)
+
         current_date += timedelta(days=1)
-        
-    report["consecutive_shadow_days"] = report["max_consecutive_shadow_days"]
-    del report["max_consecutive_shadow_days"]
-    
-    if report["legacy_total_units"] > 0:
-        report["unit_retention_ratio"] = report["shadow_total_units"] / report["legacy_total_units"]
-        
-    report["order_invariance_hashes"] = list(report["order_invariance_hashes"])
-    report["policy_fingerprints"] = list(report["policy_fingerprints"])
-    
-    return report
+
+    unit_retention_ratio = 0.0
+    if legacy_total_units > 0:
+        unit_retention_ratio = shadow_total_units / legacy_total_units
+
+    # Key order matches the previous dict literal (minus max_consecutive_shadow_days,
+    # which was deleted after being copied into consecutive_shadow_days) so the
+    # --- JSON --- output is byte-identical for the same inputs.
+    return {
+        "valid_days": valid_days,
+        "rejected_days": rejected_days,
+        "gaps": gaps,
+        "legacy_total_units": legacy_total_units,
+        "shadow_total_units": shadow_total_units,
+        "unit_retention_ratio": unit_retention_ratio,
+        "caps_binding": caps_binding,
+        "zeroed_rows": zeroed_rows,
+        "quantization_differences": quantization_differences,
+        "missing_identity_counts": missing_identity_counts,
+        "duplicate_collapse_counts": duplicate_collapse_counts,
+        "book_source_exposure": book_source_exposure,
+        "order_invariance_hashes": list(order_invariance_hashes),
+        "policy_fingerprints": list(policy_fingerprints),
+        "consecutive_shadow_days": max_consecutive_shadow_days,
+    }
 
 def generate_text_report(report: dict) -> str:
     lines = [
