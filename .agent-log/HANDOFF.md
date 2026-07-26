@@ -465,4 +465,116 @@ commit before the feature-branch PR could be created. GitHub rejected a duplicat
 - Monitor the first authorized live run for provider authentication/quota failures; those
   provider-dependent paths were intentionally not exercised during implementation.
 
+---
+
+## Claude automation hardening: sync tooling, hooks, typecheck fix, Claude Code config (2026-07-25 to 2026-07-26)
+
+**Agent**: Claude (Sonnet 5 / Opus 5)
+**Branches** (all merged and deleted, local + remote): `feat/claude-hooks-reasoning-guard`,
+`fix/hookify-rationale-correction`, `fix/sync-silent-noop`, `fix/portfolio-report-typing`,
+`docs/sync-ent-global-prompt`, `feat/claude-subagents-and-skills`,
+`feat/mcp-config-and-skill-symlinks`
+**Last Commit SHA**: `d34b06a` (canonical fast-forwarded to this; plus this handoff commit)
+**PRs** (all merged, squash): [#56](https://github.com/DaSilvaDub/outlier/pull/56),
+[#57](https://github.com/DaSilvaDub/outlier/pull/57),
+[#61](https://github.com/DaSilvaDub/outlier/pull/61),
+[#62](https://github.com/DaSilvaDub/outlier/pull/62),
+[#63](https://github.com/DaSilvaDub/outlier/pull/63),
+[#65](https://github.com/DaSilvaDub/outlier/pull/65),
+[#67](https://github.com/DaSilvaDub/outlier/pull/67)
+
+### Files Touched (representative — see each PR for full diffs)
+- `.claude/hooks/block-reasoning.ps1`, `.claude/hooks/check-sync.ps1`, `.claude/hooks/README.md`, `.claude/settings.json`
+- `sync-outlier.ps1`, `scripts/verify-sync.ps1`, `report-sync.ps1`
+- `outlier_scrapers/portfolio_report.py`, `outlier_scrapers/portfolio.py`, `outlier_scrapers/drawdown.py`
+- `AGENTS.md`, `CLAUDE.md`, `GROK.md`, `GEMINI.md`, `SYNC.md`, `docs/ENT-SYNC-GLOBAL-PROMPT.md`
+- `.claude/agents/registry-alias-auditor.md`, `.claude/agents/untyped-module-reviewer.md`
+- `.claude/skills/sync-report/SKILL.md`, `.claude/skills/handoff/SKILL.md`
+- `.mcp.json`
+- `.claude/skills/{analyze-outlier-generic-prompts,analyze-outlier-sequential-prompts,export-manual-outlier-packs,outlier-ai-desk,synthesize-outlier-pack}` (symlinks → `.agents/skills/...`)
+- `.claude/agents/{outlier-bug-checker-agent,outlier-data-validator-agent,outlier-desk-agent}.md` (symlinks → `plugins/outlier/agents/...`)
+- Outside the repo (personal machine config, not tracked): `~/.claude/CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.codex/AGENTS.md`, `~/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.gemini/AGENTS.md`, `~/.claude/settings.json`, `~/.claude/hooks/outlier-*.ps1`
+
+### Summary of Work
+
+**#56/#57 — Reasoning house rule + sync check as hooks, not prose.** The old guard
+(`.claude/hookify.no-reasoning-unless-asked.local.md`) was `action: warn` (never actually
+blocked anything) and covered neither the `PowerShell` tool nor `run_desk2`. Replaced with a
+`PreToolUse` deny hook on `Bash|PowerShell` (escape hatch: append `DESK_OK`; every block/bypass
+logged to `~/.claude/reasoning-guard.log`). Added a `SessionStart` hook that verifies sync state
+read-only and tells the agent to run STEP 0 by hand on drift — it does not auto-mutate, since
+canonical is frequently mid-work on a `risk-opt/*` branch. #57 is a docs-only correction: #56
+claimed the old hookify rule "protected exactly one machine" because `.gitignore` matched it —
+false. The file was already tracked when the ignore rule was added, so `.gitignore` never took
+effect; it's committed and reaches every ent, it just never blocked anything.
+
+**#61 — The sync tooling's own silent-no-op bug.** `sync-outlier.ps1` resolved the repo from
+cwd; run from `OneDrive\Documents\outlier` (whose `.git` is a placeholder) it printed
+`Not inside a git repo` and exited, but `verify-sync.ps1` never checked that exit code and
+produced a confident `State vs origin/master: MATCH` anyway. Fixed: repo resolution takes an
+explicit `-RepoRoot` (default canonical, never cwd), all three bootstrap invocations are now
+fatal on failure, and the report ends with a computed `REPORT STATUS: OK|FAILED` trailer plus a
+per-run `RUN-NONCE` (replacing the old `!!! FORBIDDEN` banner, which actually triggered on
+terminal width, not piping, and was pure noise). Also fixed a phantom blank full-clone row
+(hardcoded "ai-runners:" label + `Test-Path` satisfied by an unreadable placeholder) and a
+missing `Write-Warn` function that had never been defined.
+
+**#62 — `typecheck` had been red on `master` since 2026-07-25T16:31Z** (13+ runs, from
+`9347adb`). 23 mypy errors across `portfolio_report.py` (20 — a heterogeneous dict literal
+inferred as `dict[str, object]`), `portfolio.py` (2 missing `defaultdict` annotations, which
+unmasked 4 more real errors once fixed — `r` was reused for two unrelated types in one
+function), and `drawdown.py` (1 — an over-wide `Mapping` annotation). Verified with a
+differential test (old vs new `run_report` over synthetic inputs) that output is byte-identical.
+
+**#63 — Propagated #61's refreshed global-prompt block** to all six installed harness files
+(`~/.claude/CLAUDE.md`, `~/.grok/AGENTS.md`, `~/.codex/AGENTS.md`, `~/AGENTS.md`,
+`~/.gemini/GEMINI.md`, `~/.gemini/AGENTS.md`). Found three had silently drifted onto the
+unreadable OneDrive mirror path; corrected to canonical.
+
+**#65 — First real `.claude/agents/` and `.claude/skills/` content.** `registry-alias-auditor`
+(cross-checks `registry.py`'s paired alias/display tables — the exact bug class behind the WNBA
+"Tempo"/"Fire" incidents) and `untyped-module-reviewer` (manually reviews the 11
+mypy/pyright-excluded modules, including the two documented silent-wrong-number quirks:
+`implied_probability()` returns a percentage not `[0,1]`, and the `(1 - push_prob)` adjustment).
+Both read-only. Plus `sync-report` and `handoff` skills (both `disable-model-invocation: true`)
+wrapping STEP 0 and the end-of-session protocol correctly.
+
+**#67 — `.mcp.json` + symlinks.** Context7 and GitHub as remote-HTTP MCP servers, deliberately
+with no hardcoded token/API-key header (a header pointing at an unset env var degrades or breaks
+silently — exactly the failure class the rest of this work was fixing; both endpoints work
+without one). Symlinked the 5 existing cross-ent skills under `.agents/skills/` and 3 existing
+agents under `plugins/outlier/agents/` into `.claude/` as per-item relative symlinks (not a
+whole-directory swap — `.claude/agents/` and `.claude/skills/` already held #65's real content).
+Verified `core.symlinks=true` and a real git round-trip (store as mode `120000`, fresh checkout
+stays a real symlink, not a text file containing the path) before committing, then re-verified
+the blob modes directly on GitHub after push.
+
+**Repo hygiene**: after each merge, deleted the corresponding local + remote feature branch and
+`git worktree remove`d its worktree — all seven confirmed `MERGED` via `gh pr view` first (this
+matters because squash-merges make `git branch -d`/`--is-ancestor` report "not merged" even
+though they are; `-D` was used only after independent confirmation). Canonical was fast-forwarded
+from `4164f95` to `d34b06a` to write this handoff; the fast-forward did not touch the one
+unrelated file already dirty on canonical (`.github/workflows/pytest.yml` — not this work, left
+untouched, belongs to whoever has that in progress).
+
+### Next Steps / Open Items
+
+- **This skill file's own instructions are wrong.** `.claude/skills/handoff/SKILL.md` step 4
+  says to *overwrite* `.agent-log/HANDOFF.md` — but every prior entry in this file (Track C, the
+  A9 reviews, the prompt-report skills work) appended a new `## <title>` section instead,
+  preserving cross-agent history. Followed the real convention (append) for this entry, not the
+  skill's literal wording. The skill needs a one-line fix; not done yet since it's an
+  unrequested addition to this task — flagging so the next session doesn't have to rediscover it.
+- `.claude/hookify.no-reasoning-unless-asked.local.md` is now redundant with the #56 deny hook.
+  Left in place deliberately (hookify rules may still be consumed by non-Claude ents, which the
+  `PreToolUse` hook doesn't cover). `git rm --cached` would also fix the original `.gitignore`
+  intent from `b070caa` if ever wanted.
+- The symlinks in #67 depend on Developer Mode / `core.symlinks` being enabled wherever the repo
+  is checked out. Verified fine on this machine (all four harnesses run here); would silently
+  degrade to plain-text stand-ins on a fresh clone elsewhere without that.
+- `~/AGENTS.md` has a duplicated `## Heavy OMX Runtime` section (identical text, back to back) —
+  noticed in passing, pre-existing, unrelated to this work, not fixed.
+- Canonical currently has one unrelated uncommitted change
+  (`.github/workflows/pytest.yml`, switching to `dariocurr/pytest-summary@v2.6`) that is not
+  part of this handoff — whoever owns it should commit or discard it; it was left untouched here.
 
