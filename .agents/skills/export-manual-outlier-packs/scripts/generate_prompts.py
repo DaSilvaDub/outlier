@@ -62,20 +62,58 @@ def clean_stray_files(out_dir: Path) -> None:
             safe_rmtree(f)
 
 
-def archive_old_packs(out_dir: Path, keep_dates: set[str]) -> None:
-    """Move pack files older than keep_dates into out_dir/archive/."""
+ANY_DATE_RE = re.compile(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})")
+
+
+def archive_old_packs(out_dir: Path, date_str: str) -> None:
+    """Move pack files older than current date into out_dir/archive/ and purge data older than 1 day."""
     archive_dir = out_dir / ARCHIVE_DIRNAME
-    for f in out_dir.rglob("*_pack_*.txt"):
+    archive_dir.mkdir(exist_ok=True)
+
+    current_date = date.fromisoformat(date_str)
+    one_day_old = (current_date - timedelta(days=1)).isoformat()
+    keep_dates = {date_str, one_day_old}
+
+    # 1. Move old files not in keep_dates into archive
+    for f in list(out_dir.rglob("*_pack_*.txt")):
         if ARCHIVE_DIRNAME in f.parts:
             continue
         match = PACK_DATE_RE.search(f.name)
         if match and match.group(1) in keep_dates:
             continue
-        archive_dir.mkdir(exist_ok=True)
         try:
-            shutil.move(str(f), str(archive_dir / f.name))
+            target_path = archive_dir / f.name
+            if target_path.exists():
+                target_path.unlink()
+            shutil.move(str(f), str(target_path))
         except OSError:
             pass
+
+    # 2. Purge archive folder: ONLY keep data that is 1 day old (date_str or current_date - 1 day)
+    for item in list(archive_dir.iterdir()):
+        if item.name.startswith("."):
+            continue
+        match = ANY_DATE_RE.search(item.name)
+        should_delete = False
+        if match:
+            item_date = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            if item_date not in keep_dates:
+                should_delete = True
+        else:
+            should_delete = True
+
+        if should_delete:
+            try:
+                if item.is_file():
+                    try:
+                        os.chmod(item, 0o777)
+                    except OSError:
+                        pass
+                    item.unlink()
+                elif item.is_dir():
+                    safe_rmtree(item)
+            except OSError:
+                pass
 
 
 def load_prompt_template(filename: str) -> str:
@@ -106,8 +144,8 @@ def generate_for_dir(
     current_date = date.fromisoformat(date_str)
     keep_dates = {date_str, (current_date - timedelta(days=1)).isoformat()}
 
-    # Archive old files before cleaning the prompts directory
-    archive_old_packs(out_dir, keep_dates)
+    # Archive old files and clean archive folder (only keep 1 day old data)
+    archive_old_packs(out_dir, date_str)
 
     prompts_dir = out_dir / "prompts"
 

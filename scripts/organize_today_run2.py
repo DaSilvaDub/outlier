@@ -2,8 +2,61 @@ import json
 import csv
 import shutil
 import os
+import re
+import time
 import subprocess
+from datetime import date, timedelta
 from pathlib import Path
+
+
+def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
+    """Copy file with retries to handle transient cloud sync locks ([WinError 32])."""
+    for attempt in range(retries):
+        try:
+            shutil.copy2(str(src), str(dst))
+            return
+        except OSError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                try:
+                    shutil.copyfile(str(src), str(dst))
+                except OSError:
+                    pass
+
+
+def purge_old_archive_items(archive_dir: Path, keep_dates: set[str]) -> None:
+    """Purge any files/directories in archive that are older than 1 day (not in keep_dates)."""
+    if not archive_dir.exists():
+        return
+
+    pat = re.compile(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})")
+    for item in list(archive_dir.iterdir()):
+        if item.name.startswith("."):
+            continue
+        match = pat.search(item.name)
+        should_del = True
+        if match:
+            item_date = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            if item_date in keep_dates:
+                should_del = False
+
+        if should_del:
+            try:
+                if item.is_file():
+                    try:
+                        os.chmod(item, 0o777)
+                    except OSError:
+                        pass
+                    item.unlink()
+                elif item.is_dir():
+                    subprocess.run(
+                        ["powershell", "-Command", f'Remove-Item -LiteralPath "{item}" -Recurse -Force -ErrorAction SilentlyContinue'],
+                        check=False,
+                    )
+            except OSError:
+                pass
+
 
 def parse_hit_rates(hit_100_props, hit_100_l5_l10_props):
     data_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\data")
@@ -43,6 +96,7 @@ def parse_hit_rates(hit_100_props, hit_100_l5_l10_props):
         except Exception as e:
             print(f"Error parsing {cards_file}: {e}")
 
+
 def generate_specific_packs(candidates_path: Path, output_dir: Path):
     if not candidates_path.exists():
         return
@@ -62,31 +116,45 @@ def generate_specific_packs(candidates_path: Path, output_dir: Path):
                 writer.writeheader()
                 writer.writerows(subset)
 
+
 def organize_today_additive():
-    today_str = "2026-07-20"
-    suffix = "_latest"
     packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
-    latest_pack = packs_dir / today_str
-    
+    subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
+    if not subdirs:
+        print("Error: No pack directories found in packs/.")
+        return
+
+    latest_pack = max(subdirs, key=lambda d: d.name)
+    today_str = latest_pack.name
+    suffix = "_latest"
+
     out_dirs = [
         Path(r"C:\Users\dasil\OneDrive\Desktop\today"),
         Path(r"G:\My Drive\today")
     ]
-    
+
+    current_date = date.fromisoformat(today_str)
+    one_day_old = (current_date - timedelta(days=1)).isoformat()
+    keep_dates = {today_str, one_day_old}
+
     # 1. Gather 100% hit rate props
-    hit_100_props = { "MLB": [], "WNBA": [] }
-    hit_100_l5_l10_props = { "MLB": [], "WNBA": [] }
+    hit_100_props = {"MLB": [], "WNBA": []}
+    hit_100_l5_l10_props = {"MLB": [], "WNBA": []}
     parse_hit_rates(hit_100_props, hit_100_l5_l10_props)
-    
+
     # Run the generate_prompts script first so it creates the prompt files in today folders
-    gen_script = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\.agents\skills\export-manual-outlier-packs\scripts\generate_prompts.py")
+    repo_root = Path(__file__).resolve().parents[1]
+    gen_script = repo_root / ".agents" / "skills" / "export-manual-outlier-packs" / "scripts" / "generate_prompts.py"
+    if not gen_script.exists():
+        gen_script = Path(r"C:\Users\dasil\Dev\GitHub\outlier\.agents\skills\export-manual-outlier-packs\scripts\generate_prompts.py")
     subprocess.run(["python", str(gen_script), "--no-clean"], check=True)
-    
+
     for out_dir in out_dirs:
         out_dir.mkdir(parents=True, exist_ok=True)
-        
-        # WE DO NOT ARCHIVE EXISTING FILES. They stay exactly where they are.
-                    
+
+        # Purge archive folder so it ONLY keeps 1 day old data
+        purge_old_archive_items(out_dir / "archive", keep_dates)
+
         # Organize new folders for this run (using _latest suffix)
         generic_prompts = out_dir / f"generic_prompts_{today_str}{suffix}"
         desk2_prompts = out_dir / f"desk2_prompts_{today_str}{suffix}"
@@ -94,44 +162,65 @@ def organize_today_additive():
         extra_packs = out_dir / f"extra_packs_{today_str}{suffix}"
         hit_props_dir = out_dir / f"perfect_hit_props_{today_str}{suffix}"
         hit_l5_l10_props_dir = out_dir / f"perfect_hit_l10_l5_props_{today_str}{suffix}"
-        
+
         for d in [generic_prompts, desk2_prompts, pipeline_data, extra_packs, hit_props_dir, hit_l5_l10_props_dir]:
             d.mkdir(exist_ok=True)
-            
-        # Move prompt files to proper folders
-        for item in out_dir.glob("*.txt"):
-            if item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "generic")):
-                shutil.move(str(item), str(generic_prompts / item.name))
-            elif item.name[0].isupper() and item.name[1] == '_':
-                shutil.move(str(item), str(desk2_prompts / item.name))
-                    
-        # Copy pipeline data
+
+        # Copy prompt files from prompts/ subdirectories into organized output folders
+        prompts_root = out_dir / "prompts"
+        if prompts_root.exists():
+            desk1_src = prompts_root / "Desk1_Automated"
+            if desk1_src.exists():
+                for item in desk1_src.glob("*.txt"):
+                    safe_copy(item, generic_prompts / item.name)
+
+            desk2_src = prompts_root / "Desk2_Manual"
+            if desk2_src.exists():
+                for item in desk2_src.glob("*.txt"):
+                    safe_copy(item, desk2_prompts / item.name)
+
+            # Also check root prompts folder for any loose .txt files
+            for item in out_dir.glob("*.txt"):
+                if item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "2_Master", "3_Master", "generic")):
+                    safe_copy(item, generic_prompts / item.name)
+                    try:
+                        item.unlink()
+                    except OSError:
+                        pass
+                elif item.name[0].isupper() and item.name[1] == '_':
+                    safe_copy(item, desk2_prompts / item.name)
+                    try:
+                        item.unlink()
+                    except OSError:
+                        pass
+
+        # Copy pipeline data into extracted_data
         if latest_pack.exists():
             for item in latest_pack.iterdir():
                 try:
                     if item.is_dir():
                         shutil.copytree(str(item), str(pipeline_data / item.name), dirs_exist_ok=True)
                     else:
-                        shutil.copy2(str(item), str(pipeline_data / item.name))
+                        safe_copy(item, pipeline_data / item.name)
                 except Exception as e:
                     print(f"Failed to copy {item.name}: {e}")
-            
+
             # Generate extra packs from the candidate data
             candidates_csv = latest_pack / "data_analysis" / "candidates.csv"
             if not candidates_csv.exists():
                 candidates_csv = latest_pack / "candidates.csv"
-            
+
             generate_specific_packs(candidates_csv, extra_packs)
-            
-            # Also copy game_totals.csv and team_totals.csv if they exist
+
+            # Also copy game_totals.csv, team_totals.csv, alt_team_totals.csv, opportunities.csv
             for t_csv in ["game_totals.csv", "team_totals.csv", "alt_team_totals.csv", "opportunities.csv"]:
                 src = latest_pack / t_csv
                 if not src.exists():
                     src = latest_pack / "data_analysis" / t_csv
-                    
+
                 if src.exists():
-                    shutil.copy2(str(src), str(extra_packs / t_csv))
-        
+                    safe_copy(src, extra_packs / t_csv)
+
         # Write hit rate props (L5/L10/L20)
         for league, props in hit_100_props.items():
             if props:
@@ -140,7 +229,7 @@ def organize_today_additive():
                     writer = csv.DictWriter(f, fieldnames=["player", "market_label", "side", "line", "team", "matchup"])
                     writer.writeheader()
                     writer.writerows(props)
-                    
+
         # Write hit rate props (L5/L10)
         for league, props in hit_100_l5_l10_props.items():
             if props:
