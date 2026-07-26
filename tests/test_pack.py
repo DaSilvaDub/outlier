@@ -1125,6 +1125,24 @@ def test_mlb_runs_team_total_identity_uses_shared_sport_contract():
     assert row["selection"] == "LAD Team Total OVER 4.5"
 
 
+def test_untyped_mlb_total_with_team_stays_game_total():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "game-total",
+        "proposition": "TOTAL",
+        "market": "TOTAL",
+        "team": "LAD",
+        "matchup": "LAD @ SF",
+        "board": "B",
+        "sides": {"OVER": {"outcome_id": "game-over", "line": 8.5, "best_odds": -110}},
+    }
+
+    row = make_row(card, [], sport="MLB")
+
+    assert row["market_type"] == "GAMELINE"
+    assert "Team Total" not in row["selection"]
+
+
 # 19. Public money / money% read the real card keys (percentage / money).
 def test_public_money_fallback_keys():
     card = ev_card(market_type="MONEYLINE")
