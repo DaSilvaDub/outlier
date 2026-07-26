@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Close out an outlier session per AGENTS.md's Feature Branch Workflow — commit, push, open a PR, write .agent-log/HANDOFF.md, and leave the worktree clean.
+description: Close out an outlier session per AGENTS.md's Feature Branch Workflow — commit, push, open a PR, append a section to .agent-log/HANDOFF.md, and leave the worktree clean.
 disable-model-invocation: true
 ---
 
@@ -59,20 +59,36 @@ Wait for CI (`test`, `typecheck`) before telling the user the PR is ready, and n
 the body if a check was already red on `master` before your branch (so you don't get
 blamed for pre-existing breakage).
 
-## 4. Write `.agent-log/HANDOFF.md`
+## 4. Append a new section to `.agent-log/HANDOFF.md`
 
-Overwrite it with:
+**Do not overwrite this file.** It is a running cross-agent log going back to the earliest
+sessions on this repo — Track C calibration work, multiple A9 safety reviews, PR handoffs from
+Grok and Gemini as well as Claude. Every prior entry appends a new dated section at the bottom;
+overwriting would destroy that history for the next agent or ent that reads it.
+
+Read the tail of the file first to match its existing style (field names drift slightly entry to
+entry — `Last Commit SHA` vs `Last Product Commit SHA`, `Date`+`Agent`+`Branch` as separate lines
+vs inline — match whatever the two or three most recent entries are doing, not necessarily the
+exact template below). Then append, preceded by a `---` separator:
 
 ```markdown
-# Handoff — <date>
+---
 
+## <Short title for this session's work> (<date, or date range if it spanned days>)
+
+**Agent:** <your name — e.g. claude>
+**Branch(es):** <feature branch(es), or "direct to master" for infra-only commits>
 **Last Commit SHA:** <short sha, from `git rev-parse --short HEAD`>
-**PR:** <link from step 3, or "not yet opened" if this handoff is mid-task>
+**PR:** <link(s) from step 3, or "not yet opened" if this handoff is mid-task>
 
-## Files Touched
+### Files Touched
 - <path> — <one line on what changed>
 
-## Next Steps
+### Summary of Work
+- <what was done and why, in enough detail that someone with zero context on this
+  session could understand the change — this file is read cold by other ents>
+
+### Next Steps
 - <what the next agent/session should pick up, or open questions/blockers>
 ```
 
@@ -80,11 +96,13 @@ Overwrite it with:
 
 `.agent-log/` is gitignored (to keep noisy per-session logs out of history), but this
 one file is a mandated exception. A plain `git add .agent-log/HANDOFF.md` is silently
-rejected with "paths are ignored" — you must force it:
+rejected with "paths are ignored" — you must force it. Stage only this file, never a
+blanket `-A` — canonical frequently has unrelated dirty files from concurrent sessions
+that are not yours to commit:
 
 ```
 git add -f .agent-log/HANDOFF.md
-git commit -m "docs(handoff): record session close for <branch-name>"
+git commit -m "docs(handoff): record session close for <branch-name or session summary>"
 git push
 ```
 
