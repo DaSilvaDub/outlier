@@ -4,6 +4,16 @@ __pycache__/
 .venv/
 venv/
 *.log
+*.log.err
+
+# Stray debug/scratch/report artifacts previously committed by accident at repo
+# root. Removed from tracking; ignored here so they don't get re-added.
+.tmp_pytest_*.txt
+scratch_*.py
+login_page.html
+totals_output.txt
+betting_report_*.md
+terminals/
 
 # Standalone Outlier auth/session material. Do not commit secrets.
 config/*

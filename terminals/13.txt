@@ -1,9 +1,0 @@
----
-pid: 30080
-cwd: "C:\Users\dasil\OneDrive\Documents\outlier"
-command: "cd \"C:\\Users\\dasil\\OneDrive\\Documents\\outlier\" && python -m pytest tests/test_pack.py tests/test_reasoning.py tests/test_claude_reasoning.py -q --tb=no 2>&1 | Select-Object -Last 15"
-started_at: 2026-07-07T07:08:37.676Z
-running_for_ms: 67694991 
----
-..................................................................       [100%]
-66 passed in 875.39s (0:14:35)
