@@ -427,4 +427,42 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 - Start fresh agent sessions after merge so each harness reloads its instruction/skill context.
 - Use the generic skill for `Desk1_Automated`; use the sequential skill for `Desk2_Manual` or `paste_*.md`. Prompt creation alone remains non-authorizing.
 
+---
+
+## Automated cross-agent prompt reports (2026-07-26)
+
+**Last Product Commit SHA**: `321ad33ac661b1dc101eacc1e886e4acac9ad288`
+
+**Publication**: The background canonical sync advanced `origin/master` to the product
+commit before the feature-branch PR could be created. GitHub rejected a duplicate PR with
+`No commits between master and feat/automated-prompt-cli-reports`.
+
+**Files Touched**:
+- `.agents/skills/_shared/run_prompt_workflow.py`
+- `.agents/skills/analyze-outlier-generic-prompts/SKILL.md`
+- `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`
+- `.agents/skills/export-manual-outlier-packs/SKILL.md`
+- `tests/test_outlier_prompt_report_skills.py`
+
+**Summary of Work**:
+- Added a dry-run-by-default subprocess runner for the installed Codex, Claude, Gemini,
+  and Grok CLIs.
+- Generic mode discovers all latest Desk 1 master prompts, runs the selected agent set,
+  and saves collision-safe reports under `BETTING REPORTS/GENERIC/YYYY-MM-DD`.
+- Sequential mode runs Q (Codex), R (Claude), W (Gemini), X (Grok), and S (Claude) in
+  strict order, injecting every saved predecessor report and stopping on the first failure.
+- Live calls require both `--execute` and `--authorization DESK_OK`; prompt discovery alone
+  cannot spend quota. Reports are written atomically and never overwrite existing output.
+- Verified 15 focused offline tests, Ruff, Pyright, both skill validators, installed CLI
+  executability, and real dry-run plans for 12 generic and 5 sequential jobs. No live model
+  call was made.
+
+**Next Steps**:
+- To preview either workflow, run the command documented in its `SKILL.md` without
+  `--execute`.
+- To make live calls, explicitly authorize them in the current turn and use the documented
+  `--execute --authorization DESK_OK` form.
+- Monitor the first authorized live run for provider authentication/quota failures; those
+  provider-dependent paths were intentionally not exercised during implementation.
+
 
