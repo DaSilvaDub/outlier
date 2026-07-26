@@ -186,6 +186,24 @@ def test_eligibility_split_game_vs_team():
     assert is_eligible_total_record(team, kind=TOTAL_KIND_TEAM)
     assert not is_eligible_total_record(game, kind=TOTAL_KIND_TEAM)
 
+
+def test_mlb_runs_team_total_is_sport_aware():
+    mlb_runs = _norm_record(
+        'mlb-runs',
+        4.5,
+        'OVER',
+        [{'book': 'DK', 'odds': -110}],
+        market_type='TEAM_PROP',
+        proposition='RUNS',
+        team='LAD',
+    )
+
+    assert is_team_total_record(mlb_runs, sport='MLB')
+    assert is_eligible_total_record(
+        mlb_runs, kind=TOTAL_KIND_TEAM, sport='MLB'
+    )
+    assert not is_team_total_record(mlb_runs, sport='WNBA')
+
 def test_build_game_totals_excludes_team_records():
     games_norm = {'records': [_norm_record('m_game', 8.5, 'OVER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m_game', 8.5, 'UNDER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}]), _norm_record('m_team', 4.5, 'OVER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}], market_type='TEAM_PROP', proposition='POINTS'), _norm_record('m_team', 4.5, 'UNDER', [{'book': 'DK', 'odds': -110}, {'book': 'FD', 'odds': -110}], market_type='TEAM_PROP', proposition='POINTS')]}
     rows = build_game_totals([], games_norm, sport='MLB')
@@ -201,6 +219,62 @@ def test_build_team_totals_shape():
     assert row['total_kind'] == TOTAL_KIND_TEAM
     assert row['market_id'] == 'm_team'
     assert 'Team Total' in row['selection']
+
+
+def test_build_team_totals_accepts_live_shaped_mlb_runs_and_matches_candidate():
+    books_over = [{'book': 'DK', 'odds': -115}, {'book': 'FD', 'odds': -112}]
+    books_under = [{'book': 'DK', 'odds': -105}, {'book': 'FD', 'odds': -108}]
+    records = [
+        _norm_record(
+            'mlb-team-runs',
+            4.5,
+            'OVER',
+            books_over,
+            market_type='TEAM_PROP',
+            proposition='RUNS',
+            event_id='mlb-event',
+            team='LAD',
+            matchup='LAD @ SF',
+        ),
+        _norm_record(
+            'mlb-team-runs',
+            4.5,
+            'UNDER',
+            books_under,
+            market_type='TEAM_PROP',
+            proposition='RUNS',
+            event_id='mlb-event',
+            team='LAD',
+            matchup='LAD @ SF',
+        ),
+    ]
+    candidate = {
+        'sport': 'MLB',
+        'market_id': 'mlb-team-runs',
+        'market_type': 'TEAM_PROP',
+        'market_label': 'RUNS',
+        'selection': 'LAD Runs OVER 4.5',
+        'line': 4.5,
+        'line_now': 4.5,
+    }
+    games_norm = {
+        'generated_at': '2026-07-07T12:00:00Z',
+        'records': records,
+        'context': {'events': {'mlb-event': {'starts_at': '2099-12-31T00:00:00Z'}}},
+    }
+
+    rows = build_team_totals(
+        [candidate],
+        games_norm,
+        sport='MLB',
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]['market_id'] == 'mlb-team-runs'
+    assert rows[0]['team'] == 'LAD'
+    assert rows[0]['line_now'] == 4.5
+    assert 'Team Total' in rows[0]['selection']
 
 def test_period_identity_prefers_period_label_over_wrong_scope():
     rec = _norm_record('inn6', 1.5, 'OVER', [{'book': 'DK', 'odds': -110}], scope='full_game', period_label='6I', periods=[6], include_overtime=False)
