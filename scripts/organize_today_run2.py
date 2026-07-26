@@ -100,7 +100,7 @@ def organize_today_additive():
             
         # Move prompt files to proper folders
         for item in out_dir.glob("*.txt"):
-            if item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt")):
+            if item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "generic")):
                 shutil.move(str(item), str(generic_prompts / item.name))
             elif item.name[0].isupper() and item.name[1] == '_':
                 shutil.move(str(item), str(desk2_prompts / item.name))

@@ -2,6 +2,7 @@ import argparse
 import re
 import shutil
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -23,6 +24,30 @@ def filter_candidates_text_for_ai(candidates: str) -> str:
     return filter_candidates_for_ai(candidates.encode("utf-8")).decode("utf-8-sig")
 
 
+def safe_rmtree(path: Path, max_retries: int = 5, delay: float = 0.5) -> None:
+    """Safely remove a directory tree with retries for cloud-sync file locks."""
+    if not path.exists():
+        return
+    for attempt in range(max_retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                for p in list(path.rglob("*")):
+                    if p.is_file():
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                except OSError:
+                    pass
+
+
 def clean_stray_files(out_dir: Path) -> None:
     """Remove non-pack files/dirs from out_dir, preserving the archive and prompts folders."""
     for f in out_dir.glob("*"):
@@ -34,10 +59,7 @@ def clean_stray_files(out_dir: Path) -> None:
             except OSError:
                 pass
         elif f.is_dir():
-            try:
-                shutil.rmtree(f)
-            except OSError:
-                pass
+            safe_rmtree(f)
 
 
 def archive_old_packs(out_dir: Path, keep_dates: set[str]) -> None:
@@ -79,29 +101,20 @@ def generate_for_dir(out_dir: Path, date_str: str, briefing: str, candidates: st
     if not no_clean:
         clean_stray_files(out_dir)
         if prompts_dir.exists():
-            shutil.rmtree(prompts_dir)
+            safe_rmtree(prompts_dir)
 
     desk1_dir = prompts_dir / "Desk1_Automated"
     desk2_dir = prompts_dir / "Desk2_Manual"
     desk1_dir.mkdir(parents=True, exist_ok=True)
     desk2_dir.mkdir(parents=True, exist_ok=True)
 
-    # Desk 1 - Automated Models
-    desk1_models = [
-        (1, "Claude"),
-        (2, "Grok"),
-        (3, "Copilot"),
-        (4, "Gemini"),
-        (5, "ChatGPT")
-    ]
-    
+    # Desk 1 - Automated Models (Single Master Copy for Generic Prompt)
     desk1_base_prompt = get_desk1_prompt_template()
     full_desk1_prompt = f"{desk1_base_prompt}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
 
-    for order, model in desk1_models:
-        file_path = desk1_dir / f"{order}_{model}_pack_{date_str}.txt"
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(full_desk1_prompt)
+    master_desk1_file = desk1_dir / f"1_Master_Generic_pack_{date_str}.txt"
+    with open(master_desk1_file, "w", encoding="utf-8") as f:
+        f.write(full_desk1_prompt)
 
     # Desk 2 - Manual Sequence
     desk2_order_map = {
@@ -132,7 +145,7 @@ def generate_for_dir(out_dir: Path, date_str: str, briefing: str, candidates: st
                 f.write(full_prompt)
             desk2_count += 1
 
-    print(f"Successfully generated {len(desk1_models)} Desk1 and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})")
+    print(f"Successfully generated 1 Desk1 Master and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})")
 
 
 def main() -> None:
