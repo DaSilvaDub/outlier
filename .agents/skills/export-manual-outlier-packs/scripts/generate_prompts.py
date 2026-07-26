@@ -78,21 +78,34 @@ def archive_old_packs(out_dir: Path, keep_dates: set[str]) -> None:
             pass
 
 
-def get_desk1_prompt_template() -> str:
-    """Read the unified Desk 1 prompt from the repo."""
-    prompt_path = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts\A.md")
-    if prompt_path.exists():
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return "Error: Could not find unified Desk 1 prompt (A.md)."
+def load_prompt_template(filename: str) -> str:
+    """Read a prompt template from prompts directory."""
+    repo_root = Path(__file__).resolve().parents[4]
+    candidate_paths = [
+        Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / filename,
+        Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts") / filename,
+        repo_root / "prompts" / filename,
+    ]
+    for p in candidate_paths:
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                return f.read()
+    return f"Error: Could not find prompt template ({filename})."
 
 
-def generate_for_dir(out_dir: Path, date_str: str, briefing: str, candidates: str, no_clean: bool) -> None:
+def generate_for_dir(
+    out_dir: Path,
+    date_str: str,
+    briefing: str,
+    candidates: str,
+    totals_data: tuple[str, str, str],
+    no_clean: bool,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     current_date = date.fromisoformat(date_str)
     keep_dates = {date_str, (current_date - timedelta(days=1)).isoformat()}
-    
+
     # Archive old files before cleaning the prompts directory
     archive_old_packs(out_dir, keep_dates)
 
@@ -108,44 +121,66 @@ def generate_for_dir(out_dir: Path, date_str: str, briefing: str, candidates: st
     desk1_dir.mkdir(parents=True, exist_ok=True)
     desk2_dir.mkdir(parents=True, exist_ok=True)
 
-    # Desk 1 - Automated Models (Single Master Copy for Generic Prompt)
-    desk1_base_prompt = get_desk1_prompt_template()
-    full_desk1_prompt = f"{desk1_base_prompt}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
+    # Master Prompts for Data Types (Cards, HitRate, Totals)
+    cards_template = load_prompt_template("A.md")
+    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
 
-    master_desk1_file = desk1_dir / f"1_Master_Generic_pack_{date_str}.txt"
-    with open(master_desk1_file, "w", encoding="utf-8") as f:
-        f.write(full_desk1_prompt)
+    hitrate_template = load_prompt_template("HitRate_Props_Analysis.md")
+    full_hitrate_prompt = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
 
-    # Desk 2 - Manual Sequence
+    totals_template = load_prompt_template("Totals_Analysis.md")
+    game_totals, team_totals, alt_team_totals = totals_data
+    full_totals_prompt = (
+        f"{totals_template}\n\n### Pack Data\n{briefing}\n\n"
+        f"### Game Totals Data\n```csv\n{game_totals}\n```\n\n"
+        f"### Team Totals Data\n```csv\n{team_totals}\n```\n\n"
+        f"### Alternate Team Totals Data\n```csv\n{alt_team_totals}\n```\n"
+    )
+
+    with open(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", "w", encoding="utf-8") as f:
+        f.write(full_cards_prompt)
+
+    with open(desk1_dir / f"2_Master_HitRate_pack_{date_str}.txt", "w", encoding="utf-8") as f:
+        f.write(full_hitrate_prompt)
+
+    with open(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", "w", encoding="utf-8") as f:
+        f.write(full_totals_prompt)
+
+    # Desk 2 - Manual Sequence (Phase-specific prompts)
     desk2_order_map = {
         "Q_chatgpt": (1, "PhaseQ"),
         "R_claude": (2, "PhaseR"),
         "W_gemini": (3, "PhaseW"),
         "X_grok": (4, "PhaseX"),
-        "S_claude": (5, "PhaseS")
+        "S_claude": (5, "PhaseS"),
     }
 
     src_desk2_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\prompts\desk2")
+    if not src_desk2_dir.exists():
+        src_desk2_dir = Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts\desk2")
+
     desk2_count = 0
     if src_desk2_dir.exists():
         for p in src_desk2_dir.glob("*.md"):
             with open(p, "r", encoding="utf-8") as pf:
                 p_text = pf.read()
             full_prompt = f"{p_text}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
-            
+
             stem = p.stem
             if stem in desk2_order_map:
                 order, phase_name = desk2_order_map[stem]
                 filename = f"{order}_{phase_name}_{stem}_pack_{date_str}.txt"
             else:
                 filename = f"99_{stem}_pack_{date_str}.txt"
-                
+
             out_file = desk2_dir / filename
             with open(out_file, "w", encoding="utf-8") as f:
                 f.write(full_prompt)
             desk2_count += 1
 
-    print(f"Successfully generated 1 Desk1 Master and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})")
+    print(
+        f"Successfully generated 3 Master Prompts (Cards, HitRate, Totals) and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})"
+    )
 
 
 def main() -> None:
@@ -189,8 +224,18 @@ def main() -> None:
     briefing = briefing.replace("- Use this pack ONLY. Do not use memory or the web.\n", "")
     briefing = briefing.replace("- If you need info not in the pack, list it under NEEDS — do not guess.\n", "")
 
+    # Read totals data if available
+    gt_path = latest_pack / "game_totals.csv"
+    tt_path = latest_pack / "team_totals.csv"
+    att_path = latest_pack / "alt_team_totals.csv"
+
+    game_totals = gt_path.read_text(encoding="utf-8") if gt_path.exists() else ""
+    team_totals = tt_path.read_text(encoding="utf-8") if tt_path.exists() else ""
+    alt_team_totals = att_path.read_text(encoding="utf-8") if att_path.exists() else ""
+    totals_data = (game_totals, team_totals, alt_team_totals)
+
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, args.no_clean)
+        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, args.no_clean)
 
 
 if __name__ == "__main__":
