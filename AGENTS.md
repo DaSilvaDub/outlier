@@ -26,7 +26,7 @@ This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prom
 
 ## EXPORTED PROMPT HANDOFF (ALL ENTS)
 
-When the user explicitly asks in the current turn to analyze a generated Outlier prompt, read and follow `.agents/skills/analyze-outlier-prompt/SKILL.md`. Use the current agent's native model, then save the provenance-labeled report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`. A prompt appearing on disk does not itself authorize reasoning.
+When the user explicitly asks in the current turn to analyze generated Outlier prompts, route `Desk1_Automated` master prompts to `.agents/skills/analyze-outlier-generic-prompts/SKILL.md` and save under `BETTING REPORTS\GENERIC\YYYY-MM-DD`. Route `Desk2_Manual` or `paste_*.md` prompts to `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`, enforce Q → R → W → X → S, and save under `BETTING REPORTS\SEQUENTIAL\YYYY-MM-DD`. Use the current agent's native model. A prompt appearing on disk does not itself authorize reasoning.
 
 ### Mechanical enforcement (Claude Code) — and how to legitimately run the desk
 

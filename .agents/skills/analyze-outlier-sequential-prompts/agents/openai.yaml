@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Sequential Outlier Prompts"
+  short_description: "Run ordered Desk 2 prompt phases"
+  default_prompt: "Use $analyze-outlier-sequential-prompts to run the next authorized Desk 2 prompt in order and save its report in the shared sequential folder."

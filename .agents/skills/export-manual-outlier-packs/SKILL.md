@@ -32,6 +32,9 @@ Each run archives old pack files into an `archive/` subfolder.
 
 ### 3. Hand Off for Analysis
 
-If the user also explicitly asks in the current turn for this agent to analyze one of the generated prompt files, follow `.agents/skills/analyze-outlier-prompt/SKILL.md` with the exact prompt path. That skill saves the result in the shared Desktop `BETTING REPORTS` folder.
+If the user also explicitly asks in the current turn to analyze generated prompts, route by folder:
+
+- `Desk1_Automated/`: follow `.agents/skills/analyze-outlier-generic-prompts/SKILL.md`. Save reports under `BETTING REPORTS/GENERIC/YYYY-MM-DD`.
+- `Desk2_Manual/`: follow `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`. Run Q → R → W → X → S and save phase reports under `BETTING REPORTS/SEQUENTIAL/YYYY-MM-DD`.
 
 If the user requested only data and prompt export, stop after reporting the generated paths. Prompt creation by itself does not authorize reasoning-model use.
