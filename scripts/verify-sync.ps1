@@ -21,23 +21,84 @@
   If a user or another ent shows you raw one-liner output, tell them to run THIS script instead.
 #>
 
+[CmdletBinding()]
+param(
+  # Repo this report is ABOUT. Defaults to canonical; override only to target another
+  # checkout (or to test this script without mutating canonical).
+  [string]$RepoRoot
+)
+
 $ErrorActionPreference = 'Continue'
 
-$canonicalRoot = 'C:\Users\dasil\Dev\GitHub\outlier'
-$canonicalBootstrap = Join-Path $canonicalRoot 'sync-outlier.ps1'
+$CanonicalRoot = 'C:\Users\dasil\Dev\GitHub\outlier'
+if (-not $RepoRoot) { $RepoRoot = $CanonicalRoot }
+$canonicalRoot = $RepoRoot
 
-# Guard against the exact anti-pattern that keeps causing "d05eb21 not found" confusion
-$inv = $MyInvocation.Line
-if ($inv -match 'Select-String|Out-String|Select -First| \| ' -or $Host.UI.RawUI.WindowSize.Width -lt 200) {
-    Write-Host '!!! FORBIDDEN: This verify-sync.ps1 was invoked with piping, Select-String, Out-String, Select -First, or truncation.' -ForegroundColor Red
-    Write-Host '!!! Every "I searched every branch/worktree" or status report MUST be the complete, unfiltered output of a direct call.' -ForegroundColor Red
-    Write-Host '!!! Correct:  & "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"'
-    Write-Host '!!! Then paste EVERY line. No pipes. No filters. No -First.'
+# Invoke the bootstrap that ships ALONGSIDE this script, not the one at the canonical
+# path. These two files are a versioned pair and must not be mixed across versions:
+# a new verify-sync passing -RepoRoot to an old sync-outlier is a parameter-binding
+# error. Which repo is *targeted* is decided by $RepoRoot above, so this is purely
+# about which code runs -- script-relative is safe here in a way it is NOT for
+# resolving the repo root (a copy of this tooling also lives under OneDrive).
+$canonicalBootstrap = Join-Path (Split-Path -Parent $PSScriptRoot) 'sync-outlier.ps1'
+if (-not (Test-Path -LiteralPath $canonicalBootstrap)) {
+    $canonicalBootstrap = Join-Path $CanonicalRoot 'sync-outlier.ps1'
 }
+
+# Per-run nonce. Replaces the old "!!! FORBIDDEN" banner, which claimed to detect
+# piping but actually fired on ANY terminal narrower than 200 columns
+# ($Host.UI.RawUI.WindowSize.Width -lt 200) -- so it fired on clean, unpiped
+# `& "...\report-sync.ps1"` calls and was pure noise. A script fundamentally cannot
+# see what its caller pipes it into; $MyInvocation.Line only ever showed the wrapper's
+# own invocation line. Training every ent to ignore the one anti-forgery signal was
+# strictly worse than having none.
+#
+# Instead: emit an unforgeable-after-the-fact token as the FINAL line. A paste that
+# is truncated, filtered, or edited will be missing it or carry a stale one, and the
+# token can be checked against this run's HEAD and timestamp.
+$runNonce = [guid]::NewGuid().ToString('N').Substring(0, 16)
+$runUtc   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 
 function Write-Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Write-Ok($m)      { Write-Host "[OK]  $m" -ForegroundColor Green }
 function Write-Bad($m)     { Write-Host "[!!]  $m" -ForegroundColor Red }
+# Was called at L162 but never defined, so a lagging full clone raised
+# "The term 'Write-Warn' is not recognized" instead of the intended warning.
+function Write-Warn($m)    { Write-Host "[??]  $m" -ForegroundColor Yellow }
+
+# Verdict accumulators, rendered as a single computed trailer at the end.
+$vBootstrap = 'NOT-RUN'
+$vValidate  = 'NOT-RUN'
+$vState     = 'UNKNOWN'
+$vMarkers   = '0/5'
+$vWorktrees = 'NOT-RUN'
+$vClones    = 'NOT-RUN'
+$vFailures  = [System.Collections.Generic.List[string]]::new()
+
+function Write-Verdict {
+    param([int]$ExitCode)
+    # Defence in depth: never render OK while failures are recorded. A caller passing a
+    # mis-derived 0 (see the LASTEXITCODE-unset case below) must not be able to mint a
+    # green attestation.
+    if ($ExitCode -eq 0 -and $vFailures.Count -gt 0) { $ExitCode = 1 }
+    $status = if ($ExitCode -eq 0) { 'OK' } else { 'FAILED' }
+    Write-Section 'VERDICT'
+    Write-Host "REPORT STATUS: $status"
+    Write-Host ("  bootstrap={0}  validate={1}  state={2}  markers={3}  worktrees={4}  fullclones={5}" -f `
+        $vBootstrap, $vValidate, $vState, $vMarkers, $vWorktrees, $vClones)
+    if ($vFailures.Count -gt 0) {
+        Write-Host '  failures:'
+        foreach ($f in $vFailures) { Write-Host "    - $f" }
+    }
+    if ($ExitCode -ne 0) {
+        Write-Bad 'This report is NOT a valid sync attestation. Do not quote it as proof of state.'
+    }
+    $headNow = git -C $canonicalRoot rev-parse --short HEAD 2>$null
+    if (-not $headNow) { $headNow = 'unknown' }
+    Write-Host ''
+    Write-Host "RUN-NONCE: $runNonce  utc=$runUtc  head=$headNow  status=$status"
+    exit $ExitCode
+}
 
 # Force the entire world into a known synchronized state first.
 Write-Section 'Search result processed (via committed verifier)'
@@ -45,21 +106,84 @@ Write-Section 'Search result processed (via committed verifier)'
 Write-Host 'This report was produced by scripts/verify-sync.ps1 (never ad-hoc).'
 Write-Host 'Canonical bootstrap + SyncAllWorktrees forced before any inspection.'
 
-& $canonicalBootstrap 2>&1 | Out-Null
-& $canonicalBootstrap -SyncAllWorktrees 2>&1 | Out-Null
-& $canonicalBootstrap -ValidateOnly 2>&1 | Out-Null
+# The repo root is passed EXPLICITLY. Previously the bootstrap resolved it from cwd,
+# so invoking this from an unreadable directory made all three calls no-op while the
+# sections below -- which address canonical directly -- still produced a confident
+# report. Every invocation's exit code is now checked and is fatal.
+# Hashtable splatting, not array splatting: array elements bind positionally, so
+# '-RepoRoot' arrived as a value rather than a parameter name and the call failed with
+# "A positional parameter cannot be found that accepts argument ...". Hashtable
+# splatting binds by name unambiguously.
+$bootstrapSteps = @(
+    @{ Name = 'bootstrap';        Args = @{ RepoRoot = $canonicalRoot } },
+    @{ Name = 'SyncAllWorktrees'; Args = @{ RepoRoot = $canonicalRoot; SyncAllWorktrees = $true } },
+    @{ Name = 'ValidateOnly';     Args = @{ RepoRoot = $canonicalRoot; ValidateOnly = $true } }
+)
+
+foreach ($step in $bootstrapSteps) {
+    # @($step.Args) is an array SUBEXPRESSION, not splatting -- it passes the whole
+    # array as one positional argument. Splatting needs @<variablename>.
+    $stepArgs = $step.Args
+    $global:LASTEXITCODE = $null
+    try {
+        & $canonicalBootstrap @stepArgs
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Bad "  bootstrap threw before it could set an exit code: $($_.Exception.Message)"
+        $code = 1
+    }
+    # A throw (e.g. parameter binding failure) leaves LASTEXITCODE unset. Treating
+    # $null/'' as 0 is exactly the empty-string truthiness bug this PR exists to kill:
+    # it reported STATUS: OK for a run that never executed.
+    if ($null -eq $code -or "$code" -eq '') { $code = 1 }
+    $code = [int]$code
+    if ($code -ne 0) {
+        Write-Bad "ABORT: bootstrap step '$($step.Name)' failed with exit code $code."
+        switch ($code) {
+            1 { Write-Bad "  -> canonical is not a git repo git can read: $canonicalRoot" }
+            2 { Write-Bad '  -> upgrade-marker validation failed; the tree is stale or wrong.' }
+            3 { Write-Bad '  -> git fetch failed; origin/master cannot be trusted.' }
+            default { Write-Bad '  -> see the [sync] lines above for the cause.' }
+        }
+        Write-Bad '  Refusing to continue to the identity/marker sections. Those address canonical'
+        Write-Bad '  explicitly and would otherwise print a MATCH derived from a fetch that never ran.'
+        $vBootstrap = "FAILED($($step.Name)/exit$code)"
+        $vFailures.Add("bootstrap step '$($step.Name)' exited $code")
+        Write-Verdict -ExitCode $code
+    }
+    if ($step.Name -eq 'ValidateOnly') { $vValidate = 'OK' }
+}
+$vBootstrap = 'OK'
 
 # Now produce the full picture from the canonical owner.
 Set-Location $canonicalRoot
 
 Write-Section 'GitHub + Canonical identity'
 git remote -v
-$originMaster = git rev-parse --verify origin/master
-$head = git rev-parse HEAD
+$originMaster = git rev-parse --verify origin/master 2>$null
+$head = git rev-parse HEAD 2>$null
 Write-Host "origin/master: $originMaster"
 Write-Host "local HEAD   : $head"
-$state = if ($head -eq $originMaster) { 'MATCH' } else { 'DIVERGED' }
+# Reachable only after a bootstrap that fetched successfully (exit 3 otherwise), so
+# this comparison is against a freshly-updated origin/master rather than a stale ref.
+if (-not $originMaster -or -not $head) {
+    $state = 'UNKNOWN'
+    $vFailures.Add('could not resolve origin/master or HEAD at canonical')
+} else {
+    $state = if ($head -eq $originMaster) { 'MATCH' } else { 'DIVERGED' }
+}
+$vState = $state
 Write-Host "State vs origin/master: $state"
+if ($state -eq 'DIVERGED') {
+    # The bootstrap above force-aligns canonical to origin/master (reset --hard, or
+    # checkout -B when the tree is dirty), so reaching here means that alignment did
+    # not take -- e.g. the checkout hit a conflict, or another session moved HEAD
+    # mid-run. Either way the tree is not what this report would otherwise imply.
+    $branchNow = git rev-parse --abbrev-ref HEAD 2>$null
+    Write-Bad "  canonical HEAD ($head, branch '$branchNow') != origin/master ($originMaster)"
+    Write-Bad '  The bootstrap should have aligned these. Check for a concurrent session moving HEAD.'
+    $vFailures.Add("canonical DIVERGED from origin/master (branch '$branchNow')")
+}
 
 Write-Section 'Pipeline upgrade landed changes (the reason d05eb21 existed)'
 Write-Host 'The ~624-line pack.py + daily_job.py counter-proposal changes were reviewed at'
@@ -81,10 +205,21 @@ $hasCand     = $gitPack -match 'CANDIDATES_HEADER'
 $hasLock     = $gitDaily -match '_acquire_pack_lock'
 $hasDec      = $gitPack -match 'decisions\.csv'
 
+$markerHits = @($hasPlayer, $hasRound, $hasCand, $hasLock, $hasDec) | Where-Object { $_ }
+$vMarkers = "$($markerHits.Count)/5"
+
 if ($hasPlayer -and $hasRound -and $hasCand -and $hasLock -and $hasDec) {
   Write-Ok "All Tier-1 upgrade markers present in origin/master blobs (pack + daily)"
 } else {
-  Write-Bad "MISSING MARKERS. Something is very wrong."
+  # Name the offenders. "Something is very wrong" gave the reader nothing to act on.
+  $absent = @()
+  if (-not $hasPlayer) { $absent += 'player_id (pack.py)' }
+  if (-not $hasRound)  { $absent += 'round_robin_then_fill (pack.py)' }
+  if (-not $hasCand)   { $absent += 'CANDIDATES_HEADER (pack.py)' }
+  if (-not $hasLock)   { $absent += '_acquire_pack_lock (daily_job.py)' }
+  if (-not $hasDec)    { $absent += 'decisions.csv (pack.py)' }
+  Write-Bad ("MISSING MARKERS ({0}/5): {1}" -f $markerHits.Count, ($absent -join ', '))
+  $vFailures.Add("origin/master missing markers: $($absent -join ', ')")
 }
 
 Write-Section 'All registered worktrees (linked ents from canonical .git)'
@@ -130,9 +265,11 @@ foreach ($line in $wtList) {
   }
 }
 
-$badWts = $worktreeResults | Where-Object { -not $_.MarkersOK }
+$badWts = @($worktreeResults | Where-Object { -not $_.MarkersOK })
+$vWorktrees = "{0}/{1}" -f ($worktreeResults.Count - $badWts.Count), $worktreeResults.Count
 if ($badWts.Count -gt 0) {
   Write-Bad ("{0} worktree(s) are missing upgrade markers or are stale." -f $badWts.Count)
+  foreach ($b in $badWts) { $vFailures.Add("worktree missing markers: $($b.Path)") }
 } else {
   Write-Ok ("All {0} registered worktrees have the pipeline upgrade markers." -f $worktreeResults.Count)
 }
@@ -146,24 +283,66 @@ $knownFullClones = @(
   'C:\Users\dasil\OneDrive\Documents\outlier-mirror',
   'C:\Users\dasil\My Drive (dasilvadub@gmail.com)\Sports_Analytics\outlier'
 )
+# Every row used to be hardcoded as "ai-runners:" regardless of which path it described,
+# so four different clones reported under one name. And Test-Path on .git is satisfied by
+# a OneDrive placeholder that git cannot open, which emitted the phantom blank row
+# ("HEAD= origin/master= markers=MISSING") sitting among healthy ones -- an empty-string
+# truthiness bug of the same family as PR #41. Label by actual path, and probe with git
+# rather than trusting Test-Path.
+$cloneOk = 0
+$cloneTotal = 0
+$cloneUnreadable = 0
 foreach ($fc in $knownFullClones) {
-  if (Test-Path (Join-Path $fc '.git')) {
-    $fcHead = (git -C $fc rev-parse --short HEAD 2>$null)
-    $fcOrigin = (git -C $fc rev-parse --short origin/master 2>$null)
-    $fcPack = git -C $fc show origin/master:outlier_scrapers/pack.py 2>$null   # from origin for truth
-    $fcDaily = git -C $fc show origin/master:outlier_scrapers/daily_job.py 2>$null
-    $mP = [bool]($fcPack -match 'player_id')
-    $mR = [bool]($fcPack -match 'round_robin_then_fill')
-    $mC = [bool]($fcPack -match 'CANDIDATES_HEADER')
-    $mL = [bool]($fcDaily -match '_acquire_pack_lock')
-    $ok = $mP -and $mR -and $mC -and $mL
-    $status = if ($ok) { 'OK' } else { 'MISSING' }
-    Write-Host ("  ai-runners: HEAD={0} origin/master={1} markers={2}" -f $fcHead, $fcOrigin, $status)
-    if ($fcHead -ne $fcOrigin) { Write-Warn "  ai-runners is not at origin/master tip; re-run report-sync from canonical." }
-  } else {
-    Write-Host "  ai-runners: not present at expected path"
+  # Leaf alone is ambiguous: Documents\outlier and My Drive\...\outlier both render as
+  # "outlier". Use the last two segments.
+  $leaf   = Split-Path -Leaf $fc
+  $parent = Split-Path -Leaf (Split-Path -Parent $fc)
+  $label  = "$parent/$leaf"
+
+  if (-not (Test-Path (Join-Path $fc '.git'))) {
+    Write-Host ("  {0,-28} : not present" -f $label)
+    continue
+  }
+
+  git -C $fc rev-parse --git-dir 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    # Reported, but deliberately NOT a hard failure. The OneDrive mirror is
+    # permanently unreadable by design (placeholder .git), so failing the verdict on
+    # it would print FAILED on every single run -- and a status that is always red
+    # teaches everyone to ignore it, which is precisely how the old FORBIDDEN banner
+    # became noise. Only readable-but-stale clones fail the report.
+    Write-Warn ("  {0,-28} : UNREADABLE (.git exists but git cannot open it - OneDrive placeholder?) at {1}" -f $label, $fc)
+    $cloneUnreadable++
+    continue
+  }
+
+  $cloneTotal++
+  $fcHead   = (git -C $fc rev-parse --short HEAD 2>$null)
+  $fcOrigin = (git -C $fc rev-parse --short origin/master 2>$null)
+  $fcPack   = git -C $fc show origin/master:outlier_scrapers/pack.py 2>$null   # from origin for truth
+  $fcDaily  = git -C $fc show origin/master:outlier_scrapers/daily_job.py 2>$null
+  $mP = [bool]($fcPack -match 'player_id')
+  $mR = [bool]($fcPack -match 'round_robin_then_fill')
+  $mC = [bool]($fcPack -match 'CANDIDATES_HEADER')
+  $mL = [bool]($fcDaily -match '_acquire_pack_lock')
+  $ok = $mP -and $mR -and $mC -and $mL
+
+  # An empty HEAD is a failed probe, not a healthy clone at "".
+  if (-not $fcHead) {
+    Write-Bad ("  {0,-12} : could not resolve HEAD at {1}" -f $label, $fc)
+    $vFailures.Add("full clone HEAD unresolved: $fc")
+    continue
+  }
+
+  $status = if ($ok) { 'OK' } else { 'MISSING' }
+  Write-Host ("  {0,-28} : HEAD={1} origin/master={2} markers={3}" -f $label, $fcHead, $fcOrigin, $status)
+  if ($ok) { $cloneOk++ } else { $vFailures.Add("full clone missing markers: $fc") }
+  if ($fcHead -ne $fcOrigin) {
+    Write-Warn ("  {0} is not at origin/master tip; re-run report-sync from canonical." -f $label)
   }
 }
+$vClones = "$cloneOk/$cloneTotal"
+if ($cloneUnreadable -gt 0) { $vClones += " (+$cloneUnreadable unreadable)" }
 
 Write-Section 'Explicit d05eb21 / search explanation (answer to the pasted complaint)'
 Write-Host 'd05eb21 does NOT exist in any branch, fetch, or worktree — by design.'
@@ -204,6 +383,13 @@ Write-Host '   git clone https://github.com/DaSilvaDub/outlier.git then run the 
 Write-Host ''
 Write-Ok 'Report complete. This is the synchronized view for all ents.'
 Write-Host 'Rule: every "I searched..." or "commit not visible" discussion must start with the'
-Write-Host 'full output of the command above (the canonical verify-sync.ps1 path).'
+Write-Host 'full output of the command above (the canonical verify-sync.ps1 path), and the'
+Write-Host 'paste must end with the RUN-NONCE line below. No nonce = not a valid attestation.'
 
-exit 0
+# Previously an unconditional `exit 0`: the report could describe a total failure and
+# still succeed. The verdict is computed from what actually happened.
+$exitCode = 0
+if ($vState -ne 'MATCH')   { $exitCode = 1 }
+if ($vMarkers -ne '5/5')   { $exitCode = 1 }
+if ($vFailures.Count -gt 0) { $exitCode = 1 }
+Write-Verdict -ExitCode $exitCode

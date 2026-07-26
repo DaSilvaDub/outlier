@@ -15,13 +15,36 @@
     & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1"
     & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -ValidateOnly
     & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -SyncAllWorktrees   # from canonical: align every registered worktree
+    & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -RepoRoot D:\some\other\checkout
+
+.NOTES
+  BEHAVIOUR CHANGE (cwd is no longer an input).
+
+  This script used to resolve the repo with a bare `git rev-parse --show-toplevel`,
+  i.e. from the current directory. Launched from a directory git cannot read -- most
+  importantly C:\Users\dasil\OneDrive\Documents\outlier, where .git is a OneDrive
+  placeholder -- it printed "[sync] Not inside a git repo" and exited, doing nothing.
+  verify-sync.ps1 discarded that exit code and carried on to sections that address
+  canonical explicitly, so the report still rendered a confident
+  "State vs origin/master: MATCH" after a fetch that never ran. Three bootstrap
+  invocations no-opped, VALIDATE: OK never printed, and the overall exit was 0. The
+  only evidence of total failure was an ABSENT line.
+
+  It now targets $CanonicalRoot by default, regardless of where it is invoked from,
+  and refuses loudly (non-zero exit) if that path is not a readable git repo. Use
+  -RepoRoot to deliberately target a different checkout.
+
+  $PSScriptRoot deliberately is NOT used to derive the default: a copy of this
+  tooling also exists under OneDrive\Documents\outlier, so script-relative
+  resolution would point straight back at the unreadable mirror.
 #>
 
 [CmdletBinding()]
 param(
   [switch]$ValidateOnly,
   [switch]$Force,
-  [switch]$SyncAllWorktrees
+  [switch]$SyncAllWorktrees,
+  [string]$RepoRoot
 )
 
 $ErrorActionPreference = 'Continue'
@@ -30,12 +53,37 @@ function Write-Info($msg) { Write-Host "[sync] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[sync] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "[sync] $msg" -ForegroundColor Red }
 
-$repoRoot = git rev-parse --show-toplevel 2>$null
-if (-not $repoRoot) {
-  Write-Err "Not inside a git repo. cd to an outlier checkout first."
+# Exit codes (verify-sync.ps1 checks these after every invocation):
+#   0 = success   1 = target is not a readable git repo   2 = validation failed
+#   3 = fetch failed, so origin/master cannot be trusted
+$CanonicalRoot = 'C:\Users\dasil\Dev\GitHub\outlier'
+
+if (-not $RepoRoot) { $RepoRoot = $CanonicalRoot }
+
+if (-not (Test-Path -LiteralPath $RepoRoot)) {
+  Write-Err "FATAL: target path does not exist: $RepoRoot"
+  Write-Err "Canonical is $CanonicalRoot. Pass -RepoRoot to target a different checkout."
   exit 1
 }
-Set-Location $repoRoot
+
+# Resolve via `git -C` against the explicit target. Never from cwd: the whole
+# silent-no-op class of bug came from cwd being an input.
+#
+# NB: this must not be called $repoRoot -- PowerShell variable names are
+# case-insensitive, so $repoRoot IS $RepoRoot, and assigning git's (empty) output
+# would clobber the parameter before the error message below could report it.
+$resolvedRoot = git -C $RepoRoot rev-parse --show-toplevel 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $resolvedRoot) {
+  Write-Err "FATAL: '$RepoRoot' is not a git repository that git can read."
+  Write-Err "If this is a OneDrive path, .git is very likely a placeholder/reparse point"
+  Write-Err "rather than a real directory, which git cannot open. That is the exact"
+  Write-Err "condition that used to make this script no-op silently while the report"
+  Write-Err "still printed 'State vs origin/master: MATCH'."
+  Write-Err "Use the canonical checkout: $CanonicalRoot"
+  exit 1
+}
+
+Set-Location $resolvedRoot
 $here = (Get-Location).Path
 Write-Info "Repo root: $here"
 
@@ -68,6 +116,14 @@ git remote set-url origin $githubUrl 2>$null | Out-Null
 # 2. Fetch latest from the single source of truth
 Write-Info "Fetching origin (GitHub)..."
 git fetch origin --prune --tags 2>$null | Out-Null
+$fetchExit = $LASTEXITCODE
+if ($fetchExit -ne 0) {
+  Write-Err "FATAL: git fetch origin failed (exit $fetchExit)."
+  Write-Err "origin/master cannot be trusted, so no MATCH/DIVERGED claim will be made."
+  Write-Err "This is usually transient (offline / auth / GitHub down). Re-run when connected."
+  exit 3
+}
+Write-Info "Fetch OK."
 
 $target = git rev-parse --verify origin/master 2>$null
 if (-not $target) {
@@ -204,7 +260,18 @@ if ($SyncAllWorktrees) {
   # hard-reset to the SSOT. This eliminates the case where ai-runners lags and ad-hoc
   # searches inside it find "d05eb21 not present".
   foreach ($fc in $knownFullClones) {
+    # Test-Path on .git is NOT sufficient: a OneDrive placeholder satisfies it while
+    # git cannot open the directory, which produced "Aligning full clone" lines for a
+    # clone that was never actually touched. Require git to resolve it.
+    $fcReadable = $false
     if (Test-Path (Join-Path $fc '.git')) {
+      git -C $fc rev-parse --git-dir 2>$null | Out-Null
+      $fcReadable = ($LASTEXITCODE -eq 0)
+      if (-not $fcReadable) {
+        Write-Warn "Skipping full clone (git cannot read it, likely a OneDrive placeholder): $fc"
+      }
+    }
+    if ($fcReadable) {
       Write-Info "Aligning full clone: $fc"
       git -C $fc fetch origin --prune --tags 2>$null
       git -C $fc reset --hard origin/master 2>$null
