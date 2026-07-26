@@ -157,6 +157,7 @@ $vBootstrap = 'OK'
 
 # Now produce the full picture from the canonical owner.
 Set-Location $canonicalRoot
+python "$canonicalRoot\scripts\sync_agent_docs.py"
 
 Write-Section 'GitHub + Canonical identity'
 git remote -v

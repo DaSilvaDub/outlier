@@ -531,7 +531,8 @@ def build_totals(
             flags.append("LOCKED_OR_UNVERIFIED_EVENT")
         if identity.get("is_active") is False:
             flags.append("MARKET_INACTIVE")
-        if not cand or not cand.get("market_id"):
+        events_dict = ((games_norm or {}).get("context") or {}).get("events") or {}
+        if not events_dict or event_id not in events_dict:
             flags.append("UNINDEXED_SLATE_GAME")
         if cand.get("data_quality_flags"):
             flags.append("SOURCE_INTEGRITY_FLAG")

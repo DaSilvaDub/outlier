@@ -117,6 +117,7 @@ EXCLUDED_MARKETS = {
     "HR", "HOME_RUNS",
     "HRR", "HITSRUNSRBIS", "HITS_RUNS_RBIS",
     "BB", "WALKS",
+    "WALKS_ALLOWED", "WALKSALLOWED", "PITCHER_WALKS", "PITCHING_WALKS", "WALKS ALLOWED",
 }
 
 # House rule: plus-money longshots (e.g. a Hits Over at +181) are hard-filtered
@@ -195,7 +196,16 @@ def match_ev_records(
 
 def is_excluded_market(market_token: str | None, market_type: str | None) -> bool:
     for tok in (market_token, market_type):
-        if tok and str(tok).strip().upper() in EXCLUDED_MARKETS:
+        if not tok:
+            continue
+        upper_tok = str(tok).strip().upper()
+        norm_tok = upper_tok.replace(" ", "_").replace("-", "_")
+        clean_tok = norm_tok.replace("_", "")
+        if (
+            upper_tok in EXCLUDED_MARKETS
+            or norm_tok in EXCLUDED_MARKETS
+            or clean_tok in EXCLUDED_MARKETS
+        ):
             return True
     return False
 
@@ -1285,7 +1295,13 @@ def build_briefing(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"| {_matchup_display(r)}"
             )
-    flagged = [r for r in rows if r.get("_board") == "flagged"]
+    flagged = [
+        r
+        for r in rows
+        if r.get("_board") == "flagged"
+        and (str(r.get("sport") or ""), str(r.get("market_id")))
+        not in derived_market_ids
+    ]
     if flagged:
         lines += ["", "### Non-actionable flagged cards"]
         for r in flagged:
