@@ -607,3 +607,35 @@ untouched, belongs to whoever has that in progress).
   rule, symlink Developer Mode dependency, duplicated OMX section in `~/AGENTS.md`, the unrelated
   `pytest.yml` change on canonical) are still open and unrelated to this change.
 
+---
+
+## Sport-aware primary team totals (2026-07-26)
+
+**Agent:** Codex
+**Branch:** `fix/team-total-scoring-tokens`
+**Last Product Commit SHA:** `896a40b9de3d6bf29233aef500a01dab00bf2be3` (plus the handoff-only commit recording this summary)
+**PR:** https://github.com/DaSilvaDub/outlier/pull/70
+
+### Files Touched
+- `outlier_scrapers/team_totals.py`
+- `outlier_scrapers/game_totals.py`
+- `outlier_scrapers/alt_team_totals.py`
+- `outlier_scrapers/totals_model.py`
+- `outlier_scrapers/pack.py`
+- `tests/test_game_totals.py`
+- `tests/test_pack.py`
+
+### Summary of Work
+- Centralized sport-aware team-total scoring propositions in a dependency-neutral module.
+- Applied the contract to normalized-record filtering, candidate matching, pack-row identity,
+  alternate team totals, and totals-model indexing.
+- Added live-shaped MLB `TEAM_PROP/RUNS` regressions and guarded ambiguous untyped `TOTAL`
+  cards so they remain game totals unless `TEAM_PROP` is explicit.
+- Verified 167 focused tests, a 529-test offline suite excluding live reasoning-provider modules,
+  Ruff, mypy, `git diff --check`, and today's saved MLB feed (30 rows, 15 actionable).
+- Reviewer found no blocking issues. No paid reasoning models or live desk providers were run.
+
+### Next Steps
+- Review and merge PR #70 after hosted checks pass.
+- Re-run the local pack after merge to regenerate `team_totals.csv` with the recovered MLB rows.
+
