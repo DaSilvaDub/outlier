@@ -578,3 +578,32 @@ untouched, belongs to whoever has that in progress).
   (`.github/workflows/pytest.yml`, switching to `dariocurr/pytest-summary@v2.6`) that is not
   part of this handoff — whoever owns it should commit or discard it; it was left untouched here.
 
+---
+
+## Fix handoff skill: append, not overwrite (2026-07-26)
+
+**Agent:** claude
+**Branch(es):** `fix/handoff-skill-append-not-overwrite`
+**Last Commit SHA:** `80a4bc7`
+**PR:** https://github.com/DaSilvaDub/outlier/pull/68
+
+### Files Touched
+- `.claude/skills/handoff/SKILL.md`
+
+### Summary of Work
+- The first "Next Steps" item in the entry directly above this one flagged that the `handoff`
+  skill's own step 4 said to *overwrite* `.agent-log/HANDOFF.md`, when every real entry in this
+  file (including that one) appends a new dated section instead. Fixed it: step 4 now instructs
+  appending a `---`-separated section matching the field names already in use here (`Agent`,
+  `Branch(es)`, `Last Commit SHA`, `PR`, then `Files Touched` / `Summary of Work` / `Next Steps`),
+  and to check the file's tail first since field naming has drifted slightly entry to entry
+  across sessions/agents. Also tightened step 5 to explicitly say stage only the handoff file,
+  never a blanket `-A` — canonical routinely has unrelated dirty files from concurrent sessions.
+- Docs-only change to the skill's own instructions; no code or repo behavior affected.
+- This entry itself is written by following the corrected skill.
+
+### Next Steps
+- None outstanding from this fix. The open items listed in the entry above (redundant hookify
+  rule, symlink Developer Mode dependency, duplicated OMX section in `~/AGENTS.md`, the unrelated
+  `pytest.yml` change on canonical) are still open and unrelated to this change.
+
