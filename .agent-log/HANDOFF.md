@@ -397,29 +397,34 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 
 ---
 
-## Cross-agent exported-prompt report skill (2026-07-26)
+## Split cross-agent prompt report skills (2026-07-26)
 
-**Last Commit SHA**: `4f87210b096403f4ea6c040c6db0a95871570ebf`
+**Last Product Commit SHA**: `aaffb2cca7da7680b32e3d558e2a55507ff5d26a` (plus the handoff-only commit recording this summary)
 
 **PR**: https://github.com/DaSilvaDub/outlier/pull/64
 
 **Files Touched**:
-- `.agents/skills/analyze-outlier-prompt/`
+- `.agents/skills/analyze-outlier-generic-prompts/`
+- `.agents/skills/analyze-outlier-sequential-prompts/`
+- `.agents/skills/_shared/resolve_prompt_report.py`
 - `.agents/skills/export-manual-outlier-packs/`
 - `AGENTS.md`, `CLAUDE.md`, `GROK.md`, `GEMINI.md`
 - `docs/ENT-SYNC-GLOBAL-PROMPT.md`
-- `tests/test_analyze_outlier_prompt_skill.py`
+- `tests/test_outlier_prompt_report_skills.py`
 
 **Summary of Work**:
-- Added one canonical skill that tells each agent how to analyze an exact exported prompt with its native model and save a provenance-labeled Markdown report in `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS`.
-- Added a collision-safe resolver for Desktop master prompts and dated `paste_*.md` Desk 2 prompts; ambiguous latest prompts fail closed.
-- Wired the existing manual exporter to the skill and corrected its source paths from the unreadable OneDrive checkout to the canonical repo.
+- Replaced the combined prompt skill with two explicit skills: generic Desk 1 master prompts and ordered Desk 2 phases.
+- Generic reports go to `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS\GENERIC\YYYY-MM-DD`.
+- Sequential reports go to `C:\Users\dasil\OneDrive\Desktop\BETTING REPORTS\SEQUENTIAL\YYYY-MM-DD` with hard Q → R → W → X → S predecessor and agent-assignment gates.
+- Added one shared collision-safe resolver that returns predecessor report paths to each downstream phase and keeps generic outputs outside the Desk 2 chain.
+- Wired the existing manual exporter to route each prompt family to its matching skill.
 - Installed thin prompt-handoff pointers in all live Grok, Claude, Codex, and Gemini global instruction files. These machine-local edits are not part of the PR.
-- Verified the skill validator, 5 focused tests, Ruff, and Pyright. No reasoning model or scraper was run.
+- Created the live `BETTING REPORTS\GENERIC` and `BETTING REPORTS\SEQUENTIAL` folders.
+- Verified both skill validators, 9 focused tests, Ruff, and Pyright. No reasoning model or scraper was run.
 
 **Next Steps**:
 - Review and merge PR #64.
 - Start fresh agent sessions after merge so each harness reloads its instruction/skill context.
-- Invoke the skill with an exact generated prompt path when a report is wanted; prompt creation alone remains non-authorizing.
+- Use the generic skill for `Desk1_Automated`; use the sequential skill for `Desk2_Manual` or `paste_*.md`. Prompt creation alone remains non-authorizing.
 
 
