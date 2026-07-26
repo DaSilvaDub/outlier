@@ -607,3 +607,37 @@ untouched, belongs to whoever has that in progress).
   rule, symlink Developer Mode dependency, duplicated OMX section in `~/AGENTS.md`, the unrelated
   `pytest.yml` change on canonical) are still open and unrelated to this change.
 
+---
+
+## Normalized prop identity contract fix (2026-07-26)
+
+**Agent:** Codex
+**Branch(es):** `fix/normalized-prop-identity`
+**Last Commit SHA:** `578aa6b`
+**PR:** https://github.com/DaSilvaDub/outlier/pull/71
+
+### Files Touched
+- `outlier_scrapers/normalizer.py`
+- `outlier_scrapers/schema.py`
+- `outlier_scrapers/cards.py`
+- `tests/fixtures/mlb_player_props.json`
+- `tests/fixtures/wnba_player_props.json`
+- `tests/test_normalizer.py`
+- `tests/test_schema.py`
+
+### Summary of Work
+- Confirmed the live raw MLB payload contained `position` and `outcomeId` on every outcome;
+  the warning came from an internal normalized-contract mismatch.
+- Promoted both fields to top-level normalized keys while preserving `side` and nested
+  `sport_context.outcome_id` compatibility aliases.
+- Dropped source rows without stable outcome identity and made normalized contract violations
+  abort the refresh instead of continuing after warning-only validation.
+- Updated cards to prefer canonical identity with legacy fallback.
+- Verified 183 focused offline tests, Ruff, Pyright, compile checks, and a live-payload smoke
+  covering 23,854 rows with zero schema errors or identity mismatches.
+
+### Next Steps
+- Review and merge PR #71 after hosted checks pass.
+- Re-run the local pipeline after merge to regenerate props artifacts without the prior schema
+  warning flood.
+
