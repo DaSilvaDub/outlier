@@ -352,4 +352,28 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 ### Next Steps:
 - Open PR for `fix/r2-r5-desk-integrity-and-totals-reconciliation` to merge into `master`.
 
+---
+
+## Single Master Generic Prompt Export for Desk 1
+
+**Date**: 2026-07-25  
+**Agent**: Gemini 3.6 Flash  
+**Branch**: `feat/single-master-generic-prompts`  
+**Last Commit SHA**: `49959a1`  
+**PR**: https://github.com/DaSilvaDub/outlier/pull/60  
+
+### Files Touched:
+- `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
+- `scripts/organize_today_run2.py`
+
+### Summary of Work:
+1. **Single Master Generic Prompt**: Updated `generate_prompts.py` so that Desk 1 generic prompt export generates a single master file (`1_Master_Generic_pack_{date}.txt`) instead of 5 identical model copies.
+2. **Desk 2 Phase-Specific Prompts Intact**: Preserved phase/model-specific prompts for Desk 2 (`Desk2_Manual/`), where individual phases require distinct prompt instructions.
+3. **Resilient Cloud Storage Clean-up**: Added `safe_rmtree()` with retry logic to avoid `PermissionError` when clearing `prompts/` directories in cloud-synced folders (OneDrive and Google Drive).
+4. **Organize Script Updated**: Updated `organize_today_run2.py` startswith matcher to properly route `1_Master` generic prompt files into `generic_prompts_{date}` output subdirectories.
+
+### Next Steps:
+- Review and merge PR #60 into `master`.
+
+
 
