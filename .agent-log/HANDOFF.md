@@ -401,7 +401,7 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 
 **Last Product Commit SHA**: `aaffb2cca7da7680b32e3d558e2a55507ff5d26a` (plus the handoff-only commit recording this summary)
 
-**PR**: https://github.com/DaSilvaDub/outlier/pull/64
+**PR**: https://github.com/DaSilvaDub/outlier/pull/66 (follow-up because PR #64 merged before the split-skill correction was pushed)
 
 **Files Touched**:
 - `.agents/skills/analyze-outlier-generic-prompts/`
@@ -423,7 +423,7 @@ Enforce path in `write_pack` zeros rows without `stable_wager_id`. Pack candidat
 - Verified both skill validators, 9 focused tests, Ruff, and Pyright. No reasoning model or scraper was run.
 
 **Next Steps**:
-- Review and merge PR #64.
+- Review and merge PR #66. PR #64 contains the superseded combined-skill version already on master.
 - Start fresh agent sessions after merge so each harness reloads its instruction/skill context.
 - Use the generic skill for `Desk1_Automated`; use the sequential skill for `Desk2_Manual` or `paste_*.md`. Prompt creation alone remains non-authorizing.
 
