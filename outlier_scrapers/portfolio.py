@@ -476,7 +476,7 @@ def allocate_portfolio_risk(
         else:
             allocated_units[wager_id] = 0.0
 
-    group_sums = defaultdict(float)
+    group_sums: defaultdict[str, float] = defaultdict(float)
     row_keys = {}
     for row in eligible_rows:
         wager_id = row.get("stable_wager_id") or stable_wager_id(row)
@@ -505,7 +505,7 @@ def allocate_portfolio_risk(
             group_ratios[group_key] = ratio
 
     base_units = {}
-    current_utilization = defaultdict(float)
+    current_utilization: defaultdict[str, float] = defaultdict(float)
     cap_reasons = defaultdict(list)
 
     for row in eligible_rows:
@@ -516,11 +516,14 @@ def allocate_portfolio_risk(
         min_ratio = 1.0
         binding_reasons = []
         for key_name, group_key in keys.items():
-            r = group_ratios.get(group_key, 1.0)
-            if r < min_ratio:
-                min_ratio = r
+            # Named group_ratio, not r: `r` is already the row variable in the
+            # `for r in rows:` loops earlier in this same function, so reusing it for a
+            # float here gave it two unrelated types in one scope.
+            group_ratio = group_ratios.get(group_key, 1.0)
+            if group_ratio < min_ratio:
+                min_ratio = group_ratio
                 binding_reasons = [group_key]
-            elif r == min_ratio and r < 1.0:
+            elif group_ratio == min_ratio and group_ratio < 1.0:
                 binding_reasons.append(group_key)
 
         scaled = pre_cap * min_ratio
