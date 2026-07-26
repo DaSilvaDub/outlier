@@ -11,7 +11,15 @@ You are agent **`claude`** in this repo. Multiple AI agents share this codebase.
 
 Runs full bootstrap + SyncAll (now covers ai-runners) + authoritative report (includes explicit d05eb21 section).
 
-Paste the ENTIRE output. Only continue when it shows the "produced by scripts/verify-sync.ps1" header + VALIDATE: OK + MATCH + all markers (player_id etc).
+Paste the ENTIRE output, up to and including the final `RUN-NONCE:` line.
+
+**Only continue when the trailer reads `REPORT STATUS: OK`.** That verdict is computed from
+what actually ran (`bootstrap=/validate=/state=/markers=/worktrees=/fullclones=`), so a
+skipped sync now says `FAILED` and exits non-zero instead of quietly omitting a line. A
+missing `RUN-NONCE:` line means the paste was truncated or edited — treat it as invalid.
+
+The individual gates ("produced by scripts/verify-sync.ps1" + VALIDATE: OK + MATCH + all 5
+markers) are still shown, but you should not have to hunt for an absent one.
 
 For any branch/worktree/commit search questions: re-run the report-sync and paste full (never ad-hoc git commands).
 

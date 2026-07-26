@@ -99,11 +99,16 @@ worth asking about.
 ## `check-sync.ps1` — read-only sync verification
 
 STEP 0 is mandated in `AGENTS.md`, `CLAUDE.md`, and `GROK.md`, and was enforced by nothing.
-Its failure mode is near-silent: launched from a directory git cannot read — such as the
-OneDrive mirror, whose `.git` is a OneDrive placeholder — the bootstrap stage no-ops and
-prints `[sync] Not inside a git repo`, yet the report still renders
-`State vs origin/master: MATCH`. Only the absence of `VALIDATE: OK` distinguishes a skipped
-sync from a real one.
+
+> **Historical note.** This hook was written when the sync tooling itself failed silently:
+> launched from a directory git cannot read — such as the OneDrive mirror, whose `.git` is a
+> placeholder — the bootstrap stage no-opped and printed `[sync] Not inside a git repo`, yet
+> the report still rendered `State vs origin/master: MATCH`, and only the *absence* of
+> `VALIDATE: OK` distinguished a skipped sync from a real one. That is fixed:
+> `sync-outlier.ps1` no longer takes cwd as an input, skipped bootstraps are fatal, and
+> `verify-sync.ps1` ends with a computed `REPORT STATUS: OK|FAILED` trailer plus a per-run
+> `RUN-NONCE`. This hook remains useful for a different reason — it tells you when *this
+> session's* working directory is not a readable checkout, which governs where your edits land.
 
 This hook **does not call `report-sync.ps1`**. That script force-runs
 bootstrap + `-SyncAllWorktrees` before it will inspect anything, which hard-aligns the

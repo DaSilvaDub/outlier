@@ -69,7 +69,24 @@ d05eb21 (the isolated "pipeline upgrade counter-proposal" with ~624 lines to pac
 Use the canonical absolute path always. This runs bootstrap + -SyncAllWorktrees (which now hard-aligns ai-runners too) + produces the complete standardized report.
 
 - Paste the ENTIRE output.
-- Look for: VALIDATE: OK, State vs origin/master: MATCH, Upgrade markers present (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv), and "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)".
+- **The single line that matters is the trailer: `REPORT STATUS: OK`.** It is computed from
+  what actually executed, so you no longer have to notice that an expected line is *absent*:
+
+  ```
+  REPORT STATUS: OK
+    bootstrap=OK  validate=OK  state=MATCH  markers=5/5  worktrees=2/2  fullclones=3/3 (+1 unreadable)
+
+  RUN-NONCE: 2bf030bbd1b24567  utc=2026-07-26T03:28:39Z  head=1d701f1  status=OK
+  ```
+
+  `REPORT STATUS: FAILED` (or a non-zero exit) means the report is **not** a valid sync
+  attestation — do not quote it as proof of state. The `failures:` list names the cause.
+- The paste must END with the `RUN-NONCE:` line. No nonce = truncated or edited = not valid.
+  The nonce is per-run, so a re-pasted old nonce is detectable against its `utc`/`head`.
+- The individual gates are still printed and still meaningful: VALIDATE: OK,
+  State vs origin/master: MATCH, all 5 upgrade markers (player_id, round_robin_then_fill,
+  CANDIDATES_HEADER in pack.py; _acquire_pack_lock in daily_job.py; decisions.csv), and
+  "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)".
 - For any "searched every... d05eb21 not found" question the *only* acceptable answer is a fresh full paste of the above command.
 
 After you or any other ent executes -SyncAllWorktrees, immediately run the report-sync command again and share the full result.

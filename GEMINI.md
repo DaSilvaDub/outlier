@@ -32,10 +32,16 @@ ALWAYS execute EXACTLY (full canonical path; do not use a local ./report-sync or
 cd 'C:\Users\dasil\Dev\GitHub\outlier' first if you like, then the command above.
 Report the *full* untruncated console output (every line from [sync] through the final Rule).
 
-You may only continue when the output contains:
+You may only continue when the computed trailer reads:
+- "REPORT STATUS: OK"   (anything else, or a non-zero exit, means NOT a valid attestation)
+
+and the paste ends with the per-run "RUN-NONCE:" line (missing it = truncated/edited).
+
+Underlying gates, still printed:
 - "VALIDATE: OK"
 - "State vs origin/master: MATCH"
-- "Upgrade markers present" (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
+- All 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py;
+  _acquire_pack_lock in daily_job.py; decisions.csv)
 - Current canonical HEAD matches origin/master
 - "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
 

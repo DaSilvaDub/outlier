@@ -11,11 +11,16 @@ You are agent `grok` in this repo. Multiple AI agents share this codebase.
 
 (This does bootstrap + -SyncAllWorktrees (including ai-runners full clone) + the complete standardized report with d05eb21 explanation.)
 
-Paste the *entire* output. Proceed only if you see:
+Paste the *entire* output, through the final "RUN-NONCE:" line. Proceed only if:
+- The trailer reads "REPORT STATUS: OK" (computed; FAILED also exits non-zero)
+- The paste ends with "RUN-NONCE:" (missing it = truncated/edited = invalid)
+
+Underlying gates, still printed:
 - "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)"
 - VALIDATE: OK
 - State vs origin/master: MATCH
-- All upgrade markers present (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
+- All 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py;
+  _acquire_pack_lock in daily_job.py; decisions.csv)
 - Current HEAD on canonical == origin/master
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).

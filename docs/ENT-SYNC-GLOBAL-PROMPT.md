@@ -23,17 +23,31 @@ ALWAYS execute EXACTLY (full canonical path; do not use a local ./report-sync or
 & "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
 
 # Thin wrapper -> canonical bootstrap + -SyncAllWorktrees (which now also hard-resets ai-runners) + full verify report.
-# Never pipe | Select-String | Out-String | Select -First | grep etc. The guard will flag it.
+# Never pipe | Select-String | Out-String | Select -First | grep etc. Paste it whole.
 
-cd 'C:\Users\dasil\Dev\GitHub\outlier' first if you like, then the command above.
-Report the *full* untruncated console output (every line from [sync] through the final Rule).
+cwd no longer matters — the script targets canonical explicitly and refuses loudly if that
+path is not a readable git repo. Report the *full* untruncated console output, through the
+final RUN-NONCE line.
 
-You may only continue when the output contains:
-- "VALIDATE: OK"
-- "State vs origin/master: MATCH"
-- "Upgrade markers present" (player_id, round_robin_then_fill, CANDIDATES_HEADER, _acquire_pack_lock, decisions.csv)
-- Current canonical HEAD matches origin/master
-- "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
+You may only continue when the trailer reads:
+- "REPORT STATUS: OK"
+
+That verdict is computed, and is the only thing you need to check:
+
+```
+REPORT STATUS: OK
+  bootstrap=OK  validate=OK  state=MATCH  markers=5/5  worktrees=2/2  fullclones=3/3 (+1 unreadable)
+
+RUN-NONCE: 2bf030bbd1b24567  utc=2026-07-26T03:28:39Z  head=1d701f1  status=OK
+```
+
+- "REPORT STATUS: FAILED", or a non-zero exit code, means NOT a valid sync attestation.
+  The "failures:" list names the cause. Do not quote a FAILED report as proof of state.
+- The paste must END with "RUN-NONCE:". Missing it = truncated/edited = invalid.
+- Underlying gates still printed: "VALIDATE: OK", "State vs origin/master: MATCH",
+  all 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py;
+  _acquire_pack_lock in daily_job.py; decisions.csv), canonical HEAD == origin/master,
+  and "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
 
 For ANY question about "does commit X exist", "I searched every branch + .codex/.gemini worktree", "closest commit is d756cb4", "d05eb21 not found", sizes, or state:
 - Run & "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"  (or the scripts/verify... directly)

@@ -33,7 +33,9 @@ This single command:
 - runs -SyncAllWorktrees (now also force-resets the ai-runners full clone + materializes sync scripts)
 - produces the authoritative report with marker validation, worktree list, full clone status, and the baked-in d05eb21 explanation
 
-Then paste the *entire* output. Only proceed if you see VALIDATE: OK + MATCH + all markers.
+Then paste the *entire* output, through the final `RUN-NONCE:` line. Only proceed if the
+trailer reads `REPORT STATUS: OK` (it is computed from what actually ran; `FAILED` also exits
+non-zero). A paste with no `RUN-NONCE:` line is truncated and is not a valid attestation.
 
 For state/search questions ("commit not found", "searched all worktrees") you MUST use report-sync.ps1 (or scripts/verify-sync.ps1) and paste full. Ad-hoc git log / Get-ChildItem inside a 90ca8c3 worktree or lagged ai-runners clone is forbidden and will be rejected.
 
@@ -114,7 +116,12 @@ Execute exactly:
 # or for gate:
 & "C:\Users\dasil\Dev\GitHub\outlier\sync-outlier.ps1" -ValidateOnly
 
-Report the *full* console output. You may only continue when the output shows VALIDATE: OK, recent HEAD match, and all pipeline upgrade markers (player_id / CANDIDATES_HEADER / round_robin / decisions.csv / locks). If not OK, re-run and/or escalate.
+Report the *full* console output. You may only continue when the trailer shows
+`REPORT STATUS: OK` — which requires VALIDATE: OK, HEAD matching origin/master, and all five
+pipeline upgrade markers (player_id / CANDIDATES_HEADER / round_robin / decisions.csv in
+pack.py, _acquire_pack_lock in daily_job.py). If it says FAILED, read the `failures:` list,
+then re-run and/or escalate. Note the script now exits non-zero on failure, so it can be
+checked programmatically instead of by eye.
 
 This is the only way to guarantee you see the same pack.py + daily_job.py (~624 line changes) and history as every other agent (Grok/Claude/Codex/Gemini/...).
 See repo AGENTS.md + SYNC.md for details and -SyncAllWorktrees.
