@@ -68,7 +68,7 @@ This rule is what makes d05eb21-style "the commit and the pack.py changes are in
 - After updating a harness config, start a fresh session in the outlier checkout and verify it obeys STEP 0 by reporting full bootstrap output.
 - When handing off between ents: the sender runs `& "...\sync-outlier.ps1" -SyncAllWorktrees` from canonical, then tells the receiver the exact bootstrap command + "run verify-sync for any state query".
 
-## Installed locations (machine: dasil, 2026-07-12)
+## Installed locations (machine: dasil, refreshed 2026-07-26)
 
 The fenced block above was installed (or refreshed) into every harness global surface on this machine:
 
@@ -86,10 +86,21 @@ The fenced block above was installed (or refreshed) into every harness global su
 
 When the fenced block in this file changes, re-run the install (or re-paste) into every path in the table above.
 
+**2026-07-26 refresh:** re-installed after PR #61 (REPORT STATUS/RUN-NONCE verdict,
+skipped-bootstrap-is-fatal, FORBIDDEN banner replaced). While refreshing, found that
+`.codex\AGENTS.md` and both `.gemini\*.md` files had drifted onto
+`C:\Users\dasil\OneDrive\Documents\outlier` instead of the canonical path — that
+mirror's `.git` is a OneDrive placeholder git cannot open, which is precisely the
+condition PR #61 makes report-sync.ps1 refuse loudly rather than silently no-op on.
+Corrected to canonical in all three during this refresh.
+
 ## Why this exists
 
 The d05eb21 (~624 line pipeline upgrade touching pack.py + daily_job.py) was a transient review tree that never got pushed to origin or other worktrees. Later materialization (88083ff+) + these scripts + enforced bootstrap = synchronized state for all ents.
 
 Run `& "C:\Users\dasil\Dev\GitHub\outlier\scripts\verify-sync.ps1"` yourself to see the live authoritative cross-worktree report (lists all ~16 worktrees + marker status + explicit d05eb21 explanation).
 
-Last updated: 2026-07-12 (added permanent "no reasoning models unless asked" house rule)
+Last updated: 2026-07-26 (REPORT STATUS/RUN-NONCE verdict from PR #61; re-installed
+into all 6 harness global files and corrected 3 that had drifted to the unreadable
+OneDrive mirror path). Previously: 2026-07-12 (added permanent "no reasoning models
+unless asked" house rule).
