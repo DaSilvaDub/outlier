@@ -11,6 +11,7 @@ from pathlib import Path
 
 def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
     """Copy file with retries to handle transient cloud sync locks ([WinError 32])."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(retries):
         try:
             shutil.copy2(str(src), str(dst))
@@ -118,7 +119,9 @@ def generate_specific_packs(candidates_path: Path, output_dir: Path):
 
 
 def organize_today_additive():
-    packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
+    packs_dir = Path(r"C:\Users\dasil\Dev\GitHub\outlier\packs")
+    if not packs_dir.exists():
+        packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
     subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
     if not subdirs:
         print("Error: No pack directories found in packs/.")
