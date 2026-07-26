@@ -117,14 +117,27 @@ def generate_specific_packs(candidates_path: Path, output_dir: Path):
                 writer.writerows(subset)
 
 
+def find_all_pack_dirs() -> list[Path]:
+    search_paths = [
+        Path(r"C:\Users\dasil\Dev\GitHub\outlier\packs"),
+        Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs"),
+    ]
+    packs_map: dict[str, Path] = {}
+    for p in search_paths:
+        if p.exists():
+            for d in p.iterdir():
+                if d.is_dir() and d.name.replace("-", "").isdigit():
+                    packs_map[d.name] = d
+    return sorted(packs_map.values(), key=lambda d: d.name)
+
+
 def organize_today_additive():
-    packs_dir = Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs")
-    subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
+    subdirs = find_all_pack_dirs()
     if not subdirs:
         print("Error: No pack directories found in packs/.")
         return
 
-    latest_pack = max(subdirs, key=lambda d: d.name)
+    latest_pack = subdirs[-1]
     today_str = latest_pack.name
     suffix = "_latest"
 
@@ -157,13 +170,15 @@ def organize_today_additive():
 
         # Organize new folders for this run (using _latest suffix)
         generic_prompts = out_dir / f"generic_prompts_{today_str}{suffix}"
+        hitrate_prompts = out_dir / f"hitrate_prompts_{today_str}{suffix}"
+        totals_prompts = out_dir / f"totals_prompts_{today_str}{suffix}"
         desk2_prompts = out_dir / f"desk2_prompts_{today_str}{suffix}"
         pipeline_data = out_dir / f"extracted_data_{today_str}{suffix}"
         extra_packs = out_dir / f"extra_packs_{today_str}{suffix}"
         hit_props_dir = out_dir / f"perfect_hit_props_{today_str}{suffix}"
         hit_l5_l10_props_dir = out_dir / f"perfect_hit_l10_l5_props_{today_str}{suffix}"
 
-        for d in [generic_prompts, desk2_prompts, pipeline_data, extra_packs, hit_props_dir, hit_l5_l10_props_dir]:
+        for d in [generic_prompts, hitrate_prompts, totals_prompts, desk2_prompts, pipeline_data, extra_packs, hit_props_dir, hit_l5_l10_props_dir]:
             d.mkdir(exist_ok=True)
 
         # Copy prompt files from prompts/ subdirectories into organized output folders
@@ -172,7 +187,14 @@ def organize_today_additive():
             desk1_src = prompts_root / "Desk1_Automated"
             if desk1_src.exists():
                 for item in desk1_src.glob("*.txt"):
-                    safe_copy(item, generic_prompts / item.name)
+                    if "Cards" in item.name:
+                        safe_copy(item, generic_prompts / item.name)
+                    elif "HitRate" in item.name:
+                        safe_copy(item, hitrate_prompts / item.name)
+                    elif "Totals" in item.name:
+                        safe_copy(item, totals_prompts / item.name)
+                    else:
+                        safe_copy(item, generic_prompts / item.name)
 
             desk2_src = prompts_root / "Desk2_Manual"
             if desk2_src.exists():
@@ -181,18 +203,26 @@ def organize_today_additive():
 
             # Also check root prompts folder for any loose .txt files
             for item in out_dir.glob("*.txt"):
-                if item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "2_Master", "3_Master", "generic")):
+                if "Cards" in item.name:
                     safe_copy(item, generic_prompts / item.name)
-                    try:
-                        item.unlink()
-                    except OSError:
-                        pass
+                    try: item.unlink()
+                    except OSError: pass
+                elif "HitRate" in item.name:
+                    safe_copy(item, hitrate_prompts / item.name)
+                    try: item.unlink()
+                    except OSError: pass
+                elif "Totals" in item.name:
+                    safe_copy(item, totals_prompts / item.name)
+                    try: item.unlink()
+                    except OSError: pass
+                elif item.name.startswith(("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "generic")):
+                    safe_copy(item, generic_prompts / item.name)
+                    try: item.unlink()
+                    except OSError: pass
                 elif item.name[0].isupper() and item.name[1] == '_':
                     safe_copy(item, desk2_prompts / item.name)
-                    try:
-                        item.unlink()
-                    except OSError:
-                        pass
+                    try: item.unlink()
+                    except OSError: pass
 
         # Copy pipeline data into extracted_data
         if latest_pack.exists():
@@ -212,7 +242,7 @@ def organize_today_additive():
 
             generate_specific_packs(candidates_csv, extra_packs)
 
-            # Also copy game_totals.csv, team_totals.csv, alt_team_totals.csv, opportunities.csv
+            # Also copy game_totals.csv, team_totals.csv, alt_team_totals.csv, opportunities.csv to extra_packs & totals_prompts
             for t_csv in ["game_totals.csv", "team_totals.csv", "alt_team_totals.csv", "opportunities.csv"]:
                 src = latest_pack / t_csv
                 if not src.exists():
@@ -220,6 +250,8 @@ def organize_today_additive():
 
                 if src.exists():
                     safe_copy(src, extra_packs / t_csv)
+                    if t_csv in ["game_totals.csv", "team_totals.csv", "alt_team_totals.csv"]:
+                        safe_copy(src, totals_prompts / t_csv)
 
         # Write hit rate props (L5/L10/L20)
         for league, props in hit_100_props.items():

@@ -220,6 +220,20 @@ def generate_for_dir(
     )
 
 
+def find_all_pack_dirs() -> list[Path]:
+    search_paths = [
+        Path(r"C:\Users\dasil\Dev\GitHub\outlier\packs"),
+        Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs"),
+    ]
+    packs_map: dict[str, Path] = {}
+    for p in search_paths:
+        if p.exists():
+            for d in p.iterdir():
+                if d.is_dir() and d.name.replace("-", "").isdigit():
+                    packs_map[d.name] = d
+    return sorted(packs_map.values(), key=lambda d: d.name)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate prompt files from Outlier packs")
     parser.add_argument(
@@ -232,15 +246,12 @@ def main() -> None:
     args = parser.parse_args()
 
     out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
-    repo_root = Path(__file__).resolve().parents[4]
-    packs_dir = repo_root / "packs"
-
-    subdirs = [d for d in packs_dir.iterdir() if d.is_dir() and d.name.replace("-", "").isdigit()]
+    subdirs = find_all_pack_dirs()
     if not subdirs:
         print("Error: No pack directories found in packs/.")
         return
 
-    latest_pack = max(subdirs, key=lambda d: d.name)
+    latest_pack = subdirs[-1]
     date_str = latest_pack.name
 
     print(f"Generating prompts for pack date: {date_str}")
