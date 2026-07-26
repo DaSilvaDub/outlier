@@ -252,7 +252,7 @@ def is_full_game_total(rec: dict[str, Any]) -> bool:
 
 def _record_market_and_prop(rec: dict[str, Any]) -> tuple[str, str]:
     mt = str(rec.get("market_type") or "").upper()
-    prop = str(rec.get("proposition") or rec.get("market") or "").upper()
+    prop = str(rec.get("proposition") or rec.get("_proposition") or rec.get("market") or "").upper()
     return mt, prop
 
 
@@ -264,12 +264,15 @@ def is_game_total_record(rec: dict[str, Any]) -> bool:
     return mt == "GAMELINE" and prop == "TOTAL"
 
 
+TEAM_TOTAL_PROPOSITION_TOKENS = frozenset({"POINTS", "RUNS", "R", "TOTAL_RUNS", "GOALS", "TOTAL", "TEAM_TOTAL"})
+
+
 def is_team_total_record(rec: dict[str, Any]) -> bool:
-    """Full-game team totals only (TEAM_PROP / POINTS)."""
+    """Full-game team totals (TEAM_PROP / POINTS, RUNS, GOALS, TOTAL)."""
     if not is_full_game_total(rec):
         return False
     mt, prop = _record_market_and_prop(rec)
-    return mt == "TEAM_PROP" and prop == "POINTS"
+    return mt == "TEAM_PROP" and prop in TEAM_TOTAL_PROPOSITION_TOKENS
 
 
 def is_eligible_total_record(rec: dict[str, Any], *, kind: str | None = None) -> bool:

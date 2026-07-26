@@ -118,7 +118,7 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
 
 
 def load_prompt_template(filename: str) -> str:
-    """Read a prompt template from prompts directory."""
+    """Read a prompt template from prompts directory, falling back to A.md if missing."""
     repo_root = Path(__file__).resolve().parents[4]
     candidate_paths = [
         repo_root / "prompts" / filename,
@@ -128,7 +128,14 @@ def load_prompt_template(filename: str) -> str:
         if p.exists():
             with open(p, "r", encoding="utf-8") as f:
                 return f.read()
-    return f"Error: Could not find prompt template ({filename})."
+    # Safety fallback to Master Cards prompt (A.md)
+    for fallback_name in ["A.md"]:
+        for p in [repo_root / "prompts" / fallback_name, Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / fallback_name]:
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read()
+    return "You are a disciplined, evidence-first sports-betting analyst. Analyze the supplied betting data pack and produce a final pregame betting report."
+
 
 
 def generate_for_dir(
