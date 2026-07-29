@@ -147,7 +147,7 @@ def filter_3unit_candidates(candidates_csv_text: str) -> str:
     return f_out.getvalue()
 
 
-def get_hitrate_data_buckets() -> dict[str, str]:
+def get_hitrate_data_buckets(allow_matchups: frozenset[str] | None = None) -> dict[str, str]:
     """Extract and format 3 specialized hit rate prop datasets across leagues."""
     repo_root = Path(__file__).resolve().parents[4]
     scripts_dir = repo_root / "scripts"
@@ -199,7 +199,7 @@ def get_hitrate_data_buckets() -> dict[str, str]:
                             if l5 == 100.0 and l10 >= 90.0 and l20 >= 70.0:
                                 r3.append(row)
 
-                opts = FilterOptions()
+                opts = FilterOptions(allow_matchups=allow_matchups)
                 k1, _, _ = filter_rows(r1, opts)
                 k2, _, _ = filter_rows(r2, opts)
                 k3, _, _ = filter_rows(r3, opts)
@@ -370,6 +370,7 @@ def find_all_pack_dirs() -> list[Path]:
 
 
 def main() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
     parser = argparse.ArgumentParser(description="Generate prompt files from Outlier packs")
     parser.add_argument(
         "--out-dir",
@@ -418,8 +419,19 @@ def main() -> None:
     alt_team_totals = att_path.read_text(encoding="utf-8") if att_path.exists() else ""
     totals_data = (game_totals, team_totals, alt_team_totals)
 
-    # Extract HitRate buckets data
-    hitrate_buckets = get_hitrate_data_buckets()
+    # Build slate allowlist from candidates + dossiers to enforce today's slate games only
+    scripts_dir = repo_root / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    dossiers_dir = latest_pack / "dossiers"
+    from filter_perfect_hit_props import allowlist_from_candidates_csv, allowlist_from_dossiers_dir
+    allow_set = set()
+    allow_set |= allowlist_from_candidates_csv(candidates_path)
+    allow_set |= allowlist_from_dossiers_dir(dossiers_dir if dossiers_dir.is_dir() else None)
+    allow_matchups = frozenset(allow_set) if allow_set else None
+
+    # Extract HitRate buckets data (filtered to today's active slate matchups)
+    hitrate_buckets = get_hitrate_data_buckets(allow_matchups=allow_matchups)
 
     for out_dir in out_dirs:
         generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, args.no_clean)
