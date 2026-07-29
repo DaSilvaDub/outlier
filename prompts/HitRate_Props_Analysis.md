@@ -36,32 +36,25 @@ When data or signals conflict, follow this hierarchy:
 
 ---
 
-## 3. Data Integrity & Prohibited Markets
+## 3. Data Integrity & Allowed/Prohibited Markets
 
-### 3.1 Prohibited Markets
+### 3.1 Allowed Markets
+* **Hits Allowed** (Pitching) — *Allowed*
+* **Total Bases** (Batting) — *Allowed*
+* **Walks Allowed / Pitching Walks** — *Allowed*
+* **Hits, Strikeouts, Earned Runs, Outs, RBIs, Singles/Doubles/Triples, Batters Faced, Pitches Thrown** — *Allowed*
+* **Home Runs (Over-Only)** — *Allowed* (Home Runs Under rejected)
+
+### 3.2 Prohibited & Dropped Markets
 Always reject:
-* **HR / Home Runs**
-* **HRR / Hits + Runs + RBI**
-* **BB / Walks**
+* **Home Runs UNDER**
+* **Milestone UNDER**
 
-Treat their presence as a data error and stand them down.
-
-### 3.2 High-Variance Markets
-Never recommend:
+### 3.3 High-Variance Markets (Proceed with Caution)
+Evaluate with strict role stability & matchup verification:
 * **3PM / Three Pointers Made**
-* **Hits Allowed**
-* **Total Bases**
 * **Turnovers**
-
-These may appear only in the rejected candidates audit.
-
-### 3.3 Moderate-Variance Markets
-Treat as moderate variance:
-* **Strikeouts**
-* **Assists**
-* **Points**
-
-Moderate-variance props require verified role stability and a favorable matchup to qualify.
+* **HRR / Hits + Runs + RBI**
 
 ---
 

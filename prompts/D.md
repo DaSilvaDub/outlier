@@ -235,22 +235,16 @@ Any supplied probability applies to the exact stated signed selection covering.
 
 ## 6.1 Edge Definition
 
-Treat `edge_pct` as an absolute probability advantage.
+Understand the distinction between Expected Value ($\text{EV}\%$) and absolute probability advantage ($\Delta p$):
 
-Example:
+* `edge_pct` (and `local_ev_pct`): Represents Expected Value / Expected Return relative to stake ($\text{EV}\%$ or ROI fraction). For example, `edge_pct = 0.08618` represents a +8.62% EV return per unit staked.
+* `independent_edge_pct` (or $\text{model\_prob} - \text{implied\_prob}$): Represents the absolute probability advantage ($\Delta p$ in percentage points). For example, if $\text{model\_prob} = 0.47225$ (47.23%) and $\text{implied\_prob} = 0.43478$ (43.48%), the probability advantage is 3.75 percentage points (3.75 pp).
 
-True probability: 63%
-Implied probability: 50%
-Pack edge: 13 percentage points
+Always report both metrics when evaluating pack candidates:
+* **EV% (`edge_pct`):** The expected financial return per unit risked.
+* **Probability Advantage ($\Delta p$):** The raw model probability edge over implied market probability ($\text{model\_prob} - \text{implied\_prob}$).
 
-Do NOT describe `edge_pct` as:
-
-* ROI
-* expected return
-* profit percentage
-* expected value percentage
-
-unless the pack explicitly defines a separate field that way.
+Do NOT conflate `edge_pct` (EV%) as an absolute probability advantage in percentage points.
 
 ## 6.2 Independent Evidence
 
@@ -623,7 +617,7 @@ Before answering, verify:
 * Every betting line, selection, price, book, and market ID comes directly from the pack.
 * No spread sign was changed.
 * Every cited edge is attached to the line at which it was actually calculated.
-* `edge_pct` is not mislabeled as ROI.
+* `edge_pct` (EV%) is not conflated with absolute probability advantage (percentage points).
 * `proxy_market_devig` is not presented as an independent model.
 * Partial movement coverage is not treated as authoritative evidence.
 * Same-event exposure is adjusted.
