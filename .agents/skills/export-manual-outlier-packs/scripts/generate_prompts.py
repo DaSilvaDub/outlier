@@ -117,6 +117,73 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
                 pass
 
 
+import csv
+import io
+
+def filter_3unit_candidates(candidates_csv_text: str) -> str:
+    """Filter candidate rows to 3-unit recommended candidates (recommended_units_pre_news >= 3.0 or Board A fallback)."""
+    f_in = io.StringIO(candidates_csv_text)
+    reader = csv.DictReader(f_in)
+    fieldnames = reader.fieldnames or []
+    rows = list(reader)
+
+    kept = []
+    for r in rows:
+        val_str = r.get("recommended_units_pre_news", "").strip()
+        try:
+            val = float(val_str) if val_str else 0.0
+        except ValueError:
+            val = 0.0
+        if val >= 3.0:
+            kept.append(r)
+
+    if not kept:
+        kept = [r for r in rows if r.get("board") == "A"]
+
+    f_out = io.StringIO()
+    writer = csv.DictWriter(f_out, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(kept)
+    return f_out.getvalue()
+
+
+def get_hitrate_data() -> str:
+    """Extract and format 100% L20/L10/L5 perfect hit rate prop data across leagues."""
+    repo_root = Path(__file__).resolve().parents[4]
+    scripts_dir = repo_root / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    try:
+        from organize_today_run2 import FilterOptions, parse_hit_rates
+
+        data_dirs = [repo_root / "data", Path(r"C:\Users\dasil\OneDrive\Documents\outlier\data")]
+        hit_100: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
+        hit_l5_l10: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
+        parse_hit_rates(hit_100, hit_l5_l10, data_dirs=data_dirs, filter_opts=FilterOptions())
+
+        output = []
+        headers = ["player", "market_label", "side", "line", "team", "matchup"]
+
+        for lg in ["MLB", "WNBA"]:
+            output.append(f"#### {lg} 100% Hit Rate Props (L20 / L10 / L5)")
+            f_out = io.StringIO()
+            w = csv.DictWriter(f_out, fieldnames=headers, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(hit_100.get(lg) or [])
+            output.append("```csv\n" + f_out.getvalue() + "```\n")
+
+            output.append(f"#### {lg} 100% Hit Rate Props (L10 / L5)")
+            f_out = io.StringIO()
+            w = csv.DictWriter(f_out, fieldnames=headers, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(hit_l5_l10.get(lg) or [])
+            output.append("```csv\n" + f_out.getvalue() + "```\n")
+
+        return "\n".join(output)
+    except Exception as exc:
+        return f"Error extracting hit rate props data: {exc}"
+
+
 def load_prompt_template(filename: str) -> str:
     """Read a prompt template from prompts directory, falling back to A.md if missing."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -144,6 +211,7 @@ def generate_for_dir(
     briefing: str,
     candidates: str,
     totals_data: tuple[str, str, str],
+    hitrate_data: str,
     no_clean: bool,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -168,10 +236,11 @@ def generate_for_dir(
 
     # Master Prompts for Data Types (Cards, HitRate, Totals)
     cards_template = load_prompt_template("A.md")
-    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
+    cards_3unit = filter_3unit_candidates(candidates)
+    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### 3-Unit Candidates Data\n```csv\n{cards_3unit}\n```\n"
 
     hitrate_template = load_prompt_template("HitRate_Props_Analysis.md")
-    full_hitrate_prompt = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Candidates Data\n```csv\n{candidates}\n```\n"
+    full_hitrate_prompt = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Hit Rate Props Data\n{hitrate_data}\n"
 
     totals_template = load_prompt_template("Totals_Analysis.md")
     game_totals, team_totals, alt_team_totals = totals_data
@@ -290,8 +359,12 @@ def main() -> None:
     alt_team_totals = att_path.read_text(encoding="utf-8") if att_path.exists() else ""
     totals_data = (game_totals, team_totals, alt_team_totals)
 
+    # Extract HitRate data
+    hitrate_data = get_hitrate_data()
+
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, args.no_clean)
+        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_data, args.no_clean)
+
 
 
 if __name__ == "__main__":
