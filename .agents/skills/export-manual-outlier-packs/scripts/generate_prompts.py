@@ -247,8 +247,23 @@ def load_prompt_template(filename: str) -> str:
             if p.exists():
                 with open(p, "r", encoding="utf-8") as f:
                     return f.read()
-    return "You are a disciplined, evidence-first sports-betting analyst. Analyze the supplied betting data pack and produce a final pregame betting report."
-
+def safe_write_text(filepath: Path, content: str, retries: int = 10, delay: float = 1.0) -> None:
+    import time
+    for attempt in range(retries):
+        try:
+            if filepath.exists():
+                try:
+                    filepath.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(content)
+            return
+        except (PermissionError, OSError):
+            if attempt == retries - 1:
+                print(f"Warning: could not write to {filepath} due to cloud lock.")
+                return
+            time.sleep(delay)
 
 
 def generate_for_dir(
@@ -298,20 +313,11 @@ def generate_for_dir(
         f"### Team Totals Data\n```csv\n{team_totals}\n```\n"
     )
 
-    with open(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", "w", encoding="utf-8") as f:
-        f.write(full_cards_prompt)
-
-    with open(desk1_dir / f"2a_Master_HitRate_100_All3_pack_{date_str}.txt", "w", encoding="utf-8") as f:
-        f.write(full_hitrate_all3)
-
-    with open(desk1_dir / f"2b_Master_HitRate_100_L10_L5_pack_{date_str}.txt", "w", encoding="utf-8") as f:
-        f.write(full_hitrate_l10_l5)
-
-    with open(desk1_dir / f"2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_{date_str}.txt", "w", encoding="utf-8") as f:
-        f.write(full_hitrate_l5_thresh)
-
-    with open(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", "w", encoding="utf-8") as f:
-        f.write(full_totals_prompt)
+    safe_write_text(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", full_cards_prompt)
+    safe_write_text(desk1_dir / f"2a_Master_HitRate_100_All3_pack_{date_str}.txt", full_hitrate_all3)
+    safe_write_text(desk1_dir / f"2b_Master_HitRate_100_L10_L5_pack_{date_str}.txt", full_hitrate_l10_l5)
+    safe_write_text(desk1_dir / f"2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_{date_str}.txt", full_hitrate_l5_thresh)
+    safe_write_text(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
 
     # Desk 2 - Manual Sequence (Phase-specific prompts)
     desk2_order_map = {
