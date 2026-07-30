@@ -507,6 +507,33 @@ def organize_today_additive(
                 hit_100_l5_l10_props.get(league) or [],
             )
 
+        # Mirror to clean un-suffixed directories so both date-tagged and standard names work
+        for src_folder_name in [
+            f"generic_prompts_{today_str}{suffix}",
+            f"hitrate_prompts_{today_str}{suffix}",
+            f"totals_prompts_{today_str}{suffix}",
+            f"desk2_prompts_{today_str}{suffix}",
+            f"extracted_data_{today_str}{suffix}",
+            f"extra_packs_{today_str}{suffix}",
+            f"perfect_hit_props_{today_str}{suffix}",
+            f"perfect_hit_l10_l5_props_{today_str}{suffix}",
+        ]:
+            std_name = src_folder_name.replace(f"_{today_str}{suffix}", "")
+            src_dir = out_dir / src_folder_name
+            std_dir = replace_dir(out_dir / std_name)
+            if src_dir.exists():
+                shutil.copytree(str(src_dir), str(std_dir), dirs_exist_ok=True)
+
+        # Remove empty top-level directories to prevent folder confusion
+        for sub in list(out_dir.glob("*")):
+            if sub.is_dir() and not sub.name.startswith("."):
+                has_files = any(p.is_file() for p in sub.rglob("*"))
+                if not has_files:
+                    try:
+                        shutil.rmtree(sub)
+                    except OSError:
+                        pass
+
         print(f"Organized replace-export -> {out_dir} (pack={latest_pack.name})")
 
     return latest_pack

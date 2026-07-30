@@ -116,6 +116,12 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
             except OSError:
                 pass
 
+    if archive_dir.exists() and not list(archive_dir.iterdir()):
+        try:
+            archive_dir.rmdir()
+        except OSError:
+            pass
+
 
 import csv
 import io
