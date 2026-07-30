@@ -265,6 +265,25 @@ def test_build_game_totals_blends_l10_into_edge_and_columns():
     expected = compute_sizing(decimal_price=float(row['decimal_price']), model_prob=blended, push_prob=0.0)
     assert expected.edge_pct is not None
     assert float(row['edge_pct']) == pytest.approx(expected.edge_pct, abs=1e-3)
+    assert 'totals_model_divergence' in row['quality_flags']
+    assert row['actionable'] == 'false'
+
+
+def test_build_game_totals_flags_fair_total_side_conflict():
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [
+        _norm_record('m-low', 8.5, 'OVER', [{'book': 'DK', 'odds': 180}, {'book': 'FD', 'odds': 175}], stats=_l10_stats(2, 4)),
+        _norm_record('m-low', 8.5, 'UNDER', [{'book': 'DK', 'odds': -220}, {'book': 'FD', 'odds': -215}]),
+        _norm_record('m-high', 10.5, 'OVER', [{'book': 'DK', 'odds': -130}, {'book': 'FD', 'odds': -128}]),
+        _norm_record('m-high', 10.5, 'UNDER', [{'book': 'DK', 'odds': 110}, {'book': 'FD', 'odds': 108}]),
+    ]}
+    candidates = [{'market_id': 'm-low', 'market_type': 'GAMELINE', 'line': 8.5, '_proposition': 'TOTAL'}]
+
+    row = build_game_totals(candidates, games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))[0]
+
+    assert row['best_side'] == 'UNDER'
+    assert float(row['fair_total']) > float(row['line'])
+    assert 'FAIR_TOTAL_SIDE_CONFLICT' in row['quality_flags']
+    assert row['actionable'] == 'false'
 
 def test_build_game_totals_l10_can_flip_best_side_to_over():
     # Market prices favor UNDER; a 10/10 L10 over-record flips the pick.
@@ -304,4 +323,3 @@ def test_totals_slate_event_filtering():
     ]
     assert len(filtered) == 1
     assert filtered[0]['matchup'] == 'MIN @ TOR'
-

@@ -630,6 +630,23 @@ def build_totals(
         model_win_prob = p_side_conditional
         consensus_win_prob = p_side_market
         independent_win_prob = p_side_independent
+
+        # ``fair_total`` is interpolated exclusively from the devigged market
+        # ladder above; it is not an independent model projection.  A recent-
+        # results signal can therefore pull ``best_side`` through the market's
+        # own fair line.  Do not silently call that disagreement actionable.
+        if fair_total is not None and (
+            (best_side == "OVER" and fair_total < headline_line)
+            or (best_side == "UNDER" and fair_total > headline_line)
+        ):
+            flags.append("FAIR_TOTAL_SIDE_CONFLICT")
+        if (
+            p_side_independent is not None
+            and p_side_market is not None
+            and abs(p_side_independent - p_side_market) >= 0.1499
+        ):
+            flags.append("totals_model_divergence")
+
         decimal_price = _american_to_decimal(best_price)
         _implied_pct_val = implied_probability(best_price)
         implied_prob = round(_implied_pct_val / 100.0, 5) if _implied_pct_val is not None else None
