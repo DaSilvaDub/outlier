@@ -1446,6 +1446,31 @@ def write_pack(
         totals_rows.extend(build_game_totals(rows, payload, sport=lg))
         team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
 
+    # Filter totals rows to ONLY keep games/teams active on the current target date slate
+    slate_eids = {str(r.get("event_id")) for r in rows if r.get("event_id")}
+    slate_matchups = {str(r.get("matchup")).upper() for r in rows if r.get("matchup")}
+    slate_teams = set()
+    for r in rows:
+        if r.get("team"):
+            slate_teams.add(str(r.get("team")).upper())
+        if r.get("opponent"):
+            slate_teams.add(str(r.get("opponent")).upper())
+
+    if slate_eids or slate_matchups or slate_teams:
+        totals_rows = [
+            r
+            for r in totals_rows
+            if str(r.get("event_id")) in slate_eids
+            or str(r.get("matchup")).upper() in slate_matchups
+        ]
+        team_totals_rows = [
+            r
+            for r in team_totals_rows
+            if str(r.get("event_id")) in slate_eids
+            or str(r.get("matchup")).upper() in slate_matchups
+            or (r.get("team") and str(r.get("team")).upper() in slate_teams)
+        ]
+
     # --- PORTFOLIO RISK ALLOCATION ---
     try:
         git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=str(Path(__file__).parent)).strip()
