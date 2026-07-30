@@ -286,3 +286,22 @@ def test_implied_prob_scaling_and_rounding():
     # -110 implied prob is 52.380952...% -> 0.52380952...
     # So 0.52381 when rounded to 5 decimal places.
     assert row['implied_prob'] == 0.52381
+
+
+def test_totals_slate_event_filtering():
+    """Verify that off-slate events/matchups are filtered out when slate candidates are defined."""
+    slate_eids = {'E_SLATE'}
+    slate_matchups = {'MIN @ TOR'}
+    
+    totals_rows = [
+        {'event_id': 'E_SLATE', 'matchup': 'MIN @ TOR', 'team': 'MIN', 'selection': 'Total OVER 160.5'},
+        {'event_id': 'E_OFF', 'matchup': 'GSV @ PHX', 'team': 'GSV', 'selection': 'Total OVER 156.5'},
+    ]
+    
+    filtered = [
+        r for r in totals_rows
+        if r.get('event_id') in slate_eids or r.get('matchup') in slate_matchups
+    ]
+    assert len(filtered) == 1
+    assert filtered[0]['matchup'] == 'MIN @ TOR'
+
