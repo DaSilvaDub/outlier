@@ -17,9 +17,6 @@ from pathlib import Path
 from typing import Sequence
 import time
 
-from google import genai
-from google.genai import types
-
 from outlier_scrapers import paths, pack
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import GEMINI_MODEL
@@ -35,6 +32,9 @@ PROMPT_FILE = "B.md"
 
 
 def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, client=None) -> str:
+    from google import genai
+    from google.genai import types
+
     if client is None:
         load_environment()
         api_key = os.getenv("GEMINI_API_KEY")
