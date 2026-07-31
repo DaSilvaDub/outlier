@@ -638,6 +638,35 @@ untouched, belongs to whoever has that in progress).
 ### Next Steps
 - Commit the team total scoring token fix, prompt template fallbacks, and test guardrails to git.
 
+---
+
+## FAIR_TOTAL_DIVERGENCE, MODEL_SATURATED Quality Gates & API Auth Headers Fix (2026-07-31)
+
+**Date**: 2026-07-31  
+**Agent**: Gemini 3.6 Flash / Antigravity  
+**Branch(es)**: `fix/fair-total-divergent-gate`  
+**Last Commit SHA**: `53951b1`  
+**PR**: https://github.com/DaSilvaDub/outlier/pull/75  
+
+### Files Touched
+- `outlier_scrapers/auth.py`
+- `outlier_scrapers/game_totals.py`
+- `.agent-log/HANDOFF.md`
+
+### Summary of Work
+1. **API Header Fix**: Fixed Outlier API `HTTP 403 Forbidden` schedule endpoint error in `outlier_scrapers/auth.py` by configuring modern `User-Agent`, `Origin`, and `Referer` headers in `build_api_headers()`.
+2. **`FAIR_TOTAL_DIVERGENCE` & `MODEL_SATURATED` Quality Gates**:
+   - Updated `outlier_scrapers/game_totals.py` to evaluate directional divergence between `best_side` and `fair_total`.
+   - When `best_side == "UNDER"` and `fair_total > headline_line + 0.05` (or `best_side == "OVER"` and `fair_total < headline_line - 0.05`), appends `FAIR_TOTAL_DIVERGENCE` and `SOURCE_INTEGRITY_FLAG` to `quality_flags`, forcing `actionable = "false"`.
+   - When `independent_win_prob` exhibits uncalibrated saturation (`>= 0.98` or `<= 0.02`), appends `MODEL_SATURATED` and `SOURCE_INTEGRITY_FLAG`, forcing `actionable = "false"`.
+3. **Unit Tests**: Passed 31/31 unit tests in `tests/test_game_totals.py`.
+4. **Pack Regeneration**: Re-ran live refresh and rebuilt `2026-07-31` pack across 11 games (5953 MLB cards, 442 WNBA cards). Confirmed 100% binding on live totals output (`KC @ COL`, `NYY @ CHC`, `PIT @ CIN`, `DET @ ATH`, `KC TT`, `MIA TT`, `DET TT`, `DAL TT` all forced `actionable=false`).
+5. **Export & PR**: Exported clean `2026-07-31` data and Master Prompts to `OneDrive/Desktop/today` and `Google Drive/today`. Opened PR #75.
+
+### Next Steps
+- Merge PR #75 after automated checks complete.
+- Proceed with Phase 1 / Phase 2 research passes on the surviving actionable totals (`MIA @ NYM Total UNDER 8.5`, `NYM Team Total UNDER 4.5`, `ATL Team Total UNDER 95.5`).
+
 
 
 ---

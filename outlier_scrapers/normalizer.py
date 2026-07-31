@@ -17,6 +17,14 @@ from .schema import (
 
 logger = logging.getLogger(__name__)
 
+PROHIBITED_MLB_PLAYER_PROP_MARKETS = frozenset(
+    {"WALKS_ALLOWED", "TOTAL_BASES", "HITS_ALLOWED"}
+)
+
+
+def _market_token(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper()).strip("_")
+
 
 def _to_float(value: Any) -> float | None:
     if value in (None, "", "-"):
@@ -374,11 +382,21 @@ def normalize_player_props(
         if outcome.get("active") is False:
             continue
 
+        outcome_id = str(outcome.get("outcomeId") or outcome.get("id") or "").strip()
         side = str(outcome.get("position") or "").strip().upper()
         line = _to_float(outcome.get("line"))
         player_raw = parse_player_name(outcome)
         market_raw = parse_market_descriptor(outcome)
-        if side not in {"OVER", "UNDER"} or line is None or not player_raw:
+        # Stable outcome identity is required for exact joins to EV, movement,
+        # insights, enrichment, feedback, and settlement records.  Drop an
+        # unidentifiable source row instead of allowing a weaker market/side
+        # fallback to make it appear usable downstream.
+        if not outcome_id or side not in {"OVER", "UNDER"} or line is None or not player_raw:
+            continue
+        if config.league_id == "MLB" and {
+            _market_token(outcome.get("proposition")),
+            _market_token(market_raw),
+        } & PROHIBITED_MLB_PLAYER_PROP_MARKETS:
             continue
 
         event_id = str(outcome.get("eventId") or "").strip()
@@ -411,6 +429,7 @@ def normalize_player_props(
             "league": config.league_id,
             "event_id": event_id or None,
             "market_id": outcome.get("marketId"),
+            "outcome_id": outcome_id,
             "player": player_raw,
             "player_raw": player_raw,
             "team": team,
@@ -421,6 +440,9 @@ def normalize_player_props(
             "matchup_raw": event_info.get("matchup_raw"),
             "market": market,
             "market_raw": market_raw or str(outcome.get("proposition") or "").strip() or None,
+            # ``position`` is the normalized schema name.  Keep ``side`` as a
+            # compatibility alias for existing cards and movement consumers.
+            "position": side,
             "side": side,
             "line": line,
             "books": books,
@@ -438,7 +460,7 @@ def normalize_player_props(
                 "proposition": outcome.get("proposition"),
                 "market_label": outcome.get("marketLabel"),
                 "scope": scope,
-                "outcome_id": outcome.get("outcomeId") or outcome.get("id"),
+                "outcome_id": outcome_id,
                 "orf": record.get("orf"),
                 "orf_score": record.get("orfScore"),
                 "raw_opp_rank": raw_opp_rank,
@@ -490,8 +512,9 @@ def build_normalized_payload(
 
     normalized_errors = validate_normalized_props(rows)
     if normalized_errors:
-        for err in normalized_errors:
-            logger.warning("Normalized props schema warning: %s", err)
+        raise ValidationError(
+            "Critical normalized props schema violation: " + "; ".join(normalized_errors)
+        )
 
     pagination = (
         props_payload.get("_page_summary")
@@ -509,7 +532,7 @@ def build_normalized_payload(
         "records": rows,
         "data_contract": {
             "dataset": "outlier_player_props",
-            "version": "1.0",
+            "version": "1.1",
             "intended_use": "Standalone Outlier props data for sport-specific betting triage.",
             "dedupe_key": "league+event_id+(market_id|market_raw)+player_raw+side+line",
         },

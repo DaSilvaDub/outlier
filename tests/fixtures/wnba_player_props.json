@@ -5,6 +5,7 @@
         "active": true,
         "eventId": "wnba-event-1",
         "marketId": "wnba-market-1",
+        "outcomeId": "wnba-outcome-1",
         "marketLabel": "A'ja Wilson - Points",
         "proposition": "POINTS",
         "position": "UNDER",

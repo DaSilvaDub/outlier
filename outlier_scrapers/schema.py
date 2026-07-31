@@ -89,9 +89,9 @@ def validate_raw_player_props(payload: Any) -> list[str]:
         if not market_id:
             errors.append(f"Prop {idx} 'outcome' is missing 'marketId'")
 
-        outcome_id = outcome.get("outcomeId")
+        outcome_id = outcome.get("outcomeId") or outcome.get("id")
         if not outcome_id:
-            errors.append(f"Prop {idx} 'outcome' is missing 'outcomeId'")
+            errors.append(f"Prop {idx} 'outcome' is missing 'outcomeId' or 'id'")
 
         # Verify basic type integrity
         position = outcome.get("position")
@@ -183,7 +183,17 @@ def validate_normalized_props(records: Any) -> list[str]:
     if not isinstance(records, list):
         return ["Normalized props records must be a list"]
 
-    required_keys = {"league", "event_id", "market_id", "outcome_id", "position", "line", "team", "matchup"}
+    required_keys = {
+        "league",
+        "event_id",
+        "market_id",
+        "outcome_id",
+        "position",
+        "side",
+        "line",
+        "team",
+        "matchup",
+    }
     for idx, rec in enumerate(records):
         if not isinstance(rec, dict):
             errors.append(f"Normalized prop record {idx} is not a dictionary")
@@ -191,6 +201,18 @@ def validate_normalized_props(records: Any) -> list[str]:
         missing = required_keys - set(rec.keys())
         if missing:
             errors.append(f"Normalized prop record {idx} is missing key(s): {', '.join(missing)}")
+            continue
+        outcome_id = str(rec.get("outcome_id") or "").strip()
+        position = str(rec.get("position") or "").strip().upper()
+        side = str(rec.get("side") or "").strip().upper()
+        if not outcome_id:
+            errors.append(f"Normalized prop record {idx} has an empty 'outcome_id'")
+        if position not in {"OVER", "UNDER"}:
+            errors.append(f"Normalized prop record {idx} has invalid 'position': {position!r}")
+        if side != position:
+            errors.append(
+                f"Normalized prop record {idx} has mismatched 'side' and 'position'"
+            )
 
     return errors
 

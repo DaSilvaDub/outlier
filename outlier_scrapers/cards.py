@@ -448,11 +448,11 @@ def _group_key(identity: dict[str, Any]) -> str:
 def _side_data_from_prop(prop: dict[str, Any]) -> dict[str, Any]:
     ctx = prop.get("sport_context") or {}
     return {
-        "side": prop.get("side"),
+        "side": prop.get("position") or prop.get("side"),
         "line": prop.get("line"),
         "best_odds": prop.get("best_odds"),
         "books": prop.get("books") or [],
-        "outcome_id": ctx.get("outcome_id"),
+        "outcome_id": prop.get("outcome_id") or ctx.get("outcome_id"),
         "orf_score": ctx.get("orf_score"),
         "l5_pct": prop.get("l5_pct"),
         "l10_pct": prop.get("l10_pct"),

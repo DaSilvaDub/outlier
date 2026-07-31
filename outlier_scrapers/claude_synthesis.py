@@ -16,8 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-import anthropic
-
 from outlier_scrapers import paths, pack
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import CLAUDE_MODEL
@@ -64,6 +62,8 @@ def build_user_content(prompt_text: str, inputs: dict[str, str]) -> str:
 
 
 def call_claude(user_content: str, role_block: list[str], client=None) -> str:
+    import anthropic
+
     if client is None:
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):

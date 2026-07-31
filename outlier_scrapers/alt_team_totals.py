@@ -36,20 +36,14 @@ from outlier_scrapers.utils import (
 from outlier_scrapers.normalizer import implied_probability, percent_number
 from outlier_scrapers.paths import league_paths
 from outlier_scrapers.registry import supported_leagues
+from outlier_scrapers.team_totals import (
+    is_team_total_proposition,
+    team_total_propositions as _team_total_propositions,
+)
 
 MIN_HIT_PCT = 90.0
 MAX_HIT_PCT = 100.0
 PARLAY_LEGS = 2
-
-# Board-verified for WNBA (TEAM_PROP/POINTS). MLB team totals are total runs
-# (user-confirmed); accept the raw proposition variants plus the canonical
-# market alias R (registry: RUNS -> R). TOTAL under TEAM_PROP is unambiguous —
-# game totals arrive as GAMELINE, so no cross-stream false positives.
-TEAM_TOTAL_PROPOSITIONS: dict[str, frozenset[str]] = {
-    "WNBA": frozenset({"POINTS"}),
-    "MLB": frozenset({"POINTS", "RUNS", "R", "TOTAL_RUNS", "TOTAL"}),
-}
-DEFAULT_TEAM_TOTAL_PROPOSITIONS = frozenset({"POINTS"})
 
 ALT_TEAM_TOTALS_HEADER = [
     "league",
@@ -98,9 +92,8 @@ FLAG_NO_PRICE = "NO_PRICE"
 
 
 def team_total_propositions(league: str) -> frozenset[str]:
-    return TEAM_TOTAL_PROPOSITIONS.get(
-        str(league or "").upper(), DEFAULT_TEAM_TOTAL_PROPOSITIONS
-    )
+    """Backward-compatible access to the shared sport-aware token contract."""
+    return _team_total_propositions(league)
 
 
 def is_alt_team_total_record(rec: dict[str, Any], *, league: str) -> bool:
@@ -110,8 +103,8 @@ def is_alt_team_total_record(rec: dict[str, Any], *, league: str) -> bool:
     mt = str(rec.get("market_type") or "").upper()
     if mt != "TEAM_PROP":
         return False
-    prop = str(rec.get("proposition") or rec.get("market") or "").upper()
-    return prop in team_total_propositions(league)
+    prop = rec.get("proposition") or rec.get("market")
+    return is_team_total_proposition(prop, sport=league)
 
 
 def extract_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
