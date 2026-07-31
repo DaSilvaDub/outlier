@@ -150,11 +150,12 @@ def test_unknown_team_yields_none_team_but_preserves_team_raw():
             {
                 "outcome": {
                     "eventId": "evt-x",
+                    "outcomeId": "outcome-x",
                     "teamId": "1",
                     "position": "OVER",
                     "line": 1.5,
-                    "marketLabel": "Some Guy - Total Bases",
-                    "proposition": "TOTAL_BASES",
+                    "marketLabel": "Some Guy - Hits",
+                    "proposition": "HITS",
                     "marketId": "m-x",
                     "bestOdds": -110,
                     "books": [],
@@ -192,6 +193,7 @@ def test_wnba_expansion_team_portland_resolves_team_and_opponent():
             {
                 "outcome": {
                     "eventId": "evt-pdx",
+                    "outcomeId": "outcome-pdx",
                     "teamId": "t-pdx",
                     "position": "UNDER",
                     "line": 12.5,
@@ -217,9 +219,9 @@ def test_wnba_expansion_team_portland_resolves_team_and_opponent():
 def test_unicode_minus_odds_parse_to_int_best_odds():
     schedule = {"events": [{"eventId": "evt-u", "away": {"alias": "NYY", "teamId": "1"},
         "home": {"alias": "BOS", "teamId": "2"}}]}
-    props = {"props": [{"outcome": {"eventId": "evt-u", "teamId": "1",
-        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Total Bases",
-        "proposition": "TOTAL_BASES", "marketId": "m-u",
+    props = {"props": [{"outcome": {"eventId": "evt-u", "outcomeId": "outcome-u", "teamId": "1",
+        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Hits",
+        "proposition": "HITS", "marketId": "m-u",
         "bestOdds": "−120", "books": [], "bookOdds": {}}, "stats": {}}]}
     rows = normalize_player_props(props, schedule, get_sport_config("MLB"))
     assert rows[0]["best_odds"] == -120
@@ -257,6 +259,7 @@ def _mlb_prop(market_id, label, *, event_id="e1", proposition="HITS", line=1.5):
     return {
         "outcome": {
             "eventId": event_id,
+            "outcomeId": f"{market_id}:{event_id}:{line}:over",
             "teamId": "10",
             "oppTeamId": "20",
             "position": "OVER",
@@ -302,4 +305,48 @@ def test_teamid_fallback_fills_team_when_event_not_in_schedule():
     assert row["opponent"] == "BOS"
     assert row["event_id"] == "e9"  # row preserved despite missing schedule entry
     assert row["matchup"] is None  # no event-specific matchup available
+
+
+def test_player_prop_promotes_stable_identity_to_top_level():
+    rows = normalize_player_props(
+        {"props": [_mlb_prop("m1", "Aaron Judge - Hits")]},
+        _mlb_one_event_schedule(),
+        get_sport_config("MLB"),
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["outcome_id"] == row["sport_context"]["outcome_id"]
+    assert row["position"] == row["side"] == "OVER"
+
+
+def test_player_prop_without_stable_outcome_id_is_dropped():
+    prop = _mlb_prop("m1", "Aaron Judge - Hits")
+    prop["outcome"].pop("outcomeId")
+
+    rows = normalize_player_props(
+        {"props": [prop]}, _mlb_one_event_schedule(), get_sport_config("MLB")
+    )
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("proposition", "label"),
+    [
+        ("WALKS_ALLOWED", "Walks Allowed"),
+        ("TOTAL_BASES", "Total Bases"),
+        ("HITS_ALLOWED", "Hits Allowed"),
+    ],
+)
+def test_prohibited_mlb_markets_are_excluded_during_generation(
+    proposition, label
+):
+    prop = _mlb_prop("m-prohibited", f"Aaron Judge - {label}", proposition=proposition)
+
+    rows = normalize_player_props(
+        {"props": [prop]}, _mlb_one_event_schedule(), get_sport_config("MLB")
+    )
+
+    assert rows == []
 

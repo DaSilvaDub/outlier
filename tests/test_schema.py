@@ -191,6 +191,29 @@ def test_validate_normalized_props_and_games():
     assert any("missing key(s)" in err for err in validate_normalized_games(invalid_game))
 
 
+def test_validate_normalized_props_rejects_empty_or_divergent_identity():
+    base = {
+        "league": "MLB",
+        "event_id": "e1",
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "position": "OVER",
+        "side": "OVER",
+        "line": 1.5,
+        "team": "NYY",
+        "matchup": "NYY @ BOS",
+    }
+    assert validate_normalized_props([base]) == []
+    assert any(
+        "empty 'outcome_id'" in err
+        for err in validate_normalized_props([{**base, "outcome_id": ""}])
+    )
+    assert any(
+        "mismatched 'side' and 'position'" in err
+        for err in validate_normalized_props([{**base, "side": "UNDER"}])
+    )
+
+
 def test_validate_candidate_row():
     # Happy path
     valid_row = {
@@ -230,6 +253,21 @@ def test_build_normalized_payload_compatibility_gate():
         build_normalized_payload(
             config=get_sport_config("MLB"),
             props_payload={},
+            schedule_payload={"events": []},
+            source_url="http://test.com",
+        )
+
+
+def test_build_normalized_payload_fails_closed_on_normalized_contract_error(monkeypatch):
+    monkeypatch.setattr(
+        "outlier_scrapers.normalizer.normalize_player_props",
+        lambda *_args, **_kwargs: [{}],
+    )
+
+    with pytest.raises(ValidationError, match="Critical normalized props schema violation"):
+        build_normalized_payload(
+            config=get_sport_config("MLB"),
+            props_payload={"props": []},
             schedule_payload={"events": []},
             source_url="http://test.com",
         )
