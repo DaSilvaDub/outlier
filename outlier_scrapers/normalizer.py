@@ -17,6 +17,14 @@ from .schema import (
 
 logger = logging.getLogger(__name__)
 
+PROHIBITED_MLB_PLAYER_PROP_MARKETS = frozenset(
+    {"WALKS_ALLOWED", "TOTAL_BASES", "HITS_ALLOWED"}
+)
+
+
+def _market_token(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper()).strip("_")
+
 
 def _to_float(value: Any) -> float | None:
     if value in (None, "", "-"):
@@ -384,6 +392,11 @@ def normalize_player_props(
         # unidentifiable source row instead of allowing a weaker market/side
         # fallback to make it appear usable downstream.
         if not outcome_id or side not in {"OVER", "UNDER"} or line is None or not player_raw:
+            continue
+        if config.league_id == "MLB" and {
+            _market_token(outcome.get("proposition")),
+            _market_token(market_raw),
+        } & PROHIBITED_MLB_PLAYER_PROP_MARKETS:
             continue
 
         event_id = str(outcome.get("eventId") or "").strip()

@@ -154,8 +154,8 @@ def test_unknown_team_yields_none_team_but_preserves_team_raw():
                     "teamId": "1",
                     "position": "OVER",
                     "line": 1.5,
-                    "marketLabel": "Some Guy - Total Bases",
-                    "proposition": "TOTAL_BASES",
+                    "marketLabel": "Some Guy - Hits",
+                    "proposition": "HITS",
                     "marketId": "m-x",
                     "bestOdds": -110,
                     "books": [],
@@ -220,8 +220,8 @@ def test_unicode_minus_odds_parse_to_int_best_odds():
     schedule = {"events": [{"eventId": "evt-u", "away": {"alias": "NYY", "teamId": "1"},
         "home": {"alias": "BOS", "teamId": "2"}}]}
     props = {"props": [{"outcome": {"eventId": "evt-u", "outcomeId": "outcome-u", "teamId": "1",
-        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Total Bases",
-        "proposition": "TOTAL_BASES", "marketId": "m-u",
+        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Hits",
+        "proposition": "HITS", "marketId": "m-u",
         "bestOdds": "−120", "books": [], "bookOdds": {}}, "stats": {}}]}
     rows = normalize_player_props(props, schedule, get_sport_config("MLB"))
     assert rows[0]["best_odds"] == -120
@@ -323,6 +323,26 @@ def test_player_prop_promotes_stable_identity_to_top_level():
 def test_player_prop_without_stable_outcome_id_is_dropped():
     prop = _mlb_prop("m1", "Aaron Judge - Hits")
     prop["outcome"].pop("outcomeId")
+
+    rows = normalize_player_props(
+        {"props": [prop]}, _mlb_one_event_schedule(), get_sport_config("MLB")
+    )
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("proposition", "label"),
+    [
+        ("WALKS_ALLOWED", "Walks Allowed"),
+        ("TOTAL_BASES", "Total Bases"),
+        ("HITS_ALLOWED", "Hits Allowed"),
+    ],
+)
+def test_prohibited_mlb_markets_are_excluded_during_generation(
+    proposition, label
+):
+    prop = _mlb_prop("m-prohibited", f"Aaron Judge - {label}", proposition=proposition)
 
     rows = normalize_player_props(
         {"props": [prop]}, _mlb_one_event_schedule(), get_sport_config("MLB")
