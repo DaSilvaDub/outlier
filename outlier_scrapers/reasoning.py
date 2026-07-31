@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Sequence
 import time
 
-import openai
-
 from outlier_scrapers import paths, pack
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
@@ -50,6 +48,8 @@ def call_openai_responses_api(
     team_totals_bytes: bytes | None = None,
     client=None,
 ) -> str:
+    import openai
+
     if client is None:
         load_environment()
         if not os.getenv("OPENAI_API_KEY"):

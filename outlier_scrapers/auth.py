@@ -254,7 +254,15 @@ def build_api_headers(storage_state: dict[str, Any]) -> dict[str, str]:
     if "Accept" not in headers and "accept" not in headers:
         headers["Accept"] = "application/json"
     if "User-Agent" not in headers and "user-agent" not in headers:
-        headers["User-Agent"] = "Mozilla/5.0"
+        headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        )
+    if "Origin" not in headers and "origin" not in headers:
+        headers["Origin"] = "https://app.outlier.bet"
+    if "Referer" not in headers and "referer" not in headers:
+        headers["Referer"] = "https://app.outlier.bet/"
 
     cookie_header = build_cookie_header(storage_state)
     if cookie_header and "Cookie" not in headers and "cookie" not in headers:

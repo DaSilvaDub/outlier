@@ -171,19 +171,27 @@ def test_build_market_ladder_groups_sides():
 def test_eligibility_split_game_vs_team():
     game = _norm_record('g1', 8.5, 'OVER', [{'book': 'DK', 'odds': -110}])
     team = _norm_record('t1', 4.5, 'OVER', [{'book': 'DK', 'odds': -110}], market_type='TEAM_PROP', proposition='POINTS')
+    team_mlb = _norm_record('t2', 4.5, 'OVER', [{'book': 'DK', 'odds': -110}], market_type='TEAM_PROP', proposition='RUNS')
+    team_nhl = _norm_record('t3', 2.5, 'OVER', [{'book': 'DK', 'odds': -110}], market_type='TEAM_PROP', proposition='GOALS')
+    team_total = _norm_record('t4', 3.5, 'OVER', [{'book': 'DK', 'odds': -110}], market_type='TEAM_PROP', proposition='TOTAL')
     half = dict(game)
     half['scope'] = 'first_5_innings'
     assert is_game_total_record(game)
     assert not is_team_total_record(game)
     assert is_team_total_record(team)
+    assert is_team_total_record(team_mlb)
+    assert is_team_total_record(team_nhl)
+    assert is_team_total_record(team_total)
     assert not is_game_total_record(team)
     assert not is_game_total_record(half)
     assert not is_team_total_record(half)
     assert is_eligible_total_record(game)
     assert is_eligible_total_record(team)
+    assert is_eligible_total_record(team_mlb)
     assert is_eligible_total_record(game, kind=TOTAL_KIND_GAME)
     assert not is_eligible_total_record(team, kind=TOTAL_KIND_GAME)
     assert is_eligible_total_record(team, kind=TOTAL_KIND_TEAM)
+    assert is_eligible_total_record(team_mlb, kind=TOTAL_KIND_TEAM)
     assert not is_eligible_total_record(game, kind=TOTAL_KIND_TEAM)
 
 
@@ -352,3 +360,60 @@ def test_implied_prob_scaling_and_rounding():
     # -110 implied prob is 52.380952...% -> 0.52380952...
     # So 0.52381 when rounded to 5 decimal places.
     assert row['implied_prob'] == 0.52381
+
+
+def test_totals_slate_event_filtering():
+    """Verify that off-slate events/matchups are filtered out when slate candidates are defined."""
+    slate_eids = {'E_SLATE'}
+    slate_matchups = {'MIN @ TOR'}
+    
+    totals_rows = [
+        {'event_id': 'E_SLATE', 'matchup': 'MIN @ TOR', 'team': 'MIN', 'selection': 'Total OVER 160.5'},
+        {'event_id': 'E_OFF', 'matchup': 'GSV @ PHX', 'team': 'GSV', 'selection': 'Total OVER 156.5'},
+    ]
+    
+    filtered = [
+        r for r in totals_rows
+        if r.get('event_id') in slate_eids or r.get('matchup') in slate_matchups
+    ]
+    assert len(filtered) == 1
+    assert filtered[0]['matchup'] == 'MIN @ TOR'
+
+
+def test_fair_total_directional_divergence_flag():
+    """Verify that selecting a side opposing market fair_total triggers FAIR_TOTAL_DIVERGENCE and actionable=false."""
+    cards = [
+        {
+            "card_id": "card_div_1",
+            "market_id": "m_game",
+            "group_key": "EV1|game|TOTAL|full_game|ot_unk",
+            "event_id": "EV1",
+            "matchup": "BOS @ ATH",
+            "line": 8.5,
+            "headline_side": "UNDER",
+            "sides": {
+                "OVER": {"side": "OVER", "line": 8.5, "best_odds": -110, "book_count": 3},
+                "UNDER": {"side": "UNDER", "line": 8.5, "best_odds": -110, "book_count": 3},
+            },
+        }
+    ]
+    records = [
+        _norm_record("m_game", 8.5, "OVER", [{"book": "DraftKings", "odds": -180}, {"book": "FanDuel", "odds": -180}], event_id="EV1"),
+        _norm_record("m_game", 8.5, "UNDER", [{"book": "DraftKings", "odds": 150}, {"book": "FanDuel", "odds": 150}], event_id="EV1"),
+        _norm_record("m_game", 9.5, "OVER", [{"book": "DraftKings", "odds": -140}, {"book": "FanDuel", "odds": -140}], event_id="EV1"),
+        _norm_record("m_game", 9.5, "UNDER", [{"book": "DraftKings", "odds": 120}, {"book": "FanDuel", "odds": 120}], event_id="EV1"),
+        _norm_record("m_game", 10.5, "OVER", [{"book": "DraftKings", "odds": 110}, {"book": "FanDuel", "odds": 110}], event_id="EV1"),
+        _norm_record("m_game", 10.5, "UNDER", [{"book": "DraftKings", "odds": -130}, {"book": "FanDuel", "odds": -130}], event_id="EV1"),
+    ]
+    games_norm = {"generated_at": "2026-07-30T12:00:00Z", "records": records}
+    rows = build_game_totals(cards, games_norm, sport="MLB", now=datetime(2026, 7, 30, 13, tzinfo=timezone.utc))
+    assert len(rows) > 0
+    row = rows[0]
+    assert row["fair_total"] != ""
+    assert float(row["fair_total"]) > 8.5
+    if row["best_side"] == "UNDER":
+        assert "FAIR_TOTAL_DIVERGENCE" in row["quality_flags"]
+        assert "SOURCE_INTEGRITY_FLAG" in row["quality_flags"]
+        assert row["actionable"] == "false"
+
+

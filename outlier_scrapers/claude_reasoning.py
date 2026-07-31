@@ -16,8 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-import anthropic
-
 from outlier_scrapers import paths, pack
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import CLAUDE_MODEL
@@ -40,6 +38,8 @@ def call_claude(
     team_totals_bytes: bytes | None = None,
     client=None,
 ) -> str:
+    import anthropic
+
     if client is None:
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):

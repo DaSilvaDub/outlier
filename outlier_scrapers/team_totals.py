@@ -10,12 +10,16 @@ from typing import Any
 # POINTS. GOALS is retained for hockey-shaped feeds covered by the house
 # team-total contract even though NHL is not enabled in the current registry.
 TEAM_TOTAL_PROPOSITIONS: dict[str, frozenset[str]] = {
-    "MLB": frozenset({"POINTS", "RUNS", "R", "TOTAL_RUNS", "TOTAL"}),
-    "WNBA": frozenset({"POINTS"}),
-    "NBA": frozenset({"POINTS"}),
-    "NHL": frozenset({"GOALS", "TOTAL"}),
+    "MLB": frozenset(
+        {"POINTS", "RUNS", "R", "TOTAL_RUNS", "TOTAL", "TEAM_TOTAL"}
+    ),
+    "WNBA": frozenset({"POINTS", "TOTAL", "TEAM_TOTAL"}),
+    "NBA": frozenset({"POINTS", "TOTAL", "TEAM_TOTAL"}),
+    "NHL": frozenset({"GOALS", "TOTAL", "TEAM_TOTAL"}),
 }
-DEFAULT_TEAM_TOTAL_PROPOSITIONS = frozenset({"POINTS"})
+DEFAULT_TEAM_TOTAL_PROPOSITIONS = frozenset().union(
+    *TEAM_TOTAL_PROPOSITIONS.values()
+)
 
 
 def team_total_propositions(sport: str | None) -> frozenset[str]:
