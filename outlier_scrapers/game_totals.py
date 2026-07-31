@@ -608,6 +608,14 @@ def build_totals(
             flags.append("SOURCE_INTEGRITY_FLAG")
         best_book = under_book if best_side == "UNDER" else over_book
 
+        if fair_total is not None:
+            if best_side == "UNDER" and fair_total > headline_line + 0.05:
+                flags.append("FAIR_TOTAL_DIVERGENCE")
+                flags.append("SOURCE_INTEGRITY_FLAG")
+            elif best_side == "OVER" and fair_total < headline_line - 0.05:
+                flags.append("FAIR_TOTAL_DIVERGENCE")
+                flags.append("SOURCE_INTEGRITY_FLAG")
+
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         p_side_market = (
@@ -630,6 +638,10 @@ def build_totals(
         model_win_prob = p_side_conditional
         consensus_win_prob = p_side_market
         independent_win_prob = p_side_independent
+
+        if independent_win_prob is not None and (independent_win_prob >= 0.98 or independent_win_prob <= 0.02):
+            flags.append("MODEL_SATURATED")
+            flags.append("SOURCE_INTEGRITY_FLAG")
         decimal_price = _american_to_decimal(best_price)
         _implied_pct_val = implied_probability(best_price)
         implied_prob = round(_implied_pct_val / 100.0, 5) if _implied_pct_val is not None else None
