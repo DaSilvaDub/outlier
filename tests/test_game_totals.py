@@ -305,3 +305,41 @@ def test_totals_slate_event_filtering():
     assert len(filtered) == 1
     assert filtered[0]['matchup'] == 'MIN @ TOR'
 
+
+def test_fair_total_directional_divergence_flag():
+    """Verify that selecting a side opposing market fair_total triggers FAIR_TOTAL_DIVERGENCE and actionable=false."""
+    cards = [
+        {
+            "card_id": "card_div_1",
+            "market_id": "m_game",
+            "group_key": "EV1|game|TOTAL|full_game|ot_unk",
+            "event_id": "EV1",
+            "matchup": "BOS @ ATH",
+            "line": 8.5,
+            "headline_side": "UNDER",
+            "sides": {
+                "OVER": {"side": "OVER", "line": 8.5, "best_odds": -110, "book_count": 3},
+                "UNDER": {"side": "UNDER", "line": 8.5, "best_odds": -110, "book_count": 3},
+            },
+        }
+    ]
+    records = [
+        _norm_record("m_game", 8.5, "OVER", [{"book": "DraftKings", "odds": -180}, {"book": "FanDuel", "odds": -180}], event_id="EV1"),
+        _norm_record("m_game", 8.5, "UNDER", [{"book": "DraftKings", "odds": 150}, {"book": "FanDuel", "odds": 150}], event_id="EV1"),
+        _norm_record("m_game", 9.5, "OVER", [{"book": "DraftKings", "odds": -140}, {"book": "FanDuel", "odds": -140}], event_id="EV1"),
+        _norm_record("m_game", 9.5, "UNDER", [{"book": "DraftKings", "odds": 120}, {"book": "FanDuel", "odds": 120}], event_id="EV1"),
+        _norm_record("m_game", 10.5, "OVER", [{"book": "DraftKings", "odds": 110}, {"book": "FanDuel", "odds": 110}], event_id="EV1"),
+        _norm_record("m_game", 10.5, "UNDER", [{"book": "DraftKings", "odds": -130}, {"book": "FanDuel", "odds": -130}], event_id="EV1"),
+    ]
+    games_norm = {"generated_at": "2026-07-30T12:00:00Z", "records": records}
+    rows = build_game_totals(cards, games_norm, sport="MLB", now=datetime(2026, 7, 30, 13, tzinfo=timezone.utc))
+    assert len(rows) > 0
+    row = rows[0]
+    assert row["fair_total"] != ""
+    assert float(row["fair_total"]) > 8.5
+    if row["best_side"] == "UNDER":
+        assert "FAIR_TOTAL_DIVERGENCE" in row["quality_flags"]
+        assert "SOURCE_INTEGRITY_FLAG" in row["quality_flags"]
+        assert row["actionable"] == "false"
+
+
