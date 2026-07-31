@@ -20,7 +20,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from outlier_scrapers.alt_team_totals import team_total_propositions
 from outlier_scrapers.game_totals import (
     BASE_INDEPENDENT_WEIGHT,
     _l10_over_for_record,
@@ -33,6 +32,7 @@ from outlier_scrapers.game_totals import (
     logical_market_key,
 )
 from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.team_totals import team_total_propositions
 
 __all__ = [
     "BASE_INDEPENDENT_WEIGHT",

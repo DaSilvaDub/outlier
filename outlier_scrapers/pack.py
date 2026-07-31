@@ -31,6 +31,7 @@ from outlier_scrapers.registry import (
 from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
 from outlier_scrapers.schema import ValidationError, validate_candidate_row
 from outlier_scrapers.utils import _local_date, _parse_start, drop_locked_events, _write_csv
+from outlier_scrapers.team_totals import is_team_total_proposition
 
 logger = logging.getLogger(__name__)
 
@@ -602,11 +603,19 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
-    proposition = card.get("proposition") or ref.get("proposition")
+    proposition = (
+        card.get("proposition")
+        or ref.get("proposition")
+        or card.get("market_label")
+        or ref.get("market_label")
+        or market_token
+    )
     has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
     if not (card.get("market_type") or ref.get("market_type")) and not has_player:
         prop_token = str(proposition or "").upper()
-        if prop_token == "POINTS" and (card.get("team") or ref.get("team")):  # nosec B105 - market name, not a credential
+        if prop_token != "TOTAL" and is_team_total_proposition(prop_token, sport=sport) and (
+            card.get("team") or ref.get("team")
+        ):
             market_type = "TEAM_PROP"
         elif prop_token in {"TOTAL", "SPREAD", "MONEYLINE"}:
             market_type = "GAMELINE"
@@ -622,7 +631,7 @@ def build_row(
     row["player_id"] = card.get("player_id") or ref.get("player_id")
     is_team_total = (
         str(market_type or "").upper() == "TEAM_PROP"
-        and str(proposition or "").upper() == "POINTS"
+        and is_team_total_proposition(proposition, sport=sport)
     )
     name = (
         card.get("player")

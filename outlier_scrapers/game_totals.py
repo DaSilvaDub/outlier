@@ -13,6 +13,7 @@ from typing import Any
 from outlier_scrapers.line_movement import build_consensus_operator_refs, _props_freshness
 from outlier_scrapers.normalizer import detect_scope, implied_probability, percent_number
 from outlier_scrapers.sizing import compute_sizing
+from outlier_scrapers.team_totals import is_team_total_proposition
 from outlier_scrapers.utils import (
     _american_to_decimal,
     _summary_stat_for_team,
@@ -34,18 +35,23 @@ def _is_candidate_game_total(row: dict[str, Any]) -> bool:
     return "total o/u" in sel or prop == "TOTAL"
 
 
-def _is_candidate_team_total(row: dict[str, Any]) -> bool:
+def _is_candidate_team_total(
+    row: dict[str, Any], *, sport: str | None = None
+) -> bool:
     if row.get("player_id"):
         return False
-    mt = row.get("market_type")
+    mt = str(row.get("market_type") or "").upper()
     if mt != "TEAM_PROP":
         return False
     sel = (row.get("selection") or "").lower()
-    prop = str(row.get("_proposition") or row.get("market") or "").upper()
-    return "team total" in sel or prop == "POINTS"
+    prop = row.get("_proposition") or row.get("market") or row.get("market_label")
+    row_sport = sport or row.get("sport") or row.get("league")
+    return "team total" in sel or is_team_total_proposition(prop, sport=row_sport)
 
 
-def _is_candidate_total(row: dict[str, Any], *, kind: str | None = None) -> bool:
+def _is_candidate_total(
+    row: dict[str, Any], *, kind: str | None = None, sport: str | None = None
+) -> bool:
     """Match candidate rows that correspond to totals markets.
 
     kind=None matches either game or team totals (legacy helpers).
@@ -53,8 +59,8 @@ def _is_candidate_total(row: dict[str, Any], *, kind: str | None = None) -> bool
     if kind == TOTAL_KIND_GAME:
         return _is_candidate_game_total(row)
     if kind == TOTAL_KIND_TEAM:
-        return _is_candidate_team_total(row)
-    return _is_candidate_game_total(row) or _is_candidate_team_total(row)
+        return _is_candidate_team_total(row, sport=sport)
+    return _is_candidate_game_total(row) or _is_candidate_team_total(row, sport=sport)
 
 
 def _research_leverage(prop: str, scope: str, sport: str) -> str:
@@ -264,18 +270,20 @@ def is_game_total_record(rec: dict[str, Any]) -> bool:
     return mt == "GAMELINE" and prop == "TOTAL"
 
 
-TEAM_TOTAL_PROPOSITION_TOKENS = frozenset({"POINTS", "RUNS", "R", "TOTAL_RUNS", "GOALS", "TOTAL", "TEAM_TOTAL"})
-
-
-def is_team_total_record(rec: dict[str, Any]) -> bool:
-    """Full-game team totals (TEAM_PROP / POINTS, RUNS, GOALS, TOTAL)."""
+def is_team_total_record(
+    rec: dict[str, Any], *, sport: str | None = None
+) -> bool:
+    """Full-game TEAM_PROP totals using the sport's scoring propositions."""
     if not is_full_game_total(rec):
         return False
     mt, prop = _record_market_and_prop(rec)
-    return mt == "TEAM_PROP" and prop in TEAM_TOTAL_PROPOSITION_TOKENS
+    rec_sport = sport or rec.get("sport") or rec.get("league")
+    return mt == "TEAM_PROP" and is_team_total_proposition(prop, sport=rec_sport)
 
 
-def is_eligible_total_record(rec: dict[str, Any], *, kind: str | None = None) -> bool:
+def is_eligible_total_record(
+    rec: dict[str, Any], *, kind: str | None = None, sport: str | None = None
+) -> bool:
     """Eligibility for the combined totals projection board.
 
     kind=None matches either stream (legacy). Prefer is_game_total_record /
@@ -284,8 +292,8 @@ def is_eligible_total_record(rec: dict[str, Any], *, kind: str | None = None) ->
     if kind == TOTAL_KIND_GAME:
         return is_game_total_record(rec)
     if kind == TOTAL_KIND_TEAM:
-        return is_team_total_record(rec)
-    return is_game_total_record(rec) or is_team_total_record(rec)
+        return is_team_total_record(rec, sport=sport)
+    return is_game_total_record(rec) or is_team_total_record(rec, sport=sport)
 
 
 def logical_market_key(rec: dict[str, Any]) -> str:
@@ -435,11 +443,11 @@ def _is_integer_line(line: float) -> bool:
 
 
 def _index_candidates_by_market(
-    rows: list[dict[str, Any]], *, kind: str
+    rows: list[dict[str, Any]], *, kind: str, sport: str
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
-        if not _is_candidate_total(row, kind=kind):
+        if not _is_candidate_total(row, kind=kind, sport=sport):
             continue
         mid = str(row.get("market_id") or "")
         if mid and mid not in out:
@@ -448,12 +456,12 @@ def _index_candidates_by_market(
 
 
 def _group_records_by_logical_market(
-    records: list[dict[str, Any]], *, kind: str
+    records: list[dict[str, Any]], *, kind: str, sport: str
 ) -> dict[str, list[dict[str, Any]]]:
     """Collapse raw API market_ids into one ladder per logical total."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for rec in records:
-        if not is_eligible_total_record(rec, kind=kind):
+        if not is_eligible_total_record(rec, kind=kind, sport=sport):
             continue
         if not str(rec.get("event_id") or "").strip():
             continue
@@ -489,8 +497,8 @@ def build_totals(
     if kind not in (TOTAL_KIND_GAME, TOTAL_KIND_TEAM):
         raise ValueError(f"unsupported totals kind: {kind!r}")
     records = (games_norm or {}).get("records") or []
-    by_market = _group_records_by_logical_market(records, kind=kind)
-    cand_by_market = _index_candidates_by_market(candidate_rows, kind=kind)
+    by_market = _group_records_by_logical_market(records, kind=kind, sport=sport)
+    cand_by_market = _index_candidates_by_market(candidate_rows, kind=kind, sport=sport)
     now = now or datetime.now().astimezone()
     output: list[dict[str, Any]] = []
     freshness = _props_freshness(
@@ -804,7 +812,7 @@ def build_team_totals(
     sport: str,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Build projection rows for team totals only (TEAM_PROP / POINTS)."""
+    """Build projection rows for sport-aware full-game TEAM_PROP totals."""
     return build_totals(
         candidate_rows, games_norm, sport=sport, kind=TOTAL_KIND_TEAM, now=now
     )
