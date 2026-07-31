@@ -22,6 +22,20 @@ from outlier_scrapers.utils import (
 
 TOTAL_KIND_GAME = "game"
 TOTAL_KIND_TEAM = "team"
+FAIR_TOTAL_DIRECTION_TOLERANCE = 0.05
+TOTALS_MODEL_DIVERGENCE_THRESHOLD = 0.15
+
+
+def _totals_models_diverge(
+    independent_probability: float | None,
+    market_probability: float | None,
+) -> bool:
+    if independent_probability is None or market_probability is None:
+        return False
+    return (
+        abs(independent_probability - market_probability)
+        >= TOTALS_MODEL_DIVERGENCE_THRESHOLD
+    )
 
 
 def _is_candidate_game_total(row: dict[str, Any]) -> bool:
@@ -617,11 +631,19 @@ def build_totals(
         best_book = under_book if best_side == "UNDER" else over_book
 
         if fair_total is not None:
-            if best_side == "UNDER" and fair_total > headline_line + 0.05:
+            if (
+                best_side == "UNDER"
+                and fair_total > headline_line + FAIR_TOTAL_DIRECTION_TOLERANCE
+            ):
                 flags.append("FAIR_TOTAL_DIVERGENCE")
+                flags.append("FAIR_TOTAL_SIDE_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")
-            elif best_side == "OVER" and fair_total < headline_line - 0.05:
+            elif (
+                best_side == "OVER"
+                and fair_total < headline_line - FAIR_TOTAL_DIRECTION_TOLERANCE
+            ):
                 flags.append("FAIR_TOTAL_DIVERGENCE")
+                flags.append("FAIR_TOTAL_SIDE_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")
 
 
@@ -646,6 +668,9 @@ def build_totals(
         model_win_prob = p_side_conditional
         consensus_win_prob = p_side_market
         independent_win_prob = p_side_independent
+
+        if _totals_models_diverge(p_side_independent, p_side_market):
+            flags.append("totals_model_divergence")
 
         if independent_win_prob is not None and (independent_win_prob >= 0.98 or independent_win_prob <= 0.02):
             flags.append("MODEL_SATURATED")

@@ -668,3 +668,27 @@ untouched, belongs to whoever has that in progress).
 - Proceed with Phase 1 / Phase 2 research passes on the surviving actionable totals (`MIA @ NYM Total UNDER 8.5`, `NYM Team Total UNDER 4.5`, `ATL Team Total UNDER 95.5`).
 
 
+
+---
+
+## Totals fair-line and model-divergence stand-down (2026-07-30)
+
+**Agent**: Codex
+**Branch**: `fix/totals-fair-side-consistency`
+**Last Product Commit SHA**: `4865fe63f488bd2acb322578f7ea0daa81c25c03` (plus the handoff-only commit recording this summary)
+**PR**: Prepared with `make_pr`: “Reject totals whose model side conflicts with market fair line”
+
+### Files Touched
+- `outlier_scrapers/game_totals.py`
+- `tests/test_game_totals.py`
+- `.agent-log/HANDOFF.md`
+
+### Summary of Work
+- Confirmed `fair_total` is a market-ladder interpolation while `edge_pct` and sizing use `final_blended_prob`.
+- Added fail-closed quality flags for a selected side that opposes the market fair line and for independent/L10 probability divergence of at least 15 percentage points.
+- Added regression tests proving both conditions make totals non-actionable.
+- Did not run web research or any paid reasoning provider.
+
+### Next Steps
+- Regenerate the affected pack from fresh data so previously emitted actionable rows receive the new flags.
+- Review the broader event-level consistency concern (game total versus summed team totals) as a separate cross-board integrity enhancement.
