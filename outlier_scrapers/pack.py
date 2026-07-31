@@ -31,6 +31,7 @@ from outlier_scrapers.registry import (
 from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
 from outlier_scrapers.schema import ValidationError, validate_candidate_row
 from outlier_scrapers.utils import _local_date, _parse_start, drop_locked_events, _write_csv
+from outlier_scrapers.team_totals import is_team_total_proposition
 
 logger = logging.getLogger(__name__)
 
@@ -602,11 +603,19 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
-    proposition = card.get("proposition") or ref.get("proposition")
+    proposition = (
+        card.get("proposition")
+        or ref.get("proposition")
+        or card.get("market_label")
+        or ref.get("market_label")
+        or market_token
+    )
     has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
     if not (card.get("market_type") or ref.get("market_type")) and not has_player:
         prop_token = str(proposition or "").upper()
-        if prop_token == "POINTS" and (card.get("team") or ref.get("team")):  # nosec B105 - market name, not a credential
+        if prop_token != "TOTAL" and is_team_total_proposition(prop_token, sport=sport) and (
+            card.get("team") or ref.get("team")
+        ):
             market_type = "TEAM_PROP"
         elif prop_token in {"TOTAL", "SPREAD", "MONEYLINE"}:
             market_type = "GAMELINE"
@@ -622,7 +631,7 @@ def build_row(
     row["player_id"] = card.get("player_id") or ref.get("player_id")
     is_team_total = (
         str(market_type or "").upper() == "TEAM_PROP"
-        and str(proposition or "").upper() == "POINTS"
+        and is_team_total_proposition(proposition, sport=sport)
     )
     name = (
         card.get("player")
@@ -1446,6 +1455,31 @@ def write_pack(
         totals_rows.extend(build_game_totals(rows, payload, sport=lg))
         team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
 
+    # Filter totals rows to ONLY keep games/teams active on the current target date slate
+    slate_eids = {str(r.get("event_id")) for r in rows if r.get("event_id")}
+    slate_matchups = {str(r.get("matchup")).upper() for r in rows if r.get("matchup")}
+    slate_teams = set()
+    for r in rows:
+        if r.get("team"):
+            slate_teams.add(str(r.get("team")).upper())
+        if r.get("opponent"):
+            slate_teams.add(str(r.get("opponent")).upper())
+
+    if slate_eids or slate_matchups or slate_teams:
+        totals_rows = [
+            r
+            for r in totals_rows
+            if str(r.get("event_id")) in slate_eids
+            or str(r.get("matchup")).upper() in slate_matchups
+        ]
+        team_totals_rows = [
+            r
+            for r in team_totals_rows
+            if str(r.get("event_id")) in slate_eids
+            or str(r.get("matchup")).upper() in slate_matchups
+            or (r.get("team") and str(r.get("team")).upper() in slate_teams)
+        ]
+
     # --- PORTFOLIO RISK ALLOCATION ---
     try:
         git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=str(Path(__file__).parent)).strip()
@@ -1521,6 +1555,35 @@ def write_pack(
         bs = r.get("book_source", "unknown")
         bs_breakdown[bs] = bs_breakdown.get(bs, 0) + 1
 
+    # --- Flat metrics consumed by portfolio_report.py / portfolio replay (A8) ---
+    # A7 (this sidecar writer) and A8 (portfolio_report.py, plus the pinned
+    # fixtures in test_portfolio_report.py / test_portfolio_replay.py) were
+    # implemented in separate commits and never reconciled: the reader expects
+    # flat keys (legacy_total_units, caps_binding, book_source_exposure, ...)
+    # that this sidecar never wrote, so every real pack silently produced a
+    # report of zeros. These are computed here, alongside the existing nested
+    # diagnostic fields, using data already available above.
+    caps_binding: dict[str, int] = {}
+    for group_key in alloc_result.binding_constraints:
+        cap_type = group_key.split(":", 1)[0]
+        caps_binding[cap_type] = caps_binding.get(cap_type, 0) + 1
+
+    book_source_exposure: dict[str, float] = {}
+    zeroed_rows = 0
+    for r in unified:
+        if r.get("risk_role") != "PRIMARY":
+            continue
+        wager_id = r.get("stable_wager_id")
+        allocated = alloc_result.allocated_units.get(wager_id, 0.0) if wager_id else 0.0
+        bs = r.get("book_source", "unknown")
+        book_source_exposure[bs] = round(book_source_exposure.get(bs, 0.0) + allocated, 4)
+        pre_cap_row = float(r.get("pre_cap_units", r.get("units", 0.0)))
+        if pre_cap_row > 0.0 and allocated == 0.0:
+            zeroed_rows += 1
+
+    missing_identity_counts = sum(1 for r in all_projected if r.get("missing_risk_identity"))
+    duplicate_collapse_counts = (len(all_projected) - len(collapsed)) + (len(collapsed) - len(unified))
+
     sidecar = {
         "schema_version": policy.schema_version,
         "policy_version": policy.policy_version,
@@ -1559,10 +1622,27 @@ def write_pack(
             "collapsed": len(all_projected) - len(collapsed),
             "unified": len(collapsed) - len(unified)
         },
-        "missing_identity_warnings": sum(1 for r in all_projected if r.get("missing_risk_identity")),
+        "missing_identity_warnings": missing_identity_counts,
         "book_source_breakdown": bs_breakdown,
         "quantization_only_difference_totals": 0,
         "order_invariance_hash": alloc_result.order_invariance_hash,
+        # Flat aliases required by portfolio_report.py / portfolio replay.
+        "legacy_total_units": legacy_units,
+        "shadow_total_units": shadow_units,
+        "caps_binding": caps_binding,
+        "zeroed_rows": zeroed_rows,
+        "missing_identity_counts": missing_identity_counts,
+        "duplicate_collapse_counts": duplicate_collapse_counts,
+        "book_source_exposure": book_source_exposure,
+        # Ticket A1 (continuous, unrounded pre_cap_units) is not yet merged onto
+        # this branch, so pre_cap_units currently falls back to the already
+        # half-unit-rounded legacy `units` value (see project_risk_identity /
+        # allocate_portfolio_risk). With no continuous baseline to diff
+        # against, a genuine quantization-only difference can't be computed
+        # yet -- report 0 with an explicit flag rather than a value that would
+        # look measured but isn't.
+        "quantization_differences": 0,
+        "quantization_diff_measurable": False,
     }
 
     with open(out_dir / "portfolio_risk.json", "w", encoding="utf-8") as f:
