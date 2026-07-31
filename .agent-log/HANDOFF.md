@@ -692,3 +692,33 @@ untouched, belongs to whoever has that in progress).
 ### Next Steps
 - Regenerate the affected pack from fresh data so previously emitted actionable rows receive the new flags.
 - Review the broader event-level consistency concern (game total versus summed team totals) as a separate cross-board integrity enhancement.
+
+---
+
+## Merge open PRs #70, #71, and #73 (2026-07-31)
+
+**Agent**: Codex
+**Last Commit SHA**: `600e9689be1902a636725c0e5c23397f35ad3a9a`
+**Merged PRs**: [#70](https://github.com/DaSilvaDub/outlier/pull/70), [#71](https://github.com/DaSilvaDub/outlier/pull/71), [#73](https://github.com/DaSilvaDub/outlier/pull/73)
+
+### Files Touched
+- `outlier_scrapers/team_totals.py`
+- `outlier_scrapers/game_totals.py`
+- `outlier_scrapers/pack.py`
+- `outlier_scrapers/normalizer.py`
+- `tests/test_game_totals.py`
+- `tests/test_pack.py`
+- `tests/test_normalizer.py`
+- `tests/fixtures/mlb_player_props.json`
+- `.agent-log/HANDOFF.md`
+
+### Summary
+- Resolved each PR against current `master` in isolated temporary worktrees and preserved unrelated dirty worktrees.
+- Kept sport-aware team-total matching, added unknown-sport compatibility, and handled raw market aliases.
+- Enforced generation-time rejection of prohibited MLB markets with stable outcome identities.
+- Consolidated fair-total safety flags, retained model-saturation checks, and used an exact `0.15` model-divergence threshold.
+- Addressed all current review findings; refreshed CI and type checks passed before every merge.
+- Focused verification passed: 171 tests for #70, 68 tests for #71, and 242 tests for #73.
+
+### Next Steps
+- None for these PRs. Regenerate production packs only when separately requested with fresh input data.
