@@ -603,7 +603,13 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
-    proposition = card.get("proposition") or ref.get("proposition")
+    proposition = (
+        card.get("proposition")
+        or ref.get("proposition")
+        or card.get("market_label")
+        or ref.get("market_label")
+        or market_token
+    )
     has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
     if not (card.get("market_type") or ref.get("market_type")) and not has_player:
         prop_token = str(proposition or "").upper()

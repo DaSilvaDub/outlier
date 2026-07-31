@@ -1125,6 +1125,30 @@ def test_mlb_runs_team_total_identity_uses_shared_sport_contract():
     assert row["selection"] == "LAD Team Total OVER 4.5"
 
 
+def test_mlb_team_total_uses_market_alias_when_proposition_is_missing():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "tm-runs-alias",
+        "market": "R",
+        "market_label": "RUNS",
+        "team": "LAD",
+        "matchup": "LAD @ SF",
+        "board": "B",
+        "sides": {
+            "OVER": {
+                "outcome_id": "to-runs-alias",
+                "line": 4.5,
+                "best_odds": -110,
+            }
+        },
+    }
+
+    row = make_row(card, [], sport="MLB")
+
+    assert row["market_type"] == "TEAM_PROP"
+    assert row["selection"] == "LAD Team Total OVER 4.5"
+
+
 def test_untyped_mlb_total_with_team_stays_game_total():
     card = {
         "headline_side": "OVER",

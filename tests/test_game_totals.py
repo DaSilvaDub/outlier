@@ -207,6 +207,28 @@ def test_mlb_runs_team_total_is_sport_aware():
     )
 
     assert is_team_total_record(mlb_runs, sport='MLB')
+    assert is_team_total_record(
+        _norm_record(
+            'wnba-points',
+            85.5,
+            'OVER',
+            [{'book': 'DK', 'odds': -110}],
+            market_type='TEAM_PROP',
+            proposition='POINTS',
+        ),
+        sport='WNBA',
+    )
+    assert is_team_total_record(
+        _norm_record(
+            'nhl-goals',
+            2.5,
+            'OVER',
+            [{'book': 'DK', 'odds': -110}],
+            market_type='TEAM_PROP',
+            proposition='GOALS',
+        ),
+        sport='NHL',
+    )
     assert is_eligible_total_record(
         mlb_runs, kind=TOTAL_KIND_TEAM, sport='MLB'
     )
