@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from collections import defaultdict
 import sys
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ from .normalizer import _to_float, _to_int, implied_probability, percent_number
 from .paths import league_paths
 from .registry import supported_leagues
 from .utils import _summary_stat_for_team
+
+logger = logging.getLogger(__name__)
 
 
 def write_json(path, payload: dict[str, Any]) -> None:
@@ -242,8 +245,15 @@ def _average_summary_stat_blobs(blobs: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def _summary_stat_blob_for_side(rec: dict[str, Any], side: str) -> dict[str, Any] | None:
+def _summary_stat_blob_for_side(
+    rec: dict[str, Any], side: str
+) -> tuple[dict[str, Any] | None, str | None]:
     """Pick the game-market summary-stat blob for a side.
+
+    Returns ``(blob, flag)``. ``flag`` is ``"AMBIGUOUS_STATS_SIDE"`` when a
+    TEAM_PROP row has both home/away stats but the team cannot be matched to
+    the matchup (same contract as ``_summary_stat_for_team``); otherwise
+    ``None``. Missing stats return ``(None, None)`` — not ambiguous.
 
     * HOME / AWAY → matching ``homeSummaryStat`` / ``awaySummaryStat``
     * TEAM_PROP OVER/UNDER → team-matched blob via ``_summary_stat_for_team``
@@ -252,42 +262,42 @@ def _summary_stat_blob_for_side(rec: dict[str, Any], side: str) -> dict[str, Any
     """
     stats = rec.get("stats")
     if not isinstance(stats, dict) or not stats:
-        return None
+        return None, None
     home = stats.get("homeSummaryStat") if isinstance(stats.get("homeSummaryStat"), dict) else None
     away = stats.get("awaySummaryStat") if isinstance(stats.get("awaySummaryStat"), dict) else None
     side_u = str(side or "").strip().upper()
 
     if side_u == "HOME":
-        return home
+        return home, None
     if side_u == "AWAY":
-        return away
+        return away, None
 
     if side_u in {"OVER", "UNDER"}:
         market_type = str(rec.get("market_type") or "").upper()
         if market_type == "TEAM_PROP":
-            blob, _flag = _summary_stat_for_team(rec)
-            return blob if isinstance(blob, dict) else None
+            blob, flag = _summary_stat_for_team(rec)
+            return (blob if isinstance(blob, dict) else None), flag
         blobs = [b for b in (home, away) if b is not None]
         if not blobs:
-            return None
+            return None, None
         if len(blobs) == 1:
-            return blobs[0]
-        return _average_summary_stat_blobs(blobs)
+            return blobs[0], None
+        return _average_summary_stat_blobs(blobs), None
 
     if side_u == "DRAW":
         blobs = [b for b in (home, away) if b is not None]
         if not blobs:
-            return None
+            return None, None
         if len(blobs) == 1:
-            return blobs[0]
-        return _average_summary_stat_blobs(blobs)
+            return blobs[0], None
+        return _average_summary_stat_blobs(blobs), None
 
     # Unknown position: only unambiguous when a single blob is present.
     if home is not None and away is None:
-        return home
+        return home, None
     if away is not None and home is None:
-        return away
-    return None
+        return away, None
+    return None, None
 
 
 def hit_rates_from_game_stats(rec: dict[str, Any], side: str) -> dict[str, float | None]:
@@ -299,7 +309,7 @@ def hit_rates_from_game_stats(rec: dict[str, Any], side: str) -> dict[str, float
     ``recency_hit_pct`` / Board B signal can score game cards.
     """
     empty: dict[str, float | None] = {key: None for key in _HIT_RATE_KEYS}
-    blob = _summary_stat_blob_for_side(rec, side)
+    blob, _flag = _summary_stat_blob_for_side(rec, side)
     if not blob:
         return empty
     return {
@@ -309,6 +319,12 @@ def hit_rates_from_game_stats(rec: dict[str, Any], side: str) -> dict[str, float
         "h2h_pct": percent_number(blob.get("h2h")),
         "season_pct": percent_number(blob.get("curSeason")),
     }
+
+
+def game_stats_side_flag(rec: dict[str, Any], side: str) -> str | None:
+    """Return the stats side-selection data-quality flag for ``side``, if any."""
+    _blob, flag = _summary_stat_blob_for_side(rec, side)
+    return flag
 
 
 def movement_corroboration(side: str, mv: dict[str, Any] | None) -> float:
@@ -924,6 +940,14 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             and not _line_values_equal(movement_line, card_line)
         ):
             card.setdefault("flags", []).append("movement_line_mismatch")
+    # Ambiguous TEAM_PROP team/matchup match: hit rates stay empty (graceful
+    # degrade) but surface a card flag so it is not invisible vs missing stats.
+    if any(sdata.get("stats_flag") == "AMBIGUOUS_STATS_SIDE" for sdata in sides_data.values()):
+        card.setdefault("flags", []).append("ambiguous_stats_side")
+        logger.debug(
+            "game card %s: AMBIGUOUS_STATS_SIDE (team/matchup could not select home/away stats)",
+            market_id,
+        )
     return card
 
 
@@ -939,6 +963,9 @@ def _best_american_price(row: dict[str, Any]) -> int | None:
 
 def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
     rates = hit_rates_from_game_stats(prop, side)
+    stats_flag = game_stats_side_flag(prop, side)
+    # stats_flag is internal only — not copied onto the public side_view.
+    # assemble_game_card lifts AMBIGUOUS_STATS_SIDE to a card-level flag.
     return {
         "side": side,
         "line": prop.get("line"),
@@ -946,6 +973,7 @@ def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
         "books": prop.get("books") or [],
         "outcome_id": prop.get("outcome_id"),
         "public_money": prop.get("public_money"),
+        "stats_flag": stats_flag,
         **rates,
     }
 

@@ -10,6 +10,7 @@ from outlier_scrapers.cards import (
     assemble_game_card,
     build_cards_payload,
     build_indexes,
+    game_stats_side_flag,
     hit_rates_from_game_stats,
     movement_corroboration,
     proxy_market_edge,
@@ -423,6 +424,62 @@ def test_hit_rates_from_game_stats_team_prop_matches_team():
     assert rates["season_pct"] == 40.0
 
 
+def test_game_stats_side_flag_ambiguous_team_prop():
+    rec = {
+        "market_type": "TEAM_PROP",
+        "proposition": "RUNS",
+        "position": "OVER",
+        "team": "NYY",  # neither side of the matchup
+        "matchup": "CWS @ TB",
+        "stats": {
+            "homeSummaryStat": {"l5": 0.9},
+            "awaySummaryStat": {"l5": 0.1},
+        },
+    }
+    assert game_stats_side_flag(rec, "OVER") == "AMBIGUOUS_STATS_SIDE"
+
+
+def test_game_stats_side_flag_none_for_unambiguous_side():
+    rec = {
+        "position": "HOME",
+        "stats": {"homeSummaryStat": {"l5": 0.9}, "awaySummaryStat": {"l5": 0.1}},
+    }
+    assert game_stats_side_flag(rec, "HOME") is None
+
+
+def test_assemble_game_card_flags_ambiguous_team_prop_stats_end_to_end():
+    rows = [
+        {
+            **_spread_prop_row("OVER", 85.5),
+            "position": "OVER",
+            "proposition": "RUNS",
+            "market_type": "TEAM_PROP",
+            "team": "NYY",
+            "matchup": "CWS @ TB",
+            "stats": {
+                "homeSummaryStat": {"l5": 0.9},
+                "awaySummaryStat": {"l5": 0.1},
+            },
+        },
+        {
+            **_spread_prop_row("UNDER", 85.5),
+            "position": "UNDER",
+            "proposition": "RUNS",
+            "market_type": "TEAM_PROP",
+            "team": "NYY",
+            "matchup": "CWS @ TB",
+            "stats": {
+                "homeSummaryStat": {"l5": 0.9},
+                "awaySummaryStat": {"l5": 0.1},
+            },
+        },
+    ]
+    card = assemble_game_card("gm1", build_indexes(rows, [], [], []))
+    assert "ambiguous_stats_side" in card["flags"]
+    # No leak into the per-side public contract.
+    assert "stats_flag" not in card["sides"]["OVER"]
+
+
 def test_hit_rates_from_game_stats_missing_returns_nones():
     rates = hit_rates_from_game_stats({"stats": {}}, "HOME")
     assert rates == {
@@ -465,6 +522,7 @@ def test_assemble_game_card_wires_hit_rates_into_signal():
 
     assert home_view["hit_rates"]["l5_pct"] == 100.0
     assert home_view["hit_rates"]["l10_pct"] == 100.0
+    assert home_view["hit_rates"]["h2h_pct"] == 100.0
     assert away_view["hit_rates"]["l5_pct"] == 0.0
 
     # Board B hit component is 40% of the composite; with perfect hit rates and
