@@ -331,7 +331,8 @@ def _format_injury(item: dict[str, Any]) -> str:
     if not name:
         name = str(item.get("player") or item.get("description") or "").strip()
 
-    injury = item.get("injury") if isinstance(item.get("injury"), dict) else {}
+    raw_injury = item.get("injury")
+    injury: dict[str, Any] = raw_injury if isinstance(raw_injury, dict) else {}
     raw_status = injury.get("status")
     status = str(raw_status).strip() if isinstance(raw_status, (str, int, float)) else ""
     # API body/diagnosis lives under nested key "injury" (e.g. "Right Forearm Strain").
