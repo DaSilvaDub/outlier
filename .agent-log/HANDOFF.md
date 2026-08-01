@@ -1,7 +1,9 @@
 # Handoff
 
-- **Last Commit SHA**: `f538afe27a69bc17189e6d3a7a584e6e5756cdf9` (`fix(alt-props): enforce strict bankroll contract`)
-- **Pull Request**: https://github.com/DaSilvaDub/outlier/pull/77
+- **Last Commit SHA**: `dbe3b849eb50a1e399ed4c1bed0b9783bfa14df0` (`fix(ci): preserve pack builder test contract`)
+- **Pull Requests**:
+  - https://github.com/DaSilvaDub/outlier/pull/77 (merged)
+  - https://github.com/DaSilvaDub/outlier/pull/78 (CI compatibility follow-up)
 - **Files Touched**:
   - `outlier_scrapers/alt_player_props.py`
   - `outlier_scrapers/alt_bankroll_props.py`
@@ -15,8 +17,9 @@
   - `tests/test_generate_prompts.py`
 - **Verification**:
   - Scoped Ruff checks passed.
-  - Relevant offline suite passed: `225 passed`.
+  - Relevant offline suite passed: `225 passed`; CI-regression subset passed: `41 passed`.
+  - Full local suite reached `631 passed`; its two failures are from unrelated unstaged `scripts/organize_today_run2.py` changes excluded from both PRs.
   - Saved live-shaped normalized feeds produced MLB `47` player / `14` bankroll rows and WNBA `9` player / `11` bankroll rows.
 - **Next Steps**:
-  - Review and merge PR #77.
-  - Preserve unrelated local work in `scripts/organize_today_run2.py` and untracked `sample_recs.json`; neither is part of PR #77.
+  - Review and merge PR #78 after hosted pytest and MyPy pass.
+  - Preserve unrelated local work in `scripts/organize_today_run2.py` and untracked `sample_recs.json`; neither is part of either PR.
