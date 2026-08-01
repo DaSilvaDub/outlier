@@ -1,25 +1,16 @@
 # Handoff
 
-- **Last Commit SHA**: `dbe3b849eb50a1e399ed4c1bed0b9783bfa14df0` (`fix(ci): preserve pack builder test contract`)
+- **Last Commit SHA**: `59d6322fe5acb94de4b8dfec0d8d4fee16d62420` (`fix(scripts): drop unused L5+L10-only hit-rate tracking`), pushed directly to `master`.
 - **Pull Requests**:
   - https://github.com/DaSilvaDub/outlier/pull/77 (merged)
-  - https://github.com/DaSilvaDub/outlier/pull/78 (CI compatibility follow-up)
-- **Files Touched**:
-  - `outlier_scrapers/alt_player_props.py`
-  - `outlier_scrapers/alt_bankroll_props.py`
-  - `outlier_scrapers/pack.py`
-  - `.agents/skills/export-manual-outlier-packs/SKILL.md`
-  - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
-  - `prompts/Alt_Player_Props_Analysis.md`
-  - `prompts/Alt_Bankroll_Props_Analysis.md`
-  - `tests/test_alt_player_props.py`
-  - `tests/test_alt_bankroll_props.py`
-  - `tests/test_generate_prompts.py`
+  - https://github.com/DaSilvaDub/outlier/pull/78 (merged, CI compatibility follow-up)
+- Branch `fix/alt-props-bankroll-contract` deleted (local + remote) after both PRs landed.
+- **Files Touched (this session, post-PR-78)**:
+  - `scripts/organize_today_run2.py` — removed the redundant L5+L10-only perfect-hit tracking pass (function signature, stats keys, and output directory); only the L5+L10+L20 bucket remains.
+  - `tests/test_organize_today_run2.py` — updated `parse_hit_rates` call to match the trimmed signature.
+  - Deleted untracked `sample_recs.json` (unused manual test fixture, not referenced by any code).
 - **Verification**:
-  - Scoped Ruff checks passed.
-  - Relevant offline suite passed: `225 passed`; CI-regression subset passed: `41 passed`.
-  - Full local suite reached `631 passed`; its two failures are from unrelated unstaged `scripts/organize_today_run2.py` changes excluded from both PRs.
-  - Saved live-shaped normalized feeds produced MLB `47` player / `14` bankroll rows and WNBA `9` player / `11` bankroll rows.
+  - `pytest -q tests/test_organize_today_run2.py`: `5 passed`.
+  - Scoped Ruff check on touched files: clean (one pre-existing unrelated `F401` in `test_organize_today_run2.py`, left as-is).
 - **Next Steps**:
-  - Review and merge PR #78 after hosted pytest and MyPy pass.
-  - Preserve unrelated local work in `scripts/organize_today_run2.py` and untracked `sample_recs.json`; neither is part of either PR.
+  - No pending work from this session; `master` is clean and up to date with `origin/master`.
