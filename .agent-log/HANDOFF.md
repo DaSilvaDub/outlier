@@ -1,13 +1,12 @@
 # Handoff
 
-- **Last Commit SHA**: `35c466c3d2d11570aff6099712a2eb113b14d129` on `feat/richer-injury-flags`
+- **Last Commit SHA**: `22ce08453cfd107386ee35a1a1eb2b8ebcdfc27d` on `feat/richer-injury-flags`
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/81
 - **Files Touched**:
-  - `outlier_scrapers/pack.py` — richer `_format_injury` (body, return date, analysis @ 160 chars)
-  - `tests/test_pack.py` — updated schema test + new richer-flags test
-  - `tests/test_games.py` — e2e asserts body part
-  - `.claude/plan/richer-injury-flags.md`
+  - `outlier_scrapers/pack.py` — date validation in `_injury_return_date` & type safety guards for scalar fields in `_format_injury`
+  - `tests/test_pack.py` — strengthened analysis truncation & multi-player separator assertions; added test for unnormalized dates & non-scalar types
+- **Verification**:
+  - `pytest -q tests/test_pack.py tests/test_games.py`: 117 passed
+  - `ruff check outlier_scrapers/pack.py tests/test_pack.py tests/test_games.py`: All checks passed
 - **Next Steps**:
-  - Merge PR #81 after CI green
-  - Optional: hasNews-first / IL filter for huge MLB lists
-  - Next pack rebuild surfaces richer `injury_flags` automatically
+  - PR #81 ready for merge after CI checks pass
