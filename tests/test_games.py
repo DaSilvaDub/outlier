@@ -265,6 +265,15 @@ def test_build_game_cards_payload_generates_sides(monkeypatch):
                 "best_odds": 150,
                 "books": [{"book": "DraftKings", "american": 150}],
                 "public_money": {"position": "HOME", "percentage": 60, "money": 55},
+                "stats": {
+                    "homeSummaryStat": {
+                        "l5": 0.8,
+                        "l10": 0.7,
+                        "l20": 0.6,
+                        "h2h": 0.5,
+                        "curSeason": 0.55,
+                    }
+                },
             },
             {
                 "league": "MLB",
@@ -277,6 +286,15 @@ def test_build_game_cards_payload_generates_sides(monkeypatch):
                 "best_odds": -170,
                 "books": [{"book": "DraftKings", "american": -170}],
                 "public_money": {"position": "AWAY", "percentage": 40, "money": 45},
+                "stats": {
+                    "awaySummaryStat": {
+                        "l5": 0.2,
+                        "l10": 0.3,
+                        "l20": 0.4,
+                        "h2h": 0.1,
+                        "curSeason": 0.25,
+                    }
+                },
             },
         ],
         "context": {},
@@ -298,6 +316,11 @@ def test_build_game_cards_payload_generates_sides(monkeypatch):
     assert "AWAY" in card["sides"]
     assert card["sides"]["HOME"]["line"] == -1.5
     assert card["sides"]["HOME"]["public_money"]["percentage"] == 60
+    assert card["sides"]["HOME"]["hit_rates"]["l5_pct"] == 80.0
+    assert card["sides"]["HOME"]["hit_rates"]["l10_pct"] == 70.0
+    assert card["sides"]["AWAY"]["hit_rates"]["l5_pct"] == 20.0
+    assert card["sides"]["HOME"]["signal"]["hit_pct"] is not None
+    assert card["sides"]["HOME"]["signal"]["hit_pct"] > card["sides"]["AWAY"]["signal"]["hit_pct"]
 
 
 # --------------------------------------------------------------------------- #

@@ -10,9 +10,11 @@ from outlier_scrapers.cards import (
     assemble_game_card,
     build_cards_payload,
     build_indexes,
+    hit_rates_from_game_stats,
     movement_corroboration,
     proxy_market_edge,
     recency_hit_pct,
+    signal_score,
     snapshot_skew,
     two_way_fair,
 )
@@ -363,6 +365,124 @@ def test_game_card_preserves_normalized_market_type():
     ]
     card = assemble_game_card("gm1", build_indexes(rows, [], [], []))
     assert card["market_type"] == "TEAM_PROP"
+
+
+def test_hit_rates_from_game_stats_home_away_blobs():
+    rec = {
+        "position": "HOME",
+        "stats": {
+            "homeSummaryStat": {"l5": 0.8, "l10": 0.7, "l20": 0.6, "h2h": 0.5, "curSeason": 0.55},
+            "awaySummaryStat": {"l5": 0.2, "l10": 0.3, "l20": 0.4, "h2h": 0.1, "curSeason": 0.25},
+        },
+    }
+    home = hit_rates_from_game_stats(rec, "HOME")
+    away = hit_rates_from_game_stats(rec, "AWAY")
+    assert home == {
+        "l5_pct": 80.0,
+        "l10_pct": 70.0,
+        "l20_pct": 60.0,
+        "h2h_pct": 50.0,
+        "season_pct": 55.0,
+    }
+    assert away["l5_pct"] == 20.0
+    assert away["l10_pct"] == 30.0
+
+
+def test_hit_rates_from_game_stats_total_averages_home_away():
+    rec = {
+        "market_type": "GAMELINE",
+        "proposition": "TOTAL",
+        "position": "OVER",
+        "stats": {
+            "homeSummaryStat": {"l5": 0.6, "l10": 0.8, "l20": 0.4, "h2h": 0.5, "curSeason": 0.5},
+            "awaySummaryStat": {"l5": 0.4, "l10": 0.4, "l20": 0.6, "h2h": 0.5, "curSeason": 0.7},
+        },
+    }
+    rates = hit_rates_from_game_stats(rec, "OVER")
+    assert rates["l5_pct"] == 50.0
+    assert rates["l10_pct"] == 60.0
+    assert rates["l20_pct"] == 50.0
+    assert rates["season_pct"] == 60.0
+
+
+def test_hit_rates_from_game_stats_team_prop_matches_team():
+    rec = {
+        "market_type": "TEAM_PROP",
+        "proposition": "RUNS",
+        "position": "OVER",
+        "team": "CWS",
+        "matchup": "CWS @ TB",
+        "stats": {
+            "homeSummaryStat": {"l5": 0.9, "l10": 0.9, "l20": 0.9, "h2h": 0.9, "curSeason": 0.9},
+            "awaySummaryStat": {"l5": 0.1, "l10": 0.2, "l20": 0.3, "h2h": 0.0, "curSeason": 0.4},
+        },
+    }
+    rates = hit_rates_from_game_stats(rec, "OVER")
+    assert rates["l5_pct"] == 10.0
+    assert rates["l10_pct"] == 20.0
+    assert rates["season_pct"] == 40.0
+
+
+def test_hit_rates_from_game_stats_missing_returns_nones():
+    rates = hit_rates_from_game_stats({"stats": {}}, "HOME")
+    assert rates == {
+        "l5_pct": None,
+        "l10_pct": None,
+        "l20_pct": None,
+        "h2h_pct": None,
+        "season_pct": None,
+    }
+
+
+def test_assemble_game_card_wires_hit_rates_into_signal():
+    home = {
+        **_spread_prop_row("HOME", -1.5),
+        "stats": {
+            "homeSummaryStat": {
+                "l5": 1.0,
+                "l10": 1.0,
+                "l20": 1.0,
+                "h2h": 1.0,
+                "curSeason": 1.0,
+            }
+        },
+    }
+    away = {
+        **_spread_prop_row("AWAY", 1.5),
+        "stats": {
+            "awaySummaryStat": {
+                "l5": 0.0,
+                "l10": 0.0,
+                "l20": 0.0,
+                "h2h": 0.0,
+                "curSeason": 0.0,
+            }
+        },
+    }
+    card = assemble_game_card("gm1", build_indexes([home, away], [], [], []))
+    home_view = card["sides"]["HOME"]
+    away_view = card["sides"]["AWAY"]
+
+    assert home_view["hit_rates"]["l5_pct"] == 100.0
+    assert home_view["hit_rates"]["l10_pct"] == 100.0
+    assert away_view["hit_rates"]["l5_pct"] == 0.0
+
+    # Board B hit component is 40% of the composite; with perfect hit rates and
+    # no movement/insights/orf, HOME should outrank AWAY on signal composite.
+    assert home_view["signal"]["hit_pct"] == 100.0
+    assert away_view["signal"]["hit_pct"] == 0.0
+    assert home_view["signal"]["composite"] > away_view["signal"]["composite"]
+
+    # Direct unit check that recency-weighted hit rates feed signal_score.
+    side_data = {
+        "l5_pct": 100.0,
+        "l10_pct": 100.0,
+        "l20_pct": 100.0,
+        "season_pct": 100.0,
+    }
+    scored = signal_score("HOME", side_data, None, [])
+    assert scored["hit_pct"] == 100.0
+    assert scored["composite"] > 50.0
 
 
 def test_movement_corroboration_direction():

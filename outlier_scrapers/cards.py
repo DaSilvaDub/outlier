@@ -30,9 +30,10 @@ from datetime import datetime
 from typing import Any
 
 from .cards_html import render_html
-from .normalizer import _to_float, _to_int, implied_probability
+from .normalizer import _to_float, _to_int, implied_probability, percent_number
 from .paths import league_paths
 from .registry import supported_leagues
+from .utils import _summary_stat_for_team
 
 
 def write_json(path, payload: dict[str, Any]) -> None:
@@ -221,6 +222,93 @@ def recency_hit_pct(side_data: dict[str, Any]) -> float | None:
             num += weight * float(value)
             den += weight
     return round(num / den, 3) if den > 0 else None
+
+
+_HIT_RATE_KEYS = ("l5_pct", "l10_pct", "l20_pct", "h2h_pct", "season_pct")
+
+
+def _average_summary_stat_blobs(blobs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Mean of shared fraction fields across home/away summary-stat blobs."""
+    keys = ("l5", "l10", "l20", "h2h", "curSeason", "prevSeason")
+    out: dict[str, Any] = {}
+    for key in keys:
+        values = [
+            float(blob[key])
+            for blob in blobs
+            if isinstance(blob.get(key), (int, float))
+        ]
+        if values:
+            out[key] = sum(values) / len(values)
+    return out
+
+
+def _summary_stat_blob_for_side(rec: dict[str, Any], side: str) -> dict[str, Any] | None:
+    """Pick the game-market summary-stat blob for a side.
+
+    * HOME / AWAY → matching ``homeSummaryStat`` / ``awaySummaryStat``
+    * TEAM_PROP OVER/UNDER → team-matched blob via ``_summary_stat_for_team``
+    * GAMELINE TOTAL (and other dual-blob OVER/UNDER) → average of home+away
+    * DRAW → average of both blobs when present (draw rates live on both)
+    """
+    stats = rec.get("stats")
+    if not isinstance(stats, dict) or not stats:
+        return None
+    home = stats.get("homeSummaryStat") if isinstance(stats.get("homeSummaryStat"), dict) else None
+    away = stats.get("awaySummaryStat") if isinstance(stats.get("awaySummaryStat"), dict) else None
+    side_u = str(side or "").strip().upper()
+
+    if side_u == "HOME":
+        return home
+    if side_u == "AWAY":
+        return away
+
+    if side_u in {"OVER", "UNDER"}:
+        market_type = str(rec.get("market_type") or "").upper()
+        if market_type == "TEAM_PROP":
+            blob, _flag = _summary_stat_for_team(rec)
+            return blob if isinstance(blob, dict) else None
+        blobs = [b for b in (home, away) if b is not None]
+        if not blobs:
+            return None
+        if len(blobs) == 1:
+            return blobs[0]
+        return _average_summary_stat_blobs(blobs)
+
+    if side_u == "DRAW":
+        blobs = [b for b in (home, away) if b is not None]
+        if not blobs:
+            return None
+        if len(blobs) == 1:
+            return blobs[0]
+        return _average_summary_stat_blobs(blobs)
+
+    # Unknown position: only unambiguous when a single blob is present.
+    if home is not None and away is None:
+        return home
+    if away is not None and home is None:
+        return away
+    return None
+
+
+def hit_rates_from_game_stats(rec: dict[str, Any], side: str) -> dict[str, float | None]:
+    """Normalize Outlier game ``stats`` into the same 0-100 hit-rate keys as props.
+
+    Game markets store fractions under ``homeSummaryStat`` / ``awaySummaryStat``
+    (``l5``, ``l10``, ``l20``, ``h2h``, ``curSeason``). Player props already
+    expose these as ``l5_pct`` etc.; this maps game rows onto that contract so
+    ``recency_hit_pct`` / Board B signal can score game cards.
+    """
+    empty: dict[str, float | None] = {key: None for key in _HIT_RATE_KEYS}
+    blob = _summary_stat_blob_for_side(rec, side)
+    if not blob:
+        return empty
+    return {
+        "l5_pct": percent_number(blob.get("l5")),
+        "l10_pct": percent_number(blob.get("l10")),
+        "l20_pct": percent_number(blob.get("l20")),
+        "h2h_pct": percent_number(blob.get("h2h")),
+        "season_pct": percent_number(blob.get("curSeason")),
+    }
 
 
 def movement_corroboration(side: str, mv: dict[str, Any] | None) -> float:
@@ -610,7 +698,7 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
         side_view = {
             **{k: sdata.get(k) for k in ("side", "line", "best_odds", "outcome_id", "orf_score")},
-            "hit_rates": {k: sdata.get(k) for k in ("l5_pct", "l10_pct", "l20_pct", "h2h_pct", "season_pct")},
+            "hit_rates": {k: sdata.get(k) for k in _HIT_RATE_KEYS},
             "alt_lines": alt_lines.get(side, []),
             "movement": _slim_movement(mv),
             "signal": score,
@@ -782,7 +870,7 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
         side_view = {
             **{k: sdata.get(k) for k in ("side", "line", "best_odds", "outcome_id")},
-            "hit_rates": {},
+            "hit_rates": {k: sdata.get(k) for k in _HIT_RATE_KEYS},
             "alt_lines": alt_lines.get(side, []),
             "movement": _slim_movement(mv),
             "signal": score,
@@ -850,6 +938,7 @@ def _best_american_price(row: dict[str, Any]) -> int | None:
     return max(odds) if odds else None
 
 def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
+    rates = hit_rates_from_game_stats(prop, side)
     return {
         "side": side,
         "line": prop.get("line"),
@@ -857,6 +946,7 @@ def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
         "books": prop.get("books") or [],
         "outcome_id": prop.get("outcome_id"),
         "public_money": prop.get("public_money"),
+        **rates,
     }
 
 
