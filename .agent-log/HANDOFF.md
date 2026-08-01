@@ -1,14 +1,22 @@
 # Handoff
 
-- **Last Commit SHA**: `959dce3` (feat: Add strict MLB whitelist and Alt Props Master Prompt)
+- **Last Commit SHA**: `f538afe27a69bc17189e6d3a7a584e6e5756cdf9` (`fix(alt-props): enforce strict bankroll contract`)
+- **Pull Request**: https://github.com/DaSilvaDub/outlier/pull/77
 - **Files Touched**:
   - `outlier_scrapers/alt_player_props.py`
+  - `outlier_scrapers/alt_bankroll_props.py`
   - `outlier_scrapers/pack.py`
-  - `outlier_scrapers/normalizer.py`
+  - `.agents/skills/export-manual-outlier-packs/SKILL.md`
   - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
-  - `prompts/Alt_Player_Props_Analysis.md` (New)
-  - Various test files
+  - `prompts/Alt_Player_Props_Analysis.md`
+  - `prompts/Alt_Bankroll_Props_Analysis.md`
+  - `tests/test_alt_player_props.py`
+  - `tests/test_alt_bankroll_props.py`
+  - `tests/test_generate_prompts.py`
+- **Verification**:
+  - Scoped Ruff checks passed.
+  - Relevant offline suite passed: `225 passed`.
+  - Saved live-shaped normalized feeds produced MLB `47` player / `14` bankroll rows and WNBA `9` player / `11` bankroll rows.
 - **Next Steps**:
-  - Review the implementation of `Alt_Player_Props_Analysis.md` and adjust formatting instructions as needed.
-  - Test the prompt in your manual LLM UI.
-  - Review PR on GitHub (if pushed).
+  - Review and merge PR #77.
+  - Preserve unrelated local work in `scripts/organize_today_run2.py` and untracked `sample_recs.json`; neither is part of PR #77.
