@@ -137,7 +137,7 @@ def test_normalize_games_team_prop_resolution():
                 {
                     "marketId": "m1",
                     "marketType": "TEAM_PROP",
-                    "proposition": "POINTS",
+                    "proposition": "RUNS",
                     "teamId": "h1",
                     "outcomes": [
                         {"id": "o1", "position": "OVER", "line": 4.5},
@@ -146,8 +146,8 @@ def test_normalize_games_team_prop_resolution():
                 {
                     "marketId": "m2",
                     "marketType": "TEAM_PROP",
-                    "proposition": "POINTS",
-                    "label": "Red Sox Total Points",
+                    "proposition": "RUNS",
+                    "label": "Red Sox Total Runs",
                     "outcomes": [
                         {"id": "o2", "position": "OVER", "line": 3.5},
                     ],

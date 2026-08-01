@@ -100,19 +100,15 @@ def test_non_first_inning_game_props_remain_excluded():
     assert rows["record_count"] == 0
 
 
-def test_mlb_unknown_market_is_preserved_with_raw_fields():
+def test_unknown_market_is_dropped_for_mlb():
     rows = normalize_player_props(
         load_fixture("mlb_player_props.json"),
         load_fixture("mlb_schedule.json"),
         get_sport_config("MLB"),
     )
-    mystery = next(row for row in rows if row["market_raw"] == "Mystery Barrel Prop")
-    assert mystery["market"] is None
-    assert mystery["team"] == "NYY"
-    assert mystery["team_raw"] == "NYY"
-    assert mystery["opponent"] == "BOS"
-    assert mystery["opp_rank"] is None
-    assert mystery["opp_rank_signal"] == "not_applicable"
+    # Mystery Barrel Prop is not in the ALLOWED_MLB_PLAYER_PROPS list, so it is dropped.
+    mystery_rows = [row for row in rows if row["market_raw"] == "Mystery Barrel Prop"]
+    assert len(mystery_rows) == 0
 
 
 def test_mlb_doubleheader_dedupe_keeps_same_player_line_in_different_events():
@@ -121,18 +117,19 @@ def test_mlb_doubleheader_dedupe_keeps_same_player_line_in_different_events():
         load_fixture("mlb_schedule.json"),
         get_sport_config("MLB"),
     )
-    assert len(rows) == 2
-    assert {row["event_id"] for row in rows} == {"mlb-event-1", "mlb-event-2"}
+    # Only the "Hits" prop is kept (2 events = 2 rows originally, but one was Mystery, so only 1 is kept)
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == "mlb-event-1"
 
 
-def test_missing_market_id_uses_market_raw_identity_without_collapsing():
+def test_missing_market_id_is_dropped_if_not_in_whitelist():
     rows = normalize_player_props(
         load_fixture("mlb_player_props.json"),
         load_fixture("mlb_schedule.json"),
         get_sport_config("MLB"),
     )
-    row = next(row for row in rows if row["market_id"] is None)
-    assert row["market_raw"] == "Mystery Barrel Prop"
+    mystery_rows = [row for row in rows if row["market_id"] is None]
+    assert len(mystery_rows) == 0
 
 
 def test_unknown_team_yields_none_team_but_preserves_team_raw():
@@ -275,23 +272,18 @@ def _mlb_prop(market_id, label, *, event_id="e1", proposition="HITS", line=1.5):
     }
 
 
-def test_full_game_maps_and_scoped_variant_preserved_not_canonicalized():
+def test_full_game_maps_and_scoped_variant_dropped():
     payload = {
         "props": [
             _mlb_prop("m1", "Aaron Judge - Hits"),
             _mlb_prop("m2", "Aaron Judge - 1st Inning Hits"),
         ]
     }
+    # MLB whitelist drops the 1st inning prop because its canonical market maps to None
     rows = normalize_player_props(payload, _mlb_one_event_schedule(), get_sport_config("MLB"))
-    by_scope = {r["sport_context"]["scope"]: r for r in rows}
-
-    assert by_scope["full_game"]["market"] == "H"
-    assert by_scope["full_game"]["market_raw"] == "Hits"
-
-    scoped = by_scope["first_inning"]
-    assert scoped["market"] is None  # not canonicalized
-    assert scoped["market_raw"] == "1st Inning Hits"  # preserved
-    assert scoped["sport_context"]["proposition"] == "HITS"
+    assert len(rows) == 1
+    assert rows[0]["sport_context"]["scope"] == "full_game"
+    assert rows[0]["market"] == "H"
 
 
 def test_teamid_fallback_fills_team_when_event_not_in_schedule():

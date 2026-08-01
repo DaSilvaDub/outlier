@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 def test_audit_prohibited_markets_exclusion():
     """Gate 1: Ensure all prohibited market tokens are recognized by exclusion filter."""
     prohibited_tokens = [
-        "HR", "HOME_RUNS", "HRR", "HITSRUNSRBIS", "BB", "WALKS",
+        "HR", "HOME_RUNS",
         "WALKS_ALLOWED", "WALKSALLOWED", "PITCHER_WALKS", "PITCHING_WALKS", "WALKS ALLOWED"
     ]
     for token in prohibited_tokens:

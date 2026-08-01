@@ -111,13 +111,11 @@ CANDIDATES_HEADER = [
 
 NO_PUSH_MARKETS = {"MONEYLINE", "ML", "ML_3WAY", "MONEYLINE_3WAY"}
 
-# House rule: HR / HRR (H+R+RBI) / BB (walks) prop markets are excluded from
+# House rule: HR prop markets are excluded from
 # packs entirely (low hit-rate longshot markets). Covers both the normalized
 # short codes (registry.py) and the raw proposition tokens.
 EXCLUDED_MARKETS = {
     "HR", "HOME_RUNS",
-    "HRR", "HITSRUNSRBIS", "HITS_RUNS_RBIS",
-    "BB", "WALKS",
     "WALKS_ALLOWED", "WALKSALLOWED", "PITCHER_WALKS", "PITCHING_WALKS", "WALKS ALLOWED",
 }
 
@@ -1140,7 +1138,7 @@ ROLE_BLOCK = [
     " each leg's recommended_units_pre_news at face value.",
     "",
     "HOUSE RULES (all passes):",
-    "- HR / HRR (H+R+RBI) / BB (walks) markets are excluded from this desk entirely."
+    "- HR markets are excluded from this desk entirely."
     " If one appears in the pack, treat it as a data error and stand it down.",
     f"- Plus-money longshots priced +{LONGSHOT_AMERICAN_PRICE} or longer (e.g. a Hits Over at +181)"
     " are filtered from this pack. If one appears, treat it as a data error and stand it down.",

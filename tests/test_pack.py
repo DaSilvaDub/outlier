@@ -1290,7 +1290,7 @@ def test_summarize_lm_status_missing_generated_at():
 # 22. House rule: HR / HRR (H+R+RBI) / BB (walks) markets are excluded entirely,
 #     matching both normalized short codes and raw proposition tokens.
 def test_excluded_markets_dropped():
-    for token in ("HR", "HRR", "BB", "HOME_RUNS", "HITS_RUNS_RBIS", "HITSRUNSRBIS", "WALKS"):
+    for token in ("HR", "HOME_RUNS", "WALKS_ALLOWED"):
         card = ev_card(market=token, market_type=token)
         assert make_row(card, []) is None, f"{token} should be excluded from the pack"
 
@@ -1309,9 +1309,10 @@ def test_non_excluded_markets_kept():
 
 def test_is_excluded_market():
     assert is_excluded_market("HR", None) is True
-    assert is_excluded_market(None, "HRR") is True
-    assert is_excluded_market("bb", None) is True
+    assert is_excluded_market(None, "WALKS_ALLOWED") is True
     assert is_excluded_market("HITS", "HITS") is False
+    assert is_excluded_market(None, "HRR") is False
+    assert is_excluded_market("bb", None) is False
     assert is_excluded_market(None, None) is False
 
 
@@ -1366,7 +1367,7 @@ def test_is_longshot_price():
 def test_briefing_house_rules():
     text = build_briefing([], "2026-06-24")
     assert "HOUSE RULES" in text
-    assert "HR / HRR" in text and "BB" in text
+    assert "HR " in text and "markets are excluded" in text
     assert "+150" in text and "longshot" in text.lower()
 
 

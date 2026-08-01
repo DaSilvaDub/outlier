@@ -17,9 +17,13 @@ from .schema import (
 
 logger = logging.getLogger(__name__)
 
-PROHIBITED_MLB_PLAYER_PROP_MARKETS = frozenset(
-    {"WALKS_ALLOWED", "TOTAL_BASES", "HITS_ALLOWED"}
-)
+ALLOWED_MLB_PLAYER_PROPS = frozenset({
+    "SO", "TB", "OUTS", "2B", "HRR", "ER", "BB", "H"
+})
+
+ALLOWED_MLB_TEAM_PROPS = frozenset({
+    "H", "SO", "BB", "R", "TOTAL"
+})
 
 
 def _market_token(value: Any) -> str:
@@ -393,11 +397,7 @@ def normalize_player_props(
         # fallback to make it appear usable downstream.
         if not outcome_id or side not in {"OVER", "UNDER"} or line is None or not player_raw:
             continue
-        if config.league_id == "MLB" and {
-            _market_token(outcome.get("proposition")),
-            _market_token(market_raw),
-        } & PROHIBITED_MLB_PLAYER_PROP_MARKETS:
-            continue
+
 
         event_id = str(outcome.get("eventId") or "").strip()
         event_info = schedule_index.get(event_id, {})
@@ -415,6 +415,12 @@ def normalize_player_props(
             )
         else:
             market = None
+
+        if config.league_id == "MLB":
+            if market not in ALLOWED_MLB_PLAYER_PROPS:
+                continue
+            if market == "2B" and side == "OVER":
+                continue
         books = _books_from_outcome(outcome)
 
         raw_opp_rank = stats.get("oppRank") or outcome.get("oppRank")
@@ -648,6 +654,10 @@ def normalize_games(
                 canonical_market = normalize_market(config, proposition) or normalize_market(
                     config, market_raw
                 )
+
+            if config.league_id == "MLB" and market_type == "TEAM_PROP":
+                if canonical_market not in ALLOWED_MLB_TEAM_PROPS:
+                    continue
 
             market_id = str(market.get("marketId") or "")
 
