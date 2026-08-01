@@ -1138,6 +1138,9 @@ ROLE_BLOCK = [
     " each leg's recommended_units_pre_news at face value.",
     "",
     "HOUSE RULES (all passes):",
+    "- MLB player props (strict whitelist): SO, H, TB, OUTS, 2B, HRR, ER, BB only."
+    " Doubles (2B) are UNDER-only. Team props: H, SO, BB, R, TOTAL only."
+    " Game lines (ML/spread/total) are preserved.",
     "- HR markets are excluded from this desk entirely."
     " If one appears in the pack, treat it as a data error and stand it down.",
     f"- Plus-money longshots priced +{LONGSHOT_AMERICAN_PRICE} or longer (e.g. a Hits Over at +181)"
@@ -1741,6 +1744,34 @@ def write_pack(
     )
     (sections_dir / "alt_team_totals.md").write_text(
         format_alt_team_totals_md(alt_tt_rows, alt_tt_parlays), encoding="utf-8"
+    )
+
+    from outlier_scrapers.alt_player_props import (
+        ALT_PLAYER_PROPS_PARLAYS_HEADER,
+        ALT_PLAYER_PROPS_HEADER,
+        build_alt_player_props_board,
+        build_alt_player_props_parlays,
+        format_alt_player_props_md,
+    )
+
+    alt_player_rows = []
+    alt_player_parlays = []
+    
+    pack_leagues = {row.get("league") for row in rows if row.get("league")}
+    for lg in pack_leagues:
+        league_rows = build_alt_player_props_board(rows, league=lg)
+        if league_rows:
+            alt_player_rows.extend(league_rows)
+            alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
+        
+    _write_csv(out_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, alt_player_rows)
+    _write_csv(
+        out_dir / "alt_player_props_parlays.csv",
+        ALT_PLAYER_PROPS_PARLAYS_HEADER,
+        alt_player_parlays,
+    )
+    (sections_dir / "alt_player_props.md").write_text(
+        format_alt_player_props_md(alt_player_rows, alt_player_parlays), encoding="utf-8"
     )
 
 def build_pack_with_coverage(

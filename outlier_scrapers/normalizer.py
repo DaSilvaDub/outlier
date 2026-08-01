@@ -17,10 +17,14 @@ from .schema import (
 
 logger = logging.getLogger(__name__)
 
+# Strict MLB player-prop whitelist (full-game only). House rule source of truth —
+# keep in lockstep with scripts/sync_agent_docs.py COMMON_INVARIANTS_BLOCK §1.
 ALLOWED_MLB_PLAYER_PROPS = frozenset({
     "SO", "TB", "OUTS", "2B", "HRR", "ER", "BB", "H"
 })
 
+# Strict MLB team-prop whitelist (full-game only). GAMELINE moneyline/spread/total
+# are not TEAM_PROP and are never gated by this set. House rule §2.
 ALLOWED_MLB_TEAM_PROPS = frozenset({
     "H", "SO", "BB", "R", "TOTAL"
 })
@@ -398,7 +402,6 @@ def normalize_player_props(
         if not outcome_id or side not in {"OVER", "UNDER"} or line is None or not player_raw:
             continue
 
-
         event_id = str(outcome.get("eventId") or "").strip()
         event_info = schedule_index.get(event_id, {})
         team, team_raw, opponent, opponent_raw = _extract_team_context(
@@ -416,6 +419,7 @@ def normalize_player_props(
         else:
             market = None
 
+        # House rule §1 + §3: strict whitelist; Doubles (2B) are UNDER-only.
         if config.league_id == "MLB":
             if market not in ALLOWED_MLB_PLAYER_PROPS:
                 continue
