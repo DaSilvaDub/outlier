@@ -1,13 +1,13 @@
 # Handoff
 
-- **Last Commit SHA**: `c3b9203c966ac8ff394186a3d21925cde26c783b` (merged PR #80).
-- **Pull Request**: https://github.com/DaSilvaDub/outlier/pull/80 (merged).
+- **Last Commit SHA**: `35c466c3d2d11570aff6099712a2eb113b14d129` on `feat/richer-injury-flags`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/81
 - **Files Touched**:
-  - `outlier_scrapers/cards.py` — surfaces ambiguous TEAM_PROP stats-side selection and keeps hit-rate mapping centralized.
-  - `tests/test_cards.py` — covers ambiguity propagation and preserves `h2h_pct` through game-card assembly.
-- **Verification**:
-  - `python -m pytest tests/test_cards.py tests/test_games.py -q`: 64 passed.
-  - `ruff check outlier_scrapers/cards.py tests/test_cards.py`: passed.
-  - Fresh GitHub Offline Pytest and Static Type Checking runs: passed.
-  - All PR review threads resolved before merge.
-- **Next Steps**: None; confirm canonical sync and no remaining open PRs.
+  - `outlier_scrapers/pack.py` — richer `_format_injury` (body, return date, analysis @ 160 chars)
+  - `tests/test_pack.py` — updated schema test + new richer-flags test
+  - `tests/test_games.py` — e2e asserts body part
+  - `.claude/plan/richer-injury-flags.md`
+- **Next Steps**:
+  - Merge PR #81 after CI green
+  - Optional: hasNews-first / IL filter for huge MLB lists
+  - Next pack rebuild surfaces richer `injury_flags` automatically
