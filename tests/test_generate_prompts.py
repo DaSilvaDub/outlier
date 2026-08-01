@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
+import io
 from pathlib import Path
 
 
@@ -55,6 +57,54 @@ def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
     assert not module.csv_has_data_rows("")
     assert not module.csv_has_data_rows("league,event_id\n")
     assert module.csv_has_data_rows("league,event_id\nMLB,e1\n")
+
+
+def test_master_cards_filter_uses_two_unit_floor():
+    module = _load_module()
+    candidates = (
+        "candidate_id,board,recommended_units_pre_news\n"
+        "below,A,1.99\n"
+        "two,A,2.0\n"
+        "above,A,2.5\n"
+        "three,A,3.0\n"
+    )
+
+    filtered = module.filter_min_unit_candidates(candidates)
+    rows = list(csv.DictReader(io.StringIO(filtered)))
+
+    assert [row["candidate_id"] for row in rows] == ["two", "above", "three"]
+
+
+def test_master_cards_prompt_labels_two_plus_unit_candidates(tmp_path):
+    module = _load_module()
+    out_dir = tmp_path / "today"
+    candidates = (
+        "candidate_id,board,recommended_units_pre_news\n"
+        "below,A,1.99\n"
+        "two,A,2.0\n"
+    )
+
+    module.generate_for_dir(
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        candidates,
+        ("", "", ""),
+        {"all3": "", "l10_l5": "", "l5_thresh": ""},
+        ("", ""),
+        ("", ""),
+        False,
+    )
+
+    master_cards = (
+        out_dir
+        / "prompts"
+        / "Desk1_Automated"
+        / "1_Master_Cards_pack_2099-12-31.txt"
+    ).read_text(encoding="utf-8")
+    assert "### 2+ Unit Candidates Data" in master_cards
+    assert "two,A,2.0" in master_cards
+    assert "below,A,1.99" not in master_cards
 
 
 def test_generate_for_dir_omits_header_only_alt_prompts(tmp_path):

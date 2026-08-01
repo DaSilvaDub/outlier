@@ -26,7 +26,7 @@ By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` a
 
 The script structures the output into two pipelines:
 - `Desk1_Automated/`: Eight specialized master prompts when both leagues have qualifying bankroll rows:
-  - `1_Master_Cards_pack_YYYY-MM-DD.txt`: Filtered strictly for 3.0 Unit Recommended Candidates.
+  - `1_Master_Cards_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates.
   - `2a_Master_HitRate_100_All3_pack_YYYY-MM-DD.txt`: 100% Hit Rate across All 3 windows (Last 5 = 100%, Last 10 = 100%, Last 20 = 100%).
   - `2b_Master_HitRate_100_L10_L5_pack_YYYY-MM-DD.txt`: 100% Hit Rate across Last 5 & Last 10 (Last 5 = 100%, Last 10 = 100%).
   - `2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_YYYY-MM-DD.txt`: 100% Hit Rate for Last 5, Min 90% in Last 10, Min 70% in Last 20.

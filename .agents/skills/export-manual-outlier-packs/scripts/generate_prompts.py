@@ -124,8 +124,8 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
         except OSError:
             pass
 
-def filter_3unit_candidates(candidates_csv_text: str) -> str:
-    """Filter candidate rows to 3-unit recommended candidates (recommended_units_pre_news >= 3.0 or Board A fallback)."""
+def filter_min_unit_candidates(candidates_csv_text: str, min_units: float = 2.0) -> str:
+    """Filter candidate rows to recommended candidates (recommended_units_pre_news >= min_units, default 2.0, or Board A fallback)."""
     f_in = io.StringIO(candidates_csv_text)
     reader = csv.DictReader(f_in)
     fieldnames = reader.fieldnames or []
@@ -138,7 +138,7 @@ def filter_3unit_candidates(candidates_csv_text: str) -> str:
             val = float(val_str) if val_str else 0.0
         except ValueError:
             val = 0.0
-        if val >= 3.0:
+        if val >= min_units:
             kept.append(r)
 
     if not kept:
@@ -310,8 +310,8 @@ def generate_for_dir(
 
     # Master Prompts for Data Types (Cards, HitRate, Totals)
     cards_template = load_prompt_template("A.md")
-    cards_3unit = filter_3unit_candidates(candidates)
-    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### 3-Unit Candidates Data\n```csv\n{cards_3unit}\n```\n"
+    cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
+    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### 2+ Unit Candidates Data\n```csv\n{cards_2unit}\n```\n"
 
     hitrate_template = load_prompt_template("HitRate_Props_Analysis.md")
     full_hitrate_all3 = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Hit Rate Props Data\n{hitrate_buckets.get('all3', '')}\n"
