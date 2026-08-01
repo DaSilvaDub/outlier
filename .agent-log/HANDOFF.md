@@ -10,3 +10,18 @@
   - `ruff check outlier_scrapers/pack.py tests/test_pack.py tests/test_games.py`: All checks passed
 - **Next Steps**:
   - PR #81 ready for merge after CI checks pass
+
+---
+
+## Master Cards 2-unit floor (2026-08-01)
+
+- **Last Commit SHA**: `a4fd697e137bf3f75d13b038f789dbbd8e72e687`
+- **Files Touched**:
+  - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
+  - `.agents/skills/export-manual-outlier-packs/SKILL.md`
+  - `tests/test_generate_prompts.py`
+- **Verification**:
+  - `python -m pytest tests/test_generate_prompts.py -q`: 6 passed
+  - `python -m ruff check .agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py tests/test_generate_prompts.py`: passed
+- **Next Steps**:
+  - None. The `1_Master_Cards_pack_YYYY-MM-DD.txt` generator now includes candidates at 2.0 units or higher and labels the section `2+ Unit Candidates Data`.
