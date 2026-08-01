@@ -890,13 +890,11 @@ Before answering, verify every item below.
 
 ## House Rules
 
-* No 3PM recommendation.
-* No hits-allowed recommendation.
-* No total-bases recommendation.
-* No turnovers recommendation.
-* No HR recommendation.
-* No HRR recommendation.
-* No BB recommendation.
+* No 3PM recommendation (non-MLB high-variance).
+* No turnovers recommendation (non-MLB high-variance).
+* No HR recommendation (pack hard-ban).
+* MLB player props outside strict whitelist (SO, H, TB, OUTS, 2B UNDER-only, HRR, ER, BB) are not recommended.
+* MLB team props outside H / SO / BB / R / TOTAL are not recommended.
 * No prohibited +150-or-longer longshot.
 
 ## Quantitative Integrity

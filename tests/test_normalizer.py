@@ -252,14 +252,23 @@ def _mlb_one_event_schedule():
     }
 
 
-def _mlb_prop(market_id, label, *, event_id="e1", proposition="HITS", line=1.5):
+def _mlb_prop(
+    market_id,
+    label,
+    *,
+    event_id="e1",
+    proposition="HITS",
+    line=1.5,
+    position="OVER",
+):
+    side = str(position or "OVER").strip().upper()
     return {
         "outcome": {
             "eventId": event_id,
-            "outcomeId": f"{market_id}:{event_id}:{line}:over",
+            "outcomeId": f"{market_id}:{event_id}:{line}:{side.lower()}",
             "teamId": "10",
             "oppTeamId": "20",
-            "position": "OVER",
+            "position": side,
             "line": line,
             "marketLabel": label,
             "proposition": proposition,
@@ -326,12 +335,18 @@ def test_player_prop_without_stable_outcome_id_is_dropped():
 @pytest.mark.parametrize(
     ("proposition", "label"),
     [
-        ("WALKS_ALLOWED", "Walks Allowed"),
-        ("TOTAL_BASES", "Total Bases"),
-        ("HITS_ALLOWED", "Hits Allowed"),
+        ("WALKS_ALLOWED", "Walks Allowed"),  # BBA — not on whitelist
+        ("HITS_ALLOWED", "Hits Allowed"),  # HA — not on whitelist
+        ("HOME_RUNS", "Home Runs"),  # HR — not on whitelist
+        ("RBI", "RBIs"),
+        ("SINGLES", "Singles"),
+        ("TRIPLES", "Triples"),
+        ("BATTERS_FACED", "Batters Faced"),
+        ("PITCHES_THROWN", "Pitches Thrown"),
+        ("TOTAL_BASES", "Total Bases"),  # raw token does not alias; live feed uses BASES
     ],
 )
-def test_prohibited_mlb_markets_are_excluded_during_generation(
+def test_non_whitelisted_mlb_markets_are_excluded_during_generation(
     proposition, label
 ):
     prop = _mlb_prop("m-prohibited", f"Aaron Judge - {label}", proposition=proposition)
@@ -341,4 +356,44 @@ def test_prohibited_mlb_markets_are_excluded_during_generation(
     )
 
     assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("proposition", "label", "expected_market"),
+    [
+        ("HITS", "Hits", "H"),
+        ("STRIKEOUTS", "Strikeouts", "SO"),
+        ("BASES", "Total Bases", "TB"),
+        ("OUTS", "Outs", "OUTS"),
+        ("HITSRUNSRBIS", "Hits + Runs + RBIs", "HRR"),
+        ("EARNED_RUNS", "Earned Runs", "ER"),
+        ("WALKS", "Walks", "BB"),
+    ],
+)
+def test_whitelisted_mlb_player_props_are_kept(proposition, label, expected_market):
+    prop = _mlb_prop("m-ok", f"Aaron Judge - {label}", proposition=proposition)
+
+    rows = normalize_player_props(
+        {"props": [prop]}, _mlb_one_event_schedule(), get_sport_config("MLB")
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["market"] == expected_market
+
+
+def test_doubles_are_under_only():
+    over = _mlb_prop(
+        "m-2b-o", "Aaron Judge - Doubles", proposition="DOUBLES", position="OVER"
+    )
+    under = _mlb_prop(
+        "m-2b-u", "Aaron Judge - Doubles", proposition="DOUBLES", position="UNDER"
+    )
+
+    rows = normalize_player_props(
+        {"props": [over, under]}, _mlb_one_event_schedule(), get_sport_config("MLB")
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["market"] == "2B"
+    assert rows[0]["side"] == "UNDER"
 

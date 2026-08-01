@@ -279,6 +279,7 @@ def generate_for_dir(
     candidates: str,
     totals_data: tuple[str, str, str],
     hitrate_buckets: dict[str, str],
+    alt_props_data: tuple[str, str],
     no_clean: bool,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -319,11 +320,20 @@ def generate_for_dir(
         f"### Team Totals Data\n```csv\n{team_totals}\n```\n"
     )
 
+    alt_props_template = load_prompt_template("Alt_Player_Props_Analysis.md")
+    alt_player_props, alt_player_props_parlays = alt_props_data
+    full_alt_props_prompt = (
+        f"{alt_props_template}\n\n### Pack Data\n{briefing}\n\n"
+        f"### Alternate Player Props Data\n```csv\n{alt_player_props}\n```\n\n"
+        f"### Alternate Player Props Parlays Data\n```csv\n{alt_player_props_parlays}\n```\n"
+    )
+
     safe_write_text(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", full_cards_prompt)
     safe_write_text(desk1_dir / f"2a_Master_HitRate_100_All3_pack_{date_str}.txt", full_hitrate_all3)
     safe_write_text(desk1_dir / f"2b_Master_HitRate_100_L10_L5_pack_{date_str}.txt", full_hitrate_l10_l5)
     safe_write_text(desk1_dir / f"2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_{date_str}.txt", full_hitrate_l5_thresh)
     safe_write_text(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
+    safe_write_text(desk1_dir / f"4_Master_Alt_Player_Props_pack_{date_str}.txt", full_alt_props_prompt)
 
     # Desk 2 - Manual Sequence (Phase-specific prompts)
     desk2_order_map = {
@@ -357,7 +367,7 @@ def generate_for_dir(
             desk2_count += 1
 
     print(
-        f"Successfully generated 3 Master Prompts (Cards, HitRate, Totals) and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})"
+        f"Successfully generated 4 Master Prompts (Cards, HitRate, Totals, Alt Props) and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})"
     )
 
 
@@ -425,6 +435,13 @@ def main() -> None:
     alt_team_totals = att_path.read_text(encoding="utf-8") if att_path.exists() else ""
     totals_data = (game_totals, team_totals, alt_team_totals)
 
+    # Read alt player props data if available
+    app_path = latest_pack / "alt_player_props.csv"
+    app_parlays_path = latest_pack / "alt_player_props_parlays.csv"
+    alt_player_props = app_path.read_text(encoding="utf-8") if app_path.exists() else ""
+    alt_player_props_parlays = app_parlays_path.read_text(encoding="utf-8") if app_parlays_path.exists() else ""
+    alt_props_data = (alt_player_props, alt_player_props_parlays)
+
     # Build slate allowlist from candidates + dossiers to enforce today's slate games only
     scripts_dir = repo_root / "scripts"
     if str(scripts_dir) not in sys.path:
@@ -440,7 +457,7 @@ def main() -> None:
     hitrate_buckets = get_hitrate_data_buckets(allow_matchups=allow_matchups)
 
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, args.no_clean)
+        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, alt_props_data, args.no_clean)
 
 
 

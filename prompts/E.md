@@ -610,7 +610,7 @@ Before answering, verify:
 * Every final bet has `actionable=true`.
 * Every final bet is demonstrably pregame.
 * No high-variance prop is recommended.
-* No HR, HRR, or BB market is recommended.
+* No HR market is recommended. MLB player props outside the strict whitelist (SO, H, TB, OUTS, 2B UNDER-only, HRR, ER, BB) are not eligible.
 * No prohibited +150-or-longer longshot is recommended.
 * No explicit stale or corruption flag has been ignored.
 * No unresolved line mismatch survives.

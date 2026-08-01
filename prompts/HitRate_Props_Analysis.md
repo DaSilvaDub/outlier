@@ -26,7 +26,7 @@ Identify the strongest actionable pregame player prop bets while:
 When data or signals conflict, follow this hierarchy:
 
 1. Data integrity and pregame eligibility
-2. House exclusions and variance exclusions (Prohibited: HR, HRR, BB; High Variance: 3PM, Hits Allowed, Total Bases, Turnovers)
+2. House exclusions (MLB strict whitelist only: SO, H, TB, OUTS, 2B UNDER-only, HRR, ER, BB; pack hard-ban: HR; drop non-whitelist including HA, RBI, 1B, 3B, BF, PT, BBA; WNBA high-variance caution: 3PM, Turnovers)
 3. Role and opportunity stability (minutes, usage, plate appearances, pitch count)
 4. Opponent matchup quality and defensive allowance
 5. Recent hit rate consistency across sample sizes (L5, L10, L20)
@@ -38,23 +38,32 @@ When data or signals conflict, follow this hierarchy:
 
 ## 3. Data Integrity & Allowed/Prohibited Markets
 
-### 3.1 Allowed Markets
-* **Hits Allowed** (Pitching) — *Allowed*
-* **Total Bases** (Batting) — *Allowed*
-* **Walks Allowed / Pitching Walks** — *Allowed*
-* **Hits, Strikeouts, Earned Runs, Outs, RBIs, Singles/Doubles/Triples, Batters Faced, Pitches Thrown** — *Allowed*
-* **Home Runs (Over-Only)** — *Allowed* (Home Runs Under rejected)
+### 3.1 MLB Player Prop Allowed Markets (strict whitelist — full-game only)
+* **Strikeouts (SO)**
+* **Hits (H)**
+* **Total Bases (TB)**
+* **Outs (OUTS)**
+* **Doubles (2B) — UNDER-only** (2B OVER is dropped at generation)
+* **HRR / Hits + Runs + RBI**
+* **Earned Runs (ER)**
+* **Batting Walks (BB)**
 
-### 3.2 Prohibited & Dropped Markets
-Always reject:
-* **Home Runs UNDER**
-* **Milestone UNDER**
+### 3.2 MLB Team Prop Allowed Markets (strict whitelist)
+* **Hits (H), Strikeouts (SO), Walks (BB), Runs (R), Total (TOTAL)**
+* Game lines (Moneyline, Spread, Game Total) are always in-scope and not subject to prop whitelists.
 
-### 3.3 High-Variance Markets (Proceed with Caution)
+### 3.3 Prohibited & Dropped Markets
+Always reject (not on whitelist and/or pack hard-ban):
+* **Home Runs (HR)** — pack-excluded entirely
+* **Hits Allowed (HA), Walks Allowed (BBA)**
+* **RBI, Singles (1B), Triples (3B), Batters Faced (BF), Pitches Thrown (PT)**
+* **Doubles OVER (2B OVER)**
+* Any other non-whitelisted MLB player/team prop
+
+### 3.4 High-Variance Markets (non-MLB / proceed with caution)
 Evaluate with strict role stability & matchup verification:
 * **3PM / Three Pointers Made**
 * **Turnovers**
-* **HRR / Hits + Runs + RBI**
 
 ---
 
@@ -154,7 +163,7 @@ List all rejected props with clear reasons (e.g., `Prohibited Market`, `High Var
 
 Before outputting, verify:
 * Every recommended prop comes directly from the supplied data.
-* No HR, HRR, BB, 3PM, Hits Allowed, Total Bases, or Turnovers props are recommended.
+* No HR props are recommended. MLB recommendations stay inside the strict whitelist (SO, H, TB, OUTS, 2B UNDER-only, HRR, ER, BB). Non-MLB high-variance props (3PM, Turnovers) are not recommended without role+matchup support.
 * No prop line, selection, or player name was invented or altered.
 * Hit rates are cited accurately across L5, L10, and L20.
 * Matchup quality and role stability were explicitly evaluated.
