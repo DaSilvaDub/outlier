@@ -291,15 +291,26 @@ _INJURY_ANALYSIS_MAX_CHARS = 160
 
 
 def _injury_return_date(injury: dict[str, Any]) -> str:
-    """Normalize API returnDate / return_date to YYYY-MM-DD when possible."""
+    """Normalize API returnDate / return_date to YYYY-MM-DD when possible.
+
+    Returns empty string if missing or unparseable to avoid unnormalized text
+    (e.g., "TBD", "2026/09/04") in ``ret YYYY-MM-DD`` flags.
+    """
     raw = injury.get("returnDate") or injury.get("return_date") or ""
     text = str(raw).strip()
     if not text:
         return ""
     # Common shapes: "2026-09-04", "2026-09-04T00:00:00-0700"
-    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+    if (
+        len(text) >= 10
+        and text[4] == "-"
+        and text[7] == "-"
+        and text[:4].isdigit()
+        and text[5:7].isdigit()
+        and text[8:10].isdigit()
+    ):
         return text[:10]
-    return text
+    return ""
 
 
 def _format_injury(item: dict[str, Any]) -> str:
@@ -321,11 +332,14 @@ def _format_injury(item: dict[str, Any]) -> str:
         name = str(item.get("player") or item.get("description") or "").strip()
 
     injury = item.get("injury") if isinstance(item.get("injury"), dict) else {}
-    status = str(injury.get("status") or "").strip()
+    raw_status = injury.get("status")
+    status = str(raw_status).strip() if isinstance(raw_status, (str, int, float)) else ""
     # API body/diagnosis lives under nested key "injury" (e.g. "Right Forearm Strain").
-    body = str(injury.get("injury") or "").strip()
+    raw_body = injury.get("injury")
+    body = str(raw_body).strip() if isinstance(raw_body, (str, int, float)) else ""
     ret = _injury_return_date(injury)
-    analysis = str(injury.get("analysis") or "").strip()
+    raw_analysis = injury.get("analysis")
+    analysis = str(raw_analysis).strip() if isinstance(raw_analysis, (str, int, float)) else ""
 
     paren_bits: list[str] = []
     if status:

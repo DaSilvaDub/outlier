@@ -1,5 +1,7 @@
 import csv
 import json
+from unittest import mock
+from pathlib import Path
 
 import pytest
 
@@ -7,7 +9,9 @@ from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _opportunity_key,
+    _restore_published_pack,
     _summarize_lm_status,
+    _swap_staged_pack,
     american_to_decimal,
     build_briefing,
     build_dossier,
@@ -814,11 +818,44 @@ def test_build_injuries_includes_return_date_and_analysis():
     flag = inj["E1"]
     assert "Stephen Kolek (60-Day IL; Right Forearm Strain; ret 2026-09-04)" in flag
     assert "Leonie Fiebich (Out; Left Foot; ret 2026-08-03)" in flag
-    # Analysis truncated to 160 chars with ellipsis; full 200 As not present.
-    assert ": " in flag
-    assert "..." in flag
+    assert " | " in flag
+    first_player_flag = flag.split(" | ")[0]
+    assert ": " in first_player_flag
+    rendered_analysis = first_player_flag.split(": ", 1)[1]
+    assert len(rendered_analysis) == 160
+    assert rendered_analysis.endswith("...")
     assert "A" * 200 not in flag
     assert "playerId" not in flag
+
+
+def test_build_injuries_rejects_unnormalized_return_dates_and_complex_types():
+    """Unnormalized return dates (e.g. 'TBD') return empty date, avoiding 'ret TBD'."""
+    games = {
+        "context": {
+            "events": {"E1": {"home_team_id": "T1", "away_team_id": "T2"}},
+            "teams": {
+                "T1": {
+                    "injuries": [
+                        {
+                            "firstName": "Player",
+                            "lastName": "One",
+                            "injury": {
+                                "status": "Questionable",
+                                "returnDate": "TBD",
+                                "injury": {"nested": "dict"},  # Non-scalar body
+                                "analysis": ["list", "of", "items"],  # Non-scalar analysis
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    }
+    inj = build_injuries(games)
+    assert inj["E1"] == "Player One (Questionable)"
+    assert "ret" not in inj["E1"]
+    assert "TBD" not in inj["E1"]
+    assert "nested" not in inj["E1"]
 
 
 # 14. Quota ranking never starves board B.
@@ -2058,10 +2095,6 @@ def test_historical_edge_pct_populated_from_raw_hit_pct():
     assert float(row["historical_edge_pct"]) == pytest.approx(expected, abs=1e-4)
 
 
-from unittest import mock
-from pathlib import Path
-from outlier_scrapers.pack import _swap_staged_pack, _restore_published_pack, _retry_replace, _retry_rmtree
-
 def test_swap_staged_pack_retries_on_permission_error(tmp_path):
     staging_dir = tmp_path / "staging"
     out_dir = tmp_path / "out"
@@ -2142,7 +2175,6 @@ def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
     sidecar_path.write_text('{"mode": "enforce"}', encoding="utf-8")
     
     # Mock config to be enforce
-    import json
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     policy_path = config_dir / "portfolio_risk.json"
@@ -2178,7 +2210,6 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()
     
-    import json
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     policy_path = config_dir / "portfolio_risk.json"
