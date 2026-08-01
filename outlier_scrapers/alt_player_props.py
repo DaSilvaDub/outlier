@@ -224,7 +224,10 @@ def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str
     """Build two-leg, distinct-player parlays from strict board rows."""
     by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in board:
-        by_day[_local_date(row.get("event_starts_at"))].append(row)
+        day = _local_date(row.get("event_starts_at"))
+        if day is None:
+            continue
+        by_day[day].append(row)
 
     parlays: list[dict[str, Any]] = []
     for day, day_rows in by_day.items():

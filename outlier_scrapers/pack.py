@@ -1803,7 +1803,6 @@ def build_pack_with_coverage(
     top_signal_n: int,
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
-    props_norm_by_league_out: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
@@ -1820,8 +1819,6 @@ def build_pack_with_coverage(
         games_norm = load_json(norm / f"{low}_games_latest.json")
         games_norm_by_league[lg] = games_norm
         props_norm = load_json(norm / f"{low}_props_latest.json")
-        if props_norm_by_league_out is not None:
-            props_norm_by_league_out[lg] = props_norm
         projections_payload = load_json(norm / f"{low}_projections_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
@@ -1909,6 +1906,20 @@ def build_pack(
     return rows, target_date, games_norm
 
 
+def load_props_norm_by_league(leagues: Sequence[str]) -> dict[str, Any]:
+    """Load normalized player-prop payloads without changing pack-builder API."""
+    payloads: dict[str, Any] = {}
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        league_root = paths.league_paths(league).normalized
+        payloads[league] = load_json(
+            league_root / f"{league.lower()}_props_latest.json"
+        )
+    return payloads
+
+
 def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) -> None:
     last_err = None
     for _ in range(retries):
@@ -1994,11 +2005,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     leagues = args.leagues.split(",")
     blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
     opportunity_rows: list[dict[str, Any]] = []
-    props_norm_by_league: dict[str, Any] = {}
-    build_kwargs: dict[str, Any] = {
-        "opportunity_rows_out": opportunity_rows,
-        "props_norm_by_league_out": props_norm_by_league,
-    }
+    build_kwargs: dict[str, Any] = {"opportunity_rows_out": opportunity_rows}
     if blend_artifact is not None:
         build_kwargs["blend_artifact"] = blend_artifact
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
@@ -2008,6 +2015,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
         args.top_signal_n,
         **build_kwargs,
     )
+    props_norm_by_league = load_props_norm_by_league(leagues)
     projection_records = load_projection_records(leagues)
     freshness = build_freshness_section(leagues)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
