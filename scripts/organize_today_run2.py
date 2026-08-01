@@ -151,7 +151,6 @@ def build_slate_allowlist(
 
 def parse_hit_rates(
     hit_100_props: dict[str, list[dict]],
-    hit_100_l5_l10_props: dict[str, list[dict]],
     data_dirs: list[Path] | None = None,
     filter_opts: FilterOptions | None = None,
 ) -> dict[str, dict]:
@@ -167,16 +166,13 @@ def parse_hit_rates(
     leagues = ["MLB", "WNBA"]
     stats: dict[str, dict] = {
         league: {
-            "raw_l5_l10": 0,
             "raw_l5_l10_l20": 0,
-            "kept_l5_l10": 0,
             "kept_l5_l10_l20": 0,
             "reject_reasons": _Counter(),
         }
         for league in leagues
     }
 
-    seen_l5_l10: dict[str, set] = {lg: set() for lg in leagues}
     seen_full: dict[str, set] = {lg: set() for lg in leagues}
 
     for league in leagues:
@@ -194,7 +190,6 @@ def parse_hit_rates(
                 continue
 
             raw_rows_full: list[dict] = []
-            raw_rows_l5_l10: list[dict] = []
 
             for board in ["board_a", "board_b"]:
                 for card in cards_data.get(board) or []:
@@ -212,34 +207,23 @@ def parse_hit_rates(
                             "team": card.get("team") or "",
                             "matchup": card.get("matchup") or "",
                         }
-                        if l5 == 100.0 and l10 == 100.0:
-                            raw_rows_l5_l10.append(row)
-                            if l20 == 100.0:
-                                raw_rows_full.append(row)
+                        if l5 == 100.0 and l10 == 100.0 and l20 == 100.0:
+                            raw_rows_full.append(row)
 
-            if not raw_rows_l5_l10 and not raw_rows_full:
+            if not raw_rows_full:
                 continue
 
-            stats[league]["raw_l5_l10"] = len(raw_rows_l5_l10)
             stats[league]["raw_l5_l10_l20"] = len(raw_rows_full)
 
-            kept_l5, _rej_l5, reasons_l5 = filter_rows(raw_rows_l5_l10, opts)
             kept_full, _rej_full, reasons_full = filter_rows(raw_rows_full, opts)
-            stats[league]["reject_reasons"].update(reasons_l5)
-            stats[league]["reject_reasons_full"] = dict(reasons_full)
+            stats[league]["reject_reasons"].update(reasons_full)
 
-            for row in kept_l5:
-                key = _row_key(row)
-                if key not in seen_l5_l10[league]:
-                    seen_l5_l10[league].add(key)
-                    hit_100_l5_l10_props[league].append(row)
             for row in kept_full:
                 key = _row_key(row)
                 if key not in seen_full[league]:
                     seen_full[league].add(key)
                     hit_100_props[league].append(row)
 
-            stats[league]["kept_l5_l10"] = len(hit_100_l5_l10_props[league])
             stats[league]["kept_l5_l10_l20"] = len(hit_100_props[league])
             # First successful source wins per league.
             break
@@ -418,18 +402,16 @@ def organize_today_additive(
         )
 
     hit_100_props: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
-    hit_100_l5_l10_props: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
     hit_stats = parse_hit_rates(
         hit_100_props,
-        hit_100_l5_l10_props,
         data_dirs=data_dirs,
         filter_opts=filter_opts,
     )
     for league, st in hit_stats.items():
-        if st.get("raw_l5_l10") or st.get("raw_l5_l10_l20"):
+        if st.get("raw_l5_l10_l20"):
             print(
-                f"Perfect-hit {league}: L5+L10 raw={st['raw_l5_l10']} kept={st['kept_l5_l10']}; "
-                f"L5+L10+L20 raw={st['raw_l5_l10_l20']} kept={st['kept_l5_l10_l20']}; "
+                f"Perfect-hit {league}: L5+L10+L20 raw={st['raw_l5_l10_l20']} "
+                f"kept={st['kept_l5_l10_l20']}; "
                 f"rejects={dict(st.get('reject_reasons') or {})}"
             )
 
@@ -465,9 +447,6 @@ def organize_today_additive(
         pipeline_data = out_dir / f"extracted_data_{today_str}{suffix}"
         extra_packs = replace_dir(out_dir / f"extra_packs_{today_str}{suffix}")
         hit_props_dir = replace_dir(out_dir / f"perfect_hit_props_{today_str}{suffix}")
-        hit_l5_l10_props_dir = replace_dir(
-            out_dir / f"perfect_hit_l10_l5_props_{today_str}{suffix}"
-        )
 
         copy_prompt_outputs(
             out_dir, generic_prompts, hitrate_prompts, totals_prompts, desk2_prompts
@@ -502,10 +481,6 @@ def organize_today_additive(
                 hit_props_dir / f"{league}_100_hit_rate.csv",
                 hit_100_props.get(league) or [],
             )
-            write_hit_csv(
-                hit_l5_l10_props_dir / f"{league}_100_hit_l10_l5.csv",
-                hit_100_l5_l10_props.get(league) or [],
-            )
 
         # Mirror to clean un-suffixed directories so both date-tagged and standard names work
         for src_folder_name in [
@@ -516,7 +491,6 @@ def organize_today_additive(
             f"extracted_data_{today_str}{suffix}",
             f"extra_packs_{today_str}{suffix}",
             f"perfect_hit_props_{today_str}{suffix}",
-            f"perfect_hit_l10_l5_props_{today_str}{suffix}",
         ]:
             std_name = src_folder_name.replace(f"_{today_str}{suffix}", "")
             src_dir = out_dir / src_folder_name

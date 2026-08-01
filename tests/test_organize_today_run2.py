@@ -118,9 +118,8 @@ def test_parse_hit_rates_filters_hr_under_and_slate(tmp_path: Path):
         ],
     )
     hit_full: dict[str, list] = {"MLB": [], "WNBA": []}
-    hit_l5: dict[str, list] = {"MLB": [], "WNBA": []}
     opts = FilterOptions(allow_matchups=frozenset({"NYY @ PHI"}))
-    stats = org.parse_hit_rates(hit_full, hit_l5, data_dirs=[data], filter_opts=opts)
+    stats = org.parse_hit_rates(hit_full, data_dirs=[data], filter_opts=opts)
     assert stats["MLB"]["raw_l5_l10_l20"] == 3
     assert len(hit_full["MLB"]) == 1
     assert hit_full["MLB"][0]["player"] == "On Slate"
