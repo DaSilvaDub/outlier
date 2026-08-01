@@ -962,16 +962,8 @@ def _best_american_price(row: dict[str, Any]) -> int | None:
     return max(odds) if odds else None
 
 def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
-    blob, stats_flag = _summary_stat_blob_for_side(prop, side)
-    rates: dict[str, float | None] = {key: None for key in _HIT_RATE_KEYS}
-    if blob:
-        rates = {
-            "l5_pct": percent_number(blob.get("l5")),
-            "l10_pct": percent_number(blob.get("l10")),
-            "l20_pct": percent_number(blob.get("l20")),
-            "h2h_pct": percent_number(blob.get("h2h")),
-            "season_pct": percent_number(blob.get("curSeason")),
-        }
+    rates = hit_rates_from_game_stats(prop, side)
+    stats_flag = game_stats_side_flag(prop, side)
     # stats_flag is internal only — not copied onto the public side_view.
     # assemble_game_card lifts AMBIGUOUS_STATS_SIDE to a card-level flag.
     return {

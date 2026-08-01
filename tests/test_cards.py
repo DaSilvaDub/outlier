@@ -522,6 +522,7 @@ def test_assemble_game_card_wires_hit_rates_into_signal():
 
     assert home_view["hit_rates"]["l5_pct"] == 100.0
     assert home_view["hit_rates"]["l10_pct"] == 100.0
+    assert home_view["hit_rates"]["h2h_pct"] == 100.0
     assert away_view["hit_rates"]["l5_pct"] == 0.0
 
     # Board B hit component is 40% of the composite; with perfect hit rates and
