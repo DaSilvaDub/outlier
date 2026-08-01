@@ -1183,6 +1183,8 @@ DERIVED_PACK_OUTPUTS = (
     "manifest.json",
     "projections.jsonl",
     "portfolio_risk.json",
+    "mlb_alt_bankroll_props.csv",
+    "wnba_alt_bankroll_props.csv",
 )
 
 FRESH_COVERAGE_WARN = 0.9
@@ -1360,6 +1362,8 @@ def write_pack(
     freshness_lines: list[str] | None = None,
     *,
     games_norm_by_league: dict[str, Any] | None = None,
+    props_norm_by_league: dict[str, Any] | None = None,
+    target_date: str | None = None,
     coverage: dict[str, dict[str, int]] | None = None,
     opportunity_rows: list[dict[str, Any]] | None = None,
     projection_records: list[dict[str, Any]] | None = None,
@@ -1424,6 +1428,7 @@ def write_pack(
             raise ValueError(f"Enforce mode refused: only {shadow_days} days of shadow history found. 14 required.")
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    pack_date = target_date or out_dir.name
     for name in DERIVED_PACK_OUTPUTS:
         (out_dir / name).unlink(missing_ok=True)
     dossiers_dir = out_dir / "dossiers"
@@ -1732,7 +1737,7 @@ def write_pack(
     alt_tt_parlays: list[dict[str, Any]] = []
     for lg, payload in (games_norm_by_league or {}).items():
         league_rows = build_alt_team_total_board(
-            payload, league=lg, target_date=out_dir.name
+            payload, league=lg, target_date=pack_date
         )
         alt_tt_rows.extend(league_rows)
         alt_tt_parlays.extend(build_alt_team_total_parlays(league_rows))
@@ -1746,6 +1751,21 @@ def write_pack(
         format_alt_team_totals_md(alt_tt_rows, alt_tt_parlays), encoding="utf-8"
     )
 
+    from outlier_scrapers.alt_bankroll_props import (
+        ALT_BANKROLL_PROPS_HEADER,
+        build_alt_bankroll_board,
+    )
+
+    for lg, payload in (games_norm_by_league or {}).items():
+        bankroll_rows = build_alt_bankroll_board(
+            payload, league=lg, target_date=pack_date
+        )
+        _write_csv(
+            out_dir / f"{lg.lower()}_alt_bankroll_props.csv",
+            ALT_BANKROLL_PROPS_HEADER,
+            bankroll_rows,
+        )
+
     from outlier_scrapers.alt_player_props import (
         ALT_PLAYER_PROPS_PARLAYS_HEADER,
         ALT_PLAYER_PROPS_HEADER,
@@ -1756,14 +1776,15 @@ def write_pack(
 
     alt_player_rows = []
     alt_player_parlays = []
-    
-    pack_leagues = {row.get("league") for row in rows if row.get("league")}
-    for lg in pack_leagues:
-        league_rows = build_alt_player_props_board(rows, league=lg)
+
+    for lg, payload in (props_norm_by_league or {}).items():
+        league_rows = build_alt_player_props_board(
+            payload, league=lg, target_date=pack_date
+        )
         if league_rows:
             alt_player_rows.extend(league_rows)
             alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
-        
+
     _write_csv(out_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, alt_player_rows)
     _write_csv(
         out_dir / "alt_player_props_parlays.csv",
@@ -1774,6 +1795,7 @@ def write_pack(
         format_alt_player_props_md(alt_player_rows, alt_player_parlays), encoding="utf-8"
     )
 
+
 def build_pack_with_coverage(
     leagues: Sequence[str],
     requested_date: str | None,
@@ -1781,6 +1803,7 @@ def build_pack_with_coverage(
     top_signal_n: int,
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
+    props_norm_by_league_out: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
@@ -1797,6 +1820,8 @@ def build_pack_with_coverage(
         games_norm = load_json(norm / f"{low}_games_latest.json")
         games_norm_by_league[lg] = games_norm
         props_norm = load_json(norm / f"{low}_props_latest.json")
+        if props_norm_by_league_out is not None:
+            props_norm_by_league_out[lg] = props_norm
         projections_payload = load_json(norm / f"{low}_projections_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
@@ -1969,7 +1994,11 @@ def main(argv: Sequence[str] | None = None) -> Path:
     leagues = args.leagues.split(",")
     blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
     opportunity_rows: list[dict[str, Any]] = []
-    build_kwargs: dict[str, Any] = {"opportunity_rows_out": opportunity_rows}
+    props_norm_by_league: dict[str, Any] = {}
+    build_kwargs: dict[str, Any] = {
+        "opportunity_rows_out": opportunity_rows,
+        "props_norm_by_league_out": props_norm_by_league,
+    }
     if blend_artifact is not None:
         build_kwargs["blend_artifact"] = blend_artifact
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
@@ -1988,6 +2017,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
             out_dir,
             freshness,
             games_norm_by_league=games_norm,
+            props_norm_by_league=props_norm_by_league,
+            target_date=target_date,
             coverage=coverage,
             opportunity_rows=opportunity_rows,
             projection_records=projection_records,
@@ -2011,6 +2042,8 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 staging_dir,
                 freshness,
                 games_norm_by_league=games_norm,
+                props_norm_by_league=props_norm_by_league,
+                target_date=target_date,
                 coverage=coverage,
                 opportunity_rows=opportunity_rows,
                 projection_records=projection_records,

@@ -1,4 +1,6 @@
 import argparse
+import csv
+import io
 import os
 import re
 import shutil
@@ -122,10 +124,6 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
         except OSError:
             pass
 
-
-import csv
-import io
-
 def filter_3unit_candidates(candidates_csv_text: str) -> str:
     """Filter candidate rows to 3-unit recommended candidates (recommended_units_pre_news >= 3.0 or Board A fallback)."""
     f_in = io.StringIO(candidates_csv_text)
@@ -151,6 +149,13 @@ def filter_3unit_candidates(candidates_csv_text: str) -> str:
     writer.writeheader()
     writer.writerows(kept)
     return f_out.getvalue()
+
+
+def csv_has_data_rows(csv_text: str) -> bool:
+    """Return true only when CSV text includes at least one data row."""
+    if not csv_text.strip():
+        return False
+    return next(csv.DictReader(io.StringIO(csv_text)), None) is not None
 
 
 def get_hitrate_data_buckets(allow_matchups: frozenset[str] | None = None) -> dict[str, str]:
@@ -280,6 +285,7 @@ def generate_for_dir(
     totals_data: tuple[str, str, str],
     hitrate_buckets: dict[str, str],
     alt_props_data: tuple[str, str],
+    bankroll_data: tuple[str, str],
     no_clean: bool,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -333,7 +339,20 @@ def generate_for_dir(
     safe_write_text(desk1_dir / f"2b_Master_HitRate_100_L10_L5_pack_{date_str}.txt", full_hitrate_l10_l5)
     safe_write_text(desk1_dir / f"2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_{date_str}.txt", full_hitrate_l5_thresh)
     safe_write_text(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
-    safe_write_text(desk1_dir / f"4_Master_Alt_Player_Props_pack_{date_str}.txt", full_alt_props_prompt)
+    if csv_has_data_rows(alt_player_props):
+        safe_write_text(
+            desk1_dir / f"4_Master_Alt_Player_Props_pack_{date_str}.txt",
+            full_alt_props_prompt,
+        )
+
+    bankroll_template = load_prompt_template("Alt_Bankroll_Props_Analysis.md")
+    mlb_bankroll, wnba_bankroll = bankroll_data
+    if csv_has_data_rows(mlb_bankroll):
+        full_mlb_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
+        safe_write_text(desk1_dir / f"5_Master_Alt_Bankroll_MLB_pack_{date_str}.txt", full_mlb_bankroll)
+    if csv_has_data_rows(wnba_bankroll):
+        full_wnba_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (WNBA)\n```csv\n{wnba_bankroll}\n```\n"
+        safe_write_text(desk1_dir / f"5_Master_Alt_Bankroll_WNBA_pack_{date_str}.txt", full_wnba_bankroll)
 
     # Desk 2 - Manual Sequence (Phase-specific prompts)
     desk2_order_map = {
@@ -366,23 +385,27 @@ def generate_for_dir(
                 f.write(full_prompt)
             desk2_count += 1
 
+    master_count = len(list(desk1_dir.glob("*_Master_*_pack_*.txt")))
     print(
-        f"Successfully generated 4 Master Prompts (Cards, HitRate, Totals, Alt Props) and {desk2_count} Desk2 prompt files in {out_dir}/prompts (archived anything older than {min(keep_dates)})"
+        f"Successfully generated {master_count} Master Prompts and {desk2_count} "
+        f"Desk2 prompt files in {out_dir}/prompts "
+        f"(archived anything older than {min(keep_dates)})"
     )
 
 
-def find_all_pack_dirs() -> list[Path]:
-    search_paths = [
-        Path(r"C:\Users\dasil\Dev\GitHub\outlier\packs"),
-        Path(r"C:\Users\dasil\OneDrive\Documents\outlier\packs"),
-    ]
-    packs_map: dict[str, Path] = {}
-    for p in search_paths:
-        if p.exists():
-            for d in p.iterdir():
-                if d.is_dir() and d.name.replace("-", "").isdigit():
-                    packs_map[d.name] = d
-    return sorted(packs_map.values(), key=lambda d: d.name)
+def find_all_pack_dirs(pack_root: Path | None = None) -> list[Path]:
+    """Return dated packs from the canonical checkout only."""
+    canonical_root = pack_root or (Path(__file__).resolve().parents[4] / "packs")
+    if not canonical_root.exists():
+        return []
+    return sorted(
+        (
+            path
+            for path in canonical_root.iterdir()
+            if path.is_dir() and path.name.replace("-", "").isdigit()
+        ),
+        key=lambda path: path.name,
+    )
 
 
 def main() -> None:
@@ -442,6 +465,13 @@ def main() -> None:
     alt_player_props_parlays = app_parlays_path.read_text(encoding="utf-8") if app_parlays_path.exists() else ""
     alt_props_data = (alt_player_props, alt_player_props_parlays)
 
+    # Read alt bankroll props
+    mlb_bp_path = latest_pack / "mlb_alt_bankroll_props.csv"
+    wnba_bp_path = latest_pack / "wnba_alt_bankroll_props.csv"
+    mlb_bankroll = mlb_bp_path.read_text(encoding="utf-8") if mlb_bp_path.exists() else ""
+    wnba_bankroll = wnba_bp_path.read_text(encoding="utf-8") if wnba_bp_path.exists() else ""
+    bankroll_data = (mlb_bankroll, wnba_bankroll)
+
     # Build slate allowlist from candidates + dossiers to enforce today's slate games only
     scripts_dir = repo_root / "scripts"
     if str(scripts_dir) not in sys.path:
@@ -457,7 +487,7 @@ def main() -> None:
     hitrate_buckets = get_hitrate_data_buckets(allow_matchups=allow_matchups)
 
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, alt_props_data, args.no_clean)
+        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, alt_props_data, bankroll_data, args.no_clean)
 
 
 

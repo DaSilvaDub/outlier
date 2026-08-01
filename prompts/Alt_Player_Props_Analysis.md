@@ -8,10 +8,10 @@ Your mandate is to **filter aggressively**. You are looking for the 4 safest, hi
 
 ## 1. Primary Objective
 
-Identify the 4 absolute strongest alternate player props for a parlay by:
+Identify up to 4 absolute strongest alternate player props for a parlay by:
 
 1. Treating the supplied alt prop data as the ONLY authority for player names, selections, lines, teams, and hit rates.
-2. Relying on the combination of a high recent hit rate and a strong season-long baseline.
+2. Confirming the strict 100% L5 and at least 90% L10 thresholds before using season context.
 3. Accounting for game script, blowout risk, and playing-time risk.
 4. Evaluating opponent matchup and any known injuries or lineup context.
 
@@ -25,7 +25,7 @@ When data or signals conflict, follow this hierarchy:
 2. The provided Alt Player Props Data
 3. Role and opportunity stability (minutes, usage, plate appearances)
 4. Opponent matchup quality and defensive allowance
-5. Recent hit rate consistency (L10) and full season baseline
+5. Recent hit rate consistency (L5/L10) and full season baseline
 6. Game script environment (spread, blowout risk)
 
 ---
@@ -33,7 +33,7 @@ When data or signals conflict, follow this hierarchy:
 ## 3. Data Integrity & Valid Markets
 
 ### 3.1 Provided Data
-The attached CSV data contains the allowed alternate lines. These have already been filtered for odds between -500 and -200, representing high-probability scenarios.
+The attached CSV data contains the allowed alternate lines. These have already been filtered for full-game scope, Hard Rock availability, exactly 100% L5, at least 90% L10, and odds between -500 and -200.
 DO NOT recommend any props that are not explicitly present in the provided Alternate Player Props data.
 
 ### 3.2 Side Logic Verification
@@ -62,7 +62,7 @@ Evaluate the upcoming opponent specifically for this prop:
 Evaluate blowout risk. If a game has high blowout risk, players might see reduced minutes or plate appearances.
 
 ### Phase 5 — Final Selection
-From the filtered list, identify the absolute best 4 props that carry the lowest variance and highest confidence. These will form the single recommended Bankroll Parlay.
+From the filtered list, identify up to 4 props that carry the lowest variance and highest confidence. If fewer than 4 supplied rows qualify, do not invent additional legs; explicitly report that there is no complete 4-leg bankroll parlay.
 
 ---
 
@@ -77,18 +77,18 @@ Concisely state:
 * Primary slate risk / caveat.
 
 ### B. The Core Bankroll Parlay
-List the 4 chosen legs that form the recommended parlay.
+List up to 4 chosen legs. Do not force a 4-leg parlay when fewer qualifying rows are supplied.
 
-| Leg | Sport | Matchup | Player | Market | Line | Side | L10 Hit Rate |
-| --- | ----- | ------- | ------ | ------ | ---- | ---- | ------------ |
+| Leg | Sport | Matchup | Player | Market | Line | Side | L5 Hit Rate | L10 Hit Rate | Odds |
+| --- | ----- | ------- | ------ | ------ | ---- | ---- | ----------- | ------------ | ---- |
 
 Immediately below the table, provide a concise rationale for *why* these 4 props were selected over the others.
 
 ### C. Honorable Mentions (Next 2 Best)
 List the next 2 props that barely missed the cut, just in case a user needs a pivot due to late scratches.
 
-| Sport | Matchup | Player | Market | Line | Side | L10 Hit Rate |
-| ----- | ------- | ------ | ------ | ---- | ---- | ------------ |
+| Sport | Matchup | Player | Market | Line | Side | L5 Hit Rate | L10 Hit Rate | Odds |
+| ----- | ------- | ------ | ------ | ---- | ---- | ----------- | ------------ | ---- |
 
 ---
 
@@ -96,8 +96,9 @@ List the next 2 props that barely missed the cut, just in case a user needs a pi
 
 Before outputting, verify:
 * Every recommended prop comes directly from the supplied data.
-* Exactly 4 legs are chosen for the main parlay.
+* No more than 4 legs are chosen, and a short slate is reported without invented fill-ins.
 * No prop line, selection, or player name was invented or altered.
+* Every prop is a full-game Hard Rock line in the -500 through -200 range with L5=100% and L10>=90%.
 * Matchup quality and role stability were explicitly evaluated for the chosen legs.
 
 Now analyze the supplied Alternate Player Props data below.
