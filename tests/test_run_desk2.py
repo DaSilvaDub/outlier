@@ -88,6 +88,7 @@ def test_pack_only_paste_doc_carries_candidates_and_house_rules(desk2_pack):
     assert "MKT_PREGAME" in doc
     # House rules come from pack.ROLE_BLOCK (single source of truth).
     assert "HR markets are excluded" in doc
+    assert "strict whitelist" in doc
     assert "PREGAME-only" in doc
 
 

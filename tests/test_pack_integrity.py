@@ -4,7 +4,7 @@ Guarantees that pipeline outputs are checked for structural integrity bugs befor
 exporting daily packs or research desk prompt cards.
 
 Audited Gates:
-1. Prohibited Markets Exclusion (Walks, Total Bases, Hits Allowed, HR, HRR)
+1. Pack hard-ban exclusion (HR, Walks Allowed tokens); generation whitelist is normalizer-owned
 2. Valid Event Slate Indexing (No UNINDEXED_SLATE_GAME false positives for indexed games)
 3. Briefing Pack Deduplication (No duplicate totals in flagged cards)
 4. Non-Actionable Stake Protection (Zero recommended units on actionable=false rows)

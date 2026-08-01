@@ -48,7 +48,7 @@ class FilterOptions:
 
     drop_hr_under: bool = True
     drop_milestone_under: bool = True
-    drop_prohibited_markets: bool = False  # Hits Allowed, Total Bases, Walks Allowed are ALLOWED
+    drop_prohibited_markets: bool = False  # optional; MLB generation whitelist is normalizer-owned
     require_team_in_matchup: bool = True
     side: str | None = None  # "OVER" | "UNDER" | None
     # None = no slate filter; empty set = drop everything matchup-related

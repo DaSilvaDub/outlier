@@ -166,6 +166,62 @@ def test_normalize_games_team_prop_resolution():
     assert "Red Sox" in r2["team_raw"] or r2["team"] == "BOS"
 
 
+def test_mlb_non_whitelisted_team_prop_dropped_gameline_preserved():
+    """TEAM_PROP outside ALLOWED_MLB_TEAM_PROPS drops; GAMELINE still admitted."""
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "id": "e1",
+                "status": "scheduled",
+                "home": {"id": "h1", "name": "Yankees"},
+                "away": {"id": "a1", "name": "Red Sox"},
+            }
+        ]
+    }
+    events_payloads = [
+        {
+            "eventId": "e1",
+            "markets": [
+                {
+                    "marketId": "m-team-points",
+                    "marketType": "TEAM_PROP",
+                    "proposition": "POINTS",
+                    "teamId": "h1",
+                    "outcomes": [
+                        {"id": "o-tp", "position": "OVER", "line": 4.5},
+                    ],
+                },
+                {
+                    "marketId": "m-ml",
+                    "marketType": "GAMELINE",
+                    "proposition": "MONEYLINE",
+                    "outcomes": [
+                        {"id": "o-ml-h", "position": "HOME"},
+                        {"id": "o-ml-a", "position": "AWAY"},
+                    ],
+                },
+                {
+                    "marketId": "m-total",
+                    "marketType": "GAMELINE",
+                    "proposition": "TOTAL",
+                    "outcomes": [
+                        {"id": "o-tot-o", "position": "OVER", "line": 8.5},
+                        {"id": "o-tot-u", "position": "UNDER", "line": 8.5},
+                    ],
+                },
+            ],
+        }
+    ]
+    res = normalize_games(
+        config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
+    )
+    records = res["records"]
+    assert not any(r.get("market_id") == "m-team-points" for r in records)
+    assert any(r.get("market_id") == "m-ml" for r in records)
+    assert any(r.get("market_id") == "m-total" for r in records)
+
+
 def test_scope_metadata_preserved():
     config = get_sport_config("MLB")
     schedule = {"events": [{"id": "e1"}]}
