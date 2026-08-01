@@ -286,20 +286,65 @@ def build_injuries(games_payload: dict | None) -> dict[str, str]:
     return out
 
 
+# Cap free-text analysis so multi-player event strings stay pack-readable.
+_INJURY_ANALYSIS_MAX_CHARS = 160
+
+
+def _injury_return_date(injury: dict[str, Any]) -> str:
+    """Normalize API returnDate / return_date to YYYY-MM-DD when possible."""
+    raw = injury.get("returnDate") or injury.get("return_date") or ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    # Common shapes: "2026-09-04", "2026-09-04T00:00:00-0700"
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return text
+
+
 def _format_injury(item: dict[str, Any]) -> str:
-    """Render one injury as ``"First Last (Status)"`` from the live schema
-    (firstName/lastName + nested injury.status). Falls back to a legacy
-    ``player``/``description`` field, and never dumps the raw dict."""
+    """Render one injury from the live schema for pack ``injury_flags``.
+
+    Preferred shape::
+
+        First Last (Status; Body; ret YYYY-MM-DD): analysis…
+
+    Nested fields (when present): ``injury.status``, body from
+    ``injury.injury``, ``injury.returnDate``, ``injury.analysis``.
+    Missing pieces are omitted. Falls back to legacy ``player`` /
+    ``description`` and never dumps the raw dict.
+    """
     name = " ".join(
         part for part in (item.get("firstName"), item.get("lastName")) if part
     ).strip()
     if not name:
         name = str(item.get("player") or item.get("description") or "").strip()
-    injury = item.get("injury")
-    status = injury.get("status") if isinstance(injury, dict) else None
-    if name and status:
-        return f"{name} ({status})"
-    return name
+
+    injury = item.get("injury") if isinstance(item.get("injury"), dict) else {}
+    status = str(injury.get("status") or "").strip()
+    # API body/diagnosis lives under nested key "injury" (e.g. "Right Forearm Strain").
+    body = str(injury.get("injury") or "").strip()
+    ret = _injury_return_date(injury)
+    analysis = str(injury.get("analysis") or "").strip()
+
+    paren_bits: list[str] = []
+    if status:
+        paren_bits.append(status)
+    if body:
+        paren_bits.append(body)
+    if ret:
+        paren_bits.append(f"ret {ret}")
+
+    if name and paren_bits:
+        core = f"{name} ({'; '.join(paren_bits)})"
+    else:
+        core = name
+
+    if core and analysis:
+        if len(analysis) > _INJURY_ANALYSIS_MAX_CHARS:
+            analysis = analysis[: _INJURY_ANALYSIS_MAX_CHARS - 3].rstrip() + "..."
+        core = f"{core}: {analysis}"
+    return core
 
 def _slug(text: str | None) -> str:
     if not text:

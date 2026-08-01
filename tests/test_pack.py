@@ -768,7 +768,57 @@ def test_build_injuries_formats_real_injury_schema():
         }
     }
     inj = build_injuries(games)
-    assert inj["E1"] == "Aaron Judge (OUT)"
+    assert inj["E1"] == "Aaron Judge (OUT; Toe)"
+
+
+def test_build_injuries_includes_return_date_and_analysis():
+    """P0 richer flags: body, return date, and truncated analysis when present."""
+    long_analysis = "A" * 200
+    games = {
+        "context": {
+            "events": {"E1": {"home_team_id": "T1", "away_team_id": "T2"}},
+            "teams": {
+                "T1": {
+                    "injuries": [
+                        {
+                            "playerId": "p1",
+                            "firstName": "Stephen",
+                            "lastName": "Kolek",
+                            "injury": {
+                                "status": "60-Day IL",
+                                "injury": "Right Forearm Strain",
+                                "returnDate": "2026-09-04T00:00:00-0700",
+                                "analysis": long_analysis,
+                            },
+                            "teamId": "T1",
+                        }
+                    ]
+                },
+                "T2": {
+                    "injuries": [
+                        {
+                            "firstName": "Leonie",
+                            "lastName": "Fiebich",
+                            "injury": {
+                                "status": "Out",
+                                "injury": "Left Foot",
+                                "returnDate": "2026-08-03",
+                            },
+                        }
+                    ]
+                },
+            },
+        }
+    }
+    inj = build_injuries(games)
+    flag = inj["E1"]
+    assert "Stephen Kolek (60-Day IL; Right Forearm Strain; ret 2026-09-04)" in flag
+    assert "Leonie Fiebich (Out; Left Foot; ret 2026-08-03)" in flag
+    # Analysis truncated to 160 chars with ellipsis; full 200 As not present.
+    assert ": " in flag
+    assert "..." in flag
+    assert "A" * 200 not in flag
+    assert "playerId" not in flag
 
 
 # 14. Quota ranking never starves board B.

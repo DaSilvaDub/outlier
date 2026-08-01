@@ -653,6 +653,7 @@ def test_injury_flags_join_end_to_end():
     assert "e1" in flags
     assert "Aaron Judge" in flags["e1"]
     assert "OUT" in flags["e1"]
+    assert "Toe" in flags["e1"]  # body part from nested injury.injury
     assert "playerId" not in flags["e1"]  # legible, not a raw dict dump
 
 
