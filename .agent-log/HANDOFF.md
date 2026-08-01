@@ -1,16 +1,13 @@
 # Handoff
 
-- **Last Commit SHA**: `59d6322fe5acb94de4b8dfec0d8d4fee16d62420` (`fix(scripts): drop unused L5+L10-only hit-rate tracking`), pushed directly to `master`.
-- **Pull Requests**:
-  - https://github.com/DaSilvaDub/outlier/pull/77 (merged)
-  - https://github.com/DaSilvaDub/outlier/pull/78 (merged, CI compatibility follow-up)
-- Branch `fix/alt-props-bankroll-contract` deleted (local + remote) after both PRs landed.
-- **Files Touched (this session, post-PR-78)**:
-  - `scripts/organize_today_run2.py` — removed the redundant L5+L10-only perfect-hit tracking pass (function signature, stats keys, and output directory); only the L5+L10+L20 bucket remains.
-  - `tests/test_organize_today_run2.py` — updated `parse_hit_rates` call to match the trimmed signature.
-  - Deleted untracked `sample_recs.json` (unused manual test fixture, not referenced by any code).
+- **Last Commit SHA**: `c3b9203c966ac8ff394186a3d21925cde26c783b` (merged PR #80).
+- **Pull Request**: https://github.com/DaSilvaDub/outlier/pull/80 (merged).
+- **Files Touched**:
+  - `outlier_scrapers/cards.py` — surfaces ambiguous TEAM_PROP stats-side selection and keeps hit-rate mapping centralized.
+  - `tests/test_cards.py` — covers ambiguity propagation and preserves `h2h_pct` through game-card assembly.
 - **Verification**:
-  - `pytest -q tests/test_organize_today_run2.py`: `5 passed`.
-  - Scoped Ruff check on touched files: clean (one pre-existing unrelated `F401` in `test_organize_today_run2.py`, left as-is).
-- **Next Steps**:
-  - No pending work from this session; `master` is clean and up to date with `origin/master`.
+  - `python -m pytest tests/test_cards.py tests/test_games.py -q`: 64 passed.
+  - `ruff check outlier_scrapers/cards.py tests/test_cards.py`: passed.
+  - Fresh GitHub Offline Pytest and Static Type Checking runs: passed.
+  - All PR review threads resolved before merge.
+- **Next Steps**: None; confirm canonical sync and no remaining open PRs.
