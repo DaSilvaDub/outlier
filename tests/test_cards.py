@@ -5,6 +5,7 @@ import pytest
 
 from outlier_scrapers import cards
 from outlier_scrapers.cards import (
+    PUBLIC_MONEY_DIVERGENCE_FLAG_PP,
     _align_main_lines,
     _spread_sign_conflict,
     assemble_game_card,
@@ -14,6 +15,9 @@ from outlier_scrapers.cards import (
     hit_rates_from_game_stats,
     movement_corroboration,
     proxy_market_edge,
+    public_money_component_from_divergence,
+    public_money_divergence,
+    public_money_signal_flags,
     recency_hit_pct,
     signal_score,
     snapshot_skew,
@@ -54,6 +58,97 @@ def test_proxy_market_edge_none_without_fair():
 def test_recency_hit_pct_weighted_blend():
     val = recency_hit_pct({"l5_pct": 100, "l10_pct": 90, "l20_pct": 50, "season_pct": 50})
     assert val == 82.0  # .4*100 + .3*90 + .2*50 + .1*50
+
+
+def test_public_money_divergence_happy_path_and_aliases():
+    info = public_money_divergence({"percentage": 40, "money": 70})
+    assert info == {"tickets_pct": 40.0, "money_pct": 70.0, "divergence_pct": 30.0}
+    aliased = public_money_divergence({"public_money_pct": 10, "money_pct": 10})
+    assert aliased is not None
+    assert aliased["divergence_pct"] == 0.0
+
+
+def test_public_money_divergence_fail_closed():
+    assert public_money_divergence(None) is None
+    assert public_money_divergence({}) is None
+    assert public_money_divergence({"percentage": 50}) is None
+    assert public_money_divergence({"percentage": True, "money": 50}) is None
+    assert public_money_divergence({"percentage": -1, "money": 50}) is None
+    assert public_money_divergence({"percentage": 50, "money": 150}) is None
+    assert public_money_divergence({"percentage": float("nan"), "money": 50}) is None
+
+
+def test_public_money_component_and_flags():
+    assert public_money_component_from_divergence(None) is None
+    assert public_money_component_from_divergence(30.0) == 80.0
+    assert public_money_component_from_divergence(-60.0) == 0.0
+    assert public_money_component_from_divergence(60.0) == 100.0
+    thr = PUBLIC_MONEY_DIVERGENCE_FLAG_PP
+    assert public_money_signal_flags(thr) == ["sharp_money_support"]
+    assert public_money_signal_flags(-thr) == ["public_money_heavy"]
+    assert public_money_signal_flags(thr - 1) == []
+    assert public_money_signal_flags(-(thr - 1)) == []
+    assert public_money_signal_flags(None) == []
+
+
+def test_signal_score_legacy_equivalence_without_public_money():
+    """No-PM path must match the pre-feature four-way composite."""
+    base = {
+        "l5_pct": 80,
+        "l10_pct": 70,
+        "l20_pct": 60,
+        "season_pct": 50,
+        "orf_score": 0.6,
+    }
+    scored = signal_score("OVER", base, {"line_delta_from_open": -1.0}, [])
+    hit = recency_hit_pct(base)
+    hit_c = hit if hit is not None else 50.0
+    orf_c = 60.0
+    insight_c, _ = cards.insight_component("OVER", [])
+    movement_c = 50.0 + 25.0 * 1.0  # corro = 1.0 for falling line on OVER
+    expected = 0.40 * hit_c + 0.20 * orf_c + 0.20 * insight_c + 0.20 * movement_c
+    assert scored["composite"] == round(min(max(expected, 0.0), 100.0), 3)
+    assert scored["public_money_component"] == ""
+    assert scored["public_money_divergence_pct"] == ""
+
+
+def test_signal_score_five_way_with_public_money_raises_composite():
+    base = {
+        "l5_pct": 50,
+        "l10_pct": 50,
+        "l20_pct": 50,
+        "season_pct": 50,
+        "orf_score": 0.5,
+    }
+    no_pm = signal_score("OVER", base, None, [])
+    sharp = signal_score(
+        "OVER",
+        {**base, "public_money": {"percentage": 30, "money": 70}},
+        None,
+        [],
+    )
+    assert sharp["public_money_divergence_pct"] == 40.0
+    assert sharp["public_money_component"] == 90.0
+    assert sharp["composite"] > no_pm["composite"]
+
+
+def test_assemble_game_card_signal_includes_public_money_not_card_flags():
+    home = {
+        **_spread_prop_row("HOME", -1.5),
+        "public_money": {"position": "HOME", "percentage": 20, "money": 55},
+    }
+    away = {
+        **_spread_prop_row("AWAY", 1.5),
+        "public_money": {"position": "AWAY", "percentage": 80, "money": 45},
+    }
+    card = assemble_game_card("gm1", build_indexes([home, away], [], [], []))
+    home_sig = card["sides"]["HOME"]["signal"]
+    assert home_sig["public_money_divergence_pct"] == 35.0
+    assert home_sig["public_money_component"] == 85.0
+    # Public-money tokens must never land on card.flags (actionability path).
+    flags = card.get("flags") or []
+    assert "sharp_money_support" not in flags
+    assert "public_money_heavy" not in flags
 
 
 # --- Spread sign-conflict guard (fix: a corrupted feed could ship both sides -

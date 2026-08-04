@@ -1270,6 +1270,73 @@ def test_public_money_fallback_keys():
     assert row0["money_pct"] == 0
 
 
+def test_candidates_header_public_money_component_grouped():
+    assert "public_money_component" in CANDIDATES_HEADER
+    assert "public_money_divergence_pct" in CANDIDATES_HEADER
+    # Component sits with other Board B components after orf_component.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("orf_component") + 1]
+        == "public_money_component"
+    )
+    # Raw divergence sits after money_pct.
+    assert (
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("money_pct") + 1]
+        == "public_money_divergence_pct"
+    )
+
+
+def test_public_money_signal_flags_not_data_quality_or_actionable():
+    """PM flags go on signal_flags only; never contaminate data_quality_flags."""
+    card = ev_card(market_type="MONEYLINE")
+    card["board"] = "A"
+    card["flags"] = []  # no card-level quality flags
+    card["sides"]["OVER"]["public_money"] = {"percentage": 20, "money": 55}
+    card["sides"]["OVER"]["signal"] = {
+        "public_money_component": 85.0,
+        "public_money_divergence_pct": 35.0,
+        "hit_pct": 60.0,
+        "orf_component": 50.0,
+        "insight_component": 50.0,
+        "movement_corroboration": 0.0,
+    }
+    # Provide EV so Board A can be actionable if units/edge allow.
+    ev = [
+        {
+            "market_id": card["card_id"],
+            "side": "OVER",
+            "outcome_id": "o1",
+            "current_line": card["sides"]["OVER"].get("line"),
+            "calculated_ev_pct": 5.0,
+            "calculated_ev_method": "AVERAGE",
+            "ev_source": "NATIVE",
+            "devig_decimal": 2.0,
+            "record_id": "ev1",
+            "book_decimal_odds": 2.0,
+            "kelly_pct": 2.0,
+        }
+    ]
+    row = make_row(card, ev)
+    assert "sharp_money_support" in str(row.get("signal_flags") or "")
+    assert "sharp_money_support" not in str(row.get("data_quality_flags") or "")
+    assert row["public_money_component"] == 85.0
+    assert row["public_money_divergence_pct"] == 35.0
+    # Control: same row shape without PM divergence should not invent DQ flags from PM.
+    card2 = ev_card(market_type="MONEYLINE")
+    card2["board"] = "A"
+    card2["flags"] = []
+    card2["sides"]["OVER"]["signal"] = {
+        "public_money_component": "",
+        "public_money_divergence_pct": "",
+        "hit_pct": 60.0,
+        "orf_component": 50.0,
+        "insight_component": 50.0,
+        "movement_corroboration": 0.0,
+    }
+    row2 = make_row(card2, ev)
+    assert "sharp_money_support" not in str(row2.get("signal_flags") or "")
+    assert "public_money_heavy" not in str(row2.get("signal_flags") or "")
+
+
 # 20. Freshness/coverage banner flags a stale/partial stream and an OK stream.
 def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
     reports = tmp_path / "data" / "MLB" / "reports"

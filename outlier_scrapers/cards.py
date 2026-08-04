@@ -63,13 +63,27 @@ HIT_WEIGHTS: dict[str, float] = {
     "season_pct": 0.10,
 }
 
-# Board B composite weights (must sum to 1.0).
+# Board B composite weights when public-money is absent (legacy four-way).
+# Must sum to 1.0. When public money is present, SIGNAL_WEIGHTS_WITH_PM is used.
 SIGNAL_WEIGHTS: dict[str, float] = {
     "hit": 0.40,
     "insight": 0.20,
     "movement": 0.20,
     "orf": 0.20,
 }
+
+# Board B five-way weights when public-money divergence is available (sum 1.0).
+SIGNAL_WEIGHTS_WITH_PM: dict[str, float] = {
+    "hit": 0.35,
+    "insight": 0.20,
+    "movement": 0.15,
+    "orf": 0.15,
+    "public_money": 0.15,
+}
+
+# |money% - tickets%| threshold for pack signal_flags (provisional; re-calibrate
+# against a live full-game sample if flag rate is not a minority).
+PUBLIC_MONEY_DIVERGENCE_FLAG_PP = 25.0
 
 # Board A EV buckets (calculated_ev_pct thresholds).
 EV_BUCKETS: tuple[tuple[float, str], ...] = (
@@ -372,13 +386,76 @@ def insight_component(side: str, insights: list[dict[str, Any]]) -> tuple[float,
     return round(min(max(score, 0.0), 100.0), 3), conflict
 
 
+def public_money_divergence(pm: Any) -> dict[str, float] | None:
+    """Parse tickets% vs handle% into a side-specific divergence.
+
+    Returns ``{tickets_pct, money_pct, divergence_pct}`` where
+    ``divergence_pct = money_pct - tickets_pct`` (positive = more handle than
+    tickets on this side). Returns ``None`` when the payload is missing,
+    incomplete, non-finite, boolean, or outside 0–100.
+    """
+    if not isinstance(pm, dict):
+        return None
+    tickets_raw = pm.get("percentage")
+    if tickets_raw is None:
+        tickets_raw = pm.get("public_money_pct")
+    money_raw = pm.get("money")
+    if money_raw is None:
+        money_raw = pm.get("money_pct")
+    # Reject bools (bool is a subclass of int).
+    if isinstance(tickets_raw, bool) or isinstance(money_raw, bool):
+        return None
+    if not isinstance(tickets_raw, (int, float)) or not isinstance(money_raw, (int, float)):
+        return None
+    tickets = float(tickets_raw)
+    money = float(money_raw)
+    if not (tickets == tickets and money == money):  # NaN check without math import
+        return None
+    if tickets in (float("inf"), float("-inf")) or money in (float("inf"), float("-inf")):
+        return None
+    if not (0.0 <= tickets <= 100.0 and 0.0 <= money <= 100.0):
+        return None
+    return {
+        "tickets_pct": tickets,
+        "money_pct": money,
+        "divergence_pct": money - tickets,
+    }
+
+
+def public_money_component_from_divergence(divergence_pct: float | None) -> float | None:
+    """Map handle-minus-tickets pp into a 0–100 Board B component.
+
+    ``None`` when public money is absent (caller must use legacy four-way weights).
+    """
+    if divergence_pct is None:
+        return None
+    return round(min(max(50.0 + float(divergence_pct), 0.0), 100.0), 3)
+
+
+def public_money_signal_flags(divergence_pct: float | None) -> list[str]:
+    """Descriptive pack/signal flags only — never card.flags / data_quality_flags."""
+    if divergence_pct is None:
+        return []
+    thr = PUBLIC_MONEY_DIVERGENCE_FLAG_PP
+    if divergence_pct >= thr:
+        return ["sharp_money_support"]
+    if divergence_pct <= -thr:
+        return ["public_money_heavy"]
+    return []
+
+
 def signal_score(
     side: str,
     side_data: dict[str, Any],
     mv: dict[str, Any] | None,
     insights: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Board B composite (0-100) for one side, with component breakdown."""
+    """Board B composite (0-100) for one side, with component breakdown.
+
+    When ``side_data["public_money"]`` yields a valid divergence, uses
+    ``SIGNAL_WEIGHTS_WITH_PM`` (five-way). Otherwise uses legacy
+    ``SIGNAL_WEIGHTS`` (four-way) so no-PM scores match pre-feature behavior.
+    """
     hit = recency_hit_pct(side_data)
     hit_component = hit if hit is not None else 50.0
     orf = side_data.get("orf_score")
@@ -386,12 +463,29 @@ def signal_score(
     insight_score, conflict = insight_component(side, insights)
     corro = movement_corroboration(side, mv)
     movement_component = 50.0 + 25.0 * corro
-    composite = (
-        SIGNAL_WEIGHTS["hit"] * hit_component
-        + SIGNAL_WEIGHTS["orf"] * min(orf_component, 100.0)
-        + SIGNAL_WEIGHTS["insight"] * insight_score
-        + SIGNAL_WEIGHTS["movement"] * movement_component
-    )
+
+    pm_info = public_money_divergence(side_data.get("public_money"))
+    divergence_pct = pm_info["divergence_pct"] if pm_info else None
+    pm_component = public_money_component_from_divergence(divergence_pct)
+
+    if pm_component is not None:
+        weights = SIGNAL_WEIGHTS_WITH_PM
+        composite = (
+            weights["hit"] * hit_component
+            + weights["orf"] * min(orf_component, 100.0)
+            + weights["insight"] * insight_score
+            + weights["movement"] * movement_component
+            + weights["public_money"] * pm_component
+        )
+    else:
+        weights = SIGNAL_WEIGHTS
+        composite = (
+            weights["hit"] * hit_component
+            + weights["orf"] * min(orf_component, 100.0)
+            + weights["insight"] * insight_score
+            + weights["movement"] * movement_component
+        )
+
     return {
         "composite": round(min(max(composite, 0.0), 100.0), 3),
         "hit_pct": hit,
@@ -399,6 +493,8 @@ def signal_score(
         "insight_component": insight_score,
         "movement_corroboration": corro,
         "insight_conflict": conflict,
+        "public_money_component": pm_component if pm_component is not None else "",
+        "public_money_divergence_pct": divergence_pct if divergence_pct is not None else "",
     }
 
 
@@ -706,11 +802,19 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     for side, sdata in sides_data.items():
         mv = movement.get(side)
         matched = _match_insights(idx, market_id, side, sdata.get("outcome_id"), sdata.get("line"))
-        score = signal_score(side, sdata, mv, matched)
-        proxy = proxy_market_edge(side, sdata.get("books", []), fair.get(side)) if fair else None
 
         outcome_id = str(sdata.get("outcome_id") or "")
         enrichment_data = idx.enrichment.get(outcome_id) if outcome_id else None
+        # Attach enrichment public_money onto scoring inputs BEFORE signal_score
+        # so player-path Board B can consume PM when the games enrichment map
+        # has it (v2 plan: attach-before-score).
+        if idx.enrichment_loaded and isinstance(enrichment_data, dict):
+            pm = enrichment_data.get("public_money")
+            if pm is not None:
+                sdata = {**sdata, "public_money": pm}
+
+        score = signal_score(side, sdata, mv, matched)
+        proxy = proxy_market_edge(side, sdata.get("books", []), fair.get(side)) if fair else None
 
         side_view = {
             **{k: sdata.get(k) for k in ("side", "line", "best_odds", "outcome_id", "orf_score")},
@@ -725,7 +829,9 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
         if idx.enrichment_loaded:
             side_view["per_book_odds"] = enrichment_data.get("per_book_odds") if enrichment_data else []
-            side_view["public_money"] = enrichment_data.get("public_money") if enrichment_data else None
+            side_view["public_money"] = (
+                enrichment_data.get("public_money") if enrichment_data else None
+            ) or sdata.get("public_money")
 
         side_views[side] = side_view
 

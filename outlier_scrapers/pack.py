@@ -88,6 +88,7 @@ CANDIDATES_HEADER = [
     "insight_component",
     "movement_component",
     "orf_component",
+    "public_money_component",
     "actionable",
     "outlier_ev_pct",
     "outlier_kelly_pct",
@@ -97,6 +98,7 @@ CANDIDATES_HEADER = [
     "line_now",
     "public_money_pct",
     "money_pct",
+    "public_money_divergence_pct",
     "injury_flags",
     "research_leverage",
     "projection_distribution",
@@ -952,6 +954,12 @@ def build_row(
         else ""
     )
     row["orf_component"] = signal.get("orf_component", "")
+    # Board B public-money component (descriptive only; never EV / actionable).
+    # Empty string when signal_score used the legacy four-way path (no PM).
+    pm_component = signal.get("public_money_component", "")
+    row["public_money_component"] = pm_component if pm_component is not None else ""
+    pm_div = signal.get("public_money_divergence_pct", "")
+    row["public_money_divergence_pct"] = pm_div if pm_div is not None else ""
     # Descriptive-only: edge implied by the raw recency hit rate. Reads
     # signal["hit_pct"] (None when Outlier had no recency data), NOT
     # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
@@ -977,6 +985,12 @@ def build_row(
             signal_flags.append("movement_against")
     if signal.get("insight_conflict"):
         signal_flags.append("insight_conflict")
+    # Public-money flags live only on signal_flags — never card.flags /
+    # data_quality_flags (those feed actionable=false via not dq_flags).
+    from outlier_scrapers.cards import public_money_signal_flags
+
+    for flag in public_money_signal_flags(_to_float(row.get("public_money_divergence_pct"))):
+        signal_flags.append(flag)
     row["signal_flags"] = ";".join(dict.fromkeys(signal_flags))
 
     if card.get("board") == "A":
