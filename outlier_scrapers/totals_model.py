@@ -22,6 +22,7 @@ from typing import Any
 
 from outlier_scrapers.game_totals import (
     BASE_INDEPENDENT_WEIGHT,
+    TOTALS_MODEL_DIVERGENCE_THRESHOLD,
     _l10_over_for_record,
     _to_float,
     aggregate_line_p_over,
@@ -211,7 +212,7 @@ def backfill_totals_probabilities(
             l10 = entry["l10_over"]
             l10_side = l10["pct"] if side == "OVER" else 1.0 - l10["pct"]
             row["independent_model_prob"] = l10_side * no_push_factor
-            if abs(p_side_market - l10_side) >= 0.1499:
+            if abs(p_side_market - l10_side) >= TOTALS_MODEL_DIVERGENCE_THRESHOLD:
                 extra_flags.append("totals_model_divergence")
 
         if int(entry.get("book_count") or 0) < 2:
