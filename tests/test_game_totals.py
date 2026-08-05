@@ -411,6 +411,27 @@ def test_build_game_totals_blends_l10_into_edge_and_columns():
     assert 'totals_model_divergence' in row['quality_flags']
     assert row['actionable'] == 'false'
 
+def test_build_game_totals_model_divergence_is_soft_and_halves_units():
+    """totals_model_divergence is a signal disagreement, not corrupted data —
+    it must not hard-block actionable, but should still apply a sizing haircut
+    and remain visible in quality_flags (regression guard for the soft-flag
+    gate change)."""
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m1', 8.5, 'OVER', [{'book': 'DK', 'odds': -125}, {'book': 'FD', 'odds': -122}], stats=_l10_stats(9, 9)), _norm_record('m1', 8.5, 'UNDER', [{'book': 'DK', 'odds': 105}, {'book': 'FD', 'odds': 102}]), _norm_record('m1', 9.0, 'OVER', [{'book': 'DK', 'odds': 110}, {'book': 'FD', 'odds': 108}]), _norm_record('m1', 9.0, 'UNDER', [{'book': 'DK', 'odds': -130}, {'book': 'FD', 'odds': -128}])], 'context': {'events': {'E1': {'starts_at': '2099-12-31T00:00:00Z'}}}}
+    candidates = [{'market_id': 'm1', 'market_type': 'GAMELINE', 'player_id': '', 'selection': 'A @ B Total O/U OVER 8.5', 'line': 8.5, 'price': -125, 'edge_pct': 0.05, '_proposition': 'TOTAL', '_event_starts_at': '2099-07-07T23:10:00+00:00'}]
+    rows = build_game_totals(candidates, games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
+    row = rows[0]
+    assert row['quality_flags'] == 'totals_model_divergence'
+    assert float(row['edge_pct']) >= MIN_EDGE_TOTALS
+    assert row['actionable'] == 'true'
+    full_sizing = compute_sizing(
+        decimal_price=float(row['decimal_price']),
+        model_prob=float(row['final_blended_prob']),
+        push_prob=0.0,
+    )
+    assert full_sizing.recommended_units_pre_news is not None
+    assert float(row['recommended_units_pre_news']) == pytest.approx(
+        round(full_sizing.recommended_units_pre_news * 0.5, 4)
+    )
 
 def test_build_game_totals_flags_fair_total_side_conflict():
     games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [

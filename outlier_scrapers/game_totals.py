@@ -90,6 +90,16 @@ def _research_leverage(prop: str, scope: str, sport: str) -> str:
 MIN_EDGE_TOTALS = 0.03
 FULL_GAME_SCOPES = frozenset({"", "full_game", "game", "full"})
 
+# Flags that indicate a genuine signal disagreement (recent-form vs. market, or
+# an extreme independent probability) rather than corrupted/self-contradictory
+# data. Unlike FAIR_TOTAL_SIDE_CONFLICT-style flags — which mean the pack's own
+# math disagrees with the side it picked, a correctness problem — these mean a
+# second signal disagrees with the market, which is lower conviction but not
+# necessarily wrong. They no longer hard-block ``actionable``; instead they
+# still surface in ``quality_flags`` for visibility and apply a sizing haircut.
+SOFT_QUALITY_FLAGS = frozenset({"totals_model_divergence", "MODEL_SATURATED"})
+SOFT_FLAG_UNITS_DISCOUNT = 0.5
+
 GAME_TOTALS_HEADER = [
     "totals_id",
     "sport",
@@ -778,6 +788,8 @@ def build_totals(
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
         devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
 
+        hard_flags = [f for f in flags if f not in SOFT_QUALITY_FLAGS]
+        has_soft_flag = any(f in SOFT_QUALITY_FLAGS for f in flags)
         actionable = (
             "true"
             if (
@@ -787,7 +799,7 @@ def build_totals(
                 and book_count >= 2
                 and "MISSING_SIDE" not in headline_flags
                 and "SINGLE_BOOK" not in headline_flags
-                and not flags
+                and not hard_flags
                 and not push_blocked
                 and fair_total is not None
             )
@@ -802,6 +814,8 @@ def build_totals(
         recommended_units: float | str = ""
         if actionable == "true" and sizing is not None:
             recommended_units = sizing.recommended_units_pre_news or 0.0
+            if has_soft_flag and recommended_units:
+                recommended_units = round(recommended_units * SOFT_FLAG_UNITS_DISCOUNT, 4)
 
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
