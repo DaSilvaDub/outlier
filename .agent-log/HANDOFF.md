@@ -1,5 +1,28 @@
 # Handoff
 
+- **Last Commit SHA**: `d0df4655915cd37df9ccdb0fa05b8d3e4bad4e4c` on `feat/probable-pitchers-scraper`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/83
+- **Files Touched**:
+  - `outlier_scrapers/probable_pitchers.py` (new) — MLB Stats API scraper (`statsapi.mlb.com`, no auth) for probable starting pitchers + confirmation status, normalized into a per-team lookup
+  - `outlier_scrapers/paths.py` — added `probable_pitchers_latest()`
+  - `outlier_scrapers/refresh.py` — new `--probable-pitchers` flag
+  - `outlier_scrapers/daily_job.py` — wired probable-pitchers step into the explicit refresh sequence (MLB-only; no-ops for other leagues)
+  - `outlier_scrapers/game_totals.py` — new informational `starter_flags` column (e.g. `STARTER_UNCONFIRMED:BAL`), does not affect `actionable` gating
+  - `outlier_scrapers/pack.py` — loads the probable-pitchers lookup and threads it into `build_game_totals`/`build_team_totals`
+  - `tests/test_probable_pitchers.py` (new), `tests/test_game_totals.py` — 11 new tests
+- **Verification**:
+  - `pytest -q`: 664 passed
+  - `mypy` + `ruff check`: clean on all touched/new files
+  - Live smoke test against the 2026-08-04 MLB slate: 15 games exported; confirmed the data is genuinely time-sensitive — Baltimore's starter went from `TBD` (at earlier report time) to confirmed `Cade Povich` on a later rescrape
+- **Next Steps**:
+  - PR #83 ready for review/merge
+  - Open design question, deliberately left undecided in this PR: should `STARTER_UNCONFIRMED` actually gate `actionable` in `game_totals.py`, or stay informational-only (current behavior)? That's a betting-policy call, not a code call.
+  - Natural follow-up: extend the probable-pitcher lookup into player-prop cards (`cards.py`), not just game/team totals.
+
+---
+
+## Injury flags: date validation & type safety (2026-08-01)
+
 - **Last Commit SHA**: `22ce08453cfd107386ee35a1a1eb2b8ebcdfc27d` on `feat/richer-injury-flags`
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/81
 - **Files Touched**:
