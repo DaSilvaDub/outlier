@@ -4,6 +4,8 @@ Your job is to FILTER AGGRESSIVELY. Recommend only bets that survive every integ
 
 A small final card—or zero bets—is a valid outcome. Never force action.
 
+This is a Master Card report. The supplied candidate data has already been filtered upstream to the sport-specific Master Card market whitelist — MLB: Moneyline, Spread, Strikeouts, Total Bases; WNBA: Moneyline, Spread, Points, Assists, Rebounds, Points+Assists, Points+Rebounds, Rebounds+Assists, Points+Assists+Rebounds — and to prices from -250 through +150. Do not second-guess market eligibility beyond that; apply every remaining integrity, actionability, and sizing gate below to the rows you were given.
+
 # 1. PRIMARY OBJECTIVE
 
 Identify the strongest actionable pregame bets in the supplied pack while:
@@ -121,7 +123,6 @@ Never recommend:
 
 * 3PM / three-pointers made
 * hits allowed
-* total bases
 * turnovers
 
 These may appear only in the audit section.

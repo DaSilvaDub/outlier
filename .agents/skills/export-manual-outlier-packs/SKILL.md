@@ -26,7 +26,7 @@ By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` a
 
 The script structures the output into two pipelines:
 - `Desk1_Automated/`: four specialized master prompts (HitRate prompts are intentionally not generated — dropped pending a redesign):
-  - `1_Master_Cards_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates.
+  - `1_Master_Cards_MLB_pack_YYYY-MM-DD.txt`, `1_Master_Cards_WNBA_pack_YYYY-MM-DD.txt`, `1_Master_Cards_Both_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates, each further restricted to its Master Card market whitelist (MLB: Moneyline, Spread, Strikeouts, Total Bases; WNBA: Moneyline, Spread, Points, Assists, Rebounds, Points+Assists, Points+Rebounds, Rebounds+Assists, Points+Assists+Rebounds) and odds -250 through +150; each file is omitted when no rows qualify.
   - `2_Master_Totals_pack_YYYY-MM-DD.txt`: Game Totals and Team Totals ONLY (Alternate Team Totals excluded).
   - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific alternate game/team bankroll lines (L5>=75%, L10>=75%, full-game, Hard Rock, odds -1000 through -200) when qualifying rows exist.
   - `4_Master_Alt_Player_Prop_pack_YYYY-MM-DD.txt`: strict full-game Hard Rock player alternate lines (L5>=75%, L10>=75%, odds -1000 through -200); omitted when no rows qualify.

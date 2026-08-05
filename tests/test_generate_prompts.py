@@ -74,13 +74,25 @@ def test_master_cards_filter_uses_two_unit_floor():
     assert [row["candidate_id"] for row in rows] == ["two", "above", "three"]
 
 
-def test_master_cards_prompt_labels_two_plus_unit_candidates(tmp_path):
+def _master_card_row(sport, market_type, market_label, price, units="3.0"):
+    return f"{sport},A,{units},{market_type},{market_label},{price}"
+
+
+MASTER_CARD_HEADER = "sport,board,recommended_units_pre_news,market_type,market_label,price"
+
+
+def test_master_cards_prompt_splits_mlb_wnba_and_both(tmp_path):
     module = _load_module()
     out_dir = tmp_path / "today"
-    candidates = (
-        "candidate_id,board,recommended_units_pre_news\n"
-        "below,A,1.99\n"
-        "two,A,2.0\n"
+    candidates = "\n".join(
+        [
+            MASTER_CARD_HEADER,
+            _master_card_row("MLB", "SO", "", "-150"),
+            _master_card_row("MLB", "TB", "", "-200"),
+            _master_card_row("WNBA", "PTS", "", "-120"),
+            _master_card_row("WNBA", "GAMELINE", "Moneyline", "-210"),
+            "",
+        ]
     )
 
     module.generate_for_dir(
@@ -94,15 +106,93 @@ def test_master_cards_prompt_labels_two_plus_unit_candidates(tmp_path):
         False,
     )
 
-    master_cards = (
-        out_dir
-        / "prompts"
-        / "Desk1_Automated"
-        / "1_Master_Cards_pack_2099-12-31.txt"
-    ).read_text(encoding="utf-8")
-    assert "### 2+ Unit Candidates Data" in master_cards
-    assert "two,A,2.0" in master_cards
-    assert "below,A,1.99" not in master_cards
+    desk1 = out_dir / "prompts" / "Desk1_Automated"
+    mlb = (desk1 / "1_Master_Cards_MLB_pack_2099-12-31.txt").read_text(encoding="utf-8")
+    wnba = (desk1 / "1_Master_Cards_WNBA_pack_2099-12-31.txt").read_text(encoding="utf-8")
+    both = (desk1 / "1_Master_Cards_Both_pack_2099-12-31.txt").read_text(encoding="utf-8")
+
+    assert "MLB,A,3.0,SO" in mlb and "MLB,A,3.0,TB" in mlb
+    assert "WNBA" not in mlb.split("### 2+ Unit Candidates Data")[1]
+    assert "WNBA,A,3.0,PTS" in wnba and "Moneyline" in wnba
+    assert "MLB" not in wnba.split("### 2+ Unit Candidates Data")[1]
+    assert "SO" in both and "PTS" in both
+
+
+def test_master_cards_prompt_omits_a_variant_with_no_qualifying_rows(tmp_path):
+    module = _load_module()
+    out_dir = tmp_path / "today"
+    candidates = "\n".join(
+        [
+            MASTER_CARD_HEADER,
+            _master_card_row("MLB", "SO", "", "-150"),
+            "",
+        ]
+    )
+
+    module.generate_for_dir(
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        candidates,
+        ("", "", ""),
+        ("", ""),
+        ("", ""),
+        False,
+    )
+
+    desk1 = out_dir / "prompts" / "Desk1_Automated"
+    assert (desk1 / "1_Master_Cards_MLB_pack_2099-12-31.txt").exists()
+    assert not (desk1 / "1_Master_Cards_WNBA_pack_2099-12-31.txt").exists()
+
+
+def test_filter_master_card_candidates_market_whitelist_and_odds_window():
+    module = _load_module()
+    candidates = "\n".join(
+        [
+            MASTER_CARD_HEADER,
+            _master_card_row("MLB", "SO", "", "-150"),  # eligible
+            _master_card_row("MLB", "TB", "", "-200"),  # eligible
+            _master_card_row("MLB", "H", "", "-150"),  # not on MLB whitelist
+            _master_card_row("MLB", "SO", "", "-300"),  # too far favorite (< -250)
+            _master_card_row("MLB", "SO", "", "150"),  # +150-or-longer rejected
+            _master_card_row("MLB", "GAMELINE", "Total O/U", "-110"),  # not ML/Spread
+            "",
+        ]
+    )
+
+    filtered = module.filter_master_card_candidates(candidates, ("MLB",))
+    rows = list(csv.DictReader(io.StringIO(filtered)))
+
+    assert [(r["market_type"], r["price"]) for r in rows] == [
+        ("SO", "-150"),
+        ("TB", "-200"),
+    ]
+
+
+def test_filter_master_card_candidates_matches_player_prop_catchall_and_label_variants():
+    """The pack sometimes tags props with the generic PLAYER_PROP market_type instead of
+    SO/TB/PTS/etc, and spells gameline labels inconsistently (Money Line vs Moneyline,
+    MLB spread as Run Line). The whitelist must still catch these real-world variants."""
+    module = _load_module()
+    candidates = "\n".join(
+        [
+            MASTER_CARD_HEADER,
+            _master_card_row("MLB", "PLAYER_PROP", "Riley Greene - Bases", "145"),  # TB fallback
+            _master_card_row("MLB", "PLAYER_PROP", "Framber Valdez - Strikeouts", "-120"),  # SO fallback
+            _master_card_row("MLB", "GAMELINE", "Run Line", "-110"),  # MLB spread synonym
+            _master_card_row("WNBA", "GAMELINE", "Money Line", "-130"),  # spacing variant
+            _master_card_row("WNBA", "PLAYER_PROP", "Kelsey Plum - Assists", "-143"),  # AST fallback
+            _master_card_row("WNBA", "TEAM_PROP", "Points", "-115"),  # team prop, must NOT match
+            _master_card_row("MLB", "PLAYER_PROP", "Fernando Tatis Jr. - Hits", "-200"),  # off-whitelist prop
+            "",
+        ]
+    )
+
+    mlb = list(csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("MLB",)))))
+    wnba = list(csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("WNBA",)))))
+
+    assert [r["market_label"] for r in mlb] == ["Riley Greene - Bases", "Framber Valdez - Strikeouts", "Run Line"]
+    assert [r["market_label"] for r in wnba] == ["Money Line", "Kelsey Plum - Assists"]
 
 
 def test_generate_for_dir_omits_header_only_alt_prompts(tmp_path):

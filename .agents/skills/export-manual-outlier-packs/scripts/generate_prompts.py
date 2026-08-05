@@ -151,6 +151,104 @@ def filter_min_unit_candidates(candidates_csv_text: str, min_units: float = 2.0)
     return f_out.getvalue()
 
 
+MASTER_CARD_MIN_PRICE = -250
+MASTER_CARD_MAX_PRICE = 150  # exclusive: +150-or-longer stays rejected (A.md 5.3)
+
+_MASTER_CARD_TOKEN_RE = re.compile(r"[^A-Z0-9]+")
+
+# GAMELINE market_label spelling varies by day/source ("Moneyline" vs "Money
+# Line"; MLB's spread market is sometimes labeled "Run Line" instead of
+# "Spread"), so gameline eligibility is matched on a normalized token.
+MASTER_CARD_MONEYLINE_TOKEN = "MONEYLINE"
+MASTER_CARD_SPREAD_TOKENS = {
+    "MLB": frozenset({"SPREAD", "RUNLINE"}),
+    "WNBA": frozenset({"SPREAD"}),
+}
+
+# Specific market_type codes the pack sometimes assigns directly.
+MASTER_CARD_MLB_MARKET_TYPES = frozenset({"SO", "TB"})
+MASTER_CARD_WNBA_MARKET_TYPES = frozenset({"PTS", "AST", "REB", "PA", "PR", "RA", "PRA"})
+
+# Fallback for rows the pack tags with the generic PLAYER_PROP catch-all
+# instead of a specific code: match on the "Player Name - <Prop>" label
+# suffix. TEAM_PROP is intentionally excluded — team Points/Steals labels
+# are a different market than the player props in the Master Card whitelist.
+MASTER_CARD_MLB_PROP_LABEL_SUFFIXES = frozenset({"BASES", "STRIKEOUTS"})
+MASTER_CARD_WNBA_PROP_LABEL_SUFFIXES = frozenset(
+    {
+        "POINTS",
+        "ASSISTS",
+        "REBOUNDS",
+        "POINTSASSISTS",
+        "POINTSREBOUNDS",
+        "REBOUNDSASSISTS",
+        "POINTSASSISTSREBOUNDS",
+    }
+)
+
+
+def _normalize_token(text: str) -> str:
+    return _MASTER_CARD_TOKEN_RE.sub("", str(text or "").upper())
+
+
+def _prop_label_suffix(market_label: str) -> str:
+    """"Player Name - Bases" -> "BASES"; falls back to the whole label if unstructured."""
+    label = str(market_label or "")
+    if " - " in label:
+        label = label.rsplit(" - ", 1)[1]
+    return _normalize_token(label)
+
+
+def _master_card_price_ok(price_str: str) -> bool:
+    try:
+        price = float(str(price_str).replace("−", "-").strip())
+    except (TypeError, ValueError):
+        return False
+    return MASTER_CARD_MIN_PRICE <= price < MASTER_CARD_MAX_PRICE
+
+
+def _is_master_card_row(row: dict, sport: str) -> bool:
+    """Master Card market whitelist for one sport: gameline ML/Spread plus the sport's prop set."""
+    if str(row.get("sport", "")).strip().upper() != sport:
+        return False
+    market_type = str(row.get("market_type", "")).strip().upper()
+    market_label = row.get("market_label", "")
+
+    if market_type == "GAMELINE":
+        token = _normalize_token(market_label)
+        if token != MASTER_CARD_MONEYLINE_TOKEN and token not in MASTER_CARD_SPREAD_TOKENS.get(sport, frozenset()):
+            return False
+    elif sport == "MLB":
+        if market_type not in MASTER_CARD_MLB_MARKET_TYPES and not (
+            market_type == "PLAYER_PROP" and _prop_label_suffix(market_label) in MASTER_CARD_MLB_PROP_LABEL_SUFFIXES
+        ):
+            return False
+    elif sport == "WNBA":
+        if market_type not in MASTER_CARD_WNBA_MARKET_TYPES and not (
+            market_type == "PLAYER_PROP" and _prop_label_suffix(market_label) in MASTER_CARD_WNBA_PROP_LABEL_SUFFIXES
+        ):
+            return False
+    else:
+        return False
+    return _master_card_price_ok(row.get("price", ""))
+
+
+def filter_master_card_candidates(candidates_csv_text: str, sports: tuple[str, ...]) -> str:
+    """Filter candidate rows to the Master Card market whitelist / odds window for the given sport(s)."""
+    f_in = io.StringIO(candidates_csv_text)
+    reader = csv.DictReader(f_in)
+    fieldnames = reader.fieldnames or []
+    rows = list(reader)
+
+    kept = [r for r in rows if any(_is_master_card_row(r, sport) for sport in sports)]
+
+    f_out = io.StringIO()
+    writer = csv.DictWriter(f_out, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(kept)
+    return f_out.getvalue()
+
+
 def csv_has_data_rows(csv_text: str) -> bool:
     """Return true only when CSV text includes at least one data row."""
     if not csv_text.strip():
@@ -228,7 +326,23 @@ def generate_for_dir(
     # HitRate prompts are intentionally not generated — dropped pending a redesign.
     cards_template = load_prompt_template("A.md")
     cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
-    full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### 2+ Unit Candidates Data\n```csv\n{cards_2unit}\n```\n"
+
+    # Master Card is split per league (MLB, WNBA) plus a combined variant, each
+    # restricted to its own market whitelist and the -250..+150 odds window.
+    master_card_variants = [
+        ("MLB", ("MLB",)),
+        ("WNBA", ("WNBA",)),
+        ("Both", ("MLB", "WNBA")),
+    ]
+    for label, sports in master_card_variants:
+        cards_filtered = filter_master_card_candidates(cards_2unit, sports)
+        if not csv_has_data_rows(cards_filtered):
+            continue
+        full_cards_prompt = (
+            f"{cards_template}\n\n### Pack Data\n{briefing}\n\n"
+            f"### 2+ Unit Candidates Data\n```csv\n{cards_filtered}\n```\n"
+        )
+        safe_write_text(desk1_dir / f"1_Master_Cards_{label}_pack_{date_str}.txt", full_cards_prompt)
 
     totals_template = load_prompt_template("Totals_Analysis.md")
     game_totals, team_totals, _alt_team_totals = totals_data
@@ -246,7 +360,6 @@ def generate_for_dir(
         f"### Alternate Player Props Parlays Data\n```csv\n{alt_player_props_parlays}\n```\n"
     )
 
-    safe_write_text(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", full_cards_prompt)
     safe_write_text(desk1_dir / f"2_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
 
     # "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low
