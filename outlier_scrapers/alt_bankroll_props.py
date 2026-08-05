@@ -2,8 +2,8 @@
 
 Lists full-game GAMELINE (Moneyline, Spread, Game Total) and eligible TEAM_PROP
 lines that the team has cleared 100% of the time over its last 5 games and at
-least 90% of the time over its last 10 games. Only Hard Rock prices from -500
-through -200 are included. Consumes the normalized games feed; no API calls.
+least 90% of the time over its last 10 games. Only Hard Rock prices from -1000
+through -500 are included. Consumes the normalized games feed; no API calls.
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ from outlier_scrapers.registry import supported_leagues
 
 MIN_L10_HIT_PCT = 90.0
 MIN_L5_HIT_PCT = 100.0
-MIN_AMERICAN_ODDS = -500
-MAX_AMERICAN_ODDS = -200
+MIN_AMERICAN_ODDS = -1000
+MAX_AMERICAN_ODDS = -500
 ALLOWED_GAMELINES = frozenset({"MONEYLINE", "SPREAD", "TOTAL"})
 
 ALT_BANKROLL_PROPS_HEADER = [

@@ -14,7 +14,7 @@ def _prop(
     player: str = "Player One",
     market: str = "H",
     position: str = "OVER",
-    odds: int = -250,
+    odds: int = -600,
     book: str = "Hard Rock",
     l5: float = 100.0,
     l10: float = 90.0,
@@ -71,7 +71,7 @@ def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
     assert len(rows) == 1
     assert rows[0]["player"] == "Player One"
     assert rows[0]["best_book"] == "Hard Rock"
-    assert rows[0]["best_odds"] == -250
+    assert rows[0]["best_odds"] == -600
     assert rows[0]["l5_pct"] == 100.0
     assert rows[0]["l10_pct"] == 90.0
 

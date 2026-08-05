@@ -28,8 +28,8 @@ The script structures the output into two pipelines:
 - `Desk1_Automated/`: four specialized master prompts (HitRate prompts are intentionally not generated — dropped pending a redesign):
   - `1_Master_Cards_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates.
   - `2_Master_Totals_pack_YYYY-MM-DD.txt`: Game Totals and Team Totals ONLY (Alternate Team Totals excluded).
-  - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific alternate game/team bankroll lines (L5=100%, L10>=90%, full-game, Hard Rock, odds -500 through -200) when qualifying rows exist.
-  - `4_Master_Alt_Player_Prop_pack_YYYY-MM-DD.txt`: strict full-game Hard Rock player alternate lines (L5=100%, L10>=90%, odds -500 through -200); omitted when no rows qualify.
+  - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific alternate game/team bankroll lines (L5=100%, L10>=90%, full-game, Hard Rock, odds -1000 through -500) when qualifying rows exist.
+  - `4_Master_Alt_Player_Prop_pack_YYYY-MM-DD.txt`: strict full-game Hard Rock player alternate lines (L5=100%, L10>=90%, odds -1000 through -500); omitted when no rows qualify.
 
   "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low variance, high probability) — the market type differs (game/team total vs. player prop), not the underlying strategy, and their filter thresholds are aligned.
 - `Desk2_Manual/`: The strict sequential phase prompts (`1_PhaseQ...`, `2_PhaseR...`, etc.).

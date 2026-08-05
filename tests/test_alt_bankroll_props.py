@@ -12,7 +12,7 @@ def _game(
     market_type: str = "GAMELINE",
     proposition: str = "MONEYLINE",
     market: str = "MONEYLINE",
-    odds: int = -250,
+    odds: int = -600,
     book: str = "Hard Rock",
     l5: float = 1.0,
     l10: float = 0.9,
@@ -66,7 +66,7 @@ def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
 
     assert {row["event_id"] for row in rows} == {"e1", "team"}
     assert all(row["best_book"] == "Hard Rock" for row in rows)
-    assert all(-500 <= row["best_price"] <= -200 for row in rows)
+    assert all(-1000 <= row["best_price"] <= -500 for row in rows)
     assert all(row["scope"] == "full_game" for row in rows)
 
 
@@ -99,7 +99,7 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         "market": "H",
         "position": "OVER",
         "line": 0.5,
-        "books": [{"book": "Hard Rock", "odds": -250}],
+        "books": [{"book": "Hard Rock", "odds": -600}],
         "l5_pct": 100.0,
         "l10_pct": 90.0,
         "season_pct": 80.0,
