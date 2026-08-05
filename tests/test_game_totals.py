@@ -91,6 +91,43 @@ def test_build_game_totals_actionable_at_three_pct_edge():
     assert row['market_consensus_prob'] == side_probability
     assert row['final_blended_prob'] == side_probability
 
+def _build_totals_fixture():
+    games_norm = {'generated_at': '2026-07-07T12:00:00Z', 'records': [_norm_record('m1', 8.5, 'OVER', [{'book': 'DK', 'odds': -125}, {'book': 'FD', 'odds': -122}]), _norm_record('m1', 8.5, 'UNDER', [{'book': 'DK', 'odds': 105}, {'book': 'FD', 'odds': 102}]), _norm_record('m1', 9.0, 'OVER', [{'book': 'DK', 'odds': 110}, {'book': 'FD', 'odds': 108}]), _norm_record('m1', 9.0, 'UNDER', [{'book': 'DK', 'odds': -130}, {'book': 'FD', 'odds': -128}])]}
+    candidates = [{'market_id': 'm1', 'market_type': 'GAMELINE', 'player_id': '', 'selection': 'A @ B Total O/U OVER 8.5', 'line': 8.5, 'price': -125, 'edge_pct': 0.05, '_proposition': 'TOTAL', '_event_starts_at': '2099-07-07T23:10:00+00:00'}]
+    return candidates, games_norm
+
+def test_build_game_totals_starter_flags_default_empty_without_lookup():
+    candidates, games_norm = _build_totals_fixture()
+    rows = build_game_totals(candidates, games_norm, sport='MLB', now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc))
+    assert rows[0]['starter_flags'] == ''
+
+def test_build_game_totals_flags_unconfirmed_starter_without_touching_actionable():
+    candidates, games_norm = _build_totals_fixture()
+    probable_pitchers = {'B': {'pitcher': None, 'confirmed': False}}
+    rows = build_game_totals(
+        candidates, games_norm, sport='MLB',
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+        probable_pitchers=probable_pitchers,
+    )
+    row = rows[0]
+    assert row['starter_flags'] == 'STARTER_UNCONFIRMED:B'
+    # Purely informational: actionability is driven only by the existing gates.
+    if row['edge_pct'] != '' and float(row['edge_pct']) >= MIN_EDGE_TOTALS:
+        assert row['actionable'] == 'true'
+
+def test_build_game_totals_no_flag_when_both_starters_confirmed():
+    candidates, games_norm = _build_totals_fixture()
+    probable_pitchers = {
+        'A': {'pitcher': 'Pitcher A', 'confirmed': True},
+        'B': {'pitcher': 'Pitcher B', 'confirmed': True},
+    }
+    rows = build_game_totals(
+        candidates, games_norm, sport='MLB',
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+        probable_pitchers=probable_pitchers,
+    )
+    assert rows[0]['starter_flags'] == ''
+
 def test_build_game_totals_single_book_not_actionable():
     games_norm = {'records': [_norm_record('m2', 174.5, 'OVER', [{'book': 'DK', 'odds': -110}]), _norm_record('m2', 174.5, 'UNDER', [{'book': 'DK', 'odds': -110}])]}
     rows = build_game_totals([], games_norm, sport='WNBA')

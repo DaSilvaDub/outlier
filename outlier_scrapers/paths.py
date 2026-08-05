@@ -46,6 +46,9 @@ class LeaguePaths:
     def games_line_movement_latest(self) -> Path:
         return self._latest(self.normalized, "games_line_movement")
 
+    def probable_pitchers_latest(self) -> Path:
+        return self._latest(self.normalized, "probable_pitchers")
+
     def line_movement_latest(self) -> Path:
         return self._latest(self.normalized, "line_movement")
 
