@@ -24,8 +24,8 @@ from outlier_scrapers.utils import (
 
 MIN_AMERICAN_ODDS = -1000
 MAX_AMERICAN_ODDS = -200
-MIN_L5_HIT_PCT = 100.0
-MIN_L10_HIT_PCT = 90.0
+MIN_L5_HIT_PCT = 75.0
+MIN_L10_HIT_PCT = 75.0
 
 ALT_PLAYER_PROPS_HEADER = [
     "league",
@@ -155,7 +155,9 @@ def build_alt_player_props_board(
 
         l5 = percent_number(rec.get("l5_pct"))
         l10 = percent_number(rec.get("l10_pct"))
-        if l5 != MIN_L5_HIT_PCT or l10 is None or not (MIN_L10_HIT_PCT <= l10 <= 100.0):
+        if l5 is None or l10 is None:
+            continue
+        if not (MIN_L5_HIT_PCT <= l5 <= 100.0) or not (MIN_L10_HIT_PCT <= l10 <= 100.0):
             continue
         player = str(rec.get("player") or rec.get("player_raw") or "").strip()
         if not player:
@@ -275,7 +277,7 @@ def format_alt_player_props_md(
     lines = [
         "## Alt Player Props (Bankroll Builders)",
         "",
-        "Full-game Hard Rock lines from -1000 to -200 with L5=100% and L10>=90%.",
+        "Full-game Hard Rock lines from -1000 to -200 with L5>=75% and L10>=75%.",
         "Limited to the highest-probability four diverse props per game.",
         "",
     ]

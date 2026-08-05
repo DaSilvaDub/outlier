@@ -59,8 +59,8 @@ def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
             _game(event_id="bad-market", market_type="TEAM_PROP", proposition="RBI", market="RBI"),
             _game(event_id="bad-price", odds=-110),
             _game(event_id="bad-book", book="FanDuel"),
-            _game(event_id="bad-l5", l5=0.8),
-            _game(event_id="bad-l10", l10=0.8),
+            _game(event_id="bad-l5", l5=0.7),
+            _game(event_id="bad-l10", l10=0.7),
         ]
     )
 
@@ -91,6 +91,19 @@ def test_bankroll_board_accepts_full_inclusive_odds_window():
         "min-boundary",
         "max-boundary",
     }
+
+
+def test_bankroll_board_enforces_75_pct_hit_rate_floor():
+    """L5 and L10 floors were loosened from 100%/90% to a >=75% floor on both."""
+    rows = _board(
+        [
+            _game(event_id="min-boundary", l5=0.75, l10=0.75),
+            _game(event_id="below-l5", l5=0.74, l10=0.9),
+            _game(event_id="below-l10", l5=1.0, l10=0.74),
+        ]
+    )
+
+    assert {row["event_id"] for row in rows} == {"min-boundary"}
 
 
 def test_bankroll_game_total_combines_home_and_away_windows():

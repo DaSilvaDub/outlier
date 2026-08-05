@@ -59,8 +59,8 @@ def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
         [
             valid,
             _prop(player="Bad Price", odds=-110),
-            _prop(player="Bad L5", l5=80.0),
-            _prop(player="Bad L10", l10=89.0),
+            _prop(player="Bad L5", l5=70.0),
+            _prop(player="Bad L10", l10=70.0),
             _prop(player="Wrong Book", book="FanDuel"),
             _prop(player="Similar Book", book="Hardrock R"),
             _prop(player="Partial", scope="first_inning"),
@@ -74,6 +74,19 @@ def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
     assert rows[0]["best_odds"] == -600
     assert rows[0]["l5_pct"] == 100.0
     assert rows[0]["l10_pct"] == 90.0
+
+
+def test_player_board_enforces_75_pct_hit_rate_floor():
+    """L5 and L10 floors were loosened from 100%/90% to a >=75% floor on both."""
+    rows = _board(
+        [
+            _prop(player="Min Boundary", l5=75.0, l10=75.0),
+            _prop(player="Below L5", l5=74.0, l10=90.0),
+            _prop(player="Below L10", l5=100.0, l10=74.0),
+        ]
+    )
+
+    assert {row["player"] for row in rows} == {"Min Boundary"}
 
 
 def test_player_board_accepts_full_inclusive_odds_window():
