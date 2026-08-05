@@ -66,8 +66,31 @@ def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
 
     assert {row["event_id"] for row in rows} == {"e1", "team"}
     assert all(row["best_book"] == "Hard Rock" for row in rows)
-    assert all(-1000 <= row["best_price"] <= -500 for row in rows)
+    assert all(-1000 <= row["best_price"] <= -200 for row in rows)
     assert all(row["scope"] == "full_game" for row in rows)
+
+
+def test_bankroll_board_accepts_full_inclusive_odds_window():
+    """The odds window widened from [-500, -200] to [-1000, -200] — both the
+    moderate-favorite band that already qualified and the new heavy-favorite
+    band down to -1000 must be accepted, inclusive of both boundaries."""
+    rows = _board(
+        [
+            _game(event_id="moderate-favorite", odds=-250),
+            _game(event_id="heavy-favorite", odds=-900),
+            _game(event_id="min-boundary", odds=-1000),
+            _game(event_id="max-boundary", odds=-200),
+            _game(event_id="too-extreme", odds=-1001),
+            _game(event_id="too-weak", odds=-199),
+        ]
+    )
+
+    assert {row["event_id"] for row in rows} == {
+        "moderate-favorite",
+        "heavy-favorite",
+        "min-boundary",
+        "max-boundary",
+    }
 
 
 def test_bankroll_game_total_combines_home_and_away_windows():

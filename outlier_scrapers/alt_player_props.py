@@ -23,7 +23,7 @@ from outlier_scrapers.utils import (
 )
 
 MIN_AMERICAN_ODDS = -1000
-MAX_AMERICAN_ODDS = -500
+MAX_AMERICAN_ODDS = -200
 MIN_L5_HIT_PCT = 100.0
 MIN_L10_HIT_PCT = 90.0
 
@@ -275,7 +275,7 @@ def format_alt_player_props_md(
     lines = [
         "## Alt Player Props (Bankroll Builders)",
         "",
-        "Full-game Hard Rock lines from -1000 to -500 with L5=100% and L10>=90%.",
+        "Full-game Hard Rock lines from -1000 to -200 with L5=100% and L10>=90%.",
         "Limited to the highest-probability four diverse props per game.",
         "",
     ]

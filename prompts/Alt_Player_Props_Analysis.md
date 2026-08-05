@@ -33,7 +33,7 @@ When data or signals conflict, follow this hierarchy:
 ## 3. Data Integrity & Valid Markets
 
 ### 3.1 Provided Data
-The attached CSV data contains the allowed alternate lines. These have already been filtered for full-game scope, Hard Rock availability, exactly 100% L5, at least 90% L10, and odds between -1000 and -500.
+The attached CSV data contains the allowed alternate lines. These have already been filtered for full-game scope, Hard Rock availability, exactly 100% L5, at least 90% L10, and odds between -1000 and -200.
 DO NOT recommend any props that are not explicitly present in the provided Alternate Player Props data.
 
 ### 3.2 Side Logic Verification
@@ -98,7 +98,7 @@ Before outputting, verify:
 * Every recommended prop comes directly from the supplied data.
 * No more than 4 legs are chosen, and a short slate is reported without invented fill-ins.
 * No prop line, selection, or player name was invented or altered.
-* Every prop is a full-game Hard Rock line in the -1000 through -500 range with L5=100% and L10>=90%.
+* Every prop is a full-game Hard Rock line in the -1000 through -200 range with L5=100% and L10>=90%.
 * Matchup quality and role stability were explicitly evaluated for the chosen legs.
 
 Now analyze the supplied Alternate Player Props data below.

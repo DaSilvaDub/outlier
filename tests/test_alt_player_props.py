@@ -76,6 +76,29 @@ def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
     assert rows[0]["l10_pct"] == 90.0
 
 
+def test_player_board_accepts_full_inclusive_odds_window():
+    """The odds window widened from [-500, -200] to [-1000, -200] — both the
+    moderate-favorite band that already qualified and the new heavy-favorite
+    band down to -1000 must be accepted, inclusive of both boundaries."""
+    rows = _board(
+        [
+            _prop(player="Moderate Favorite", odds=-250),
+            _prop(player="Heavy Favorite", odds=-900),
+            _prop(player="Min Boundary", odds=-1000),
+            _prop(player="Max Boundary", odds=-200),
+            _prop(player="Too Extreme", odds=-1001),
+            _prop(player="Too Weak", odds=-199),
+        ]
+    )
+
+    assert {row["player"] for row in rows} == {
+        "Moderate Favorite",
+        "Heavy Favorite",
+        "Min Boundary",
+        "Max Boundary",
+    }
+
+
 def test_player_board_enforces_mlb_doubles_under_and_wnba_targets():
     mlb_rows = _board(
         [
