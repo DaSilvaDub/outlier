@@ -158,89 +158,6 @@ def csv_has_data_rows(csv_text: str) -> bool:
     return next(csv.DictReader(io.StringIO(csv_text)), None) is not None
 
 
-def get_hitrate_data_buckets(allow_matchups: frozenset[str] | None = None) -> dict[str, str]:
-    """Extract and format 3 specialized hit rate prop datasets across leagues."""
-    repo_root = Path(__file__).resolve().parents[4]
-    scripts_dir = repo_root / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    try:
-        import json
-        from filter_perfect_hit_props import FilterOptions, filter_rows
-
-        data_dirs = [repo_root / "data", Path(r"C:\Users\dasil\OneDrive\Documents\outlier\data")]
-        b1_all3: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
-        b2_l10_l5: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
-        b3_l5_thresh: dict[str, list[dict]] = {"MLB": [], "WNBA": []}
-
-        for league in ["MLB", "WNBA"]:
-            for d in data_dirs:
-                if not d.exists():
-                    continue
-                cards_file = d / league / "cards" / f"{league.lower()}_cards_latest.json"
-                if not cards_file.exists():
-                    continue
-                try:
-                    with open(cards_file, "r", encoding="utf-8") as cf:
-                        cards_data = json.load(cf)
-                except Exception:
-                    continue
-
-                r1, r2, r3 = [], [], []
-                for board in ["board_a", "board_b"]:
-                    for card in cards_data.get(board) or []:
-                        sides = card.get("sides") or {}
-                        for _sk, sv in sides.items():
-                            hr = sv.get("hit_rates") or {}
-                            l5 = hr.get("l5_pct", 0.0) or 0.0
-                            l10 = hr.get("l10_pct", 0.0) or 0.0
-                            l20 = hr.get("l20_pct", 0.0) or 0.0
-                            row = {
-                                "player": card.get("player") or "",
-                                "market_label": card.get("market_label") or "",
-                                "side": sv.get("side") or "",
-                                "line": sv.get("line") or "",
-                                "team": card.get("team") or "",
-                                "matchup": card.get("matchup") or "",
-                            }
-                            if l5 == 100.0 and l10 == 100.0 and l20 == 100.0:
-                                r1.append(row)
-                            if l5 == 100.0 and l10 == 100.0:
-                                r2.append(row)
-                            if l5 == 100.0 and l10 >= 90.0 and l20 >= 70.0:
-                                r3.append(row)
-
-                opts = FilterOptions(allow_matchups=allow_matchups)
-                k1, _, _ = filter_rows(r1, opts)
-                k2, _, _ = filter_rows(r2, opts)
-                k3, _, _ = filter_rows(r3, opts)
-                b1_all3[league] = k1
-                b2_l10_l5[league] = k2
-                b3_l5_thresh[league] = k3
-                break
-
-        def _format_bucket(b_dict: dict[str, list[dict]], title_suffix: str) -> str:
-            output = []
-            headers = ["player", "market_label", "side", "line", "team", "matchup"]
-            for lg in ["MLB", "WNBA"]:
-                output.append(f"#### {lg} {title_suffix}")
-                f_out = io.StringIO()
-                w = csv.DictWriter(f_out, fieldnames=headers, extrasaction="ignore")
-                w.writeheader()
-                w.writerows(b_dict.get(lg) or [])
-                output.append("```csv\n" + f_out.getvalue() + "```\n")
-            return "\n".join(output)
-
-        return {
-            "all3": _format_bucket(b1_all3, "100% Hit Rate Props (All 3: Last 5, Last 10, Last 20)"),
-            "l10_l5": _format_bucket(b2_l10_l5, "100% Hit Rate Props (Last 10 & Last 5)"),
-            "l5_thresh": _format_bucket(b3_l5_thresh, "100% Hit Rate Props (Last 5 = 100%, Last 10 >= 90%, Last 20 >= 70%)"),
-        }
-    except Exception as exc:
-        err_msg = f"Error extracting hit rate props data: {exc}"
-        return {"all3": err_msg, "l10_l5": err_msg, "l5_thresh": err_msg}
-
-
 def load_prompt_template(filename: str) -> str:
     """Read a prompt template from prompts directory, falling back to A.md if missing."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -283,7 +200,6 @@ def generate_for_dir(
     briefing: str,
     candidates: str,
     totals_data: tuple[str, str, str],
-    hitrate_buckets: dict[str, str],
     alt_props_data: tuple[str, str],
     bankroll_data: tuple[str, str],
     no_clean: bool,
@@ -308,15 +224,11 @@ def generate_for_dir(
     desk1_dir.mkdir(parents=True, exist_ok=True)
     desk2_dir.mkdir(parents=True, exist_ok=True)
 
-    # Master Prompts for Data Types (Cards, HitRate, Totals)
+    # Master Prompts for Data Types (Cards, Totals, Alt Total, Alt Player Prop).
+    # HitRate prompts are intentionally not generated — dropped pending a redesign.
     cards_template = load_prompt_template("A.md")
     cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
     full_cards_prompt = f"{cards_template}\n\n### Pack Data\n{briefing}\n\n### 2+ Unit Candidates Data\n```csv\n{cards_2unit}\n```\n"
-
-    hitrate_template = load_prompt_template("HitRate_Props_Analysis.md")
-    full_hitrate_all3 = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Hit Rate Props Data\n{hitrate_buckets.get('all3', '')}\n"
-    full_hitrate_l10_l5 = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Hit Rate Props Data\n{hitrate_buckets.get('l10_l5', '')}\n"
-    full_hitrate_l5_thresh = f"{hitrate_template}\n\n### Pack Data\n{briefing}\n\n### Hit Rate Props Data\n{hitrate_buckets.get('l5_thresh', '')}\n"
 
     totals_template = load_prompt_template("Totals_Analysis.md")
     game_totals, team_totals, _alt_team_totals = totals_data
@@ -335,24 +247,27 @@ def generate_for_dir(
     )
 
     safe_write_text(desk1_dir / f"1_Master_Cards_pack_{date_str}.txt", full_cards_prompt)
-    safe_write_text(desk1_dir / f"2a_Master_HitRate_100_All3_pack_{date_str}.txt", full_hitrate_all3)
-    safe_write_text(desk1_dir / f"2b_Master_HitRate_100_L10_L5_pack_{date_str}.txt", full_hitrate_l10_l5)
-    safe_write_text(desk1_dir / f"2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_{date_str}.txt", full_hitrate_l5_thresh)
-    safe_write_text(desk1_dir / f"3_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
-    if csv_has_data_rows(alt_player_props):
-        safe_write_text(
-            desk1_dir / f"4_Master_Alt_Player_Props_pack_{date_str}.txt",
-            full_alt_props_prompt,
-        )
+    safe_write_text(desk1_dir / f"2_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
 
+    # "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low
+    # variance, high probability) — the market type differs (game/team total
+    # vs. player prop), not the underlying strategy. Both templates already
+    # describe themselves as bankroll parlays; only the market-type label
+    # differs in the output filename.
     bankroll_template = load_prompt_template("Alt_Bankroll_Props_Analysis.md")
     mlb_bankroll, wnba_bankroll = bankroll_data
     if csv_has_data_rows(mlb_bankroll):
         full_mlb_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
-        safe_write_text(desk1_dir / f"5_Master_Alt_Bankroll_MLB_pack_{date_str}.txt", full_mlb_bankroll)
+        safe_write_text(desk1_dir / f"3_Master_Alt_Total_MLB_pack_{date_str}.txt", full_mlb_bankroll)
     if csv_has_data_rows(wnba_bankroll):
         full_wnba_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (WNBA)\n```csv\n{wnba_bankroll}\n```\n"
-        safe_write_text(desk1_dir / f"5_Master_Alt_Bankroll_WNBA_pack_{date_str}.txt", full_wnba_bankroll)
+        safe_write_text(desk1_dir / f"3_Master_Alt_Total_WNBA_pack_{date_str}.txt", full_wnba_bankroll)
+
+    if csv_has_data_rows(alt_player_props):
+        safe_write_text(
+            desk1_dir / f"4_Master_Alt_Player_Prop_pack_{date_str}.txt",
+            full_alt_props_prompt,
+        )
 
     # Desk 2 - Manual Sequence (Phase-specific prompts)
     desk2_order_map = {
@@ -409,7 +324,6 @@ def find_all_pack_dirs(pack_root: Path | None = None) -> list[Path]:
 
 
 def main() -> None:
-    repo_root = Path(__file__).resolve().parents[4]
     parser = argparse.ArgumentParser(description="Generate prompt files from Outlier packs")
     parser.add_argument(
         "--out-dir",
@@ -472,22 +386,8 @@ def main() -> None:
     wnba_bankroll = wnba_bp_path.read_text(encoding="utf-8") if wnba_bp_path.exists() else ""
     bankroll_data = (mlb_bankroll, wnba_bankroll)
 
-    # Build slate allowlist from candidates + dossiers to enforce today's slate games only
-    scripts_dir = repo_root / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    dossiers_dir = latest_pack / "dossiers"
-    from filter_perfect_hit_props import allowlist_from_candidates_csv, allowlist_from_dossiers_dir
-    allow_set = set()
-    allow_set |= allowlist_from_candidates_csv(candidates_path)
-    allow_set |= allowlist_from_dossiers_dir(dossiers_dir if dossiers_dir.is_dir() else None)
-    allow_matchups = frozenset(allow_set) if allow_set else None
-
-    # Extract HitRate buckets data (filtered to today's active slate matchups)
-    hitrate_buckets = get_hitrate_data_buckets(allow_matchups=allow_matchups)
-
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, hitrate_buckets, alt_props_data, bankroll_data, args.no_clean)
+        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, alt_props_data, bankroll_data, args.no_clean)
 
 
 

@@ -34,22 +34,21 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
         "briefing",
         "board,recommended_units_pre_news\nA,3.0\n",
         ("sport,event_id\nMLB,e1\n", "sport,event_id\nMLB,e1\n", ""),
-        {"all3": "", "l10_l5": "", "l5_thresh": ""},
         ("league,event_id\nMLB,e1\n", ""),
         ("league,event_id\nMLB,e1\n", ""),
         False,
     )
 
     desk1 = out_dir / "prompts" / "Desk1_Automated"
-    totals = desk1 / "3_Master_Totals_pack_2099-12-31.txt"
-    bankroll = desk1 / "5_Master_Alt_Bankroll_MLB_pack_2099-12-31.txt"
-    alt_player = desk1 / "4_Master_Alt_Player_Props_pack_2099-12-31.txt"
+    totals = desk1 / "2_Master_Totals_pack_2099-12-31.txt"
+    alt_total = desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt"
+    alt_player = desk1 / "4_Master_Alt_Player_Prop_pack_2099-12-31.txt"
     assert totals.exists()
     assert "### Game Totals Data" in totals.read_text(encoding="utf-8")
-    assert not list(desk1.glob("3_Master_Totals_MLB_*.txt"))
-    assert bankroll.exists()
+    assert not list(desk1.glob("2_Master_Totals_MLB_*.txt"))
+    assert alt_total.exists()
     assert alt_player.exists()
-    assert "### Bankroll Alt Props Data (MLB)" in bankroll.read_text(encoding="utf-8")
+    assert "### Bankroll Alt Props Data (MLB)" in alt_total.read_text(encoding="utf-8")
 
 
 def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
@@ -90,7 +89,6 @@ def test_master_cards_prompt_labels_two_plus_unit_candidates(tmp_path):
         "briefing",
         candidates,
         ("", "", ""),
-        {"all3": "", "l10_l5": "", "l5_thresh": ""},
         ("", ""),
         ("", ""),
         False,
@@ -116,15 +114,35 @@ def test_generate_for_dir_omits_header_only_alt_prompts(tmp_path):
         "briefing",
         "board,recommended_units_pre_news\nA,3.0\n",
         ("", "", ""),
-        {"all3": "", "l10_l5": "", "l5_thresh": ""},
         ("league,event_id\n", "league,event_id\n"),
         ("league,event_id\n", "league,event_id\n"),
         False,
     )
 
     desk1 = out_dir / "prompts" / "Desk1_Automated"
-    assert not (desk1 / "4_Master_Alt_Player_Props_pack_2099-12-31.txt").exists()
-    assert not list(desk1.glob("5_Master_Alt_Bankroll_*_pack_2099-12-31.txt"))
+    assert not (desk1 / "4_Master_Alt_Player_Prop_pack_2099-12-31.txt").exists()
+    assert not list(desk1.glob("3_Master_Alt_Total_*_pack_2099-12-31.txt"))
+
+
+def test_generate_for_dir_no_longer_writes_hitrate_prompts(tmp_path):
+    """HitRate prompts were intentionally dropped pending a redesign."""
+    module = _load_module()
+    assert not hasattr(module, "get_hitrate_data_buckets")
+
+    out_dir = tmp_path / "today"
+    module.generate_for_dir(
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        "board,recommended_units_pre_news\nA,3.0\n",
+        ("", "", ""),
+        ("", ""),
+        ("", ""),
+        False,
+    )
+
+    desk1 = out_dir / "prompts" / "Desk1_Automated"
+    assert not list(desk1.glob("*Master_HitRate*"))
 
 
 def test_find_all_pack_dirs_is_scoped_to_canonical_root(tmp_path):

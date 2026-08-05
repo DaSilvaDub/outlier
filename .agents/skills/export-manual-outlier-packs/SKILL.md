@@ -25,14 +25,13 @@ Run the provided helper script to automatically clean the target directories and
 By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` and `G:\My Drive\today\prompts` (pass `--out-dir` one or more times to override). 
 
 The script structures the output into two pipelines:
-- `Desk1_Automated/`: Eight specialized master prompts when both leagues have qualifying bankroll rows:
+- `Desk1_Automated/`: four specialized master prompts (HitRate prompts are intentionally not generated — dropped pending a redesign):
   - `1_Master_Cards_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates.
-  - `2a_Master_HitRate_100_All3_pack_YYYY-MM-DD.txt`: 100% Hit Rate across All 3 windows (Last 5 = 100%, Last 10 = 100%, Last 20 = 100%).
-  - `2b_Master_HitRate_100_L10_L5_pack_YYYY-MM-DD.txt`: 100% Hit Rate across Last 5 & Last 10 (Last 5 = 100%, Last 10 = 100%).
-  - `2c_Master_HitRate_100_L5_Min90L10_Min70L20_pack_YYYY-MM-DD.txt`: 100% Hit Rate for Last 5, Min 90% in Last 10, Min 70% in Last 20.
-  - `3_Master_Totals_pack_YYYY-MM-DD.txt`: Game Totals and Team Totals ONLY (Alternate Team Totals excluded).
-  - `4_Master_Alt_Player_Props_pack_YYYY-MM-DD.txt`: Strict full-game Hard Rock player alternate lines (L5=100%, L10>=90%, odds -500 through -200); omitted when no rows qualify.
-  - `5_Master_Alt_Bankroll_MLB_pack_YYYY-MM-DD.txt` and `5_Master_Alt_Bankroll_WNBA_pack_YYYY-MM-DD.txt`: Strict league-specific alternate game/team bankroll lines when qualifying rows exist.
+  - `2_Master_Totals_pack_YYYY-MM-DD.txt`: Game Totals and Team Totals ONLY (Alternate Team Totals excluded).
+  - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific alternate game/team bankroll lines (L5=100%, L10>=90%, full-game, Hard Rock, odds -500 through -200) when qualifying rows exist.
+  - `4_Master_Alt_Player_Prop_pack_YYYY-MM-DD.txt`: strict full-game Hard Rock player alternate lines (L5=100%, L10>=90%, odds -500 through -200); omitted when no rows qualify.
+
+  "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low variance, high probability) — the market type differs (game/team total vs. player prop), not the underlying strategy, and their filter thresholds are aligned.
 - `Desk2_Manual/`: The strict sequential phase prompts (`1_PhaseQ...`, `2_PhaseR...`, etc.).
 
 Each run archives old pack files into an `archive/` subfolder.
