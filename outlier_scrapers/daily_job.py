@@ -105,6 +105,7 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
             ("--props", "props"),
             ("--insights", "insights"),
             ("--games", "games"),
+            ("--probable-pitchers", "probable pitchers"),
             ("--line-movement", "props line-movement"),
             ("--game-line-movement", "game line-movement"),
             ("--cards", "cards"),

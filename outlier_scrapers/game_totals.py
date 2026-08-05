@@ -124,6 +124,7 @@ GAME_TOTALS_HEADER = [
     "public_money_pct",
     "money_pct",
     "injury_flags",
+    "starter_flags",
     "research_leverage",
     "scope",
     "as_of",
@@ -499,6 +500,47 @@ def _resolve_candidate(
     return {}
 
 
+def _teams_from_matchup(matchup: str) -> tuple[str, str]:
+    """Split an ``"AWAY @ HOME"`` matchup string into its two team codes."""
+    parts = [p.strip() for p in str(matchup or "").split("@")]
+    if len(parts) != 2:
+        return "", ""
+    return parts[0], parts[1]
+
+
+def _starter_flags_for_row(
+    *,
+    kind: str,
+    team: str,
+    matchup: str,
+    probable_pitchers: dict[str, dict[str, Any]] | None,
+) -> str:
+    """Return comma-joined ``STARTER_UNCONFIRMED:<TEAM>`` tokens for any side of
+    this total whose probable starting pitcher is not yet confirmed.
+
+    Purely informational — it is not folded into ``quality_flags`` and never
+    affects ``actionable``, so it doesn't change existing sizing/gating
+    behavior. It exists so a reasoning pass can read starter-confirmation
+    status directly from the pack instead of re-researching it per game.
+    Returns "" when no probable-pitchers lookup was supplied (e.g. league has
+    no such source, or the scraper hasn't run yet) — absence of data is never
+    treated as "unconfirmed".
+    """
+    if not probable_pitchers:
+        return ""
+    teams = (team,) if kind == TOTAL_KIND_TEAM else _teams_from_matchup(matchup)
+    tokens: list[str] = []
+    for code in teams:
+        if not code:
+            continue
+        entry = probable_pitchers.get(code)
+        if entry is None:
+            continue
+        if not entry.get("confirmed"):
+            tokens.append(f"STARTER_UNCONFIRMED:{code}")
+    return ",".join(dict.fromkeys(tokens))
+
+
 def build_totals(
     candidate_rows: list[dict[str, Any]],
     games_norm: dict[str, Any] | None,
@@ -506,6 +548,7 @@ def build_totals(
     sport: str,
     kind: str,
     now: datetime | None = None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for one totals stream (game or team)."""
     if kind not in (TOTAL_KIND_GAME, TOTAL_KIND_TEAM):
@@ -802,6 +845,9 @@ def build_totals(
                 "public_money_pct": cand.get("public_money_pct") or "",
                 "money_pct": cand.get("money_pct") or "",
                 "injury_flags": cand.get("injury_flags") or "",
+                "starter_flags": _starter_flags_for_row(
+                    kind=kind, team=team, matchup=matchup, probable_pitchers=probable_pitchers
+                ),
                 "research_leverage": cand.get("research_leverage")
                 or _research_leverage(prop, scope, sport),
                 "scope": scope,
@@ -823,10 +869,16 @@ def build_game_totals(
     *,
     sport: str,
     now: datetime | None = None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for game totals only (GAMELINE / TOTAL)."""
     return build_totals(
-        candidate_rows, games_norm, sport=sport, kind=TOTAL_KIND_GAME, now=now
+        candidate_rows,
+        games_norm,
+        sport=sport,
+        kind=TOTAL_KIND_GAME,
+        now=now,
+        probable_pitchers=probable_pitchers,
     )
 
 
@@ -836,10 +888,16 @@ def build_team_totals(
     *,
     sport: str,
     now: datetime | None = None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for sport-aware full-game TEAM_PROP totals."""
     return build_totals(
-        candidate_rows, games_norm, sport=sport, kind=TOTAL_KIND_TEAM, now=now
+        candidate_rows,
+        games_norm,
+        sport=sport,
+        kind=TOTAL_KIND_TEAM,
+        now=now,
+        probable_pitchers=probable_pitchers,
     )
 
 

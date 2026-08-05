@@ -1527,13 +1527,19 @@ def write_pack(
         project_risk_identity, collapse_duplicate_outcomes, unify_and_dedup_streams,
         allocate_portfolio_risk, load_portfolio_policy, policy_fingerprint
     )
+    from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
     import subprocess
 
     totals_rows: list[dict[str, Any]] = []
     team_totals_rows: list[dict[str, Any]] = []
     for lg, payload in (games_norm_by_league or {}).items():
-        totals_rows.extend(build_game_totals(rows, payload, sport=lg))
-        team_totals_rows.extend(build_team_totals(rows, payload, sport=lg))
+        probable_pitchers = load_probable_pitcher_lookup(lg)
+        totals_rows.extend(
+            build_game_totals(rows, payload, sport=lg, probable_pitchers=probable_pitchers)
+        )
+        team_totals_rows.extend(
+            build_team_totals(rows, payload, sport=lg, probable_pitchers=probable_pitchers)
+        )
 
     # Filter totals rows to ONLY keep games/teams active on the current target date slate
     slate_eids = {str(r.get("event_id")) for r in rows if r.get("event_id")}
