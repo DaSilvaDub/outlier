@@ -1,5 +1,6 @@
 from outlier_scrapers.paths import PROJECT_ROOT, league_paths
 from outlier_scrapers.registry import (
+    MLB_TEAM_DISPLAY,
     classify_foreign_market,
     get_sport_config,
     normalize_market,
@@ -52,6 +53,24 @@ def test_unknown_team_returns_none_instead_of_passing_through():
 def test_phx_team_alias_resolves_for_wnba():
     # Outlier sends "PHX" for Phoenix; earlier the map only knew "PHO".
     assert normalize_team(get_sport_config("WNBA"), "PHX") == "PHX"
+
+
+def test_all_mlb_teams_resolve_from_their_stats_api_full_name():
+    """Every MLB team's full display name must normalize back to its own code.
+
+    Regression for a real bug: "Cincinnati Reds" (the exact string the MLB
+    Stats API returns for probable-pitcher lookups) had no alias entry, so
+    normalize_team() silently returned None for Cincinnati. That dropped CIN
+    entirely from probable_pitchers.py's by_team lookup and left the
+    Athletics' `opponent` field blank for that game — a reasoning pass had no
+    way to see it had already-confirmed starter data and fell back to
+    external web research instead.
+    """
+    mlb = get_sport_config("MLB")
+    for code, full_name in MLB_TEAM_DISPLAY.items():
+        assert normalize_team(mlb, full_name) == code, (
+            f"{full_name!r} (display name for {code}) failed to normalize back to {code}"
+        )
 
 
 def test_team_display_name_disambiguates_los_angeles_codes():

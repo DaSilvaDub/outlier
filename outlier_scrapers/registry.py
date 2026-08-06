@@ -118,6 +118,7 @@ MLB_TEAM_ALIASES.update(
         "BOSTONREDSOX": "BOS",
         "CHICAGOCUBS": "CHC",
         "CHICAGOWHITESOX": "CWS",
+        "CINCINNATIREDS": "CIN",
         "CLEVELANDGUARDIANS": "CLE",
         "COLORADOROCKIES": "COL",
         "DETROITTIGERS": "DET",
