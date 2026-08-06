@@ -57,6 +57,10 @@ ALT_BANKROLL_PROPS_HEADER = [
     "l10_hits",
     "l10_total",
     "l10_pct",
+    "home_l5_pct",
+    "away_l5_pct",
+    "home_l10_pct",
+    "away_l10_pct",
     "best_book",
     "best_price",
     "decimal_price",
@@ -112,7 +116,17 @@ def _window(
 
 
 def extract_l5_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract exact recent hit rates for the record's team; fail closed."""
+    """Extract exact recent hit rates for the record's team; fail closed.
+
+    A game total depends on both teams' scoring, so each side's own recent
+    rate is tracked separately rather than pooled into one blended figure —
+    pooling can hide a weak team's rate behind a strong partner's (e.g. a
+    90%/70% split pools to a passing 80%, even though the 70% side alone
+    would fail the 75% bar). The reported l5_pct/l10_pct use the WEAKER
+    (minimum) side so the strict gate reflects the shakier team, while
+    home_l5_pct/away_l5_pct/home_l10_pct/away_l10_pct preserve the full
+    per-team breakdown for transparency.
+    """
     raw_stats = rec.get("stats")
     if not isinstance(raw_stats, dict):
         return None
@@ -121,17 +135,38 @@ def extract_l5_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
         and str(rec.get("proposition") or rec.get("market") or "").upper() == "TOTAL"
     )
     if is_game_total:
-        stats = [
-            blob
-            for blob in (
-                raw_stats.get("homeSummaryStat"),
-                raw_stats.get("awaySummaryStat"),
-            )
-            if isinstance(blob, dict)
-        ]
-    else:
-        stat, _flag = _summary_stat_for_team(rec)
-        stats = [stat] if isinstance(stat, dict) else []
+        home_blob = raw_stats.get("homeSummaryStat")
+        away_blob = raw_stats.get("awaySummaryStat")
+        home_stats = [home_blob] if isinstance(home_blob, dict) else []
+        away_stats = [away_blob] if isinstance(away_blob, dict) else []
+        home_hits, home_total, home_l5 = _window(home_stats, "l5")
+        away_hits, away_total, away_l5 = _window(away_stats, "l5")
+        home_l10_hits, home_l10_total, home_l10 = _window(home_stats, "l10")
+        away_l10_hits, away_l10_total, away_l10 = _window(away_stats, "l10")
+        if home_l5 is None or away_l5 is None or home_l10 is None or away_l10 is None:
+            return None
+        if home_l5 <= away_l5:
+            l5_hits, l5_total, l5_pct = home_hits, home_total, home_l5
+        else:
+            l5_hits, l5_total, l5_pct = away_hits, away_total, away_l5
+        if home_l10 <= away_l10:
+            l10_hits, l10_total, l10_pct = home_l10_hits, home_l10_total, home_l10
+        else:
+            l10_hits, l10_total, l10_pct = away_l10_hits, away_l10_total, away_l10
+        return {
+            "l5_pct": l5_pct,
+            "l10_pct": l10_pct,
+            "l5_hits": l5_hits,
+            "l5_total": l5_total,
+            "l10_hits": l10_hits,
+            "l10_total": l10_total,
+            "home_l5_pct": home_l5,
+            "away_l5_pct": away_l5,
+            "home_l10_pct": home_l10,
+            "away_l10_pct": away_l10,
+        }
+    stat, _flag = _summary_stat_for_team(rec)
+    stats = [stat] if isinstance(stat, dict) else []
     if not stats:
         return None
     l5_hits, l5_total, l5_pct = _window(stats, "l5")
@@ -145,6 +180,10 @@ def extract_l5_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
         "l5_total": l5_total,
         "l10_hits": l10_hits,
         "l10_total": l10_total,
+        "home_l5_pct": "",
+        "away_l5_pct": "",
+        "home_l10_pct": "",
+        "away_l10_pct": "",
     }
 
 
@@ -249,6 +288,10 @@ def build_alt_bankroll_board(
                 "l10_hits": l_stats.get("l10_hits"),
                 "l10_total": l_stats.get("l10_total"),
                 "l10_pct": l10_pct,
+                "home_l5_pct": l_stats.get("home_l5_pct", ""),
+                "away_l5_pct": l_stats.get("away_l5_pct", ""),
+                "home_l10_pct": l_stats.get("home_l10_pct", ""),
+                "away_l10_pct": l_stats.get("away_l10_pct", ""),
                 "best_book": best_book,
                 "best_price": best_price if best_price is not None else "",
                 "decimal_price": round(decimal_price, 4) if decimal_price is not None else "",

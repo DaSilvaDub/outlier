@@ -106,7 +106,13 @@ def test_bankroll_board_enforces_75_pct_hit_rate_floor():
     assert {row["event_id"] for row in rows} == {"min-boundary"}
 
 
-def test_bankroll_game_total_combines_home_and_away_windows():
+def test_bankroll_game_total_uses_weaker_team_not_a_blended_average():
+    """A game total depends on both teams; pooling their windows into one
+    average can mask a weak side behind a strong partner (e.g. 90%/70%
+    pools to a passing 80%, hiding that the 70% side alone would fail the
+    75% floor). l5_pct/l10_pct must reflect the WEAKER (minimum) side, and
+    the per-team breakdown must still be exposed via home_l5_pct/away_l5_pct
+    etc. for transparency."""
     total = _game(proposition="TOTAL", market="TOTAL")
     total["position"] = "OVER"
     total["team"] = None
@@ -119,7 +125,28 @@ def test_bankroll_game_total_combines_home_and_away_windows():
 
     assert len(rows) == 1
     assert rows[0]["l5_pct"] == 100.0
-    assert rows[0]["l10_pct"] == 95.0
+    assert rows[0]["l10_pct"] == 90.0
+    assert rows[0]["home_l5_pct"] == 100.0
+    assert rows[0]["away_l5_pct"] == 100.0
+    assert rows[0]["home_l10_pct"] == 90.0
+    assert rows[0]["away_l10_pct"] == 100.0
+
+
+def test_bankroll_game_total_rejected_when_weaker_team_misses_floor():
+    """The exact masking scenario the site surfaced: home 90%, away 70% on
+    L10 pools to a passing 80% average, but the weaker (away) side alone is
+    below the 75% floor and must reject the row."""
+    total = _game(proposition="TOTAL", market="TOTAL")
+    total["position"] = "OVER"
+    total["team"] = None
+    total["stats"] = {
+        "homeSummaryStat": {"l5": 1.0, "l10": 0.9},
+        "awaySummaryStat": {"l5": 1.0, "l10": 0.7},
+    }
+
+    rows = _board([total])
+
+    assert rows == []
 
 
 def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
