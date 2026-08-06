@@ -50,6 +50,56 @@ def _board(records: list[dict]) -> list[dict]:
     )
 
 
+def test_bankroll_board_accepts_widened_book_pool_not_just_hard_rock():
+    """A qualifying line with no Hard Rock offer at all -- but a qualifying
+    price on Fanatics, Midnite, DraftKings, or Novig -- must still surface.
+    Regression for a real gap: several genuinely qualifying alt lines only
+    existed on these other books and were silently dropped when the board
+    was Hard Rock-exclusive."""
+    fanatics_only = _game(event_id="fanatics-only", book="Fanatics", odds=-250)
+    midnite_only = _game(event_id="midnite-only", book="Midnite", odds=-300)
+    draftkings_only = _game(event_id="dk-only", book="DraftKings", odds=-400)
+    novig_only = _game(event_id="novig-only", book="Novig", odds=-500)
+    still_excluded = _game(event_id="fanduel-only", book="FanDuel", odds=-250)
+
+    rows = _board([fanatics_only, midnite_only, draftkings_only, novig_only, still_excluded])
+
+    assert {row["event_id"] for row in rows} == {
+        "fanatics-only",
+        "midnite-only",
+        "dk-only",
+        "novig-only",
+    }
+    by_event = {row["event_id"]: row for row in rows}
+    assert by_event["fanatics-only"]["best_book"] == "Fanatics"
+    assert by_event["midnite-only"]["best_book"] == "Midnite"
+
+
+def test_bankroll_board_picks_best_qualifying_price_across_allowed_books():
+    """When a record has a non-qualifying Hard Rock price (outside -110/-1000)
+    alongside a qualifying price on another allowed book, the qualifying
+    book's price must be picked -- not silently dropped because Hard Rock's
+    own price failed the window."""
+    rec = _game(event_id="mixed", book="Hard Rock", odds=-105)
+    rec["books"] = [
+        {"book": "Hard Rock", "odds": -105},  # outside -110..-1000, must not win
+        {"book": "Fanatics", "odds": -300},  # qualifies, should be picked
+    ]
+
+    rows = _board([rec])
+
+    assert len(rows) == 1
+    assert rows[0]["best_book"] == "Fanatics"
+    assert rows[0]["best_price"] == -300
+
+
+def test_bankroll_board_still_excludes_hardrock_r_as_a_distinct_book():
+    """'Hardrock R' is a distinctly-named book in the raw feed, not a
+    formatting variant of 'Hard Rock' -- must not be silently aliased."""
+    rows = _board([_game(event_id="hardrock-r", book="Hardrock R", odds=-250)])
+    assert rows == []
+
+
 def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
     rows = _board(
         [
@@ -57,7 +107,7 @@ def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
             _game(event_id="team", market_type="TEAM_PROP", proposition="RUNS", market="R"),
             _game(event_id="partial", scope="first_inning", period_label="1I"),
             _game(event_id="bad-market", market_type="TEAM_PROP", proposition="RBI", market="RBI"),
-            _game(event_id="bad-price", odds=-110),
+            _game(event_id="bad-price", odds=-105),
             _game(event_id="bad-book", book="FanDuel"),
             _game(event_id="bad-l5", l5=0.7),
             _game(event_id="bad-l10", l10=0.7),
@@ -66,22 +116,23 @@ def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
 
     assert {row["event_id"] for row in rows} == {"e1", "team"}
     assert all(row["best_book"] == "Hard Rock" for row in rows)
-    assert all(-1000 <= row["best_price"] <= -200 for row in rows)
+    assert all(-1000 <= row["best_price"] <= -110 for row in rows)
     assert all(row["scope"] == "full_game" for row in rows)
 
 
 def test_bankroll_board_accepts_full_inclusive_odds_window():
-    """The odds window widened from [-500, -200] to [-1000, -200] — both the
-    moderate-favorite band that already qualified and the new heavy-favorite
-    band down to -1000 must be accepted, inclusive of both boundaries."""
+    """The odds window is [-1000, -110] — both the moderate-favorite band and
+    the heavy-favorite band down to -1000 must be accepted, inclusive of both
+    boundaries. (Ceiling widened from -200 to -110 so lighter-juice favorites
+    qualify too.)"""
     rows = _board(
         [
             _game(event_id="moderate-favorite", odds=-250),
             _game(event_id="heavy-favorite", odds=-900),
             _game(event_id="min-boundary", odds=-1000),
-            _game(event_id="max-boundary", odds=-200),
+            _game(event_id="max-boundary", odds=-110),
             _game(event_id="too-extreme", odds=-1001),
-            _game(event_id="too-weak", odds=-199),
+            _game(event_id="too-weak", odds=-109),
         ]
     )
 

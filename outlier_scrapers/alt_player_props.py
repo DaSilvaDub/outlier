@@ -2,8 +2,8 @@
 
 Consumes normalized player-prop feeds directly so book-specific prices and
 recent hit rates are not lost through the ranked candidate stream.  The board
-is pregame-only, full-game-only, Hard Rock-only, and restricted to the
-configured high-probability odds band.
+is pregame-only, full-game-only, restricted to Hard Rock/Fanatics/Midnite/
+DraftKings/Novig, and restricted to the configured high-probability odds band.
 """
 
 from __future__ import annotations
@@ -23,9 +23,20 @@ from outlier_scrapers.utils import (
 )
 
 MIN_AMERICAN_ODDS = -1000
-MAX_AMERICAN_ODDS = -200
+MAX_AMERICAN_ODDS = -110
 MIN_L5_HIT_PCT = 75.0
 MIN_L10_HIT_PCT = 75.0
+
+# Book-name variants collapse to these compact keys via "".join(alnum chars).lower().
+# Hard Rock alone excluded many qualifying alt lines it simply doesn't carry
+# but that Fanatics/Midnite/DraftKings/Novig do -- widened to these five so a
+# real opportunity isn't missed just because one specific book skipped it.
+# "Hardrock R" is deliberately NOT an alias here: it's a distinctly-named
+# book in the raw feed, not a formatting variant of "Hard Rock" -- treating
+# similarly-named books as identical would risk misattributing a price.
+ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset(
+    {"hardrock", "fanatics", "midnite", "draftkings", "novig"}
+)
 
 ALT_PLAYER_PROPS_HEADER = [
     "league",
@@ -76,18 +87,31 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def _hard_rock_offer(rec: dict[str, Any]) -> tuple[str, int | float] | None:
-    """Return the canonical Hard Rock offer, excluding similarly named books."""
+def _best_allowed_offer(rec: dict[str, Any]) -> tuple[str, int | float] | None:
+    """Best (highest / least-negative) price among the allowed sportsbooks.
+
+    Only considers offers that already fall within [MIN_AMERICAN_ODDS,
+    MAX_AMERICAN_ODDS] -- picking the numerically-best price across all
+    allowed books first and checking the window after could pick a
+    non-qualifying book's price over a different book's qualifying one for
+    the same row, silently dropping a real opportunity.
+    """
+    best: tuple[str, float] | None = None
     for offer in rec.get("books") or []:
-        book = str(offer.get("book") or offer.get("book_raw") or "").strip()
-        if "".join(ch for ch in book.lower() if ch.isalnum()) != "hardrock":
+        book_raw = str(offer.get("book") or offer.get("book_raw") or "").strip()
+        compact = "".join(ch for ch in book_raw.lower() if ch.isalnum())
+        if compact not in ALT_PLAYER_PROPS_ALLOWED_BOOKS:
             continue
         price = _number(offer.get("odds") if offer.get("odds") is not None else offer.get("odds_raw"))
-        if price is None:
-            return None
-        normalized_price: int | float = int(price) if price.is_integer() else price
-        return "Hard Rock", normalized_price
-    return None
+        if price is None or not (MIN_AMERICAN_ODDS <= price <= MAX_AMERICAN_ODDS):
+            continue
+        display_book = "Hard Rock" if compact == "hardrock" else book_raw
+        if best is None or price > best[1]:
+            best = (display_book, price)
+    if best is None:
+        return None
+    book, price = best
+    return book, int(price) if price.is_integer() else price
 
 
 def _event_started(rec: dict[str, Any], now: datetime) -> bool:
@@ -145,13 +169,10 @@ def build_alt_player_props_board(
         if not _is_allowed_side(token, market, position):
             continue
 
-        offer = _hard_rock_offer(rec)
+        offer = _best_allowed_offer(rec)
         if offer is None:
             continue
         best_book, best_odds = offer
-        odds_value = float(best_odds)
-        if not (MIN_AMERICAN_ODDS <= odds_value <= MAX_AMERICAN_ODDS):
-            continue
 
         l5 = percent_number(rec.get("l5_pct"))
         l10 = percent_number(rec.get("l10_pct"))
@@ -277,7 +298,7 @@ def format_alt_player_props_md(
     lines = [
         "## Alt Player Props (Bankroll Builders)",
         "",
-        "Full-game Hard Rock lines from -1000 to -200 with L5>=75% and L10>=75%.",
+        "Full-game Hard Rock/Fanatics/Midnite/DraftKings/Novig lines from -1000 to -110 with L5>=75% and L10>=75%.",
         "Limited to the highest-probability four diverse props per game.",
         "",
     ]
@@ -293,7 +314,7 @@ def format_alt_player_props_md(
         for row in event_rows:
             lines.append(
                 f"- **{row['player']}** ({row['position'][:1]} {row['line']} {row['market']}) "
-                f"at {_price_text(row['best_odds'])} Hard Rock "
+                f"at {_price_text(row['best_odds'])} {row['best_book']} "
                 f"[L5: {row['l5_pct']:.0f}% | L10: {row['l10_pct']:.0f}% | "
                 f"SZN: {row['season_pct']:.0f}%]"
             )

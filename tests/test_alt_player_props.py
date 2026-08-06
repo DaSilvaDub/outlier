@@ -53,12 +53,56 @@ def _board(records: list[dict], *, league: str = "MLB") -> list[dict]:
     )
 
 
+def test_player_board_accepts_widened_book_pool_not_just_hard_rock():
+    """A qualifying prop with no Hard Rock offer at all -- but a qualifying
+    price on Fanatics, Midnite, DraftKings, or Novig -- must still surface.
+    Regression for a real gap: several genuinely qualifying alt player props
+    only existed on these other books and were silently dropped when the
+    board was Hard Rock-exclusive."""
+    rows = _board(
+        [
+            _prop(player="Fanatics Only", book="Fanatics", odds=-250),
+            _prop(player="Midnite Only", book="Midnite", odds=-300),
+            _prop(player="DK Only", book="DraftKings", odds=-400),
+            _prop(player="Novig Only", book="Novig", odds=-500),
+            _prop(player="Still Excluded", book="FanDuel", odds=-250),
+        ]
+    )
+
+    assert {row["player"] for row in rows} == {
+        "Fanatics Only",
+        "Midnite Only",
+        "DK Only",
+        "Novig Only",
+    }
+    by_player = {row["player"]: row for row in rows}
+    assert by_player["Fanatics Only"]["best_book"] == "Fanatics"
+    assert by_player["Midnite Only"]["best_book"] == "Midnite"
+
+
+def test_player_board_picks_best_qualifying_price_across_allowed_books():
+    """A non-qualifying Hard Rock price alongside a qualifying price on
+    another allowed book must not cause the row to be dropped -- the
+    qualifying book's price should be picked instead."""
+    rec = _prop(player="Mixed", book="Hard Rock", odds=-105)
+    rec["books"] = [
+        {"book": "Hard Rock", "odds": -105},  # outside -110..-1000, must not win
+        {"book": "Fanatics", "odds": -300},  # qualifies, should be picked
+    ]
+
+    rows = _board([rec])
+
+    assert len(rows) == 1
+    assert rows[0]["best_book"] == "Fanatics"
+    assert rows[0]["best_odds"] == -300
+
+
 def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
     valid = _prop()
     rows = _board(
         [
             valid,
-            _prop(player="Bad Price", odds=-110),
+            _prop(player="Bad Price", odds=-105),
             _prop(player="Bad L5", l5=70.0),
             _prop(player="Bad L10", l10=70.0),
             _prop(player="Wrong Book", book="FanDuel"),
@@ -90,17 +134,18 @@ def test_player_board_enforces_75_pct_hit_rate_floor():
 
 
 def test_player_board_accepts_full_inclusive_odds_window():
-    """The odds window widened from [-500, -200] to [-1000, -200] — both the
-    moderate-favorite band that already qualified and the new heavy-favorite
-    band down to -1000 must be accepted, inclusive of both boundaries."""
+    """The odds window is [-1000, -110] — both the moderate-favorite band and
+    the heavy-favorite band down to -1000 must be accepted, inclusive of both
+    boundaries. (Ceiling widened from -200 to -110 so lighter-juice favorites
+    qualify too.)"""
     rows = _board(
         [
             _prop(player="Moderate Favorite", odds=-250),
             _prop(player="Heavy Favorite", odds=-900),
             _prop(player="Min Boundary", odds=-1000),
-            _prop(player="Max Boundary", odds=-200),
+            _prop(player="Max Boundary", odds=-110),
             _prop(player="Too Extreme", odds=-1001),
-            _prop(player="Too Weak", odds=-199),
+            _prop(player="Too Weak", odds=-109),
         ]
     )
 
