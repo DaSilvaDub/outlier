@@ -68,7 +68,8 @@ def _spread_identity_is_valid(row: dict[str, Any]) -> bool:
     return bool(expected_team) and team.casefold() == expected_team.casefold()
 
 
-def _spread_rows(bankroll_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_alt_spread_rows(bankroll_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add explicit identity fields to valid spread rows, dropping ambiguous rows."""
     rows: list[dict[str, Any]] = []
     for row in bankroll_rows:
         if not _spread_identity_is_valid(row):
@@ -97,7 +98,7 @@ def build_alt_spreads_board(
         now=now,
         target_date=target_date,
     )
-    return _spread_rows(bankroll_rows)
+    return build_alt_spread_rows(bankroll_rows)
 
 
 def export_alt_spreads_for_league(
