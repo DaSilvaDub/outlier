@@ -3,6 +3,7 @@
 ## Dedicated MLB/WNBA Alt Spreads lane (2026-08-07)
 
 - **Implementation commit**: `015355f` on `feat/alt-spreads-board`
+- **CI portability repair**: `c31ca07` (UTC-stable synthetic slate timestamps for Linux/Windows parity)
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/86
 - **Approved plan**: `adc628a` (`.agent-log/ALT_SPREADS_IMPLEMENTATION_PLAN.md`)
 - **Files**:
