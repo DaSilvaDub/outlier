@@ -9,7 +9,7 @@ from outlier_scrapers.alt_spreads import build_alt_spreads_board
 from outlier_scrapers.pack import write_pack
 
 
-NOW = datetime.fromisoformat("2099-12-31T10:00:00-05:00")
+NOW = datetime.fromisoformat("2099-12-31T10:00:00+00:00")
 
 
 def _spread(
@@ -29,7 +29,7 @@ def _spread(
     return {
         "league": league,
         "event_id": event_id,
-        "event_starts_at": "2099-12-31T20:00:00-05:00",
+        "event_starts_at": "2099-12-31T20:00:00+00:00",
         "market_id": f"m-{event_id}",
         "outcome_id": f"o-{event_id}-{position}",
         "market_type": "GAMELINE",
