@@ -1,5 +1,27 @@
 # Handoff
 
+## Dedicated MLB/WNBA Alt Spreads lane (2026-08-07)
+
+- **Implementation commit**: `015355f` on `feat/alt-spreads-board`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/86
+- **Approved plan**: `adc628a` (`.agent-log/ALT_SPREADS_IMPLEMENTATION_PLAN.md`)
+- **Files**:
+  - New `outlier_scrapers/alt_spreads.py`: thin specialization of `build_alt_bankroll_board()` with exact `GAMELINE/SPREAD`, HOME/AWAY identity, required IDs, finite signed line, `signed_line`, and authoritative `selection`.
+  - `outlier_scrapers/pack.py`: emits `mlb_alt_spreads.csv` and `wnba_alt_spreads.csv` while preserving the existing mixed `*_alt_bankroll_props.csv` artifacts.
+  - New `prompts/Alt_Spreads_Analysis.md` and prompt-generator wiring for conditional `5_Master_Alt_Spread_MLB_*` / `5_Master_Alt_Spread_WNBA_*` outputs.
+  - Alt Total prompt payloads now exclude SPREAD rows only; source mixed bankroll CSVs remain compatible. Missing dedicated CSVs fall back per league to the mixed artifact, while existing header-only files remain authoritative.
+  - New `tests/test_alt_spreads.py`, expanded prompt tests, and synchronized export skill documentation.
+- **Policy preserved**: active pregame full-game only; selected-side stats (no totals weaker-side logic); L5/L10 >=75%; Hard Rock/Fanatics/Midnite/DraftKings/Novig; odds -1000 through -110; `Hardrock R` excluded.
+- **Sign invariant**: positive lines render with explicit `+`, negative lines retain `-`, and prompts forbid sign inversion.
+- **Verification**:
+  - Focused: `34 passed`.
+  - Full suite: `695 passed`.
+  - Ruff: clean on all touched Python files.
+  - MyPy: clean across `outlier_scrapers` plus the touched prompt generator (`45 source files`).
+  - Saved August 6 feed smoke: MLB `183` mixed / `74` spread-only; WNBA `108` mixed / `54` spread-only; both prompt splits and signed selections verified.
+  - Independent reviewer found one partial-pack fallback issue; it was fixed and the re-review returned no findings.
+- **No paid reasoning, new scraper, `daily_job`, or betting-policy changes.**
+
 ## Master Cards split, alt-bankroll data fixes, multi-book widening (2026-08-06)
 
 Claude is running low on usage this session — handing off to Codex to pick up the next task (Alt Spreads, see "Next Steps" below).
