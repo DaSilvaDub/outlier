@@ -5,6 +5,8 @@
 - **Implementation commit**: `015355f` on `feat/alt-spreads-board`
 - **CI portability repair**: `c31ca07` (UTC-stable synthetic slate timestamps for Linux/Windows parity)
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/86
+- **Merged**: PR #86 at `84aa199` on 2026-08-07; all hosted checks passed.
+- **Post-merge review repair**: `5fe92b6` + `e797558` make the legacy mixed-CSV fallback derive mandatory `signed_line` / `selection` fields through the same strict event, market, outcome, side, matchup, team, and finite-line validation as the dedicated lane.
 - **Approved plan**: `adc628a` (`.agent-log/ALT_SPREADS_IMPLEMENTATION_PLAN.md`)
 - **Files**:
   - New `outlier_scrapers/alt_spreads.py`: thin specialization of `build_alt_bankroll_board()` with exact `GAMELINE/SPREAD`, HOME/AWAY identity, required IDs, finite signed line, `signed_line`, and authoritative `selection`.
@@ -21,6 +23,7 @@
   - MyPy: clean across `outlier_scrapers` plus the touched prompt generator (`45 source files`).
   - Saved August 6 feed smoke: MLB `183` mixed / `74` spread-only; WNBA `108` mixed / `54` spread-only; both prompt splits and signed selections verified.
   - Independent reviewer found one partial-pack fallback issue; it was fixed and the re-review returned no findings.
+  - Post-merge fallback repair: focused `26 passed`; full suite `696 passed`; Ruff and MyPy clean.
 - **No paid reasoning, new scraper, `daily_job`, or betting-policy changes.**
 
 ## Master Cards split, alt-bankroll data fixes, multi-book widening (2026-08-06)
