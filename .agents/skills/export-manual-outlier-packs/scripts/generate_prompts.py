@@ -276,6 +276,30 @@ def filter_bankroll_spreads(csv_text: str, *, keep_spreads: bool) -> str:
     return out.getvalue()
 
 
+def build_fallback_spreads(csv_text: str) -> str:
+    """Build identity-complete spread CSV from the legacy mixed bankroll artifact."""
+    spreads = filter_bankroll_spreads(csv_text, keep_spreads=True)
+    if not spreads.strip():
+        return ""
+    reader = csv.DictReader(io.StringIO(spreads))
+    fieldnames = reader.fieldnames or []
+    if not fieldnames:
+        return ""
+    repo_root = Path(__file__).resolve().parents[4]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from outlier_scrapers.alt_spreads import build_alt_spread_rows
+
+    output_fields = [name for name in fieldnames if name not in {"signed_line", "selection"}]
+    output_fields.extend(("signed_line", "selection"))
+    rows = build_alt_spread_rows(list(reader))
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=output_fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def load_prompt_template(filename: str) -> str:
     """Read a prompt template from prompts directory, falling back to A.md if missing."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -415,12 +439,12 @@ def generate_for_dir(
     mlb_spreads = (
         provided_mlb
         if provided_mlb is not None
-        else filter_bankroll_spreads(mlb_bankroll_all, keep_spreads=True)
+        else build_fallback_spreads(mlb_bankroll_all)
     )
     wnba_spreads = (
         provided_wnba
         if provided_wnba is not None
-        else filter_bankroll_spreads(wnba_bankroll_all, keep_spreads=True)
+        else build_fallback_spreads(wnba_bankroll_all)
     )
     for league, spread_csv in (("MLB", mlb_spreads), ("WNBA", wnba_spreads)):
         if not csv_has_data_rows(spread_csv):

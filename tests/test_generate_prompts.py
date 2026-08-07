@@ -250,9 +250,12 @@ def test_generate_for_dir_removes_spreads_from_alt_total_and_uses_fallback_lane(
     module = _load_module()
     out_dir = tmp_path / "today"
     mixed = (
-        "league,event_id,proposition,selection,signed_line\n"
-        "MLB,total,TOTAL,,\n"
-        "MLB,spread,SPREAD,HOME +3.5,+3.5\n"
+        "league,event_id,event_starts_at,matchup,team,market_type,proposition,"
+        "position,market_id,outcome_id,line\n"
+        "MLB,total,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,TOTAL,"
+        "OVER,total-market,total-outcome,8.5\n"
+        "MLB,spread,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        "HOME,spread-market,spread-outcome,3.5\n"
     )
 
     module.generate_for_dir(
@@ -274,9 +277,41 @@ def test_generate_for_dir_removes_spreads_from_alt_total_and_uses_fallback_lane(
     alt_spread = (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").read_text(
         encoding="utf-8"
     )
-    assert "total,TOTAL" in alt_total
-    assert "spread,SPREAD" not in alt_total
-    assert "HOME +3.5,+3.5" in alt_spread
+    assert ",TOTAL,OVER,total-market," in alt_total
+    assert ",SPREAD," not in alt_total
+    assert "signed_line,selection" in alt_spread
+    assert "+3.5,HOME +3.5" in alt_spread
+
+
+def test_build_fallback_spreads_drops_rows_without_unambiguous_identity():
+    module = _load_module()
+    mixed = (
+        "league,event_id,event_starts_at,matchup,team,market_type,proposition,"
+        "position,market_id,outcome_id,line\n"
+        "MLB,valid,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        "HOME,valid-market,valid-outcome,-1.5\n"
+        "MLB,,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        "HOME,market,outcome,3.5\n"
+        "MLB,no-market,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        "HOME,,outcome,3.5\n"
+        "MLB,no-outcome,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        "HOME,market,,3.5\n"
+        "MLB,no-side,2099-12-31T20:00:00Z,AWAY @ HOME,HOME,GAMELINE,SPREAD,"
+        ",market,outcome,3.5\n"
+        "MLB,mismatch,2099-12-31T20:00:00Z,AWAY @ HOME,AWAY,GAMELINE,SPREAD,"
+        "HOME,market,outcome,3.5\n"
+        "MLB,bad-line,2099-12-31T20:00:00Z,AWAY @ HOME,AWAY,GAMELINE,SPREAD,"
+        "AWAY,market,outcome,pick\n"
+        "MLB,infinite,2099-12-31T20:00:00Z,AWAY @ HOME,AWAY,GAMELINE,SPREAD,"
+        "AWAY,market,outcome,inf\n"
+    )
+
+    fallback = module.build_fallback_spreads(mixed)
+    rows = list(csv.DictReader(io.StringIO(fallback)))
+
+    assert [(row["event_id"], row["signed_line"], row["selection"]) for row in rows] == [
+        ("valid", "-1.5", "HOME -1.5")
+    ]
 
 
 def test_generate_for_dir_no_longer_writes_hitrate_prompts(tmp_path):
