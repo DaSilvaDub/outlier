@@ -1259,6 +1259,8 @@ DERIVED_PACK_OUTPUTS = (
     "portfolio_risk.json",
     "mlb_alt_bankroll_props.csv",
     "wnba_alt_bankroll_props.csv",
+    "mlb_alt_spreads.csv",
+    "wnba_alt_spreads.csv",
 )
 
 FRESH_COVERAGE_WARN = 0.9
@@ -1844,6 +1846,21 @@ def write_pack(
             out_dir / f"{lg.lower()}_alt_bankroll_props.csv",
             ALT_BANKROLL_PROPS_HEADER,
             bankroll_rows,
+        )
+
+    from outlier_scrapers.alt_spreads import (
+        ALT_SPREADS_HEADER,
+        build_alt_spreads_board,
+    )
+
+    for lg, payload in (games_norm_by_league or {}).items():
+        spread_rows = build_alt_spreads_board(
+            payload, league=lg, target_date=pack_date
+        )
+        _write_csv(
+            out_dir / f"{lg.lower()}_alt_spreads.csv",
+            ALT_SPREADS_HEADER,
+            spread_rows,
         )
 
     from outlier_scrapers.alt_player_props import (

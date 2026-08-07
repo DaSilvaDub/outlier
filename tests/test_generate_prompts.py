@@ -37,18 +37,28 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
         ("league,event_id\nMLB,e1\n", ""),
         ("league,event_id\nMLB,e1\n", ""),
         False,
+        spreads_data=(
+            "league,event_id,proposition,selection,signed_line\n"
+            "MLB,s1,SPREAD,HOME +3.5,+3.5\n",
+            "",
+        ),
     )
 
     desk1 = out_dir / "prompts" / "Desk1_Automated"
     totals = desk1 / "2_Master_Totals_pack_2099-12-31.txt"
     alt_total = desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt"
     alt_player = desk1 / "4_Master_Alt_Player_Prop_pack_2099-12-31.txt"
+    alt_spread = desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt"
     assert totals.exists()
     assert "### Game Totals Data" in totals.read_text(encoding="utf-8")
     assert not list(desk1.glob("2_Master_Totals_MLB_*.txt"))
     assert alt_total.exists()
     assert alt_player.exists()
+    assert alt_spread.exists()
     assert "### Bankroll Alt Props Data (MLB)" in alt_total.read_text(encoding="utf-8")
+    spread_text = alt_spread.read_text(encoding="utf-8")
+    assert "### Alternate Spreads Data (MLB)" in spread_text
+    assert "HOME +3.5,+3.5" in spread_text
 
 
 def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
@@ -56,6 +66,27 @@ def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
     assert not module.csv_has_data_rows("")
     assert not module.csv_has_data_rows("league,event_id\n")
     assert module.csv_has_data_rows("league,event_id\nMLB,e1\n")
+
+
+def test_filter_bankroll_spreads_splits_prompt_payload_without_mutating_source():
+    module = _load_module()
+    source = (
+        "league,event_id,proposition\n"
+        "MLB,total,TOTAL\n"
+        "MLB,spread,SPREAD\n"
+        "MLB,moneyline,MONEYLINE\n"
+    )
+
+    totals = list(
+        csv.DictReader(io.StringIO(module.filter_bankroll_spreads(source, keep_spreads=False)))
+    )
+    spreads = list(
+        csv.DictReader(io.StringIO(module.filter_bankroll_spreads(source, keep_spreads=True)))
+    )
+
+    assert [row["event_id"] for row in totals] == ["total", "moneyline"]
+    assert [row["event_id"] for row in spreads] == ["spread"]
+    assert "spread,SPREAD" in source
 
 
 def test_master_cards_filter_uses_two_unit_floor():
@@ -212,6 +243,40 @@ def test_generate_for_dir_omits_header_only_alt_prompts(tmp_path):
     desk1 = out_dir / "prompts" / "Desk1_Automated"
     assert not (desk1 / "4_Master_Alt_Player_Prop_pack_2099-12-31.txt").exists()
     assert not list(desk1.glob("3_Master_Alt_Total_*_pack_2099-12-31.txt"))
+    assert not list(desk1.glob("5_Master_Alt_Spread_*_pack_2099-12-31.txt"))
+
+
+def test_generate_for_dir_removes_spreads_from_alt_total_and_uses_fallback_lane(tmp_path):
+    module = _load_module()
+    out_dir = tmp_path / "today"
+    mixed = (
+        "league,event_id,proposition,selection,signed_line\n"
+        "MLB,total,TOTAL,,\n"
+        "MLB,spread,SPREAD,HOME +3.5,+3.5\n"
+    )
+
+    module.generate_for_dir(
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        "board,recommended_units_pre_news\nA,3.0\n",
+        ("", "", ""),
+        ("", ""),
+        (mixed, ""),
+        False,
+        spreads_data=(None, ""),
+    )
+
+    desk1 = out_dir / "prompts" / "Desk1_Automated"
+    alt_total = (desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt").read_text(
+        encoding="utf-8"
+    )
+    alt_spread = (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "total,TOTAL" in alt_total
+    assert "spread,SPREAD" not in alt_total
+    assert "HOME +3.5,+3.5" in alt_spread
 
 
 def test_generate_for_dir_no_longer_writes_hitrate_prompts(tmp_path):

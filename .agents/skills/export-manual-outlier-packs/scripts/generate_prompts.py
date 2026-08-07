@@ -256,6 +256,26 @@ def csv_has_data_rows(csv_text: str) -> bool:
     return next(csv.DictReader(io.StringIO(csv_text)), None) is not None
 
 
+def filter_bankroll_spreads(csv_text: str, *, keep_spreads: bool) -> str:
+    """Split mixed bankroll CSV text without changing the source artifact."""
+    if not csv_text.strip():
+        return ""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    fieldnames = reader.fieldnames or []
+    if not fieldnames:
+        return ""
+    rows = []
+    for row in reader:
+        is_spread = str(row.get("proposition") or "").strip().upper() == "SPREAD"
+        if is_spread == keep_spreads:
+            rows.append(row)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def load_prompt_template(filename: str) -> str:
     """Read a prompt template from prompts directory, falling back to A.md if missing."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -273,6 +293,9 @@ def load_prompt_template(filename: str) -> str:
             if p.exists():
                 with open(p, "r", encoding="utf-8") as f:
                     return f.read()
+    raise FileNotFoundError(f"prompt template not found: {filename} (A.md fallback missing)")
+
+
 def safe_write_text(filepath: Path, content: str, retries: int = 10, delay: float = 1.0) -> None:
     import time
     for attempt in range(retries):
@@ -301,6 +324,7 @@ def generate_for_dir(
     alt_props_data: tuple[str, str],
     bankroll_data: tuple[str, str],
     no_clean: bool,
+    spreads_data: tuple[str | None, str | None] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -322,7 +346,9 @@ def generate_for_dir(
     desk1_dir.mkdir(parents=True, exist_ok=True)
     desk2_dir.mkdir(parents=True, exist_ok=True)
 
-    # Master Prompts for Data Types (Cards, Totals, Alt Total, Alt Player Prop).
+    # Master Prompts for Data Types (Cards, Totals, Alt Total, Alt Player Prop,
+    # Alt Spread). The dedicated Alt Spread lane intentionally uses prefix 5
+    # so existing prompt filenames and consumers are not renumbered.
     # HitRate prompts are intentionally not generated — dropped pending a redesign.
     cards_template = load_prompt_template("A.md")
     cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
@@ -368,7 +394,9 @@ def generate_for_dir(
     # describe themselves as bankroll parlays; only the market-type label
     # differs in the output filename.
     bankroll_template = load_prompt_template("Alt_Bankroll_Props_Analysis.md")
-    mlb_bankroll, wnba_bankroll = bankroll_data
+    mlb_bankroll_all, wnba_bankroll_all = bankroll_data
+    mlb_bankroll = filter_bankroll_spreads(mlb_bankroll_all, keep_spreads=False)
+    wnba_bankroll = filter_bankroll_spreads(wnba_bankroll_all, keep_spreads=False)
     if csv_has_data_rows(mlb_bankroll):
         full_mlb_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
         safe_write_text(desk1_dir / f"3_Master_Alt_Total_MLB_pack_{date_str}.txt", full_mlb_bankroll)
@@ -380,6 +408,30 @@ def generate_for_dir(
         safe_write_text(
             desk1_dir / f"4_Master_Alt_Player_Prop_pack_{date_str}.txt",
             full_alt_props_prompt,
+        )
+
+    spread_template = load_prompt_template("Alt_Spreads_Analysis.md")
+    provided_mlb, provided_wnba = spreads_data or (None, None)
+    mlb_spreads = (
+        provided_mlb
+        if provided_mlb is not None
+        else filter_bankroll_spreads(mlb_bankroll_all, keep_spreads=True)
+    )
+    wnba_spreads = (
+        provided_wnba
+        if provided_wnba is not None
+        else filter_bankroll_spreads(wnba_bankroll_all, keep_spreads=True)
+    )
+    for league, spread_csv in (("MLB", mlb_spreads), ("WNBA", wnba_spreads)):
+        if not csv_has_data_rows(spread_csv):
+            continue
+        full_spread_prompt = (
+            f"{spread_template}\n\n### Pack Data\n{briefing}\n\n"
+            f"### Alternate Spreads Data ({league})\n```csv\n{spread_csv}\n```\n"
+        )
+        safe_write_text(
+            desk1_dir / f"5_Master_Alt_Spread_{league}_pack_{date_str}.txt",
+            full_spread_prompt,
         )
 
     # Desk 2 - Manual Sequence (Phase-specific prompts)
@@ -499,8 +551,26 @@ def main() -> None:
     wnba_bankroll = wnba_bp_path.read_text(encoding="utf-8") if wnba_bp_path.exists() else ""
     bankroll_data = (mlb_bankroll, wnba_bankroll)
 
+    # Read dedicated alternate spreads. The mixed bankroll CSVs remain intact
+    # for compatibility; these files provide the explicit spread-only product.
+    mlb_spreads_path = latest_pack / "mlb_alt_spreads.csv"
+    wnba_spreads_path = latest_pack / "wnba_alt_spreads.csv"
+    mlb_spreads = mlb_spreads_path.read_text(encoding="utf-8") if mlb_spreads_path.exists() else None
+    wnba_spreads = wnba_spreads_path.read_text(encoding="utf-8") if wnba_spreads_path.exists() else None
+    spreads_data = (mlb_spreads, wnba_spreads)
+
     for out_dir in out_dirs:
-        generate_for_dir(out_dir, date_str, briefing, candidates, totals_data, alt_props_data, bankroll_data, args.no_clean)
+        generate_for_dir(
+            out_dir,
+            date_str,
+            briefing,
+            candidates,
+            totals_data,
+            alt_props_data,
+            bankroll_data,
+            args.no_clean,
+            spreads_data=spreads_data,
+        )
 
 
 

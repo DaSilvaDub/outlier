@@ -25,11 +25,12 @@ Run the provided helper script to automatically clean the target directories and
 By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` and `G:\My Drive\today\prompts` (pass `--out-dir` one or more times to override). 
 
 The script structures the output into two pipelines:
-- `Desk1_Automated/`: four specialized master prompts (HitRate prompts are intentionally not generated — dropped pending a redesign):
+- `Desk1_Automated/`: five specialized master prompt lanes (HitRate prompts are intentionally not generated — dropped pending a redesign):
   - `1_Master_Cards_MLB_pack_YYYY-MM-DD.txt`, `1_Master_Cards_WNBA_pack_YYYY-MM-DD.txt`, `1_Master_Cards_Both_pack_YYYY-MM-DD.txt`: Filtered for 2.0+ Unit Recommended Candidates, each further restricted to its Master Card market whitelist (MLB: Moneyline, Spread, Strikeouts, Total Bases; WNBA: Moneyline, Spread, Points, Assists, Rebounds, Points+Assists, Points+Rebounds, Rebounds+Assists, Points+Assists+Rebounds) and odds -250 through +150; each file is omitted when no rows qualify.
   - `2_Master_Totals_pack_YYYY-MM-DD.txt`: Game Totals and Team Totals ONLY (Alternate Team Totals excluded).
-  - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific alternate game/team bankroll lines (L5>=75%, L10>=75%, full-game, Hard Rock/Fanatics/Midnite/DraftKings/Novig, odds -1000 through -110) when qualifying rows exist.
+  - `3_Master_Alt_Total_MLB_pack_YYYY-MM-DD.txt` and `3_Master_Alt_Total_WNBA_pack_YYYY-MM-DD.txt`: strict league-specific non-spread alternate game/team bankroll lines (L5>=75%, L10>=75%, full-game, Hard Rock/Fanatics/Midnite/DraftKings/Novig, odds -1000 through -110) when qualifying rows exist. The compatibility `*_alt_bankroll_props.csv` files remain mixed, but SPREAD rows are excluded from these prompt payloads.
   - `4_Master_Alt_Player_Prop_pack_YYYY-MM-DD.txt`: strict full-game Hard Rock/Fanatics/Midnite/DraftKings/Novig player alternate lines (L5>=75%, L10>=75%, odds -1000 through -110); omitted when no rows qualify.
+  - `5_Master_Alt_Spread_MLB_pack_YYYY-MM-DD.txt` and `5_Master_Alt_Spread_WNBA_pack_YYYY-MM-DD.txt`: dedicated strict full-game spreads from `mlb_alt_spreads.csv` / `wnba_alt_spreads.csv`, with authoritative `selection` and explicit `signed_line`; omitted when no rows qualify. Prefix `5_` preserves all existing prompt numbers and downstream consumers.
 
   "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low variance, high probability) — the market type differs (game/team total vs. player prop), not the underlying strategy, and their filter thresholds are aligned.
 - `Desk2_Manual/`: The strict sequential phase prompts (`1_PhaseQ...`, `2_PhaseR...`, etc.).

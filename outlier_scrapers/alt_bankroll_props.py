@@ -181,17 +181,17 @@ def extract_l5_l10(rec: dict[str, Any]) -> dict[str, Any] | None:
     stats = [stat] if isinstance(stat, dict) else []
     if not stats:
         return None
-    l5_hits, l5_total, l5_pct = _window(stats, "l5")
-    l10_hits, l10_total, l10_pct = _window(stats, "l10")
-    if l5_pct is None or l10_pct is None:
+    single_l5_hits, single_l5_total, single_l5_pct = _window(stats, "l5")
+    single_l10_hits, single_l10_total, single_l10_pct = _window(stats, "l10")
+    if single_l5_pct is None or single_l10_pct is None:
         return None
     return {
-        "l5_pct": l5_pct,
-        "l10_pct": l10_pct,
-        "l5_hits": l5_hits,
-        "l5_total": l5_total,
-        "l10_hits": l10_hits,
-        "l10_total": l10_total,
+        "l5_pct": single_l5_pct,
+        "l10_pct": single_l10_pct,
+        "l5_hits": single_l5_hits,
+        "l5_total": single_l5_total,
+        "l10_hits": single_l10_hits,
+        "l10_total": single_l10_total,
         "home_l5_pct": "",
         "away_l5_pct": "",
         "home_l10_pct": "",
