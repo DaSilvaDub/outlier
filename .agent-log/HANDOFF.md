@@ -1,5 +1,19 @@
 # Handoff
 
+## Sequential prompt export is opt-in (2026-08-08)
+
+- **Implementation commit**: `f611805f2a6627de75467f5cb831da66feb43c86` on `feat/opt-in-sequential-prompts`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/87
+- **Files touched**:
+  - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
+  - `scripts/organize_today_run2.py`
+  - `.agents/skills/export-manual-outlier-packs/SKILL.md`
+  - `tests/test_generate_prompts.py`
+  - `tests/test_organize_today_run2.py`
+- **Contract**: Regular prompt generation and daily organization exclude Q → R → W → X → S Desk2 prompts. Add `--include-sequential-prompts` to either entry point only when explicitly requested. Regular runs also remove stale `Desk2_Manual`, dated/stable `desk2_prompts`, and legacy flat sequential files.
+- **Verification**: focused `21 passed`; full suite `720 passed`; Ruff clean; scoped MyPy clean; independent review found no remaining issues. No reasoning-provider calls were made.
+- **Next steps**: Review and merge PR #87 after hosted checks pass.
+
 ## Dedicated MLB/WNBA Alt Spreads lane (2026-08-07)
 
 - **Implementation commit**: `015355f` on `feat/alt-spreads-board`
