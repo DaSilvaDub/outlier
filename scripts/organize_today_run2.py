@@ -9,6 +9,7 @@ Hardening (2026-07-27):
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -303,11 +304,9 @@ def copy_prompt_outputs(
     generic_prompts: Path,
     hitrate_prompts: Path,
     totals_prompts: Path,
-    desk2_prompts: Path,
+    desk2_prompts: Path | None = None,
 ) -> None:
     prompts_root = out_dir / "prompts"
-    if not prompts_root.exists():
-        return
 
     desk1_src = prompts_root / "Desk1_Automated"
     if desk1_src.exists():
@@ -322,7 +321,7 @@ def copy_prompt_outputs(
                 safe_copy(item, generic_prompts / item.name)
 
     desk2_src = prompts_root / "Desk2_Manual"
-    if desk2_src.exists():
+    if desk2_prompts is not None and desk2_src.exists():
         for item in desk2_src.glob("*.txt"):
             safe_copy(item, desk2_prompts / item.name)
 
@@ -353,8 +352,11 @@ def copy_prompt_outputs(
                 item.unlink()
             except OSError:
                 pass
-        elif len(item.name) > 1 and item.name[0].isupper() and item.name[1] == "_":
-            safe_copy(item, desk2_prompts / item.name)
+        elif (len(item.name) > 1 and item.name[0].isupper() and item.name[1] == "_") or re.match(
+            r"^\d+_Phase[QRWXS]_", item.name
+        ):
+            if desk2_prompts is not None:
+                safe_copy(item, desk2_prompts / item.name)
             try:
                 item.unlink()
             except OSError:
@@ -366,6 +368,7 @@ def organize_today_additive(
     data_dirs: list[Path] | None = None,
     out_dirs: list[Path] | None = None,
     run_generate_prompts: bool = True,
+    include_sequential_prompts: bool = False,
 ) -> Path | None:
     """Organize latest pack into today folders. Returns latest_pack path or None."""
     subdirs = find_all_pack_dirs(pack_search)
@@ -430,7 +433,10 @@ def organize_today_additive(
                 r"\export-manual-outlier-packs\scripts\generate_prompts.py"
             )
         if gen_script.exists():
-            subprocess.run(["python", str(gen_script), "--no-clean"], check=True)
+            gen_command = ["python", str(gen_script), "--no-clean"]
+            if include_sequential_prompts:
+                gen_command.append("--include-sequential-prompts")
+            subprocess.run(gen_command, check=True)
         else:
             print(f"Warning: generate_prompts.py not found at {gen_script}")
 
@@ -443,7 +449,15 @@ def organize_today_additive(
         generic_prompts = replace_dir(out_dir / f"generic_prompts_{today_str}{suffix}")
         hitrate_prompts = replace_dir(out_dir / f"hitrate_prompts_{today_str}{suffix}")
         totals_prompts = replace_dir(out_dir / f"totals_prompts_{today_str}{suffix}")
-        desk2_prompts = replace_dir(out_dir / f"desk2_prompts_{today_str}{suffix}")
+        desk2_prompts: Path | None = None
+        dated_desk2 = out_dir / f"desk2_prompts_{today_str}{suffix}"
+        if include_sequential_prompts:
+            desk2_prompts = replace_dir(dated_desk2)
+        else:
+            # Sequential prompts are opt-in. Remove both dated and stable buckets
+            # so a prior opt-in run cannot leak them into a regular export.
+            safe_rmtree(dated_desk2)
+            safe_rmtree(out_dir / "desk2_prompts")
         pipeline_data = out_dir / f"extracted_data_{today_str}{suffix}"
         extra_packs = replace_dir(out_dir / f"extra_packs_{today_str}{suffix}")
         hit_props_dir = replace_dir(out_dir / f"perfect_hit_props_{today_str}{suffix}")
@@ -483,15 +497,17 @@ def organize_today_additive(
             )
 
         # Mirror to clean un-suffixed directories so both date-tagged and standard names work
-        for src_folder_name in [
+        mirror_folders = [
             f"generic_prompts_{today_str}{suffix}",
             f"hitrate_prompts_{today_str}{suffix}",
             f"totals_prompts_{today_str}{suffix}",
-            f"desk2_prompts_{today_str}{suffix}",
             f"extracted_data_{today_str}{suffix}",
             f"extra_packs_{today_str}{suffix}",
             f"perfect_hit_props_{today_str}{suffix}",
-        ]:
+        ]
+        if include_sequential_prompts:
+            mirror_folders.append(f"desk2_prompts_{today_str}{suffix}")
+        for src_folder_name in mirror_folders:
             std_name = src_folder_name.replace(f"_{today_str}{suffix}", "")
             src_dir = out_dir / src_folder_name
             std_dir = replace_dir(out_dir / std_name)
@@ -513,5 +529,16 @@ def organize_today_additive(
     return latest_pack
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--include-sequential-prompts",
+        action="store_true",
+        help="Opt in to generating and exporting the ordered Q/R/W/X/S prompt bundle",
+    )
+    args = parser.parse_args()
+    organize_today_additive(include_sequential_prompts=args.include_sequential_prompts)
+
+
 if __name__ == "__main__":
-    organize_today_additive()
+    main()

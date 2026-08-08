@@ -359,6 +359,7 @@ def generate_for_dir(
     no_clean: bool,
     spreads_data: tuple[str | None, str | None] | None = None,
     ultimate_alt_data: tuple[str, str] | None = None,
+    include_sequential_prompts: bool = False,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -375,7 +376,12 @@ def generate_for_dir(
     desk1_dir = prompts_dir / "Desk1_Automated"
     desk2_dir = prompts_dir / "Desk2_Manual"
     desk1_dir.mkdir(parents=True, exist_ok=True)
-    desk2_dir.mkdir(parents=True, exist_ok=True)
+    if include_sequential_prompts:
+        desk2_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        # A regular run must not leave an older opt-in sequential bundle behind,
+        # including when --no-clean preserves the other prompt outputs.
+        safe_rmtree(desk2_dir)
 
     # Master Prompts for Data Types (Cards, Totals, Alt Total, Alt Player Prop,
     # Alt Spread). The dedicated Alt Spread lane intentionally uses prefix 5
@@ -440,7 +446,15 @@ def generate_for_dir(
             bankroll_data,
             spreads_data,
         )
-    _write_desk2_prompts(prompts_dir, desk1_dir, date_str, briefing, candidates)
+    desk2_count = 0
+    if include_sequential_prompts:
+        desk2_count = _write_desk2_prompts(prompts_dir, date_str, briefing, candidates)
+
+    master_count = len(list(desk1_dir.glob("*_Master_*_pack_*.txt")))
+    print(
+        f"Successfully generated {master_count} Master Prompts and {desk2_count} "
+        f"opt-in Desk2 prompt files in {prompts_dir}"
+    )
 
 
 def _write_legacy_alt_prompts(
@@ -507,11 +521,10 @@ def _write_legacy_alt_prompts(
 
 def _write_desk2_prompts(
     prompts_dir: Path,
-    desk1_dir: Path,
     date_str: str,
     briefing: str,
     candidates: str,
-) -> None:
+) -> int:
     desk2_dir = prompts_dir / "Desk2_Manual"
     desk2_order_map = {
         "Q_chatgpt": (1, "PhaseQ"),
@@ -543,11 +556,7 @@ def _write_desk2_prompts(
                 f.write(full_prompt)
             desk2_count += 1
 
-    master_count = len(list(desk1_dir.glob("*_Master_*_pack_*.txt")))
-    print(
-        f"Successfully generated {master_count} Master Prompts and {desk2_count} "
-        f"Desk2 prompt files in {prompts_dir}"
-    )
+    return desk2_count
 
 
 def find_all_pack_dirs(pack_root: Path | None = None) -> list[Path]:
@@ -577,6 +586,11 @@ def main() -> None:
         "--no-clean",
         action="store_true",
         help="Do not clean the output directory before generating",
+    )
+    parser.add_argument(
+        "--include-sequential-prompts",
+        action="store_true",
+        help="Opt in to generating the ordered Q/R/W/X/S Desk2_Manual prompt bundle",
     )
     args = parser.parse_args()
 
@@ -671,6 +685,7 @@ def main() -> None:
             args.no_clean,
             spreads_data=spreads_data,
             ultimate_alt_data=ultimate_alt_data,
+            include_sequential_prompts=args.include_sequential_prompts,
         )
 
 

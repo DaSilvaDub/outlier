@@ -58,6 +58,29 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
     spread_text = alt_spread.read_text(encoding="utf-8")
     assert "### Alternate Spreads Data (MLB)" in spread_text
     assert "HOME +3.5,+3.5" in spread_text
+    assert not (out_dir / "prompts" / "Desk2_Manual").exists()
+
+
+def test_sequential_prompts_are_opt_in_and_regular_run_removes_stale_bundle(tmp_path):
+    module = _load_module()
+    out_dir = tmp_path / "today"
+    common_args = (
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        "board,recommended_units_pre_news\nA,3.0\n",
+        ("", "", ""),
+        ("", ""),
+        ("", ""),
+        True,
+    )
+
+    module.generate_for_dir(*common_args, include_sequential_prompts=True)
+    desk2 = out_dir / "prompts" / "Desk2_Manual"
+    assert len(list(desk2.glob("*_pack_2099-12-31.txt"))) == 5
+
+    module.generate_for_dir(*common_args)
+    assert not desk2.exists()
 
 
 def test_generate_for_dir_uses_one_ultimate_alt_shadow_prompt_when_available(tmp_path):

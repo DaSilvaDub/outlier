@@ -19,10 +19,12 @@ Execute the pipeline in data-only mode to generate the briefing and candidates d
 > This pipeline typically takes around **20 minutes** to complete, largely due to the MLB line-movement scraper. Set a long timer (e.g., 300-600 seconds) and do not kill the process if it appears stuck on line-movement.
 
 ### 2. Generate Prompt Documents
-Run the provided helper script to automatically clean the target directories and generate the prompt files for all models:
+Run the provided helper script to automatically clean the target directories and generate the regular master prompt files:
 `python .agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
 
-By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` and `G:\My Drive\today\prompts` (pass `--out-dir` one or more times to override). 
+By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` and `G:\My Drive\today\prompts` (pass `--out-dir` one or more times to override).
+
+The ordered Q → R → W → X → S sequence is excluded by default. Generate it only when the user explicitly asks for it by adding `--include-sequential-prompts`. The same opt-in flag is available on `python scripts/organize_today_run2.py` and controls both generation and the `desk2_prompts` export bucket.
 
 The script structures the output into two pipelines:
 - `Desk1_Automated/`: five specialized master prompt lanes (HitRate prompts are intentionally not generated — dropped pending a redesign):
@@ -33,7 +35,7 @@ The script structures the output into two pipelines:
   - `5_Master_Alt_Spread_MLB_pack_YYYY-MM-DD.txt` and `5_Master_Alt_Spread_WNBA_pack_YYYY-MM-DD.txt`: dedicated strict full-game spreads from `mlb_alt_spreads.csv` / `wnba_alt_spreads.csv`, with authoritative `selection` and explicit `signed_line`; omitted when no rows qualify. Prefix `5_` preserves all existing prompt numbers and downstream consumers.
 
   "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low variance, high probability) — the market type differs (game/team total vs. player prop), not the underlying strategy, and their filter thresholds are aligned.
-- `Desk2_Manual/`: The strict sequential phase prompts (`1_PhaseQ...`, `2_PhaseR...`, etc.).
+- `Desk2_Manual/` (opt-in only): The strict sequential phase prompts (`1_PhaseQ...`, `2_PhaseR...`, etc.), generated only with `--include-sequential-prompts`.
 
 Each run archives old pack files into an `archive/` subfolder.
 

@@ -7,8 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -88,6 +86,33 @@ def test_replace_dir_wipes_contents(tmp_path: Path):
     assert list(d.iterdir()) == []
 
 
+def test_copy_prompt_outputs_excludes_sequential_prompts_unless_opted_in(tmp_path: Path):
+    out_dir = tmp_path / "today"
+    desk2_src = out_dir / "prompts" / "Desk2_Manual"
+    desk2_src.mkdir(parents=True)
+    (desk2_src / "1_PhaseQ_pack.txt").write_text("Q", encoding="utf-8")
+
+    generic = tmp_path / "generic"
+    hitrate = tmp_path / "hitrate"
+    totals = tmp_path / "totals"
+    for path in (generic, hitrate, totals):
+        path.mkdir()
+
+    flat_q = out_dir / "Q_chatgpt_stale.txt"
+    flat_numbered_q = out_dir / "1_PhaseQ_chatgpt_stale.txt"
+    flat_q.write_text("STALE Q", encoding="utf-8")
+    flat_numbered_q.write_text("STALE NUMBERED Q", encoding="utf-8")
+    org.copy_prompt_outputs(out_dir, generic, hitrate, totals)
+    assert all(not (path / "1_PhaseQ_pack.txt").exists() for path in (generic, hitrate, totals))
+    assert not flat_q.exists()
+    assert not flat_numbered_q.exists()
+
+    included = tmp_path / "included-desk2"
+    included.mkdir()
+    org.copy_prompt_outputs(out_dir, generic, hitrate, totals, included)
+    assert (included / "1_PhaseQ_pack.txt").read_text(encoding="utf-8") == "Q"
+
+
 def test_parse_hit_rates_filters_hr_under_and_slate(tmp_path: Path):
     data = tmp_path / "data"
     cards = data / "MLB" / "cards" / "mlb_cards_latest.json"
@@ -151,10 +176,19 @@ def test_organize_replace_export_no_stale_leftovers(tmp_path: Path):
     hit_dir = today / "perfect_hit_props_2026-07-26_latest"
     hit_dir.mkdir()
     (hit_dir / "MLB_100_hit_rate.csv").write_text(
-        "player,market_label,side,line,team,matchup\n"
-        "Bad,Bad - Home Runs,UNDER,0.5,NYY,CLE @ CIN\n",
+        "player,market_label,side,line,team,matchup\nBad,Bad - Home Runs,UNDER,0.5,NYY,CLE @ CIN\n",
         encoding="utf-8",
     )
+    stale_desk2 = today / "desk2_prompts_2026-07-26_latest"
+    stale_desk2.mkdir()
+    (stale_desk2 / "1_PhaseQ_stale.txt").write_text("STALE Q", encoding="utf-8")
+    stable_desk2 = today / "desk2_prompts"
+    stable_desk2.mkdir()
+    (stable_desk2 / "1_PhaseQ_stale.txt").write_text("STALE Q", encoding="utf-8")
+    flat_desk2 = today / "Q_chatgpt_stale.txt"
+    flat_numbered_desk2 = today / "1_PhaseQ_chatgpt_stale.txt"
+    flat_desk2.write_text("STALE Q", encoding="utf-8")
+    flat_numbered_desk2.write_text("STALE NUMBERED Q", encoding="utf-8")
 
     data = tmp_path / "data"
     _write_cards(
@@ -189,18 +223,18 @@ def test_organize_replace_export_no_stale_leftovers(tmp_path: Path):
     assert not (extracted / "manual_betting_report.md").exists()
     assert not (extracted / "dossiers" / "MLB_old_laa---sf.md").exists()
     assert (extracted / "briefing.md").read_text(encoding="utf-8").startswith("ZERO")
+    assert not stale_desk2.exists()
+    assert not stable_desk2.exists()
+    assert not flat_desk2.exists()
+    assert not flat_numbered_desk2.exists()
 
     # mlb_only rewritten empty (not stale afternoon row)
-    mlb_rows = list(
-        csv.DictReader((extra / "mlb_only.csv").open(encoding="utf-8"))
-    )
+    mlb_rows = list(csv.DictReader((extra / "mlb_only.csv").open(encoding="utf-8")))
     assert mlb_rows == []
 
     # perfect hit rewritten: HR under dropped; with empty slate allowlist,
     # side policy still applies (no allowlist when candidates empty & no dossiers)
-    hit_rows = list(
-        csv.DictReader((hit_dir / "MLB_100_hit_rate.csv").open(encoding="utf-8"))
-    )
+    hit_rows = list(csv.DictReader((hit_dir / "MLB_100_hit_rate.csv").open(encoding="utf-8")))
     assert all("Home Runs" not in r["market_label"] or r["side"] != "UNDER" for r in hit_rows)
     # Without slate allowlist, On-slate doubles may keep; HR under must be gone
     assert not any(r["player"] == "HRU" for r in hit_rows)
