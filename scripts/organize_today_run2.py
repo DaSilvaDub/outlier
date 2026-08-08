@@ -352,7 +352,7 @@ def copy_prompt_outputs(
                 item.unlink()
             except OSError:
                 pass
-        elif (len(item.name) > 1 and item.name[0].isupper() and item.name[1] == "_") or re.match(
+        elif (len(item.name) > 1 and item.name[0] in "QRWXS" and item.name[1] == "_") or re.match(
             r"^\d+_Phase[QRWXS]_", item.name
         ):
             if desk2_prompts is not None:
