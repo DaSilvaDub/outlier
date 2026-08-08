@@ -3,7 +3,8 @@
 ## Sequential prompt export is opt-in (2026-08-08)
 
 - **Implementation commit**: `f611805f2a6627de75467f5cb831da66feb43c86` on `feat/opt-in-sequential-prompts`
-- **PR**: https://github.com/DaSilvaDub/outlier/pull/87
+- **Merged PR**: https://github.com/DaSilvaDub/outlier/pull/87 at `36c924d` (auto-merged after hosted test/typecheck passed)
+- **Safety follow-up**: `d4ca88e` on `fix/sequential-cleanup-scope`, PR https://github.com/DaSilvaDub/outlier/pull/88. This narrows legacy flat-file cleanup to Q/R/W/X/S so unrelated files such as `A_notes.txt` are preserved.
 - **Files touched**:
   - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
   - `scripts/organize_today_run2.py`
@@ -12,7 +13,7 @@
   - `tests/test_organize_today_run2.py`
 - **Contract**: Regular prompt generation and daily organization exclude Q → R → W → X → S Desk2 prompts. Add `--include-sequential-prompts` to either entry point only when explicitly requested. Regular runs also remove stale `Desk2_Manual`, dated/stable `desk2_prompts`, and legacy flat sequential files.
 - **Verification**: focused `21 passed`; full suite `720 passed`; Ruff clean; scoped MyPy clean; independent review found no remaining issues. No reasoning-provider calls were made.
-- **Next steps**: Review and merge PR #87 after hosted checks pass.
+- **Next steps**: Review and merge PR #88 after hosted checks pass, then run the canonical post-merge sync verifier.
 
 ## Dedicated MLB/WNBA Alt Spreads lane (2026-08-07)
 
