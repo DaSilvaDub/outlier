@@ -34,6 +34,7 @@ calibration/*.sqlite3-shm
 calibration/*.sqlite3-wal
 calibration/reports/
 calibration/exports/
+calibration/settlements/generated/
 
 # Local credentials for headless auth - never commit.
 .env

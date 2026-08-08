@@ -1,8 +1,9 @@
 # Feedback-loop ledger and calibration tool
 
-The feedback tool turns dated packs into a permanent, gradeable dataset. It is
-fully local and deterministic: it does not call a reasoning model or a results
-provider.
+The feedback tool turns dated packs into a permanent, gradeable dataset. The
+ledger and reports are fully local and deterministic. The daily job also uses
+the read-only MLB Stats API and ESPN WNBA results feed to grade completed
+events; it never calls a reasoning model for settlement.
 
 ## What is captured automatically
 
@@ -85,6 +86,22 @@ available:
 python -m outlier_scrapers.feedback settle --input settlements_2026-07-13.csv
 ```
 
+The daily job first queries completed MLB/WNBA scoreboards and box scores for
+unsettled ledger rows from the prior three days. It requires final event status,
+matches game markets by date plus both team aliases, and matches player props by
+date plus an exact normalized player name. Ambiguous or unsupported rows remain
+unsettled. Supported markets are game moneylines/spreads/totals, team totals,
+WNBA standard full-game box-score markets and their supported combinations, and
+the MLB player-prop whitelist. The latest locally captured pregame line and
+price are used as the close when available. Generated audit CSVs are written to
+`calibration/settlements/generated/`.
+
+Run the collector independently with:
+
+```powershell
+python -m outlier_scrapers.results --leagues MLB,WNBA --lookback-days 3
+```
+
 The daily job also imports every `*.csv` placed in
 `calibration/settlements/inbox/`. A fully matched file moves to
 `calibration/settlements/processed/`; files with unmatched or ambiguous wager
@@ -143,9 +160,10 @@ The report is useful immediately as a market-derived baseline. Learned Board B
 weights and an independent probability model should be fit only after the
 settled sample is large enough and should be validated out of sample.
 
-## External boundary
+## Remaining provider boundary
 
-This repository still has no authoritative closing-line/result provider.
-Settlement ingestion is therefore an explicit CSV boundary. Automating that
-feed is separate from the ledger/grading/reporting path and must preserve the
-decision/snapshot identifiers above.
+Completed results are now automatic. Closing-line data uses the last locally
+captured pregame quote, not a separately licensed official close. Feed outages,
+unsupported markets, missing box-score statistics, and ambiguous identities are
+reported and left unsettled for the existing CSV repair path. Use
+`--skip-result-collection` only for an explicit diagnostic.

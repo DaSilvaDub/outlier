@@ -5,6 +5,7 @@ import csv
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
 from . import feedback
+from . import results
 from . import run_desk
 from . import runner_common as rc
 
@@ -194,6 +196,36 @@ def ingest_pending_settlements(
     return stats
 
 
+def collect_completed_results(
+    leagues: list[str],
+    db_path: Path | None = None,
+    output_dir: Path | None = None,
+    *,
+    lookback_days: int = 3,
+) -> dict:
+    """Grade completed ledger rows without blocking a new-slate refresh on feed downtime."""
+    db = db_path or feedback.DEFAULT_DB_PATH
+    output = output_dir or results.DEFAULT_OUTPUT_DIR
+    try:
+        stats = results.collect_and_import(
+            db,
+            leagues=leagues,
+            lookback_days=lookback_days,
+            output_dir=output,
+        )
+    except (
+        OSError,
+        sqlite3.Error,
+        results.ResultsError,
+        feedback.FeedbackError,
+        ValueError,
+    ) as exc:
+        logger.error("Automatic result collection failed closed: %s", exc)
+        return {"status": "failed", "error": str(exc)[:300]}
+    logger.info("Automatic result collection: %s", json.dumps(stats, sort_keys=True))
+    return {"status": "ok", **stats}
+
+
 def _count_pack_rows(pack_dir: Path) -> int | None:
     candidates = pack_dir / "candidates.csv"
     if not candidates.exists():
@@ -257,6 +289,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--settlement-inbox", type=Path)
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument("--results-output", type=Path)
+    parser.add_argument("--results-lookback-days", type=int, default=3)
+    parser.add_argument(
+        "--skip-result-collection",
+        action="store_true",
+        help="Explicit diagnostic escape hatch; normal daily runs grade completed events.",
+    )
     parser.add_argument(
         "--skip-settlement-ingest",
         action="store_true",
@@ -267,6 +306,15 @@ def main(argv: list[str] | None = None) -> int:
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
 
     load_environment()
+
+    result_collection = {"status": "skipped"}
+    if not args.skip_result_collection:
+        result_collection = collect_completed_results(
+            leagues,
+            args.feedback_db,
+            args.results_output,
+            lookback_days=args.results_lookback_days,
+        )
 
     settlement_stats = {
         "file_count": 0,
@@ -356,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             "pack_rows": pack_rows,
             "status_file": str(status_path) if status_path.exists() else None,
             "settlement_ingest": settlement_stats,
+            "result_collection": result_collection,
         }
         _atomic_write_manifest(pack_dir, manifest)
 

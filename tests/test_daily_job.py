@@ -38,6 +38,16 @@ def _require_otp_fetcher():
         pytest.skip(f"otp_fetcher import failed (env/OneDrive): {_otp_err}")
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_result_collection(monkeypatch):
+    if daily_job is not None:
+        monkeypatch.setattr(
+            daily_job.results,
+            "collect_and_import",
+            lambda *_args, **_kwargs: {"settlement_rows": 0, "updated_count": 0},
+        )
+
+
 def test_daily_job_orchestrates_login_and_refresh(tmp_path):
     _require_daily_job()
     fake_pack = tmp_path / "packs" / "2026-06-29"
@@ -121,6 +131,40 @@ def test_ingest_pending_settlements_routes_to_feedback_inbox(monkeypatch, tmp_pa
 
     assert daily_job.ingest_pending_settlements(inbox, db) == expected
     assert seen["args"] == (inbox, db)
+
+
+def test_collect_completed_results_routes_to_results_module(monkeypatch, tmp_path):
+    _require_daily_job()
+    expected = {"settlement_rows": 2, "updated_count": 2}
+    seen = {}
+
+    def fake_collect(db, *, leagues, lookback_days, output_dir):
+        seen["args"] = (db, leagues, lookback_days, output_dir)
+        return expected
+
+    monkeypatch.setattr(daily_job.results, "collect_and_import", fake_collect)
+    db = tmp_path / "feedback.sqlite3"
+    output = tmp_path / "generated"
+
+    assert daily_job.collect_completed_results(["MLB", "WNBA"], db, output, lookback_days=5) == {
+        "status": "ok",
+        **expected,
+    }
+    assert seen["args"] == (db, ["MLB", "WNBA"], 5, output)
+
+
+def test_collect_completed_results_fails_closed_without_blocking_daily_refresh(
+    monkeypatch, tmp_path
+):
+    _require_daily_job()
+
+    def fail(*_args, **_kwargs):
+        raise daily_job.results.ResultsError("provider unavailable")
+
+    monkeypatch.setattr(daily_job.results, "collect_and_import", fail)
+    result = daily_job.collect_completed_results(["WNBA"], tmp_path / "feedback.sqlite3")
+
+    assert result == {"status": "failed", "error": "provider unavailable"}
 
 
 def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
