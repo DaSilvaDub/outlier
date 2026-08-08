@@ -27,13 +27,16 @@ except Exception as e:
     otp_fetcher = None
     _otp_err = e
 
+
 def _require_daily_job():
     if daily_job is None:
         pytest.skip(f"daily_job import failed (env/OneDrive): {_daily_job_err}")
 
+
 def _require_otp_fetcher():
     if otp_fetcher is None:
         pytest.skip(f"otp_fetcher import failed (env/OneDrive): {_otp_err}")
+
 
 def test_daily_job_orchestrates_login_and_refresh(tmp_path):
     _require_daily_job()
@@ -52,9 +55,11 @@ def test_daily_job_orchestrates_login_and_refresh(tmp_path):
         result = daily_job.main(["--leagues", "MLB"])
         assert result == 0
 
+
 def test_otp_fetcher_redacts_code(caplog, tmp_path):
     _require_otp_fetcher()
     import logging
+
     caplog.set_level(logging.INFO)
     with patch("outlier_scrapers.otp_fetcher.imaplib.IMAP4_SSL") as mock_imap:
         instance = mock_imap.return_value
@@ -63,21 +68,60 @@ def test_otp_fetcher_redacts_code(caplog, tmp_path):
         instance.search.return_value = ("OK", [b"1 2 3"])
         from email.utils import formatdate
         import time
+
         date_str = formatdate(time.time(), localtime=False).encode()
-        mock_msg_full = b"Date: " + date_str + b"\r\nContent-Type: text/plain\r\n\r\nYour code is 123456."
+        mock_msg_full = (
+            b"Date: " + date_str + b"\r\nContent-Type: text/plain\r\n\r\nYour code is 123456."
+        )
         instance.fetch.return_value = ("OK", [(b"1 (RFC822)", mock_msg_full)])
         with (
-            patch("outlier_scrapers.otp_fetcher.os.getenv", side_effect=lambda k, d="": "test" if k in ["OUTLIER_IMAP_SERVER", "OUTLIER_IMAP_USER", "OUTLIER_IMAP_PASSWORD"] else d),
-            patch("outlier_scrapers.otp_fetcher.otp_code_file", return_value=tmp_path / "otp_code.txt"),
+            patch(
+                "outlier_scrapers.otp_fetcher.os.getenv",
+                side_effect=lambda k, d="": (
+                    "test"
+                    if k in ["OUTLIER_IMAP_SERVER", "OUTLIER_IMAP_USER", "OUTLIER_IMAP_PASSWORD"]
+                    else d
+                ),
+            ),
+            patch(
+                "outlier_scrapers.otp_fetcher.otp_code_file", return_value=tmp_path / "otp_code.txt"
+            ),
         ):
             otp_fetcher.fetch_and_write_otp(time.time() - 100)
             assert "otp_found=True" in caplog.text
             assert "123456" not in caplog.text
 
+
 def test_run_explicit_refresh_failure(monkeypatch):
     _require_daily_job()
     monkeypatch.setattr("outlier_scrapers.refresh.main", lambda _: 1)
     assert not daily_job.run_explicit_refresh(["MLB"])
+
+
+def test_ingest_pending_settlements_routes_to_feedback_inbox(monkeypatch, tmp_path):
+    _require_daily_job()
+    expected = {
+        "file_count": 1,
+        "processed_count": 1,
+        "retained_count": 0,
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 2,
+    }
+    seen = {}
+
+    def fake_import(inbox, db):
+        seen["args"] = (inbox, db)
+        return expected
+
+    monkeypatch.setattr(daily_job.feedback, "import_settlement_inbox", fake_import)
+    inbox = tmp_path / "inbox"
+    db = tmp_path / "feedback.sqlite3"
+
+    assert daily_job.ingest_pending_settlements(inbox, db) == expected
+    assert seen["args"] == (inbox, db)
+
 
 def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     _require_daily_job()
@@ -90,52 +134,56 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
+    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path / ".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
-    monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
+    monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
     calls = {}
+
     def fake_desk(pack_dir, **kw):
         calls["called"] = True
         calls["steps"] = kw.get("steps")
         return 0
+
     monkeypatch.setattr("outlier_scrapers.daily_job.run_desk.orchestrate_desk", fake_desk)
 
     import outlier_scrapers.reasoning
-    monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", lambda *a,**k: 0)
+
+    monkeypatch.setattr(outlier_scrapers.reasoning, "run_reasoning", lambda *a, **k: 0)
 
     exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 0
     assert calls.get("called")
+
 
 def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     _require_daily_job()
     fake_pack = tmp_path / "packs" / "2026-06-27"
     fake_pack.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("outlier_scrapers.daily_job.run_explicit_refresh", lambda *a,**k: True)
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_explicit_refresh", lambda *a, **k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.check_freshness", lambda *a, **k: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path/".l")
+    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path / ".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
-    monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p,d: None)
+    monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
     def fake_desk_fail(*a, **k):
         (fake_pack / "reasoning_status.json").write_text('{"overall": "failed"}')
         return 1
+
     monkeypatch.setattr("outlier_scrapers.daily_job.run_desk.orchestrate_desk", fake_desk_fail)
 
     exit_code = daily_job.main(["--run-reasoning"])
     assert exit_code == 1
 
+
 def _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall: str) -> int:
     fake_pack = tmp_path / "packs" / "2026-07-17"
     fake_pack.mkdir(parents=True, exist_ok=True)
-    (fake_pack / "candidates.csv").write_text(
-        "market_id,line\nm1,1.5\n", encoding="utf-8"
-    )
+    (fake_pack / "candidates.csv").write_text("market_id,line\nm1,1.5\n", encoding="utf-8")
     (fake_pack / "briefing.md").write_text("SLATE", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
@@ -187,9 +235,7 @@ def _setup_orchestrate_login(
 ) -> dict:
     calls: dict = {"auth_checks": []}
     monkeypatch.setattr(daily_job, "otp_status_file", lambda: tmp_path / "otp_status.json")
-    monkeypatch.setattr(
-        daily_job.subprocess, "Popen", lambda *_a, **_k: _FakeLoginProc(returncode)
-    )
+    monkeypatch.setattr(daily_job.subprocess, "Popen", lambda *_a, **_k: _FakeLoginProc(returncode))
     monkeypatch.setattr(daily_job, "tail_otp_status_and_fetch", lambda _ts: otp_result)
 
     def fake_auth_check(leagues):
@@ -270,9 +316,7 @@ def test_check_freshness_accepts_recent_aware_timestamps(tmp_path, monkeypatch):
         "not-a-timestamp",
     ],
 )
-def test_check_freshness_rejects_untrustworthy_timestamps(
-    tmp_path, monkeypatch, generated_at
-):
+def test_check_freshness_rejects_untrustworthy_timestamps(tmp_path, monkeypatch, generated_at):
     _require_daily_job()
     reports = tmp_path / "reports"
     _write_movement_statuses(reports, generated_at)
@@ -310,7 +354,9 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
     monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
     manifest = {}
-    monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data))
+    monkeypatch.setattr(
+        daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data)
+    )
 
     desk_called = False
 
@@ -319,9 +365,7 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
         desk_called = True
         raise AssertionError("desk must not run for an empty pack")
 
-    monkeypatch.setattr(
-        "outlier_scrapers.daily_job.run_desk.orchestrate_desk", fail_if_called
-    )
+    monkeypatch.setattr("outlier_scrapers.daily_job.run_desk.orchestrate_desk", fail_if_called)
 
     assert daily_job.main(["--analysis-profile", "full"]) == 0
     assert not desk_called

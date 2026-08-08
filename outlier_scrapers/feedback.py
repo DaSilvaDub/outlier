@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
+from outlier_scrapers import drawdown, probability_blend, stake_calibration
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
@@ -421,9 +421,6 @@ def _coalesce(*values: Any) -> Any:
         if value not in (None, ""):
             return value
     return None
-
-
-
 
 
 def _append_flag(flags: Any, flag: str) -> str:
@@ -869,9 +866,6 @@ def _read_csv(path: Path, required: Iterable[str] = ()) -> list[dict[str, str]]:
         return list(reader)
 
 
-
-
-
 def _pack_fallback_timestamp(pack_dir: Path) -> str:
     manifest = pack_dir / "manifest.json"
     if manifest.exists():
@@ -924,7 +918,17 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
             row["selected"] = "true"
             specialized.append((source, row))
 
-    specialized_keys = {_total_representation_key(row) for _source, row in specialized}
+    for row in _read_csv(pack_dir / "ultimate_alt.csv"):
+        row["selected"] = (
+            "true" if _text(row.get("shadow_status")).upper() == "QUALIFIED" else "false"
+        )
+        specialized.append(("ultimate_alt", row))
+
+    specialized_keys = {
+        _total_representation_key(row)
+        for source, row in specialized
+        if source in {"game_totals", "team_totals"}
+    }
     output: list[tuple[str, dict[str, Any]]] = []
     for row in base_rows:
         # A specialized totals ledger is the authoritative representation for a
@@ -955,6 +959,7 @@ def _snapshot_from_pack_row(
     recorded_pack_path: Path | None = None,
 ) -> dict[str, Any]:
     is_totals = source in {"game_totals", "team_totals"}
+    is_ultimate_alt = source == "ultimate_alt"
     event_id = _text(row.get("event_id"))
     market_id = _text(row.get("market_id"))
     selection = _text(row.get("selection"))
@@ -1000,8 +1005,37 @@ def _snapshot_from_pack_row(
             field="final_blended_prob",
         )
         model_prob_source = model_prob_source or _text(row.get("devig_source"))
-        if not signal_flags:
-            signal_flags = data_quality_flags
+        shadow_status = (
+            "QUALIFIED" if _truthy(row.get("shadow_actionable_4pct")) else "REJECTED"
+        )
+        signal_flags = ";".join(
+            filter(
+                None,
+                (
+                    signal_flags or data_quality_flags,
+                    f"totals_shadow_4pct:{shadow_status}",
+                    (
+                        f"totals_shadow_reason:{_text(row.get('shadow_gate_reasons'))}"
+                        if row.get("shadow_gate_reasons")
+                        else ""
+                    ),
+                ),
+            )
+        )
+    elif is_ultimate_alt:
+        market_consensus = _probability(row.get("estimated_prob"), field="market_consensus_prob")
+        final_blended = _probability(row.get("conservative_prob"), field="final_blended_prob")
+        model_prob_source = "ultimate_alt_shadow_conservative"
+        data_quality_flags = _text(row.get("rejection_reasons"))
+        signal_flags = ";".join(
+            filter(
+                None,
+                (
+                    f"ultimate_alt:{_text(row.get('alt_type')).upper()}",
+                    data_quality_flags,
+                ),
+            )
+        )
     else:
         market_consensus = _probability(
             _coalesce(row.get("market_consensus_prob"), row.get("model_prob")),
@@ -1066,8 +1100,7 @@ def _snapshot_from_pack_row(
         ),
         "event_starts_at": event_starts_at,
         "hours_before_game": hours_to_game,
-        "odds_range": _text(row.get("odds_range"))
-        or probability_blend.odds_range(price),
+        "odds_range": _text(row.get("odds_range")) or probability_blend.odds_range(price),
         "time_before_game": _text(row.get("time_before_game"))
         or probability_blend.time_before_game_bucket(hours_to_game),
         "market_type": market_type,
@@ -1083,10 +1116,25 @@ def _snapshot_from_pack_row(
         "orf_component": orf,
         "pack_path": str((recorded_pack_path or pack_dir).resolve()),
         "policy_fingerprint": _text(row.get("_policy_fingerprint")),
-        "portfolio_mode": _text(row.get("_portfolio_mode")),
-        "pre_cap_units": _float(row.get("_pre_cap_units"), field="pre_cap_units"),
-        "portfolio_units": _float(row.get("_portfolio_units"), field="portfolio_units"),
-        "cap_reasons": _text(row.get("_cap_reasons")),
+        "portfolio_mode": _text(row.get("_portfolio_mode"))
+        or ("shadow" if is_ultimate_alt else ""),
+        "pre_cap_units": _float(
+            _coalesce(
+                row.get("_pre_cap_units"),
+                row.get("recommended_units_pre_news") if is_ultimate_alt else None,
+            ),
+            field="pre_cap_units",
+        ),
+        "portfolio_units": _float(
+            _coalesce(
+                row.get("_portfolio_units"),
+                row.get("portfolio_shadow_units") if is_ultimate_alt else None,
+            ),
+            field="portfolio_units",
+        ),
+        "cap_reasons": _text(
+            row.get("_cap_reasons") or (row.get("cap_reasons") if is_ultimate_alt else "")
+        ),
     }
 
 
@@ -1427,14 +1475,14 @@ def import_settlements(
             decision_id = _text(row.get("decision_id"))
             snapshot_id = _text(row.get("snapshot_id"))
             outcome_id = _text(row.get("outcome_id"))
-            
+
             sport = _text(row.get("sport"))
             event_id = _text(row.get("event_id"))
             market_id = _text(row.get("market_id")) or _text(row.get("market_family"))
             player_id = _text(row.get("player_id")) or _text(row.get("subject_id"))
             line = _text(row.get("line"))
             book = _text(row.get("book"))
-            
+
             # Robust matching logic
             matches = []
             if decision_id:
@@ -1450,13 +1498,27 @@ def import_settlements(
                     JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
                     WHERE COALESCE(s.sport, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.sport, '') END
                       AND s.event_id = ? AND s.market_id = ? 
+                      AND COALESCE(s.outcome_id, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.outcome_id, '') END
                       AND COALESCE(s.player_id, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.player_id, '') END
                       AND COALESCE(s.line, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.line, '') END
                       AND COALESCE(s.book, '') = CASE WHEN ? != '' THEN ? ELSE COALESCE(s.book, '') END
                 """
                 matches = conn.execute(
-                    query, 
-                    (sport, sport, event_id, market_id, player_id, player_id, line, line, book, book)
+                    query,
+                    (
+                        sport,
+                        sport,
+                        event_id,
+                        market_id,
+                        outcome_id,
+                        outcome_id,
+                        player_id,
+                        player_id,
+                        line,
+                        line,
+                        book,
+                        book,
+                    ),
                 ).fetchall()
 
             if not matches:
@@ -1465,7 +1527,7 @@ def import_settlements(
             elif len(matches) > 1:
                 summary["ambiguous_count"] += 1
                 continue
-            
+
             matched = matches[0]
 
             matched_decision_id = _text(matched["decision_id"])
@@ -1482,18 +1544,22 @@ def import_settlements(
                 contradicts = True
             if outcome_id and outcome_id != matched_outcome_id:
                 contradicts = True
-            
+
             if contradicts:
                 summary["unmatched_count"] += 1
                 continue
 
             settlement_id = _text(row.get("settlement_id")) or _stable_id(
                 "settlement",
-                matched_decision_id or matched_snapshot_id or (matched_event_id, matched_market_id, matched_outcome_id),
+                matched_decision_id
+                or matched_snapshot_id
+                or (matched_event_id, matched_market_id, matched_outcome_id),
             )
 
             # Idempotent re-import check
-            existing = conn.execute("SELECT 1 FROM settlements WHERE settlement_id = ?", (settlement_id,)).fetchone()
+            existing = conn.execute(
+                "SELECT 1 FROM settlements WHERE settlement_id = ?", (settlement_id,)
+            ).fetchone()
             if existing:
                 summary["duplicate_count"] += 1
                 continue
@@ -1503,9 +1569,11 @@ def import_settlements(
             pnl = _float(row.get("pnl"), field="pnl")
             closing_line = _text(row.get("closing_line"))
             closing_price = _float(row.get("closing_price"), field="closing_price")
-            
+
             if clv_line is None:
-                clv_line = compute_clv_line(_text(matched["selection"]), matched["line"], closing_line)
+                clv_line = compute_clv_line(
+                    _text(matched["selection"]), matched["line"], closing_line
+                )
             if clv_price is None:
                 clv_price = compute_clv_price(matched["decimal_price"], closing_price)
             if pnl is None:
@@ -1517,7 +1585,9 @@ def import_settlements(
                     play=_is_play(matched["final_verdict"], matched["pipeline_verdict"], units),
                 )
 
-            would_have = _normal_result(row.get("would_have_result") or result, field="would_have_result")
+            would_have = _normal_result(
+                row.get("would_have_result") or result, field="would_have_result"
+            )
 
             conn.execute(
                 """
@@ -1547,7 +1617,59 @@ def import_settlements(
                 ),
             )
             summary["updated_count"] += 1
-            
+
+    return summary
+
+
+def import_settlement_file(
+    input_path: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, int]:
+    """Read and import one settlement CSV using the public CLI contract."""
+    rows = _read_csv(Path(input_path), required=("win_loss_push",))
+    return import_settlements(db_path, rows)
+
+
+def import_settlement_inbox(
+    inbox_dir: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    archive_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Import pending settlement CSVs, archiving only fully matched files.
+
+    Ambiguous or unmatched files stay in the inbox so an operator can repair
+    identity fields without losing the original result feed.
+    """
+    inbox = Path(inbox_dir)
+    archive = Path(archive_dir) if archive_dir else inbox.parent / "processed"
+    summary: dict[str, Any] = {
+        "file_count": 0,
+        "processed_count": 0,
+        "retained_count": 0,
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 0,
+    }
+    if not inbox.exists():
+        return summary
+    for input_path in sorted(inbox.glob("*.csv")):
+        summary["file_count"] += 1
+        stats = import_settlement_file(input_path, db_path)
+        for key in ("unmatched_count", "ambiguous_count", "duplicate_count", "updated_count"):
+            summary[key] += stats[key]
+        if stats["unmatched_count"] or stats["ambiguous_count"]:
+            summary["retained_count"] += 1
+            continue
+        archive.mkdir(parents=True, exist_ok=True)
+        destination = archive / input_path.name
+        if destination.exists():
+            destination = (
+                archive / f"{input_path.stem}-{_stable_id('file', input_path.resolve())[:12]}.csv"
+            )
+        input_path.replace(destination)
+        summary["processed_count"] += 1
     return summary
 
 
@@ -1928,6 +2050,113 @@ def _model_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+ULTIMATE_ALT_SHADOW_FIELDS = [
+    "alt_type",
+    "n",
+    "wins",
+    "losses",
+    "pushes",
+    "hit_rate",
+    "mean_implied_prob",
+    "mean_conservative_prob",
+    "calibration_gap",
+    "flat_profit",
+    "flat_roi",
+    "clv_coverage",
+    "mean_price_clv",
+]
+
+
+def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate, but never auto-promote, the unified alternate shadow lane."""
+    shadow_rows = [
+        row
+        for row in rows
+        if str(row.get("board") or "").upper() == "ALT_SHADOW_QUALIFIED"
+        and "ultimate_alt:" in str(row.get("signal_flags") or "")
+        and _normal_result(row.get("win_loss_push") or "") in {"W", "L", "PUSH"}
+    ]
+
+    def alt_type(row: dict[str, Any]) -> str:
+        for flag in str(row.get("signal_flags") or "").split(";"):
+            if flag.startswith("ultimate_alt:"):
+                return flag.split(":", 1)[1] or "UNKNOWN"
+        return "UNKNOWN"
+
+    def metrics(label: str, group: list[dict[str, Any]]) -> dict[str, Any]:
+        wins = sum(_normal_result(row.get("win_loss_push") or "") == "W" for row in group)
+        losses = sum(_normal_result(row.get("win_loss_push") or "") == "L" for row in group)
+        pushes = len(group) - wins - losses
+        graded = wins + losses
+        implied = [_float(row.get("implied_prob")) for row in group]
+        implied = [value for value in implied if value is not None]
+        conservative = [_float(row.get("final_blended_prob")) for row in group]
+        conservative = [value for value in conservative if value is not None]
+        profit = 0.0
+        for row in group:
+            result = _normal_result(row.get("win_loss_push") or "")
+            decimal = _float(row.get("decimal_price"))
+            if result == "W" and decimal is not None:
+                profit += decimal - 1.0
+            elif result == "L":
+                profit -= 1.0
+        clv = [_float(row.get("clv_price")) for row in group]
+        clv = [value for value in clv if value is not None]
+        hit_rate = wins / graded if graded else None
+        mean_conservative = _mean(conservative)
+        return {
+            "alt_type": label,
+            "n": len(group),
+            "wins": wins,
+            "losses": losses,
+            "pushes": pushes,
+            "hit_rate": hit_rate,
+            "mean_implied_prob": _mean(implied),
+            "mean_conservative_prob": mean_conservative,
+            "calibration_gap": (
+                hit_rate - mean_conservative
+                if hit_rate is not None and mean_conservative is not None
+                else None
+            ),
+            "flat_profit": profit,
+            "flat_roi": profit / graded if graded else None,
+            "clv_coverage": len(clv) / len(group) if group else 0.0,
+            "mean_price_clv": _mean(clv),
+        }
+
+    types = sorted({alt_type(row) for row in shadow_rows})
+    by_type = [
+        metrics(token, [row for row in shadow_rows if alt_type(row) == token]) for token in types
+    ]
+    overall = metrics("ALL", shadow_rows)
+    shadow_days = len({str(row.get("captured_at") or "")[:10] for row in shadow_rows})
+    type_counts = {row["alt_type"]: row["n"] for row in by_type}
+    gates = {
+        "minimum_200_settled": overall["n"] >= 200,
+        "minimum_30_shadow_days": shadow_days >= 30,
+        "minimum_40_each_type": all(
+            type_counts.get(token, 0) >= 40 for token in ("SPREAD", "TOTAL", "PLAYER_PROP")
+        ),
+        "positive_flat_roi": (overall["flat_roi"] or 0.0) > 0.0,
+        "calibration_gap_within_5pct": (
+            overall["calibration_gap"] is not None and abs(overall["calibration_gap"]) <= 0.05
+        ),
+        "minimum_80pct_clv_coverage": overall["clv_coverage"] >= 0.80,
+        "nonnegative_mean_price_clv": (
+            overall["mean_price_clv"] is not None and overall["mean_price_clv"] >= 0.0
+        ),
+    }
+    return {
+        "mode": "shadow",
+        "auto_promotion": False,
+        "ready_for_manual_promotion_review": all(gates.values()),
+        "shadow_days": shadow_days,
+        "gates": gates,
+        "overall": overall,
+        "by_type": by_type,
+    }
+
+
 def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
     output_dir = Path(output_dir)
     with _connect(Path(db_path)) as conn:
@@ -2091,6 +2320,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     signal_flags = _signal_results(rows)
     play_vs_stand_down = _play_vs_stand_down(rows)
     model_performance = _model_performance(rows)
+    ultimate_alt_release = ultimate_alt_shadow_release(rows)
 
     metric_fields = [
         "probability_source",
@@ -2137,9 +2367,18 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         ],
         model_performance,
     )
+    _write_csv(
+        output_dir / "ultimate_alt_shadow.csv",
+        ULTIMATE_ALT_SHADOW_FIELDS,
+        [ultimate_alt_release["overall"], *ultimate_alt_release["by_type"]],
+    )
     (output_dir / "summary.json").write_text(
         json.dumps(
-            {"coverage": coverage, "probability_metrics": probability_metrics},
+            {
+                "coverage": coverage,
+                "probability_metrics": probability_metrics,
+                "ultimate_alt_shadow_release": ultimate_alt_release,
+            },
             indent=2,
             sort_keys=True,
         ),
@@ -2161,7 +2400,7 @@ def replay_portfolio(
 ) -> dict[str, Any]:
     with open(policy_path, "r", encoding="utf-8") as f:
         policy_data = json.load(f)
-        
+
     policy = PortfolioPolicy(
         stake_increment=policy_data.get("stake_increment", 0.1),
         max_wager_units=policy_data.get("max_wager_units", 1.0),
@@ -2191,50 +2430,54 @@ def replay_portfolio(
             ORDER BY s.captured_at
         """
         rows = conn.execute(query, (start_date, end_date)).fetchall()
-        
+
         # Group by date
         grouped_by_date = defaultdict(list)
         for row in rows:
             date_str = _text(row["captured_at"])[:10]
             grouped_by_date[date_str].append(dict(row))
-            
+
         summary = {}
         for date_str, daily_rows in sorted(grouped_by_date.items()):
             # Map for allocate_portfolio_risk
             allocation_rows = []
             for r in daily_rows:
-                allocation_rows.append({
-                    "stable_wager_id": r["snapshot_id"],
-                    "actionable": str(r.get("board") == "A").lower(),
-                    "board": r.get("board"),
-                    "units": r.get("legacy_units", 0.0) if as_of_strict else policy.max_wager_units,
-                    "event_id": r.get("event_id"),
-                    "player_id": r.get("player_id"),
-                    "team": None,
-                    "market_type": r.get("market_type"),
-                    "cluster_id": None,
-                    "sportsbook": r.get("book"),
-                    "edge_pct": r.get("edge", 0.0),
-                })
-                
+                allocation_rows.append(
+                    {
+                        "stable_wager_id": r["snapshot_id"],
+                        "actionable": str(r.get("board") == "A").lower(),
+                        "board": r.get("board"),
+                        "units": r.get("legacy_units", 0.0)
+                        if as_of_strict
+                        else policy.max_wager_units,
+                        "event_id": r.get("event_id"),
+                        "player_id": r.get("player_id"),
+                        "team": None,
+                        "market_type": r.get("market_type"),
+                        "cluster_id": None,
+                        "sportsbook": r.get("book"),
+                        "edge_pct": r.get("edge", 0.0),
+                    }
+                )
+
             result = allocate_portfolio_risk(allocation_rows, policy)
-            
+
             legacy_total = sum(r.get("legacy_units") or 0.0 for r in daily_rows)
             replayed_total = sum(result.allocated_units.values())
-            
+
             summary[date_str] = {
                 "legacy_total_units": round(legacy_total, 4),
                 "replayed_total_units": round(replayed_total, 4),
                 "binding_constraints": result.binding_constraints,
                 "utilization": result.utilization,
             }
-            
+
             print(f"--- Replay Date: {date_str} ---")
             print(f"Legacy Units: {legacy_total:.4f} | Replayed Units: {replayed_total:.4f}")
             if result.binding_constraints:
                 print(f"Binding constraints: {', '.join(result.binding_constraints)}")
             print()
-            
+
         return summary
     finally:
         if close_conn:
@@ -2270,9 +2513,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     blend_parser = subparsers.add_parser(
         "fit-blend", help="Fit market/model weights from settled pregame snapshots."
     )
-    blend_parser.add_argument(
-        "--output", type=Path, default=probability_blend.DEFAULT_WEIGHTS_PATH
-    )
+    blend_parser.add_argument("--output", type=Path, default=probability_blend.DEFAULT_WEIGHTS_PATH)
     blend_parser.add_argument("--min-samples", type=int, default=30)
     blend_parser.add_argument("--prior-strength", type=float, default=30.0)
 
@@ -2301,9 +2542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "compute-drawdown",
         help="Compute drawdown equity state from settled placed wagers (Track C3).",
     )
-    drawdown_parser.add_argument(
-        "--output", type=Path, default=drawdown.DEFAULT_STATE_PATH
-    )
+    drawdown_parser.add_argument("--output", type=Path, default=drawdown.DEFAULT_STATE_PATH)
     drawdown_parser.add_argument(
         "--as-of",
         default=None,
@@ -2318,10 +2557,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     template_parser.add_argument("--output", type=Path, required=True)
 
-    replay_parser = subparsers.add_parser("replay-portfolio", help="Chronological portfolio replay.")
+    replay_parser = subparsers.add_parser(
+        "replay-portfolio", help="Chronological portfolio replay."
+    )
     replay_parser.add_argument("--from", dest="start_date", required=True, help="YYYY-MM-DD")
     replay_parser.add_argument("--to", dest="end_date", required=True, help="YYYY-MM-DD")
-    replay_parser.add_argument("--policy", type=Path, required=True, help="Path to portfolio risk policy JSON")
+    replay_parser.add_argument(
+        "--policy", type=Path, required=True, help="Path to portfolio risk policy JSON"
+    )
     replay_parser.add_argument("--as-of-strict", action="store_true", default=True)
 
     args = parser.parse_args(argv)
@@ -2335,8 +2578,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             decision_stats = import_decisions(args.input, args.db)
             print(json.dumps(decision_stats.__dict__, sort_keys=True))
         elif args.command == "settle":
-            settlement_stats = import_settlements(args.input, args.db)
-            print(json.dumps(settlement_stats.__dict__, sort_keys=True))
+            settlement_stats = import_settlement_file(args.input, args.db)
+            print(json.dumps(settlement_stats, sort_keys=True))
         elif args.command == "report":
             print(generate_report(args.db, args.output))
         elif args.command == "fit-blend":
@@ -2406,11 +2649,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(args.output)
         elif args.command == "replay-portfolio":
             summary = replay_portfolio(
-                args.db,
-                args.start_date,
-                args.end_date,
-                args.policy,
-                as_of_strict=args.as_of_strict
+                args.db, args.start_date, args.end_date, args.policy, as_of_strict=args.as_of_strict
             )
             print(json.dumps(summary, indent=2, sort_keys=True))
     except (FeedbackError, OSError, sqlite3.Error, ValueError) as exc:

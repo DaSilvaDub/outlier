@@ -117,8 +117,13 @@ NO_PUSH_MARKETS = {"MONEYLINE", "ML", "ML_3WAY", "MONEYLINE_3WAY"}
 # packs entirely (low hit-rate longshot markets). Covers both the normalized
 # short codes (registry.py) and the raw proposition tokens.
 EXCLUDED_MARKETS = {
-    "HR", "HOME_RUNS",
-    "WALKS_ALLOWED", "WALKSALLOWED", "PITCHER_WALKS", "PITCHING_WALKS", "WALKS ALLOWED",
+    "HR",
+    "HOME_RUNS",
+    "WALKS_ALLOWED",
+    "WALKSALLOWED",
+    "PITCHER_WALKS",
+    "PITCHING_WALKS",
+    "WALKS ALLOWED",
 }
 
 # House rule: plus-money longshots (e.g. a Hits Over at +181) are hard-filtered
@@ -159,6 +164,7 @@ def american_to_decimal(american: float | int | str | None) -> float | None:
         return (100.0 / abs(val)) + 1.0
     return 2.0
 
+
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -167,6 +173,7 @@ def load_json(path: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
 
+
 def index_ev_by_outcome(ev_records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     by_outcome: dict[str, list[dict[str, Any]]] = {}
     for rec in ev_records:
@@ -174,6 +181,7 @@ def index_ev_by_outcome(ev_records: list[dict[str, Any]]) -> dict[str, list[dict
         if oid:
             by_outcome.setdefault(str(oid), []).append(rec)
     return by_outcome
+
 
 def match_ev_records(
     market_id: str | None,
@@ -195,6 +203,7 @@ def match_ev_records(
         and r.get("current_line") == line
     ]
 
+
 def is_excluded_market(market_token: str | None, market_type: str | None) -> bool:
     for tok in (market_token, market_type):
         if not tok:
@@ -210,6 +219,7 @@ def is_excluded_market(market_token: str | None, market_type: str | None) -> boo
             return True
     return False
 
+
 def is_longshot_price(price: Any) -> bool:
     if price in (None, ""):
         return False
@@ -218,6 +228,7 @@ def is_longshot_price(price: Any) -> bool:
     except (ValueError, TypeError):
         return False
     return val >= LONGSHOT_AMERICAN_PRICE
+
 
 def is_no_push_market(market_token: str | None, line: float | None) -> bool:
     token = (market_token or "").upper()
@@ -232,18 +243,25 @@ def is_no_push_market(market_token: str | None, line: float | None) -> bool:
         pass
     return False
 
+
 def get_research_leverage(market_token: str | None, scope: str | None, sport: str) -> str:
     token = (market_token or "").upper()
     scope_l = (scope or "").lower()
     if sport.upper() == "MLB":
-        if token == "TOTAL" or scope_l in ("first_5_innings", "first_3_innings") or "nrfi" in scope_l:
+        if (
+            token == "TOTAL"
+            or scope_l in ("first_5_innings", "first_3_innings")
+            or "nrfi" in scope_l
+        ):
             return "HIGH"
         if token in ("SPREAD", "MONEYLINE", "RUN_LINE", "GAMELINE"):
             return "LOW"
     return "MED"
 
+
 def format_source_timestamps(ts_dict: dict[str, str | None]) -> str:
     return json.dumps({k: v for k, v in ts_dict.items() if v})
+
 
 def build_event_starts(props_payload: dict | None, games_payload: dict | None) -> dict[str, str]:
     starts: dict[str, str] = {}
@@ -261,6 +279,7 @@ def build_event_starts(props_payload: dict | None, games_payload: dict | None) -
                 if sa and str(eid) not in starts:
                     starts[str(eid)] = sa
     return starts
+
 
 def build_injuries(games_payload: dict | None) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -327,9 +346,7 @@ def _format_injury(item: dict[str, Any]) -> str:
     Missing pieces are omitted. Falls back to legacy ``player`` /
     ``description`` and never dumps the raw dict.
     """
-    name = " ".join(
-        part for part in (item.get("firstName"), item.get("lastName")) if part
-    ).strip()
+    name = " ".join(part for part in (item.get("firstName"), item.get("lastName")) if part).strip()
     if not name:
         name = str(item.get("player") or item.get("description") or "").strip()
 
@@ -363,16 +380,19 @@ def _format_injury(item: dict[str, Any]) -> str:
         core = f"{core}: {analysis}"
     return core
 
+
 def _slug(text: str | None) -> str:
     if not text:
         return "unknown"
     return "".join(ch if ch.isalnum() else "-" for ch in str(text).lower()).strip("-") or "unknown"
+
 
 def _coalesce(*values: Any) -> Any:
     for v in values:
         if v is not None:
             return v
     return None
+
 
 def _fmt_line(line: Any) -> str:
     if line in (None, ""):
@@ -402,11 +422,13 @@ def _opportunity_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]
         _fmt_line(row.get("line")),
     )
 
+
 # Propositions where the line is a signed margin (point spread / run line / puck
 # line) rather than a magnitude. A positive value here means the side is getting
 # a cushion, not that it's the favorite — the same "1.5" that's unambiguous on a
 # TOTAL is easy to mis-sign on a SPREAD, and different readers guess differently.
 SIGNED_MARGIN_PROPOSITIONS = {"SPREAD"}
+
 
 def _fmt_signed_line(line: Any, proposition: Any) -> str:
     """``_fmt_line`` plus an explicit leading '+' for positive signed-margin lines.
@@ -423,6 +445,7 @@ def _fmt_signed_line(line: Any, proposition: Any) -> str:
         return f"+{fl}"
     return fl
 
+
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -430,6 +453,7 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (ValueError, TypeError):
         return None
+
 
 def _home_away(matchup: Any, team: Any) -> str:
     """Resolve whether ``team`` is HOME or AWAY within an ``AWAY @ HOME`` matchup.
@@ -449,6 +473,7 @@ def _home_away(matchup: Any, team: Any) -> str:
         return "AWAY"
     return ""
 
+
 def _priced_line_from_ev(ev_records: list[dict[str, Any]], record_id: Any) -> Any:
     """The line an EV alt-line fallback was actually priced at (``current_line``)."""
     if not record_id:
@@ -458,10 +483,12 @@ def _priced_line_from_ev(ev_records: list[dict[str, Any]], record_id: Any) -> An
             return rec.get("current_line")
     return None
 
+
 # A single player prop line above this is a data artifact, not a real market
 # (no MLB/WNBA single-player line approaches it). Deliberately generous so a
 # high-but-real line — e.g. a starter's ~130 pitches-thrown — never trips it.
 PLAYER_PROP_LINE_CEILING = 300.0
+
 
 def market_validation_flags(
     sport: str,
@@ -497,6 +524,7 @@ def market_validation_flags(
                 flags.append("implausible_line")
     return flags
 
+
 def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: Any = None) -> str:
     name_s = str(name or "").strip()
     label_s = str(label or "").strip()
@@ -504,7 +532,12 @@ def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: An
     if name_s and label_s:
         ln = label_s.lower()
         nn = name_s.lower()
-        if ln.startswith(nn) or ln.startswith(nn + " ") or ln.startswith(nn + "-") or ln.startswith(nn + " -"):
+        if (
+            ln.startswith(nn)
+            or ln.startswith(nn + " ")
+            or ln.startswith(nn + "-")
+            or ln.startswith(nn + " -")
+        ):
             core = label_s
         else:
             core = f"{name_s} {label_s}".strip()
@@ -592,9 +625,7 @@ def apply_shadow_projection(
     return []
 
 
-def apply_learned_probability_blend(
-    row: dict[str, Any], artifact: dict[str, Any] | None
-) -> None:
+def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any] | None) -> None:
     """Apply an offline-fitted blend and refresh sizing when it is safe to do so."""
 
     if row.get("projection_quality_flags"):
@@ -670,11 +701,15 @@ def build_row(
         or ref.get("market_label")
         or market_token
     )
-    has_player = bool(card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id"))
+    has_player = bool(
+        card.get("player") or ref.get("player") or card.get("player_id") or ref.get("player_id")
+    )
     if not (card.get("market_type") or ref.get("market_type")) and not has_player:
         prop_token = str(proposition or "").upper()
-        if prop_token != "TOTAL" and is_team_total_proposition(prop_token, sport=sport) and (
-            card.get("team") or ref.get("team")
+        if (
+            prop_token != "TOTAL"
+            and is_team_total_proposition(prop_token, sport=sport)
+            and (card.get("team") or ref.get("team"))
         ):
             market_type = "TEAM_PROP"
         elif prop_token in {"TOTAL", "SPREAD", "MONEYLINE"}:
@@ -689,9 +724,8 @@ def build_row(
     row["outcome_id"] = outcome_id
     row["market_type"] = market_type
     row["player_id"] = card.get("player_id") or ref.get("player_id")
-    is_team_total = (
-        str(market_type or "").upper() == "TEAM_PROP"
-        and is_team_total_proposition(proposition, sport=sport)
+    is_team_total = str(market_type or "").upper() == "TEAM_PROP" and is_team_total_proposition(
+        proposition, sport=sport
     )
     name = (
         card.get("player")
@@ -744,7 +778,9 @@ def build_row(
     row["line_open"] = movement.get("open_line")
     row["line_now"] = movement.get("current_line")
     public_money = side_view.get("public_money") or {}
-    row["public_money_pct"] = _coalesce(public_money.get("public_money_pct"), public_money.get("percentage"))
+    row["public_money_pct"] = _coalesce(
+        public_money.get("public_money_pct"), public_money.get("percentage")
+    )
     row["money_pct"] = _coalesce(public_money.get("money_pct"), public_money.get("money"))
     if ev_summary:
         if ev_summary.get("ev_source") == "LOCAL":
@@ -757,14 +793,20 @@ def build_row(
     push_prob = 0.0 if no_push else None
     row["push_prob"] = push_prob
     usable = [r for r in matched if r.get("book_decimal_odds") is not None]
-    eligible = bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
+    eligible = (
+        bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
+    )
     if eligible:
         best_record_id = ev_summary.get("best_record_id")
         if best_record_id:
             usable = [r for r in usable if r.get("record_id") == best_record_id]
         if not usable:
             return None
-        best = sorted(usable, key=lambda r: (r.get("book_decimal_odds") or 0.0, r.get("calculated_ev_pct") or 0.0), reverse=True)[0]
+        best = sorted(
+            usable,
+            key=lambda r: (r.get("book_decimal_odds") or 0.0, r.get("calculated_ev_pct") or 0.0),
+            reverse=True,
+        )[0]
         row["book"] = best.get("book")
         row["price"] = best.get("book_odds")
         row["decimal_price"] = best.get("book_decimal_odds")
@@ -783,7 +825,9 @@ def build_row(
         if push_prob is None:
             row["sizing_flags"] = "push_capable_no_prob"
         else:
-            sizing = compute_sizing(decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob)
+            sizing = compute_sizing(
+                decimal_price=row["decimal_price"], model_prob=model_prob, push_prob=push_prob
+            )
             row["implied_prob"] = sizing.implied_prob
             row["edge_pct"] = sizing.edge_pct
             row["kelly_025_units"] = sizing.kelly_025_units
@@ -823,9 +867,7 @@ def build_row(
             row["implied_prob"] = sizing.implied_prob
             row["edge_pct"] = sizing.edge_pct
             row["kelly_025_units"] = (
-                max(0.0, sizing.kelly_025_units)
-                if sizing.kelly_025_units is not None
-                else None
+                max(0.0, sizing.kelly_025_units) if sizing.kelly_025_units is not None else None
             )
             row["max_units"] = sizing.max_units
             row["sizing_flags"] = ";".join(
@@ -873,14 +915,11 @@ def build_row(
     event_starts_at = event_starts.get(str(event_id)) if event_id else None
     row["_event_starts_at"] = event_starts_at
     hours_to_game = probability_blend.hours_before_game(row.get("as_of"), event_starts_at)
-    row["hours_before_game"] = (
-        round(hours_to_game, 4) if hours_to_game is not None else ""
-    )
+    row["hours_before_game"] = round(hours_to_game, 4) if hours_to_game is not None else ""
     row["time_before_game"] = probability_blend.time_before_game_bucket(hours_to_game)
     row["odds_range"] = probability_blend.odds_range(row.get("price"))
-    disqualifying = (
-        not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
-        or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
+    disqualifying = not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags) or any(
+        f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags
     )
     row["data_quality_tier"] = probability_blend.data_quality_tier(
         ";".join(dict.fromkeys(dq_flags)),
@@ -901,11 +940,7 @@ def build_row(
         dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
     edge_pct_val = _to_float(row.get("edge_pct"))
-    if (
-        edge_pct_val is not None
-        and edge_pct_val <= 0.035
-        and "thin_liquidity" in dq_flags
-    ):
+    if edge_pct_val is not None and edge_pct_val <= 0.035 and "thin_liquidity" in dq_flags:
         dq_flags.append("edge_suspect_thin_liquidity")
         row["recommended_units_pre_news"] = ""
     model_p = _to_float(row.get("model_prob"))
@@ -920,7 +955,6 @@ def build_row(
         existing_flags = str(row.get("sizing_flags") or "")
         if "plus_money_speculative_edge" not in existing_flags:
             row["sizing_flags"] = f"{existing_flags};plus_money_speculative_edge".strip(";")
-
 
     disqualifying = (
         not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
@@ -943,15 +977,12 @@ def build_row(
     row["actionable"] = "true" if is_actionable else "false"
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
-
     signal = side_view.get("signal") or {}
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
     row["hit_rate_component"] = signal.get("hit_component", "")
     row["insight_component"] = signal.get("insight_component", "")
     row["movement_component"] = (
-        50.0 + 25.0 * movement_corroboration
-        if movement_corroboration is not None
-        else ""
+        50.0 + 25.0 * movement_corroboration if movement_corroboration is not None else ""
     )
     row["orf_component"] = signal.get("orf_component", "")
     # Board B public-money component (descriptive only; never EV / actionable).
@@ -1012,7 +1043,6 @@ def build_row(
     return row
 
 
-
 def process_stream(
     cards_payload: dict | None,
     lm_payload: dict | None,
@@ -1064,15 +1094,12 @@ def process_stream(
             rows.append(row)
     return rows
 
+
 def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
-    dated: set[str] = {
-        d
-        for r in rows
-        if (d := _local_date(r.get("_event_starts_at"))) is not None
-    }
+    dated: set[str] = {d for r in rows if (d := _local_date(r.get("_event_starts_at"))) is not None}
     if not dated:
         return rows, (requested or today)
     if requested and requested in dated:
@@ -1081,28 +1108,30 @@ def select_date(
         target = today if today in dated else max(dated)
     kept = [r for r in rows if _local_date(r.get("_event_starts_at")) in (target, None)]
     if requested and requested not in dated:
-        logger.warning("Requested date %s has no events; emitting empty pack for that date.", requested)
+        logger.warning(
+            "Requested date %s has no events; emitting empty pack for that date.", requested
+        )
     return kept, target
-
 
 
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
     # Immutability: do not mutate caller's rows. Create new objects (AGENTS.md).
-    rows = [
-        ({**r, "_stream": "props"} if "_stream" not in r else r)
-        for r in rows
-    ]
+    rows = [({**r, "_stream": "props"} if "_stream" not in r else r) for r in rows]
     board_a = [r for r in rows if r.get("_board") == "board_a"]
     board_b = [r for r in rows if r.get("_board") == "board_b"]
     flagged = [r for r in rows if r.get("_board") == "flagged"]
+
     def _key(r: dict[str, Any]) -> tuple[float, str]:
         return (-(r.get("_rank_value") or 0.0), str(r.get("market_id") or ""))
+
     def bucket_key(r: dict[str, Any]) -> tuple[str, str]:
         return (str(r.get("sport") or ""), str(r.get("_stream") or "props"))
+
     def round_robin_then_fill(cands: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         if not cands or limit <= 0:
             return []
         from collections import defaultdict, deque
+
         buckets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         for r in cands:
             buckets[bucket_key(r)].append(r)
@@ -1127,11 +1156,13 @@ def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> l
             remain.sort(key=_key)
             selected.extend(remain[: limit - len(selected)])
         return selected
+
     ev_audit = round_robin_then_fill(board_a + flagged, top_ev_n)
     ev = [row for row in ev_audit if row.get("_board") == "board_a"]
     audit = [row for row in ev_audit if row.get("_board") == "flagged"]
     sig = round_robin_then_fill(board_b, top_signal_n)
     return ev + sig + audit
+
 
 MLB_QUESTIONS = [
     "- **Starters:** both confirmed SPs, days rest, recent form, pitch-count limit / opener.",
@@ -1149,6 +1180,7 @@ WNBA_QUESTIONS = [
     "- **Game script:** pace matchup, blowout risk, foul-trouble tendencies.",
     "- *Markets:* spread, total, points/reb/ast, **PRA**, 3PM, alt lines.",
 ]
+
 
 def _matchup_display(row: dict[str, Any]) -> str:
     """A human matchup line for a row, preferring full names over codes."""
@@ -1177,6 +1209,7 @@ def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
         )
     return "\n".join(lines)
 
+
 ROLE_BLOCK = [
     "LEDGER CONTEXT (all passes):",
     "- Each candidate carries authoritative context: team / team_name, opponent / opp_name,"
@@ -1196,7 +1229,6 @@ ROLE_BLOCK = [
     " source fills probability/edge/Kelly for auditability but is market-implied context,"
     " NOT an independent predictive model confirmation. Reasoning models MUST NOT double-count"
     " proxy market devigs as independent corroboration of an EV play.",
-
     "- Spread / run line / puck line rows already carry an explicit sign (e.g. '+1.5' or"
     " '-1.5' in the line and selection) — never re-derive or flip it from model_prob or"
     " the favorite/underdog assumption. model_prob on these rows is the probability that"
@@ -1261,9 +1293,12 @@ DERIVED_PACK_OUTPUTS = (
     "wnba_alt_bankroll_props.csv",
     "mlb_alt_spreads.csv",
     "wnba_alt_spreads.csv",
+    "ultimate_alt.csv",
+    "ultimate_alt_parlays.csv",
 )
 
 FRESH_COVERAGE_WARN = 0.9
+
 
 def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[bool, str]:
     if report is None:
@@ -1309,6 +1344,7 @@ def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[boo
         return True, f"- {label}: OK{cov}"
     return False, f"- {label}: CAVEAT — " + "; ".join(reasons)
 
+
 def build_freshness_section(leagues: Sequence[str]) -> list[str]:
     lines = ["### Freshness / Coverage"]
     all_ok = True
@@ -1348,8 +1384,11 @@ def build_candidate_coverage_section(coverage: dict[str, dict[str, int]]) -> lis
         )
     return lines
 
+
 def build_briefing(
-    rows: list[dict[str, Any]], target_date: str, freshness_lines: list[str] | None = None,
+    rows: list[dict[str, Any]],
+    target_date: str,
+    freshness_lines: list[str] | None = None,
     totals_rows: list[dict[str, Any]] | None = None,
     team_totals_rows: list[dict[str, Any]] | None = None,
     coverage_lines: list[str] | None = None,
@@ -1366,9 +1405,10 @@ def build_briefing(
         lines += coverage_lines + [""]
     lines += ROLE_BLOCK + ["", "### Top EV cards"]
     for r in rows:
-        if r.get("_board") == "board_a" and (
-            str(r.get("sport") or ""), str(r.get("market_id"))
-        ) not in derived_market_ids:
+        if (
+            r.get("_board") == "board_a"
+            and (str(r.get("sport") or ""), str(r.get("market_id"))) not in derived_market_ids
+        ):
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')} "
@@ -1376,9 +1416,10 @@ def build_briefing(
             )
     lines += ["", "### Top signal cards"]
     for r in rows:
-        if r.get("_board") == "board_b" and (
-            str(r.get("sport") or ""), str(r.get("market_id"))
-        ) not in derived_market_ids:
+        if (
+            r.get("_board") == "board_b"
+            and (str(r.get("sport") or ""), str(r.get("market_id"))) not in derived_market_ids
+        ):
             lines.append(
                 f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} @ {r.get('line')} "
                 f"| {_matchup_display(r)}"
@@ -1387,8 +1428,7 @@ def build_briefing(
         r
         for r in rows
         if r.get("_board") == "flagged"
-        and (str(r.get("sport") or ""), str(r.get("market_id")))
-        not in derived_market_ids
+        and (str(r.get("sport") or ""), str(r.get("market_id"))) not in derived_market_ids
     ]
     if flagged:
         lines += ["", "### Non-actionable flagged cards"]
@@ -1417,7 +1457,9 @@ def build_briefing(
     return "\n".join(lines)
 
 
-def _format_game_totals_md(totals_rows: list[dict[str, Any]], title: str = "# Game totals projection board") -> str:
+def _format_game_totals_md(
+    totals_rows: list[dict[str, Any]], title: str = "# Game totals projection board"
+) -> str:
     lines = [title, ""]
     if not totals_rows:
         lines.append("_No eligible totals markets._")
@@ -1445,24 +1487,25 @@ def write_pack(
     projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
 
-
     # Validate all candidate rows against schema constraints
     for idx, row in enumerate(rows):
         row_errors = validate_candidate_row(row, CANDIDATES_HEADER)
         if row_errors:
             # If a critical field is missing or empty, raise ValidationError
             critical_mismatch = any(
-                "Critical field" in err or "dictionary" in err
-                for err in row_errors
+                "Critical field" in err or "dictionary" in err for err in row_errors
             )
             if critical_mismatch:
-                raise ValidationError(f"Critical schema compatibility violation at row {idx}: {'; '.join(row_errors)}")
+                raise ValidationError(
+                    f"Critical schema compatibility violation at row {idx}: {'; '.join(row_errors)}"
+                )
             # Log minor issues as warnings
             for err in row_errors:
                 logger.warning("Candidate row schema warning at index %d: %s", idx, err)
 
     from outlier_scrapers.portfolio import load_portfolio_policy
     import json
+
     policy = load_portfolio_policy()
     # Immutable enforce pack check
     if policy.mode == "enforce":
@@ -1472,16 +1515,21 @@ def write_pack(
                 try:
                     existing = json.load(sf)
                     if existing.get("mode") == "enforce":
-                        raise ValueError("Enforce pack already exists for this slate. Refusing to overwrite immutable pack.")
+                        raise ValueError(
+                            "Enforce pack already exists for this slate. Refusing to overwrite immutable pack."
+                        )
                 except json.JSONDecodeError:
                     pass
 
         # 14-day shadow window check
         import sqlite3
         from outlier_scrapers import paths
+
         db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
         if not db_path.exists():
-            raise ValueError("Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required.")
+            raise ValueError(
+                "Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required."
+            )
         try:
             with sqlite3.connect(db_path) as conn:
                 cursor = conn.cursor()
@@ -1495,13 +1543,17 @@ def write_pack(
                         WHERE d.portfolio_mode = 'shadow'
                     """
                 else:
-                    query = "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
+                    query = (
+                        "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
+                    )
                 cursor.execute(query)
                 shadow_days = cursor.fetchone()[0]
         except Exception as e:
             raise ValueError(f"Enforce mode refused: failed to query shadow window: {e}")
         if shadow_days < 14:
-            raise ValueError(f"Enforce mode refused: only {shadow_days} days of shadow history found. 14 required.")
+            raise ValueError(
+                f"Enforce mode refused: only {shadow_days} days of shadow history found. 14 required."
+            )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pack_date = target_date or out_dir.name
@@ -1520,14 +1572,21 @@ def write_pack(
 
         rows = backfill_totals_probabilities(rows, games_norm_by_league)
         if opportunity_rows is not None:
-            opportunity_rows = backfill_totals_probabilities(
-                opportunity_rows, games_norm_by_league
-            )
+            opportunity_rows = backfill_totals_probabilities(opportunity_rows, games_norm_by_league)
 
-    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, build_game_totals, TEAM_TOTALS_HEADER, build_team_totals
+    from outlier_scrapers.game_totals import (
+        GAME_TOTALS_HEADER,
+        build_game_totals,
+        TEAM_TOTALS_HEADER,
+        build_team_totals,
+    )
     from outlier_scrapers.portfolio import (
-        project_risk_identity, collapse_duplicate_outcomes, unify_and_dedup_streams,
-        allocate_portfolio_risk, load_portfolio_policy, policy_fingerprint
+        project_risk_identity,
+        collapse_duplicate_outcomes,
+        unify_and_dedup_streams,
+        allocate_portfolio_risk,
+        load_portfolio_policy,
+        policy_fingerprint,
     )
     from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
     import subprocess
@@ -1568,9 +1627,75 @@ def write_pack(
             or (r.get("team") and str(r.get("team")).upper() in slate_teams)
         ]
 
+    # Build all legacy alternate artifacts first, then compare them on one
+    # conservative, price-aware shadow surface.  The legacy files remain for
+    # compatibility; only ultimate_alt is used for new shadow evaluation.
+    from outlier_scrapers.alt_team_totals import (
+        ALT_TEAM_TOTAL_PARLAYS_HEADER,
+        ALT_TEAM_TOTALS_HEADER,
+        build_alt_team_total_board,
+        build_alt_team_total_parlays,
+        format_alt_team_totals_md,
+    )
+    from outlier_scrapers.alt_bankroll_props import (
+        ALT_BANKROLL_PROPS_HEADER,
+        build_alt_bankroll_board,
+    )
+    from outlier_scrapers.alt_spreads import ALT_SPREADS_HEADER, build_alt_spreads_board
+    from outlier_scrapers.alt_player_props import (
+        ALT_PLAYER_PROPS_PARLAYS_HEADER,
+        ALT_PLAYER_PROPS_HEADER,
+        build_alt_player_props_board,
+        build_alt_player_props_parlays,
+        format_alt_player_props_md,
+    )
+    from outlier_scrapers.ultimate_alt import (
+        ULTIMATE_ALT_HEADER,
+        ULTIMATE_ALT_PARLAYS_HEADER,
+        build_ultimate_alt_board,
+        build_ultimate_alt_parlays,
+        format_ultimate_alt_md,
+    )
+
+    alt_tt_rows: list[dict[str, Any]] = []
+    alt_tt_parlays: list[dict[str, Any]] = []
+    alt_spread_rows: list[dict[str, Any]] = []
+    alt_total_rows: list[dict[str, Any]] = []
+    bankroll_rows_by_league: dict[str, list[dict[str, Any]]] = {}
+    for lg, payload in (games_norm_by_league or {}).items():
+        league_tt_rows = build_alt_team_total_board(payload, league=lg, target_date=pack_date)
+        alt_tt_rows.extend(league_tt_rows)
+        alt_tt_parlays.extend(build_alt_team_total_parlays(league_tt_rows))
+        bankroll_rows = build_alt_bankroll_board(payload, league=lg, target_date=pack_date)
+        bankroll_rows_by_league[lg] = bankroll_rows
+        alt_spread_rows.extend(build_alt_spreads_board(payload, league=lg, target_date=pack_date))
+        alt_total_rows.extend(
+            row
+            for row in bankroll_rows
+            if str(row.get("proposition") or "").upper() == "TOTAL"
+            or str(row.get("market_type") or "").upper() == "TEAM_PROP"
+        )
+    alt_total_rows.extend(alt_tt_rows)
+
+    alt_player_rows: list[dict[str, Any]] = []
+    alt_player_parlays: list[dict[str, Any]] = []
+    for lg, payload in (props_norm_by_league or {}).items():
+        league_rows = build_alt_player_props_board(payload, league=lg, target_date=pack_date)
+        alt_player_rows.extend(league_rows)
+        alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
+
+    ultimate_alt_rows = build_ultimate_alt_board(
+        spread_rows=alt_spread_rows,
+        total_rows=alt_total_rows,
+        player_rows=alt_player_rows,
+    )
+    ultimate_alt_parlays = build_ultimate_alt_parlays(ultimate_alt_rows)
+
     # --- PORTFOLIO RISK ALLOCATION ---
     try:
-        git_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=str(Path(__file__).parent)).strip()
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, cwd=str(Path(__file__).parent)
+        ).strip()
     except Exception:
         git_sha = "unknown"
 
@@ -1584,28 +1709,40 @@ def write_pack(
                 try:
                     existing = json.load(sf)
                     if existing.get("mode") == "enforce":
-                        raise ValueError("Enforce pack already exists for this slate. Refusing to overwrite immutable pack.")
+                        raise ValueError(
+                            "Enforce pack already exists for this slate. Refusing to overwrite immutable pack."
+                        )
                 except json.JSONDecodeError:
                     pass
-        
+
         # 14-day shadow window check
         import sqlite3
         from outlier_scrapers import paths
+
         db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
         if not db_path.exists():
-            raise ValueError("Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required.")
+            raise ValueError(
+                "Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required."
+            )
         with sqlite3.connect(db_path) as conn:
             try:
-                res = conn.execute("SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots").fetchone()
+                res = conn.execute(
+                    "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
+                ).fetchone()
                 days = res[0] if res else 0
                 if days < 14:
-                    raise ValueError(f"Enforce mode refused: only {days} days of shadow history found. 14 required.")
+                    raise ValueError(
+                        f"Enforce mode refused: only {days} days of shadow history found. 14 required."
+                    )
             except sqlite3.OperationalError:
-                pass # table might not exist in an empty db
-
+                pass  # table might not exist in an empty db
 
     all_projected = []
-    for stream_name, stream_rows in [("candidates", rows), ("game_totals", totals_rows), ("team_totals", team_totals_rows)]:
+    for stream_name, stream_rows in [
+        ("candidates", rows),
+        ("game_totals", totals_rows),
+        ("team_totals", team_totals_rows),
+    ]:
         for r in stream_rows:
             units_val = r.get("recommended_units_pre_news")
             if units_val not in (None, ""):
@@ -1614,10 +1751,36 @@ def write_pack(
             proj["_original_ref"] = r
             proj["stream"] = stream_name
             all_projected.append(proj)
+    ultimate_projected = []
+    for r in ultimate_alt_rows:
+        if r.get("shadow_status") != "QUALIFIED":
+            continue
+        risk_input = dict(r)
+        risk_input.update(
+            {
+                "actionable": "true",
+                "board": "A",
+                "units": r.get("recommended_units_pre_news") or 0.5,
+                "pre_cap_units": r.get("recommended_units_pre_news") or 0.5,
+            }
+        )
+        proj = project_risk_identity(risk_input, "ultimate_alt")
+        proj["_original_ref"] = r
+        proj["_ultimate_shadow"] = True
+        proj["stream"] = "ultimate_alt"
+        ultimate_projected.append(proj)
 
     collapsed = collapse_duplicate_outcomes(all_projected)
     unified = unify_and_dedup_streams(collapsed, policy)
     alloc_result = allocate_portfolio_risk(unified, policy)
+
+    # Ultimate Alt competes with every live stream for shadow capacity, but it
+    # never changes live/enforce allocations until a manual promotion follows
+    # the settlement release gate.
+    combined_shadow = unify_and_dedup_streams(
+        collapse_duplicate_outcomes([*all_projected, *ultimate_projected]), policy
+    )
+    combined_shadow_result = allocate_portfolio_risk(combined_shadow, policy)
 
     for u_row in unified:
         orig = u_row.pop("_original_ref", None)
@@ -1628,14 +1791,60 @@ def write_pack(
                 if not policy.shadow_mode:
                     u_row["recommended_units_pre_news"] = u_row["portfolio_units"]
             for k, v in u_row.items():
-                if policy.shadow_mode and k in ("recommended_units_pre_news", "actionable", "board"):
+                if policy.shadow_mode and k in (
+                    "recommended_units_pre_news",
+                    "actionable",
+                    "board",
+                ):
                     continue
                 orig[k] = v
 
-    legacy_units = sum(float(r.get("recommended_units_pre_news") or 0.0) for r in all_projected if str(r.get("actionable", "")).lower() == "true")
-    raw_kelly_units = sum(float(r.get("kelly_025_units") or 0.0) for r in all_projected if str(r.get("actionable", "")).lower() == "true")
-    pre_cap_units = sum(float(r.get("pre_cap_units", r.get("units", 0.0))) for r in unified if r.get("risk_role") == "PRIMARY" and str(r.get("actionable", "")).lower() == "true")
+    for u_row in combined_shadow:
+        if not u_row.get("_ultimate_shadow"):
+            continue
+        orig = u_row.get("_original_ref")
+        if orig is None:
+            continue
+        wager_id = u_row.get("stable_wager_id")
+        allocated = combined_shadow_result.allocated_units.get(wager_id, 0.0) if wager_id else 0.0
+        orig["portfolio_shadow_units"] = allocated
+        for key in (
+            "stable_wager_id",
+            "risk_market_family",
+            "risk_subject_id",
+            "correlation_cluster_ids",
+            "missing_risk_identity",
+        ):
+            if key in u_row:
+                orig[key] = u_row[key]
+        if wager_id:
+            orig["cap_reasons"] = ";".join(combined_shadow_result.cap_reasons.get(wager_id, []))
+
+    legacy_units = sum(
+        float(r.get("recommended_units_pre_news") or 0.0)
+        for r in all_projected
+        if str(r.get("actionable", "")).lower() == "true"
+    )
+    raw_kelly_units = sum(
+        float(r.get("kelly_025_units") or 0.0)
+        for r in all_projected
+        if str(r.get("actionable", "")).lower() == "true"
+    )
+    pre_cap_units = sum(
+        float(r.get("pre_cap_units", r.get("units", 0.0)))
+        for r in unified
+        if r.get("risk_role") == "PRIMARY" and str(r.get("actionable", "")).lower() == "true"
+    )
     shadow_units = sum(alloc_result.allocated_units.values())
+    ultimate_shadow_units = 0.0
+    for shadow_row in combined_shadow:
+        if not shadow_row.get("_ultimate_shadow"):
+            continue
+        shadow_wager_id = str(shadow_row.get("stable_wager_id") or "")
+        if shadow_wager_id:
+            ultimate_shadow_units += combined_shadow_result.allocated_units.get(
+                shadow_wager_id, 0.0
+            )
     final_units = shadow_units if not policy.shadow_mode else legacy_units
 
     bs_breakdown: dict[str, int] = {}
@@ -1670,7 +1879,9 @@ def write_pack(
             zeroed_rows += 1
 
     missing_identity_counts = sum(1 for r in all_projected if r.get("missing_risk_identity"))
-    duplicate_collapse_counts = (len(all_projected) - len(collapsed)) + (len(collapsed) - len(unified))
+    duplicate_collapse_counts = (len(all_projected) - len(collapsed)) + (
+        len(collapsed) - len(unified)
+    )
 
     sidecar = {
         "schema_version": policy.schema_version,
@@ -1683,6 +1894,9 @@ def write_pack(
             "candidates": len(rows),
             "game_totals": len(totals_rows),
             "team_totals": len(team_totals_rows),
+            "ultimate_alt": sum(
+                1 for row in ultimate_alt_rows if row.get("shadow_status") == "QUALIFIED"
+            ),
             "total_in_scope": len(all_projected),
             "unified": len(unified),
         },
@@ -1691,6 +1905,7 @@ def write_pack(
             "raw_kelly": raw_kelly_units,
             "pre_cap": pre_cap_units,
             "shadow": shadow_units,
+            "ultimate_alt_shadow": ultimate_shadow_units,
             "final": final_units,
         },
         "cap_limits": {
@@ -1708,7 +1923,7 @@ def write_pack(
         "binding_constraints": alloc_result.binding_constraints,
         "dedup_log": {
             "collapsed": len(all_projected) - len(collapsed),
-            "unified": len(collapsed) - len(unified)
+            "unified": len(collapsed) - len(unified),
         },
         "missing_identity_warnings": missing_identity_counts,
         "book_source_breakdown": bs_breakdown,
@@ -1746,8 +1961,8 @@ def write_pack(
     opportunity_output: list[dict[str, Any]] = []
     for source_row in opportunity_rows if opportunity_rows is not None else rows:
         row = dict(source_row)
-        key = _opportunity_key(row)
-        row["selected"] = "true" if key in selected_keys else "false"
+        opportunity_key = _opportunity_key(row)
+        row["selected"] = "true" if opportunity_key in selected_keys else "false"
         opportunity_output.append(row)
     with open(out_dir / "opportunities.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
@@ -1759,18 +1974,17 @@ def write_pack(
     with open(out_dir / "projections.jsonl", "w", encoding="utf-8") as projection_file:
         for projection in projection_records or []:
             projection_file.write(json.dumps(projection, sort_keys=True) + "\n")
-        
 
-        
     (out_dir / "briefing.md").write_text(
         build_briefing(
-            rows, 
-            out_dir.name, 
+            rows,
+            out_dir.name,
             freshness_lines,
             totals_rows if games_norm_by_league is not None else None,
             team_totals_rows if games_norm_by_league is not None else None,
             build_candidate_coverage_section(coverage) if coverage is not None else None,
-        ), encoding="utf-8"
+        ),
+        encoding="utf-8",
     )
     if coverage is not None:
         (out_dir / "candidate_coverage.json").write_text(
@@ -1794,35 +2008,23 @@ def write_pack(
 
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(exist_ok=True)
-    
+
     with open(out_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as tf:
         writer = csv.DictWriter(tf, fieldnames=GAME_TOTALS_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(totals_rows)
-    (sections_dir / "game_totals.md").write_text(_format_game_totals_md(totals_rows), encoding="utf-8")
+    (sections_dir / "game_totals.md").write_text(
+        _format_game_totals_md(totals_rows), encoding="utf-8"
+    )
 
     with open(out_dir / "team_totals.csv", "w", newline="", encoding="utf-8") as tf:
         writer = csv.DictWriter(tf, fieldnames=TEAM_TOTALS_HEADER, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(team_totals_rows)
-    (sections_dir / "team_totals.md").write_text(_format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8")
-
-    from outlier_scrapers.alt_team_totals import (
-        ALT_TEAM_TOTAL_PARLAYS_HEADER,
-        ALT_TEAM_TOTALS_HEADER,
-        build_alt_team_total_board,
-        build_alt_team_total_parlays,
-        format_alt_team_totals_md,
+    (sections_dir / "team_totals.md").write_text(
+        _format_game_totals_md(team_totals_rows, title="# Team totals"), encoding="utf-8"
     )
 
-    alt_tt_rows: list[dict[str, Any]] = []
-    alt_tt_parlays: list[dict[str, Any]] = []
-    for lg, payload in (games_norm_by_league or {}).items():
-        league_rows = build_alt_team_total_board(
-            payload, league=lg, target_date=pack_date
-        )
-        alt_tt_rows.extend(league_rows)
-        alt_tt_parlays.extend(build_alt_team_total_parlays(league_rows))
     _write_csv(out_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, alt_tt_rows)
     _write_csv(
         out_dir / "alt_team_total_parlays.csv",
@@ -1833,54 +2035,20 @@ def write_pack(
         format_alt_team_totals_md(alt_tt_rows, alt_tt_parlays), encoding="utf-8"
     )
 
-    from outlier_scrapers.alt_bankroll_props import (
-        ALT_BANKROLL_PROPS_HEADER,
-        build_alt_bankroll_board,
-    )
-
-    for lg, payload in (games_norm_by_league or {}).items():
-        bankroll_rows = build_alt_bankroll_board(
-            payload, league=lg, target_date=pack_date
-        )
+    for lg, bankroll_rows in bankroll_rows_by_league.items():
         _write_csv(
             out_dir / f"{lg.lower()}_alt_bankroll_props.csv",
             ALT_BANKROLL_PROPS_HEADER,
             bankroll_rows,
         )
 
-    from outlier_scrapers.alt_spreads import (
-        ALT_SPREADS_HEADER,
-        build_alt_spreads_board,
-    )
-
-    for lg, payload in (games_norm_by_league or {}).items():
-        spread_rows = build_alt_spreads_board(
-            payload, league=lg, target_date=pack_date
-        )
+    for lg in games_norm_by_league or {}:
+        spread_rows = [row for row in alt_spread_rows if row.get("league") == lg]
         _write_csv(
             out_dir / f"{lg.lower()}_alt_spreads.csv",
             ALT_SPREADS_HEADER,
             spread_rows,
         )
-
-    from outlier_scrapers.alt_player_props import (
-        ALT_PLAYER_PROPS_PARLAYS_HEADER,
-        ALT_PLAYER_PROPS_HEADER,
-        build_alt_player_props_board,
-        build_alt_player_props_parlays,
-        format_alt_player_props_md,
-    )
-
-    alt_player_rows = []
-    alt_player_parlays = []
-
-    for lg, payload in (props_norm_by_league or {}).items():
-        league_rows = build_alt_player_props_board(
-            payload, league=lg, target_date=pack_date
-        )
-        if league_rows:
-            alt_player_rows.extend(league_rows)
-            alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
 
     _write_csv(out_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, alt_player_rows)
     _write_csv(
@@ -1890,6 +2058,17 @@ def write_pack(
     )
     (sections_dir / "alt_player_props.md").write_text(
         format_alt_player_props_md(alt_player_rows, alt_player_parlays), encoding="utf-8"
+    )
+
+    _write_csv(out_dir / "ultimate_alt.csv", ULTIMATE_ALT_HEADER, ultimate_alt_rows)
+    _write_csv(
+        out_dir / "ultimate_alt_parlays.csv",
+        ULTIMATE_ALT_PARLAYS_HEADER,
+        ultimate_alt_parlays,
+    )
+    (sections_dir / "ultimate_alt.md").write_text(
+        format_ultimate_alt_md(ultimate_alt_rows, ultimate_alt_parlays),
+        encoding="utf-8",
     )
 
 
@@ -2011,9 +2190,7 @@ def load_props_norm_by_league(leagues: Sequence[str]) -> dict[str, Any]:
         if not league:
             continue
         league_root = paths.league_paths(league).normalized
-        payloads[league] = load_json(
-            league_root / f"{league.lower()}_props_latest.json"
-        )
+        payloads[league] = load_json(league_root / f"{league.lower()}_props_latest.json")
     return payloads
 
 
@@ -2028,6 +2205,7 @@ def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) 
             time.sleep(delay)
     if last_err:
         raise last_err
+
 
 def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
     last_err = None
@@ -2051,11 +2229,10 @@ def load_projection_records(leagues: Sequence[str]) -> list[dict[str, Any]]:
         if not league:
             continue
         league_paths = paths.league_paths(league)
-        payload = load_json(
-            league_paths.normalized / f"{league.lower()}_projections_latest.json"
-        )
+        payload = load_json(league_paths.normalized / f"{league.lower()}_projections_latest.json")
         records.extend((payload or {}).get("projections") or [])
     return records
+
 
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
@@ -2131,9 +2308,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     else:
         from outlier_scrapers import feedback
 
-        feedback_db = args.feedback_db or (
-            paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
-        )
+        feedback_db = args.feedback_db or (paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3")
         out_dir.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
         if out_dir.exists():
@@ -2189,7 +2364,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     logger.info("Wrote %d rows to %s", len(final_rows), out_dir)
     return out_dir
 
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     main()
-

@@ -85,6 +85,16 @@ available:
 python -m outlier_scrapers.feedback settle --input settlements_2026-07-13.csv
 ```
 
+The daily job also imports every `*.csv` placed in
+`calibration/settlements/inbox/`. A fully matched file moves to
+`calibration/settlements/processed/`; files with unmatched or ambiguous wager
+identity remain in the inbox for repair. Malformed settlement input fails the
+daily job closed. Use `--skip-settlement-ingest` only for an explicit diagnostic.
+
+Alternate spreads, totals, and player props are captured through the unified
+shadow artifact described in [ultimate-alt.md](ultimate-alt.md). Both qualified
+and rejected rows enter the ledger, allowing play-versus-stand-down evaluation.
+
 Then generate the complete report suite:
 
 ```powershell

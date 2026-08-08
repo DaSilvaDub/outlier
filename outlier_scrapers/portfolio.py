@@ -1,23 +1,27 @@
 import json
 import hashlib
-import math
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence, Optional
 from collections import defaultdict
 
+
 def quantize_down(units: float, increment: float = 0.5) -> float:
     import math
+
     if increment <= 0:
         raise ValueError("Increment must be positive")
     return math.floor(units / increment) * increment
+
 
 @dataclass
 class PortfolioPolicy:
     schema_version: str = "1.0"
     policy_version: str = "1.0"
     mode: str = "shadow"
-    streams_in_scope: list[str] = field(default_factory=lambda: ["candidates", "game_totals", "team_totals"])
+    streams_in_scope: list[str] = field(
+        default_factory=lambda: ["candidates", "game_totals", "team_totals"]
+    )
     stake_increment: float = 0.5
     max_wager_units: float = 3.0
     max_daily_units: float = 20.0
@@ -47,9 +51,9 @@ class PortfolioPolicy:
         max_book_units: float = 8.0,
         non_authoritative_book_policy: str = "flag_and_report_only",
         shadow_multipliers_neutral: bool = True,
-    calibration: Any = None,
-    uncertainty: Any = None,
-    drawdown: Any = None,
+        calibration: Any = None,
+        uncertainty: Any = None,
+        drawdown: Any = None,
         shadow_mode: Optional[bool] = None,
         **kwargs: Any,
     ):
@@ -59,7 +63,11 @@ class PortfolioPolicy:
             self.mode = "shadow" if shadow_mode else "enforce"
         else:
             self.mode = mode
-        self.streams_in_scope = streams_in_scope if streams_in_scope is not None else ["candidates", "game_totals", "team_totals"]
+        self.streams_in_scope = (
+            streams_in_scope
+            if streams_in_scope is not None
+            else ["candidates", "game_totals", "team_totals"]
+        )
         self.stake_increment = stake_increment
         self.max_wager_units = max_wager_units
         self.max_daily_units = max_daily_units
@@ -78,18 +86,31 @@ class PortfolioPolicy:
 
 
 REQUIRED_POLICY_KEYS = {
-    "schema_version", "policy_version", "mode", "streams_in_scope",
-    "stake_increment", "max_wager_units", "max_daily_units", "max_event_units",
-    "max_player_units", "max_team_units", "max_market_type_units",
-    "max_correlated_cluster_units", "max_book_units",
-    "non_authoritative_book_policy", "shadow_multipliers_neutral",
-    "calibration", "uncertainty", "drawdown"
+    "schema_version",
+    "policy_version",
+    "mode",
+    "streams_in_scope",
+    "stake_increment",
+    "max_wager_units",
+    "max_daily_units",
+    "max_event_units",
+    "max_player_units",
+    "max_team_units",
+    "max_market_type_units",
+    "max_correlated_cluster_units",
+    "max_book_units",
+    "non_authoritative_book_policy",
+    "shadow_multipliers_neutral",
+    "calibration",
+    "uncertainty",
+    "drawdown",
 }
 
 
 def load_portfolio_policy(path: Optional[Path | str] = None) -> PortfolioPolicy:
     if path is None:
         from outlier_scrapers import paths
+
         path = paths.PROJECT_ROOT / "config" / "portfolio_risk.json"
     else:
         path = Path(path)
@@ -109,9 +130,15 @@ def load_portfolio_policy(path: Optional[Path | str] = None) -> PortfolioPolicy:
         raise ValueError(f"Invalid mode: {mode}. Must be 'shadow' or 'enforce'.")
 
     numeric_cap_keys = [
-        "stake_increment", "max_wager_units", "max_daily_units", "max_event_units",
-        "max_player_units", "max_team_units", "max_market_type_units",
-        "max_correlated_cluster_units", "max_book_units"
+        "stake_increment",
+        "max_wager_units",
+        "max_daily_units",
+        "max_event_units",
+        "max_player_units",
+        "max_team_units",
+        "max_market_type_units",
+        "max_correlated_cluster_units",
+        "max_book_units",
     ]
     for key in numeric_cap_keys:
         val = data.get(key)
@@ -210,7 +237,9 @@ def project_risk_identity(row: Mapping[str, Any], stream: str) -> dict[str, Any]
 
     if stream == "game_totals":
         risk_market_family = "game_total"
-        risk_subject_id = f"{away_team_id}@{home_team_id}" if away_team_id and home_team_id else "game"
+        risk_subject_id = (
+            f"{away_team_id}@{home_team_id}" if away_team_id and home_team_id else "game"
+        )
         if home_team_id and away_team_id:
             exposure_team_ids = [away_team_id, home_team_id]
         else:
@@ -222,6 +251,44 @@ def project_risk_identity(row: Mapping[str, Any], stream: str) -> dict[str, Any]
             exposure_team_ids = [team_id]
         else:
             missing = True
+    elif stream == "candidates" and str(row.get("market_type") or "").upper() == "GAMELINE":
+        risk_market_family = "game_line"
+        risk_subject_id = team_id or str(row.get("matchup") or "game")
+        if team_id:
+            exposure_team_ids = [team_id]
+        elif not row.get("matchup"):
+            missing = True
+    elif stream == "candidates" and str(row.get("market_type") or "").upper() == "TEAM_PROP":
+        risk_market_family = "team_prop"
+        risk_subject_id = team_id
+        if team_id:
+            exposure_team_ids = [team_id]
+        else:
+            missing = True
+    elif stream == "ultimate_alt":
+        alt_type = str(row.get("alt_type") or "").upper()
+        player_id = str(row.get("player_id") or row.get("player") or "")
+        if alt_type == "PLAYER_PROP":
+            risk_market_family = "player_prop"
+            risk_subject_id = player_id
+            if team_id:
+                exposure_team_ids = [team_id]
+            if not player_id or not team_id:
+                missing = True
+        elif alt_type == "SPREAD":
+            risk_market_family = "game_line"
+            risk_subject_id = team_id
+            if team_id:
+                exposure_team_ids = [team_id]
+            else:
+                missing = True
+        else:
+            risk_market_family = "team_total" if team_id else "game_total"
+            risk_subject_id = team_id or str(row.get("matchup") or "game")
+            if team_id:
+                exposure_team_ids = [team_id]
+            elif not row.get("matchup"):
+                missing = True
     else:  # player_props or candidates
         risk_market_family = "player_prop"
         player_id = str(row.get("player_id") or row.get("player") or "")
@@ -246,7 +313,11 @@ def project_risk_identity(row: Mapping[str, Any], stream: str) -> dict[str, Any]
             projected["book_source"] = "proxy_book"
         elif row.get("is_arbitrary") or row.get("book_source") == "arbitrary_first_available":
             projected["book_source"] = "arbitrary_first_available"
-        elif row.get("book_source") == "explicit_best_price" or row.get("best_price") or row.get("book"):
+        elif (
+            row.get("book_source") == "explicit_best_price"
+            or row.get("best_price")
+            or row.get("book")
+        ):
             projected["book_source"] = "explicit_best_price"
         else:
             projected["book_source"] = "explicit_best_price"
@@ -274,13 +345,14 @@ def collapse_duplicate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[
             r.get("risk_scope"),
             r.get("risk_subject_id"),
             r.get("risk_side"),
-            r.get("normalized_line")
+            r.get("normalized_line"),
         )
         grouped[key].append(r)
 
     result = []
 
     for key, group in grouped.items():
+
         def sort_key(row):
             odds = row.get("decimal_odds")
             if odds is None:
@@ -302,7 +374,9 @@ def collapse_duplicate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[
                 c.append(f"{sport}:{event_id}:same_event:1")
             if row.get("risk_subject_id"):
                 c.append(f"{sport}:{event_id}:same_player:{row['risk_subject_id']}")
-            c.append(f"{sport}:{event_id}:same_outcome:{row.get('risk_market_family')}:{row.get('risk_scope')}:{row.get('risk_subject_id')}:{row.get('risk_side')}")
+            c.append(
+                f"{sport}:{event_id}:same_outcome:{row.get('risk_market_family')}:{row.get('risk_scope')}:{row.get('risk_subject_id')}:{row.get('risk_side')}"
+            )
             return c
 
         winning_row["correlation_cluster_ids"] = build_clusters(winning_row)
@@ -331,11 +405,13 @@ def compute_dedup_key(projected_row: Mapping[str, Any]) -> tuple[str, ...]:
         str(projected_row.get("risk_subject_id", "")),
         str(projected_row.get("risk_side", "")),
         str(projected_row.get("normalized_line", "")),
-        str(projected_row.get("normalized_book", ""))
+        str(projected_row.get("normalized_book", "")),
     )
 
 
-def unify_and_dedup_streams(rows: Sequence[Mapping[str, Any]], policy: PortfolioPolicy) -> list[dict[str, Any]]:
+def unify_and_dedup_streams(
+    rows: Sequence[Mapping[str, Any]], policy: PortfolioPolicy
+) -> list[dict[str, Any]]:
     results = []
     groups = defaultdict(list)
 
@@ -359,7 +435,7 @@ def unify_and_dedup_streams(rows: Sequence[Mapping[str, Any]], policy: Portfolio
             continue
 
         def sort_key(r):
-            is_cand = (r.get("stream") == "candidates")
+            is_cand = r.get("stream") == "candidates"
             wager_id = str(r.get("stable_wager_id", ""))
             return (not is_cand, wager_id)
 
@@ -470,7 +546,13 @@ def allocate_portfolio_risk(
         is_board_a = str(row.get("board", "A")).upper() == "A"
         is_missing_identity = bool(row.get("missing_risk_identity", False))
 
-        if role == "PRIMARY" and pre_cap > 0.0 and is_actionable and is_board_a and not is_missing_identity:
+        if (
+            role == "PRIMARY"
+            and pre_cap > 0.0
+            and is_actionable
+            and is_board_a
+            and not is_missing_identity
+        ):
             eligible_rows.append(row)
             allocated_units[wager_id] = round(pre_cap, 4)
         else:
@@ -551,7 +633,7 @@ def allocate_portfolio_risk(
             str(row.get("event_id", "")),
             str(row.get("market_id", "")),
             str(row.get("outcome_id", "")),
-            str(row.get("stable_wager_id", ""))
+            str(row.get("stable_wager_id", "")),
         )
 
     sorted_rows = sorted(eligible_rows, key=sort_key)
@@ -581,7 +663,9 @@ def allocate_portfolio_risk(
                 if can_add:
                     allocated_units[wager_id] = round(allocated_units[wager_id] + inc, 4)
                     for key_name, group_key in keys.items():
-                        current_utilization[group_key] = round(current_utilization[group_key] + inc, 4)
+                        current_utilization[group_key] = round(
+                            current_utilization[group_key] + inc, 4
+                        )
                     added_any = True
 
             if not added_any:

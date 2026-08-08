@@ -38,8 +38,7 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
         ("league,event_id\nMLB,e1\n", ""),
         False,
         spreads_data=(
-            "league,event_id,proposition,selection,signed_line\n"
-            "MLB,s1,SPREAD,HOME +3.5,+3.5\n",
+            "league,event_id,proposition,selection,signed_line\nMLB,s1,SPREAD,HOME +3.5,+3.5\n",
             "",
         ),
     )
@@ -61,6 +60,38 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
     assert "HOME +3.5,+3.5" in spread_text
 
 
+def test_generate_for_dir_uses_one_ultimate_alt_shadow_prompt_when_available(tmp_path):
+    module = _load_module()
+    out_dir = tmp_path / "today"
+    ultimate_rows = (
+        "sport,event_id,alt_type,selection,shadow_status\n"
+        "MLB,e1,SPREAD,TOR +5.5,QUALIFIED\n"
+        "WNBA,e2,TOTAL,ATL OVER 80.5,REJECTED\n"
+    )
+    ultimate_parlays = "rank,num_legs,legs\n1,2,TOR +5.5 | Player ER O0.5\n"
+
+    module.generate_for_dir(
+        out_dir,
+        "2099-12-31",
+        "briefing",
+        "board,recommended_units_pre_news\nA,3.0\n",
+        ("sport,event_id\nMLB,e1\n", "sport,event_id\nMLB,e1\n", ""),
+        ("league,event_id\nMLB,e1\n", ""),
+        ("league,event_id\nMLB,e1\n", ""),
+        False,
+        spreads_data=("league,event_id\nMLB,e1\n", ""),
+        ultimate_alt_data=(ultimate_rows, ultimate_parlays),
+    )
+
+    desk1 = out_dir / "prompts" / "Desk1_Automated"
+    prompt = desk1 / "3_Master_Ultimate_Alt_Shadow_pack_2099-12-31.txt"
+    assert prompt.exists()
+    assert "TOR +5.5" in prompt.read_text(encoding="utf-8")
+    assert not list(desk1.glob("3_Master_Alt_Total_*"))
+    assert not list(desk1.glob("4_Master_Alt_Player_Prop_*"))
+    assert not list(desk1.glob("5_Master_Alt_Spread_*"))
+
+
 def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
     module = _load_module()
     assert not module.csv_has_data_rows("")
@@ -71,10 +102,7 @@ def test_csv_has_data_rows_rejects_header_only_bankroll_csv():
 def test_filter_bankroll_spreads_splits_prompt_payload_without_mutating_source():
     module = _load_module()
     source = (
-        "league,event_id,proposition\n"
-        "MLB,total,TOTAL\n"
-        "MLB,spread,SPREAD\n"
-        "MLB,moneyline,MONEYLINE\n"
+        "league,event_id,proposition\nMLB,total,TOTAL\nMLB,spread,SPREAD\nMLB,moneyline,MONEYLINE\n"
     )
 
     totals = list(
@@ -209,20 +237,34 @@ def test_filter_master_card_candidates_matches_player_prop_catchall_and_label_va
         [
             MASTER_CARD_HEADER,
             _master_card_row("MLB", "PLAYER_PROP", "Riley Greene - Bases", "145"),  # TB fallback
-            _master_card_row("MLB", "PLAYER_PROP", "Framber Valdez - Strikeouts", "-120"),  # SO fallback
+            _master_card_row(
+                "MLB", "PLAYER_PROP", "Framber Valdez - Strikeouts", "-120"
+            ),  # SO fallback
             _master_card_row("MLB", "GAMELINE", "Run Line", "-110"),  # MLB spread synonym
             _master_card_row("WNBA", "GAMELINE", "Money Line", "-130"),  # spacing variant
-            _master_card_row("WNBA", "PLAYER_PROP", "Kelsey Plum - Assists", "-143"),  # AST fallback
+            _master_card_row(
+                "WNBA", "PLAYER_PROP", "Kelsey Plum - Assists", "-143"
+            ),  # AST fallback
             _master_card_row("WNBA", "TEAM_PROP", "Points", "-115"),  # team prop, must NOT match
-            _master_card_row("MLB", "PLAYER_PROP", "Fernando Tatis Jr. - Hits", "-200"),  # off-whitelist prop
+            _master_card_row(
+                "MLB", "PLAYER_PROP", "Fernando Tatis Jr. - Hits", "-200"
+            ),  # off-whitelist prop
             "",
         ]
     )
 
-    mlb = list(csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("MLB",)))))
-    wnba = list(csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("WNBA",)))))
+    mlb = list(
+        csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("MLB",))))
+    )
+    wnba = list(
+        csv.DictReader(io.StringIO(module.filter_master_card_candidates(candidates, ("WNBA",))))
+    )
 
-    assert [r["market_label"] for r in mlb] == ["Riley Greene - Bases", "Framber Valdez - Strikeouts", "Run Line"]
+    assert [r["market_label"] for r in mlb] == [
+        "Riley Greene - Bases",
+        "Framber Valdez - Strikeouts",
+        "Run Line",
+    ]
     assert [r["market_label"] for r in wnba] == ["Money Line", "Kelsey Plum - Assists"]
 
 
@@ -271,12 +313,8 @@ def test_generate_for_dir_removes_spreads_from_alt_total_and_uses_fallback_lane(
     )
 
     desk1 = out_dir / "prompts" / "Desk1_Automated"
-    alt_total = (desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt").read_text(
-        encoding="utf-8"
-    )
-    alt_spread = (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").read_text(
-        encoding="utf-8"
-    )
+    alt_total = (desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt").read_text(encoding="utf-8")
+    alt_spread = (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").read_text(encoding="utf-8")
     assert ",TOTAL,OVER,total-market," in alt_total
     assert ",SPREAD," not in alt_total
     assert "signed_line,selection" in alt_spread

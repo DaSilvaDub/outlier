@@ -1,4 +1,5 @@
 import csv
+import json
 import sqlite3
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 from outlier_scrapers import feedback, pack
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 from outlier_scrapers.pack import CANDIDATES_HEADER
+from outlier_scrapers.ultimate_alt import ULTIMATE_ALT_HEADER
 
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
@@ -70,7 +72,11 @@ def _candidate(
 
 def _pack(tmp_path: Path, rows: list[dict]) -> Path:
     pack_dir = tmp_path / "packs" / "2026-07-13"
-    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [row for row in rows if row["selected"] == "true"])
+    _write_csv(
+        pack_dir / "candidates.csv",
+        CANDIDATES_HEADER,
+        [row for row in rows if row["selected"] == "true"],
+    )
     _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], rows)
     return pack_dir
 
@@ -113,6 +119,60 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     decision_rows = _read_csv(pack_dir / "decisions.csv")
     assert len(decision_rows) == 2
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
+
+
+def test_capture_pack_includes_qualified_and_rejected_ultimate_alt_rows(tmp_path):
+    pack_dir = _pack(tmp_path, [])
+    qualified = {field: "" for field in ULTIMATE_ALT_HEADER}
+    qualified.update(
+        {
+            "sport": "MLB",
+            "league": "MLB",
+            "event_id": "alt-event",
+            "market_id": "alt-market",
+            "outcome_id": "alt-outcome",
+            "selection": "TOR +5.5",
+            "line": "5.5",
+            "price": "-110",
+            "decimal_price": "1.9091",
+            "book": "Novig",
+            "estimated_prob": "0.80",
+            "conservative_prob": "0.72",
+            "implied_prob": "0.52381",
+            "edge_pct": "19.619",
+            "alt_type": "SPREAD",
+            "market_type": "GAMELINE",
+            "shadow_status": "QUALIFIED",
+            "board": "ALT_SHADOW_QUALIFIED",
+            "recommended_units_pre_news": "0.5",
+            "portfolio_shadow_units": "0.5",
+        }
+    )
+    rejected = dict(
+        qualified,
+        market_id="rejected-market",
+        outcome_id="rejected-outcome",
+        shadow_status="REJECTED",
+        board="ALT_SHADOW_REJECTED",
+        rejection_reasons="CONSERVATIVE_EV_BELOW_1_5",
+        recommended_units_pre_news="",
+        portfolio_shadow_units="",
+    )
+    _write_csv(pack_dir / "ultimate_alt.csv", ULTIMATE_ALT_HEADER, [qualified, rejected])
+    db_path = tmp_path / "feedback.sqlite3"
+
+    stats = feedback.capture_pack(pack_dir, db_path)
+
+    assert stats.snapshots == 2
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT board, selected, final_blended_prob, portfolio_mode "
+            "FROM market_snapshots ORDER BY market_id"
+        ).fetchall()
+    assert rows == [
+        ("ALT_SHADOW_QUALIFIED", 1, 0.72, "shadow"),
+        ("ALT_SHADOW_REJECTED", 0, 0.72, "shadow"),
+    ]
 
 
 def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
@@ -168,9 +228,7 @@ def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
 
     assert captured == [(4.0, "-100_TO_+100", "1_TO_6H", "HIGH", 0.7)] * 2
     output = tmp_path / "blend_weights.json"
-    artifact = feedback.fit_blend_weights(
-        db_path, output, min_samples=2, prior_strength=0
-    )
+    artifact = feedback.fit_blend_weights(db_path, output, min_samples=2, prior_strength=0)
     assert output.exists()
     assert artifact["status"] == "active"
     assert artifact["global"]["market_weight"] == pytest.approx(0.5)
@@ -247,9 +305,7 @@ def test_snapshot_numeric_zero_values_do_not_fall_back(source, tmp_path):
         }
     )
 
-    snapshot = feedback._snapshot_from_pack_row(
-        source, row, tmp_path, "2026-07-13T16:00:00+00:00"
-    )
+    snapshot = feedback._snapshot_from_pack_row(source, row, tmp_path, "2026-07-13T16:00:00+00:00")
 
     assert snapshot["market_consensus_prob"] == pytest.approx(0.0)
     assert snapshot["final_blended_prob"] == pytest.approx(0.0)
@@ -343,12 +399,9 @@ def test_recapture_cannot_rewrite_finalized_prediction_history(tmp_path, freeze_
 
     with sqlite3.connect(db_path) as conn:
         snapshot = conn.execute(
-            "SELECT market_consensus_prob, final_blended_prob, edge, selected "
-            "FROM market_snapshots"
+            "SELECT market_consensus_prob, final_blended_prob, edge, selected FROM market_snapshots"
         ).fetchone()
-        decision = conn.execute(
-            "SELECT pipeline_verdict, units FROM decisions"
-        ).fetchone()
+        decision = conn.execute("SELECT pipeline_verdict, units FROM decisions").fetchone()
     assert snapshot == pytest.approx((0.60, 0.60, 0.10, 1))
     assert decision == ("PLAY", 2.0)
 
@@ -470,6 +523,8 @@ def test_capture_preserves_selected_total_alternate_not_represented_by_specializ
             "edge_pct": "0.10",
             "implied_prob": "0.50",
             "actionable": "true",
+            "shadow_actionable_4pct": "true",
+            "shadow_recommended_units": "2",
             "recommended_units_pre_news": "2",
             "push_prob": "0",
             "as_of": "2026-07-13T16:00:00+00:00",
@@ -484,7 +539,11 @@ def test_capture_preserves_selected_total_alternate_not_represented_by_specializ
         rows = conn.execute(
             "SELECT outcome_id, line FROM market_snapshots ORDER BY line"
         ).fetchall()
+        shadow_signal = conn.execute(
+            "SELECT signal_flags FROM market_snapshots WHERE outcome_id = 'm1:10.5:OVER'"
+        ).fetchone()[0]
     assert rows == [("m1:10.5:OVER", "10.5"), ("o2", "11.5")]
+    assert "totals_shadow_4pct:QUALIFIED" in shadow_signal
 
 
 def test_new_market_snapshot_gets_its_own_decision(tmp_path):
@@ -617,18 +676,11 @@ def test_initialize_database_upgrades_reduced_legacy_schema(
     feedback.initialize_database(db_path)
 
     with sqlite3.connect(db_path) as conn:
-        snapshot_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")
-        }
-        decision_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(decisions)")
-        }
-        settlement_columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(settlements)")
-        }
+        snapshot_columns = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
+        decision_columns = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+        settlement_columns = {row[1] for row in conn.execute("PRAGMA table_info(settlements)")}
         decision = conn.execute(
-            "SELECT decision_id, pipeline_verdict, units, created_at, updated_at "
-            "FROM decisions"
+            "SELECT decision_id, pipeline_verdict, units, created_at, updated_at FROM decisions"
         ).fetchone()
         indexes = {
             row[1]
@@ -674,9 +726,7 @@ def test_initialize_database_rejects_orphan_decisions_atomically(tmp_path):
             """
         )
 
-    with pytest.raises(
-        feedback.FeedbackError, match="blank, missing, or unknown snapshot_id"
-    ):
+    with pytest.raises(feedback.FeedbackError, match="blank, missing, or unknown snapshot_id"):
         feedback.initialize_database(db_path)
 
     with sqlite3.connect(db_path) as conn:
@@ -707,9 +757,7 @@ def test_initialize_database_rejects_null_decision_id_atomically(tmp_path):
             """
         )
 
-    with pytest.raises(
-        feedback.FeedbackError, match="blank or missing decision_id"
-    ):
+    with pytest.raises(feedback.FeedbackError, match="blank or missing decision_id"):
         feedback.initialize_database(db_path)
 
     with sqlite3.connect(db_path) as conn:
@@ -799,12 +847,15 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     settlement_input = tmp_path / "settlements.csv"
     _write_csv(settlement_input, feedback.SETTLEMENT_FIELDS, [settlement])
     stats = feedback.import_settlements(db_path, [settlement])
-    assert stats == {"unmatched_count": 0, "ambiguous_count": 0, "duplicate_count": 0, "updated_count": 1}
+    assert stats == {
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 1,
+    }
 
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT clv_line, clv_price, pnl FROM settlements"
-        ).fetchone()
+        row = conn.execute("SELECT clv_line, clv_price, pnl FROM settlements").fetchone()
     assert row[0] == pytest.approx(1.0)
     assert row[1] == pytest.approx(2.0 / (1.0 + 100.0 / 110.0) - 1.0)
     assert row[2] == pytest.approx(2.0)
@@ -822,14 +873,14 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
         "signal_flags.csv",
         "play_vs_stand_down.csv",
         "model_performance.csv",
+        "ultimate_alt_shadow.csv",
         "summary.json",
         "report.md",
     }
     assert expected_files.issubset({path.name for path in report_dir.iterdir()})
 
     probability = {
-        row["probability_source"]: row
-        for row in _read_csv(report_dir / "probability_metrics.csv")
+        row["probability_source"]: row for row in _read_csv(report_dir / "probability_metrics.csv")
     }
     assert int(probability["market_consensus"]["n"]) == 1
     assert float(probability["market_consensus"]["brier_score"]) == pytest.approx(0.16)
@@ -841,6 +892,32 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     a_bet = next(row for row in models if row["model"] == "A" and row["verdict"] == "BET")
     assert float(a_bet["recommendation_accuracy"]) == pytest.approx(1.0)
     assert (report_dir / "ledgers" / "market_snapshots.csv").exists()
+
+
+def test_ultimate_alt_release_gate_requires_depth_clv_and_each_market_type():
+    rows = []
+    for alt_type in ("SPREAD", "TOTAL", "PLAYER_PROP"):
+        for index in range(40):
+            rows.append(
+                {
+                    "board": "ALT_SHADOW_QUALIFIED",
+                    "signal_flags": f"ultimate_alt:{alt_type}",
+                    "win_loss_push": "W" if index < 30 else "L",
+                    "implied_prob": 0.60,
+                    "final_blended_prob": 0.72,
+                    "decimal_price": 1.8,
+                    "clv_price": 0.01,
+                    "captured_at": f"2099-01-{index % 30 + 1:02d}T12:00:00Z",
+                }
+            )
+
+    release = feedback.ultimate_alt_shadow_release(rows)
+
+    assert release["overall"]["n"] == 120
+    assert release["gates"]["minimum_40_each_type"] is True
+    assert release["gates"]["minimum_200_settled"] is False
+    assert release["ready_for_manual_promotion_review"] is False
+    assert release["auto_promotion"] is False
 
 
 def test_settlement_requires_identifier_when_alt_lines_are_ambiguous(tmp_path):
@@ -868,6 +945,89 @@ def test_settlement_requires_identifier_when_alt_lines_are_ambiguous(tmp_path):
 
     stats = feedback.import_settlements(db_path, [settlement])
     assert stats["ambiguous_count"] == 1
+
+
+def test_settlement_outcome_id_disambiguates_alt_lines(tmp_path):
+    rows = [
+        _candidate(market_id="m1", outcome_id="o1", line=10.5),
+        _candidate(market_id="m1", outcome_id="o2", line=11.5),
+    ]
+    pack_dir = _pack(tmp_path, rows)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    settlement = {field: "" for field in feedback.SETTLEMENT_FIELDS}
+    settlement.update(
+        {
+            "event_id": "e1",
+            "market_id": "m1",
+            "outcome_id": "o2",
+            "actual_result": "12",
+            "win_loss_push": "W",
+        }
+    )
+
+    stats = feedback.import_settlements(db_path, [settlement])
+
+    assert stats["updated_count"] == 1
+    assert stats["ambiguous_count"] == 0
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT outcome_id FROM settlements").fetchone()[0] == "o2"
+
+
+def test_settle_cli_reads_csv_and_prints_summary(tmp_path, capsys):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    settlement = {field: "" for field in feedback.SETTLEMENT_FIELDS}
+    settlement.update(
+        {
+            "event_id": "e1",
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "actual_result": "12",
+            "win_loss_push": "W",
+        }
+    )
+    input_path = tmp_path / "settlements.csv"
+    _write_csv(input_path, feedback.SETTLEMENT_FIELDS, [settlement])
+
+    assert feedback.main(["--db", str(db_path), "settle", "--input", str(input_path)]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "unmatched_count": 0,
+        "updated_count": 1,
+    }
+
+
+def test_settlement_inbox_archives_only_fully_matched_files(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    good = {field: "" for field in feedback.SETTLEMENT_FIELDS}
+    good.update(
+        {
+            "event_id": "e1",
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "win_loss_push": "W",
+        }
+    )
+    bad = dict(good, event_id="missing", outcome_id="missing")
+    _write_csv(inbox / "good.csv", feedback.SETTLEMENT_FIELDS, [good])
+    _write_csv(inbox / "bad.csv", feedback.SETTLEMENT_FIELDS, [bad])
+
+    stats = feedback.import_settlement_inbox(inbox, db_path)
+
+    assert stats["processed_count"] == 1
+    assert stats["retained_count"] == 1
+    assert not (inbox / "good.csv").exists()
+    assert (inbox.parent / "processed" / "good.csv").exists()
+    assert (inbox / "bad.csv").exists()
 
 
 def test_settlement_rejects_identity_that_contradicts_decision(tmp_path):
@@ -926,9 +1086,7 @@ def test_probability_scoring_conditions_on_non_push_mass():
         },
     ]
 
-    metrics = {
-        row["probability_source"]: row for row in feedback._probability_metrics(rows)
-    }
+    metrics = {row["probability_source"]: row for row in feedback._probability_metrics(rows)}
     assert metrics["market_consensus"]["n"] == 1
     assert metrics["market_consensus"]["brier_score"] == pytest.approx((0.6 - 1.0) ** 2)
 

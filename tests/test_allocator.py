@@ -1,5 +1,8 @@
-import random
-from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
+from outlier_scrapers.portfolio import (
+    PortfolioPolicy,
+    allocate_portfolio_risk,
+    project_risk_identity,
+)
 
 def _make_policy():
     return PortfolioPolicy(
@@ -140,3 +143,36 @@ def test_defensive_house_rule_zeroing():
     res = allocate_portfolio_risk(rows, policy)
     assert res.allocated_units.get("w1") == 0.0
     assert res.allocated_units.get("w2") == 1.0
+
+
+def test_candidate_and_ultimate_alt_share_risk_families_for_deduplication():
+    candidate = project_risk_identity(
+        {
+            "sport": "MLB",
+            "event_id": "e1",
+            "market_type": "GAMELINE",
+            "team": "TOR",
+            "matchup": "TOR @ NYY",
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "line": 5.5,
+            "book": "Novig",
+        },
+        "candidates",
+    )
+    ultimate = project_risk_identity(
+        {
+            "sport": "MLB",
+            "event_id": "e1",
+            "alt_type": "SPREAD",
+            "team": "TOR",
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "line": 5.5,
+            "book": "Novig",
+        },
+        "ultimate_alt",
+    )
+
+    assert candidate["risk_market_family"] == ultimate["risk_market_family"] == "game_line"
+    assert candidate["stable_wager_id"] == ultimate["stable_wager_id"]

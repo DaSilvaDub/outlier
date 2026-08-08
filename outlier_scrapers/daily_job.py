@@ -17,6 +17,7 @@ from .paths import otp_status_file, PROJECT_ROOT
 from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
+from . import feedback
 from . import run_desk
 from . import runner_common as rc
 
@@ -27,6 +28,7 @@ FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 # run_desk writes uppercase overall statuses (FULL/PARTIAL/DATA_ONLY); compare lowercased.
 SUCCESS_OVERALL_STATUSES = ("ok", "degraded", "partial", "full")
+
 
 def perform_auth_check(leagues: list[str]) -> bool:
     try:
@@ -40,6 +42,7 @@ def perform_auth_check(leagues: list[str]) -> bool:
     except Exception as exc:
         logger.error(f"Unexpected error during auth check: {exc}")
         raise
+
 
 def tail_otp_status_and_fetch(attempt_timestamp: float, timeout: int = 150) -> bool:
     deadline = time.time() + timeout
@@ -70,6 +73,7 @@ def tail_otp_status_and_fetch(attempt_timestamp: float, timeout: int = 150) -> b
     logger.error("Timeout waiting for authentication.")
     return False
 
+
 def orchestrate_login(leagues: list[str] | None = None) -> bool:
     attempt_timestamp = time.time()
     status_file = otp_status_file()
@@ -97,6 +101,7 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
         logger.error("Auth check still failing after login attempt.")
     return success
 
+
 def run_explicit_refresh(leagues: list[str]) -> bool:
     logger.info("Starting explicitly ordered refresh pipeline.")
     for league in leagues:
@@ -118,6 +123,7 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
                 logger.error(f"Failed at step: {name} for {league}")
                 return False
     return True
+
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     from . import paths
@@ -156,6 +162,7 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
                 return False
     return True
 
+
 def run_pack(leagues: list[str]) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
@@ -164,6 +171,28 @@ def run_pack(leagues: list[str]) -> Path | None:
     except Exception as e:
         logger.error(f"Failed to build pack: {e}")
         return None
+
+
+def ingest_pending_settlements(
+    inbox_dir: Path | None = None,
+    db_path: Path | None = None,
+) -> dict | None:
+    """Import result-feed CSVs before building the next slate."""
+    inbox = inbox_dir or PROJECT_ROOT / "calibration" / "settlements" / "inbox"
+    db = db_path or feedback.DEFAULT_DB_PATH
+    try:
+        stats = feedback.import_settlement_inbox(inbox, db)
+    except (OSError, csv.Error, feedback.FeedbackError, ValueError) as exc:
+        logger.error("Settlement ingestion failed: %s", exc)
+        return None
+    if stats["file_count"]:
+        logger.info("Settlement ingestion: %s", json.dumps(stats, sort_keys=True))
+    if stats["retained_count"]:
+        logger.warning(
+            "%d settlement file(s) retained for identity repair.", stats["retained_count"]
+        )
+    return stats
+
 
 def _count_pack_rows(pack_dir: Path) -> int | None:
     candidates = pack_dir / "candidates.csv"
@@ -184,6 +213,7 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
         logger.error("Could not count pack rows in %s: %s", pack_dir, exc)
         return None
 
+
 def _acquire_pack_lock(pack_dir: Path) -> Path | None:
     lock_dir = pack_dir / ".pack_lock"
     pack_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +223,7 @@ def _acquire_pack_lock(pack_dir: Path) -> Path | None:
     except FileExistsError:
         return None
 
+
 def _release_pack_lock(lock_dir: Path | None) -> None:
     if lock_dir and lock_dir.exists():
         try:
@@ -200,12 +231,14 @@ def _release_pack_lock(lock_dir: Path | None) -> None:
         except Exception:
             pass
 
+
 def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:
     mpath = pack_dir / "manifest.json"
     tmp = mpath.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True, default=str), encoding="utf-8")
     os.replace(tmp, mpath)
     logger.info("Wrote %s", mpath)
+
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -218,13 +251,37 @@ def main(argv: list[str] | None = None) -> int:
         help="local: pack + deterministic local report only (no external). openai: +Prompt A. full: A+B+D+E (with fallbacks).",
     )
     parser.add_argument(
-        "--run-reasoning", action="store_true", help="(deprecated) alias for --analysis-profile openai"
+        "--run-reasoning",
+        action="store_true",
+        help="(deprecated) alias for --analysis-profile openai",
+    )
+    parser.add_argument("--settlement-inbox", type=Path)
+    parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument(
+        "--skip-settlement-ingest",
+        action="store_true",
+        help="Explicit diagnostic escape hatch; normal daily runs import pending results.",
     )
     args = parser.parse_args(argv)
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
 
     load_environment()
+
+    settlement_stats = {
+        "file_count": 0,
+        "processed_count": 0,
+        "retained_count": 0,
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 0,
+    }
+    if not args.skip_settlement_ingest:
+        imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
+        if imported is None:
+            return 1
+        settlement_stats = imported
 
     if not perform_auth_check(leagues):
         if not orchestrate_login(leagues):
@@ -269,9 +326,13 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Running analysis desk (profile=%s)...", profile)
             try:
                 if profile == "local":
-                    desk_code = run_desk.orchestrate_desk(pack_dir, steps=["E"], force=False, allow_local_synth=True)
+                    desk_code = run_desk.orchestrate_desk(
+                        pack_dir, steps=["E"], force=False, allow_local_synth=True
+                    )
                 else:
-                    desk_code = run_desk.orchestrate_desk(pack_dir, steps=run_steps, force=False, allow_local_synth=True)
+                    desk_code = run_desk.orchestrate_desk(
+                        pack_dir, steps=run_steps, force=False, allow_local_synth=True
+                    )
                 if desk_code != 0:
                     logger.warning("Desk completed with non-zero (may be partial/degraded).")
             except Exception as e:
@@ -294,14 +355,18 @@ def main(argv: list[str] | None = None) -> int:
             "overall": overall,
             "pack_rows": pack_rows,
             "status_file": str(status_path) if status_path.exists() else None,
+            "settlement_ingest": settlement_stats,
         }
         _atomic_write_manifest(pack_dir, manifest)
 
         final_code = 0 if str(overall).lower() in SUCCESS_OVERALL_STATUSES else 1
-        logger.info("Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall)
+        logger.info(
+            "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall
+        )
         return final_code
     finally:
         _release_pack_lock(lock_dir)
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

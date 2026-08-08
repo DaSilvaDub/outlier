@@ -5,7 +5,8 @@
   "streams_in_scope": [
     "candidates",
     "game_totals",
-    "team_totals"
+    "team_totals",
+    "ultimate_alt"
   ],
   "stake_increment": 0.5,
   "max_wager_units": 3.0,

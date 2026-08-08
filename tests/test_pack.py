@@ -107,14 +107,17 @@ def test_header_canonical_with_flags():
         == "sizing_flags"
     )
     # data_quality_flags sits right after sizing_flags
-    assert (
-        CANDIDATES_HEADER[CANDIDATES_HEADER.index("sizing_flags") + 1]
-        == "data_quality_flags"
-    )
+    assert CANDIDATES_HEADER[CANDIDATES_HEADER.index("sizing_flags") + 1] == "data_quality_flags"
     # human-readable context columns are surfaced to the desk
     for col in (
-        "matchup", "team", "team_name", "opponent", "opp_name",
-        "home_away", "market_label", "priced_line",
+        "matchup",
+        "team",
+        "team_name",
+        "opponent",
+        "opp_name",
+        "home_away",
+        "market_label",
+        "priced_line",
     ):
         assert col in CANDIDATES_HEADER
     for col in (
@@ -226,16 +229,16 @@ def test_shadow_projection_populates_reserved_fields_without_changing_consensus_
 
 
 def test_active_learned_blend_updates_final_probability_and_sizing():
-    card = ev_card(
-        line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1"
-    )
-    ev = [{
-        "market_id": "m1",
-        "outcome_id": "o1",
-        "book": "FD",
-        "book_odds": 110,
-        "book_decimal_odds": 2.1,
-    }]
+    card = ev_card(line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+        }
+    ]
     projection = {
         "status": "eligible",
         "sport": "MLB",
@@ -282,13 +285,15 @@ def test_active_learned_blend_updates_final_probability_and_sizing():
 
 def test_shadow_projection_mismatch_fails_closed_without_touching_consensus():
     card = ev_card(line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1")
-    ev = [{
-        "market_id": "m1",
-        "outcome_id": "o1",
-        "book": "FD",
-        "book_odds": 110,
-        "book_decimal_odds": 2.1,
-    }]
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+        }
+    ]
     projection = {
         "status": "eligible",
         "row_id": "o1",
@@ -317,13 +322,15 @@ def test_duplicate_projection_outcome_ids_are_rejected_as_ambiguous():
 def test_local_ev_probability_source_is_labeled_separately():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
     card["sides"]["OVER"]["ev"]["ev_source"] = "LOCAL"
-    ev = [{
-        "market_id": "m1",
-        "outcome_id": "o1",
-        "book": "FD",
-        "book_odds": 110,
-        "book_decimal_odds": 2.1,
-    }]
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+        }
+    ]
     row = make_row(card, ev)
     assert row["model_prob_source"] == "local_devig"
 
@@ -457,7 +464,10 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
     assert row["board"] == "B"
     assert row["movement_component"] == pytest.approx(75.0)
     assert set(row["signal_flags"].split(";")) == {
-        "hit_rate_support", "insight_support", "orf_support", "movement_support"
+        "hit_rate_support",
+        "insight_support",
+        "orf_support",
+        "movement_support",
     }
     assert isinstance(row["edge_pct"], float)
     assert isinstance(row["kelly_025_units"], float)
@@ -496,9 +506,7 @@ def test_stale_line_edge_gate_withholds_units():
 
 # 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
 def test_stale_line_gate_requires_both_flags():
-    card = ev_card(
-        market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"]
-    )
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"])
     ev = [
         {
             "market_id": "m1",
@@ -556,9 +564,7 @@ def test_spread_sign_conflict_withholds_units():
 
 # 8e. Without the flag, an otherwise-identical SPREAD row sizes normally.
 def test_spread_row_without_conflict_sizes_normally():
-    card = ev_card(
-        market_type="GAMELINE", market="SPREAD", proposition="SPREAD", flags=[]
-    )
+    card = ev_card(market_type="GAMELINE", market="SPREAD", proposition="SPREAD", flags=[])
     ev = [
         {
             "market_id": "m1",
@@ -582,14 +588,16 @@ def test_card_vs_movement_line_mismatch_is_disqualifying_even_for_legacy_cards()
         proposition="SPREAD",
     )
     card["sides"]["OVER"]["movement"] = {"open_line": 7.5, "current_line": 8.5}
-    ev = [{
-        "market_id": "m1",
-        "outcome_id": "o1",
-        "book": "FD",
-        "book_odds": 115,
-        "book_decimal_odds": 2.15,
-        "calculated_ev_pct": 0.05,
-    }]
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 115,
+            "book_decimal_odds": 2.15,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
     row = make_row(card, ev)
     assert "movement_line_mismatch" in row["data_quality_flags"]
     assert row["recommended_units_pre_news"] == ""
@@ -602,9 +610,7 @@ def test_card_vs_movement_line_mismatch_is_disqualifying_even_for_legacy_cards()
 #     compute_sizing only consumes price/model_prob, never the line itself.
 def test_non_numeric_line_withholds_units():
     nan = float("nan")
-    card = ev_card(
-        line=nan, market_type="MONEYLINE", market="MONEYLINE", proposition="MONEYLINE"
-    )
+    card = ev_card(line=nan, market_type="MONEYLINE", market="MONEYLINE", proposition="MONEYLINE")
     ev = [
         {
             "market_id": "m1",
@@ -870,18 +876,9 @@ def test_quota_ranking():
 
 
 def test_flagged_audits_share_existing_ev_quota():
-    rows = [
-        {"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"}
-        for i in range(20)
-    ]
-    rows += [
-        {"_board": "flagged", "_rank_value": i + 0.5, "market_id": f"f{i}"}
-        for i in range(20)
-    ]
-    rows += [
-        {"_board": "board_b", "_rank_value": i, "market_id": f"b{i}"}
-        for i in range(10)
-    ]
+    rows = [{"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"} for i in range(20)]
+    rows += [{"_board": "flagged", "_rank_value": i + 0.5, "market_id": f"f{i}"} for i in range(20)]
+    rows += [{"_board": "board_b", "_rank_value": i, "market_id": f"b{i}"} for i in range(10)]
     out = rank_rows(rows, top_ev_n=15, top_signal_n=10)
     assert len(out) == 25
     assert sum(row["_board"] in {"board_a", "flagged"} for row in out) == 15
@@ -1047,9 +1044,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         _league_fixture(tmp_path / "data" / lg, lg)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, target, games_norm, coverage = build_pack_with_coverage(
-        ["MLB", "WNBA"], None, 15, 10
-    )
+    rows, target, games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
     projection_records = load_projection_records(["MLB", "WNBA"])
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
@@ -1086,6 +1081,9 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert (out_dir / "alt_team_totals.csv").exists()
     assert (out_dir / "alt_team_total_parlays.csv").exists()
     assert (out_dir / "sections" / "alt_team_totals.md").exists()
+    assert (out_dir / "ultimate_alt.csv").exists()
+    assert (out_dir / "ultimate_alt_parlays.csv").exists()
+    assert (out_dir / "sections" / "ultimate_alt.md").exists()
     briefing = (out_dir / "briefing.md").read_text()
     assert "REASONING PASSES (pack-only):" in briefing
     # Pass labels are desk-agnostic (no A/B/C/D letters) so the shared ROLE_BLOCK
@@ -1143,16 +1141,18 @@ def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():
         "price": 115,
         "data_quality_flags": "spread_sign_conflict;movement_line_mismatch",
     }
-    team_totals = [{
-        "sport": "WNBA",
-        "market_id": "tm1",
-        "selection": "LAS Team Total OVER 85.5",
-        "line": 85.5,
-        "price": -110,
-        "edge_pct": 0.01,
-        "actionable": "false",
-        "quality_flags": "SINGLE_BOOK",
-    }]
+    team_totals = [
+        {
+            "sport": "WNBA",
+            "market_id": "tm1",
+            "selection": "LAS Team Total OVER 85.5",
+            "line": 85.5,
+            "price": -110,
+            "edge_pct": 0.01,
+            "actionable": "false",
+            "quality_flags": "SINGLE_BOOK",
+        }
+    ]
     text = build_briefing([signal, flagged], "2026-07-13", team_totals_rows=team_totals)
     assert text.count("tm1") == 1
     assert "### Non-actionable flagged cards" in text
@@ -1275,13 +1275,11 @@ def test_candidates_header_public_money_component_grouped():
     assert "public_money_divergence_pct" in CANDIDATES_HEADER
     # Component sits with other Board B components after orf_component.
     assert (
-        CANDIDATES_HEADER[CANDIDATES_HEADER.index("orf_component") + 1]
-        == "public_money_component"
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("orf_component") + 1] == "public_money_component"
     )
     # Raw divergence sits after money_pct.
     assert (
-        CANDIDATES_HEADER[CANDIDATES_HEADER.index("money_pct") + 1]
-        == "public_money_divergence_pct"
+        CANDIDATES_HEADER[CANDIDATES_HEADER.index("money_pct") + 1] == "public_money_divergence_pct"
     )
 
 
@@ -1629,9 +1627,7 @@ def test_build_pack_coverage_explains_zero_rows_from_missing_event_starts(tmp_pa
     )
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, _target, _games_norm, coverage = build_pack_with_coverage(
-        ["MLB"], "2026-07-13", 15, 10
-    )
+    rows, _target, _games_norm, coverage = build_pack_with_coverage(["MLB"], "2026-07-13", 15, 10)
 
     assert rows == []
     assert coverage["MLB"] == {
@@ -1666,9 +1662,7 @@ def test_combined_pack_counts_undated_mlb_as_unverified_not_wrong_date(tmp_path,
     )
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
-    rows, _target, _games_norm, coverage = build_pack_with_coverage(
-        ["MLB", "WNBA"], None, 15, 10
-    )
+    rows, _target, _games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
 
     assert {row["sport"] for row in rows} == {"WNBA"}
     assert coverage["MLB"]["date_filtered"] == 0
@@ -1714,10 +1708,22 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
     assert (out_dir / "keep-me.txt").read_text() == "unrelated"
     with (out_dir / "decisions.csv").open(newline="", encoding="utf-8") as handle:
         assert next(csv.reader(handle)) == [
-            "decision_id", "snapshot_id", "pipeline_verdict", "A_verdict",
-            "B_verdict", "C_verdict", "D_verdict", "final_verdict", "units",
-            "kill_reason", "news_override", "policy_fingerprint", 
-            "portfolio_mode", "pre_cap_units", "portfolio_units", "cap_reasons",
+            "decision_id",
+            "snapshot_id",
+            "pipeline_verdict",
+            "A_verdict",
+            "B_verdict",
+            "C_verdict",
+            "D_verdict",
+            "final_verdict",
+            "units",
+            "kill_reason",
+            "news_override",
+            "policy_fingerprint",
+            "portfolio_mode",
+            "pre_cap_units",
+            "portfolio_units",
+            "cap_reasons",
         ]
 
 
@@ -1748,6 +1754,7 @@ def test_freshness_section_all_ok(tmp_path, monkeypatch):
 
 
 # --- Ledger context surfacing (report data-quality fixes) --------------------
+
 
 def _ctx_card(sport_team, opp, matchup, **extra):
     """A minimal board-A player card carrying normalizer-resolved context."""
@@ -1780,7 +1787,11 @@ def test_context_columns_populated_with_full_names():
     # WNBA CHI @ LAS with the player on LAS: the desk must see 'Los Angeles Sparks',
     # not guess 'Las Vegas' from the LAS code.
     card = _ctx_card(
-        "LAS", "CHI", "CHI @ LAS", market="REB", market_raw="Rebounds",
+        "LAS",
+        "CHI",
+        "CHI @ LAS",
+        market="REB",
+        market_raw="Rebounds",
         market_label="Test Player - Rebounds",
     )
     row = make_row(card, [], sport="WNBA")
@@ -1796,7 +1807,11 @@ def test_portland_fire_context_resolves_full_names():
     # Expansion team must resolve like any other: PDX -> Portland Fire, AWAY side
     # of 'PDX @ MIN' (regression for the 2026-07-18 Carleton blank-team row).
     card = _ctx_card(
-        "PDX", "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        "PDX",
+        "MIN",
+        "PDX @ MIN",
+        market="PTS",
+        market_raw="Points",
         market_label="Bridget Carleton - Points",
     )
     row = make_row(card, [], sport="WNBA")
@@ -1812,7 +1827,11 @@ def test_unresolved_team_blanks_opponent_and_flags():
     # worse than an empty one: 2026-07-18 the desk read opponent=MIN as the only
     # team context on a PDX player's row. Blank the pair and flag it.
     card = _ctx_card(
-        None, "MIN", "PDX @ MIN", market="PTS", market_raw="Points",
+        None,
+        "MIN",
+        "PDX @ MIN",
+        market="PTS",
+        market_raw="Points",
         market_label="Bridget Carleton - Points",
     )
     row = make_row(card, [], sport="WNBA")
@@ -1839,12 +1858,19 @@ def test_resolved_team_context_is_not_flagged():
 
 def test_gameline_without_team_context_is_not_flagged():
     # Game totals carry no team on purpose; the guard must not fire there.
-    card = ev_card(market_type="GAMELINE", market="TOTAL", proposition="TOTAL",
-                   matchup="PDX @ MIN", line=160.5)
-    ev = [{
-        "market_id": "m1", "outcome_id": "o1", "book": "FD",
-        "book_odds": 110, "book_decimal_odds": 2.1, "calculated_ev_pct": 0.05,
-    }]
+    card = ev_card(
+        market_type="GAMELINE", market="TOTAL", proposition="TOTAL", matchup="PDX @ MIN", line=160.5
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
     row = make_row(card, ev)
     assert row is not None
     assert "team_enrichment_failed" not in row["data_quality_flags"]
@@ -1853,7 +1879,11 @@ def test_gameline_without_team_context_is_not_flagged():
 def test_market_label_disambiguates_terse_code():
     # 'PT' reads as basketball points but is Pitches Thrown; market_label spells it out.
     card = _ctx_card(
-        "ATL", "STL", "ATL @ STL", market="PT", market_raw="Pitches Thrown",
+        "ATL",
+        "STL",
+        "ATL @ STL",
+        market="PT",
+        market_raw="Pitches Thrown",
         market_label="Test Pitcher - Pitches Thrown",
     )
     row = make_row(card, [], sport="MLB")
@@ -1862,6 +1892,7 @@ def test_market_label_disambiguates_terse_code():
 
 
 # --- Signed spread/run-line rendering (fix: models disagreed on -1.5 vs +1.5) --
+
 
 def _spread_card(side, line, **extra):
     card = {
@@ -1946,10 +1977,17 @@ def test_alt_line_fallback_surfaces_priced_line():
             }
         },
     }
-    ev = [{
-        "market_id": "g1", "outcome_id": "oAlt", "side": "OVER",
-        "current_line": 8.5, "record_id": "recAlt", "book": "FD", "book_odds": -110,
-    }]
+    ev = [
+        {
+            "market_id": "g1",
+            "outcome_id": "oAlt",
+            "side": "OVER",
+            "current_line": 8.5,
+            "record_id": "recAlt",
+            "book": "FD",
+            "book_odds": -110,
+        }
+    ]
     row = make_row(card, ev)
     assert row["line"] == 9.0  # display line unchanged
     assert str(row["priced_line"]) == "8.5"
@@ -1967,10 +2005,17 @@ def test_alt_line_fallback_priced_line_is_signed_for_spread():
     )
     card["sides"]["AWAY"]["ev"]["is_alt_line_fallback"] = True
     card["sides"]["AWAY"]["ev"]["best_record_id"] = "recAlt"
-    ev = [{
-        "market_id": "rl1", "outcome_id": "oAWAY", "side": "AWAY",
-        "current_line": 2.5, "record_id": "recAlt", "book": "FD", "book_odds": -170,
-    }]
+    ev = [
+        {
+            "market_id": "rl1",
+            "outcome_id": "oAWAY",
+            "side": "AWAY",
+            "current_line": 2.5,
+            "record_id": "recAlt",
+            "book": "FD",
+            "book_odds": -170,
+        }
+    ]
     row = make_row(card, ev)
     assert row["line"] == "+1.5"
     assert row["priced_line"] == "+2.5"
@@ -1994,8 +2039,10 @@ def test_dossier_and_briefing_show_matchup_not_bare_hash():
 
 # --- Data-quality validation flags (ISSUES.md follow-ups #2, #3) -------------
 
-def _dq_card(proposition, line, market_raw=None, market_type="PLAYER_PROP",
-             player_id="p1", **extra):
+
+def _dq_card(
+    proposition, line, market_raw=None, market_type="PLAYER_PROP", player_id="p1", **extra
+):
     card = {
         "headline_side": "OVER",
         "card_id": "d1",
@@ -2013,8 +2060,12 @@ def _dq_card(proposition, line, market_raw=None, market_type="PLAYER_PROP",
         "event_id": "ev1",
         "flags": [],
         "sides": {
-            "OVER": {"outcome_id": "o1", "line": line, "best_odds": -110,
-                     "ev": {"is_alt_line_fallback": False}}
+            "OVER": {
+                "outcome_id": "o1",
+                "line": line,
+                "best_odds": -110,
+                "ev": {"is_alt_line_fallback": False},
+            }
         },
     }
     card.update(extra)
@@ -2044,8 +2095,12 @@ def test_market_validation_flags_helper_is_deterministic():
     flags = market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", 6.5)
     assert flags == ["cross_sport_market:WNBA"]
     # Game/team totals with big lines are not player props -> no implausible flag.
-    assert market_validation_flags("WNBA", {"proposition": "TOTAL"}, {}, "TOTAL",
-                                   "GAMELINE", None, 168.5) == []
+    assert (
+        market_validation_flags(
+            "WNBA", {"proposition": "TOTAL"}, {}, "TOTAL", "GAMELINE", None, 168.5
+        )
+        == []
+    )
 
 
 def test_nan_line_is_flagged_non_numeric():
@@ -2063,6 +2118,7 @@ def test_nan_line_is_flagged_non_numeric():
 
 def test_lm_status_names_missing_markets():
     import datetime
+
     report = {
         "status": "partial",
         "generated_at": datetime.datetime.now().astimezone().isoformat(),
@@ -2078,6 +2134,7 @@ def test_lm_status_names_missing_markets():
 
 def test_lm_status_caps_and_counts_extra_missing_markets():
     import datetime
+
     ids = [f"m{i}" for i in range(12)]
     report = {
         "status": "partial",
@@ -2089,6 +2146,8 @@ def test_lm_status_caps_and_counts_extra_missing_markets():
     }
     _, msg = _summarize_lm_status(report, "MLB props LM")
     assert "(+4 more)" in msg  # 12 total, first 8 shown
+
+
 # 26. WNBA home-away unresolved flag.
 def test_home_away_unresolved_flag():
     card = ev_card(market_type="MONEYLINE")
@@ -2112,29 +2171,28 @@ def test_write_pack_validation_atomic(tmp_path):
     out_dir.mkdir(parents=True)
     dossiers_dir = out_dir / "dossiers"
     dossiers_dir.mkdir()
-    
+
     # Seed with existing artifacts
     (out_dir / "candidates.csv").write_text("dummy", encoding="utf-8")
     (dossiers_dir / "test_dossier.md").write_text("dummy", encoding="utf-8")
-    
+
     # Invalid candidate row that will trigger ValidationError
     invalid_rows = [{"sport": "MLB"}]
-    
+
     from outlier_scrapers.schema import ValidationError
+
     with pytest.raises(ValidationError, match="Critical schema compatibility violation"):
         write_pack(rows=invalid_rows, out_dir=out_dir)
-        
+
     # Verify the artifacts are STILL THERE because validation failed BEFORE unlinking
     assert (out_dir / "candidates.csv").exists()
     assert (dossiers_dir / "test_dossier.md").exists()
 
+
 # historical_edge_pct: descriptive edge from the raw recency hit rate.
 def test_historical_edge_pct_column_position():
     # Sits right after edge_pct so the two are adjacent when eyeballing the CSV.
-    assert (
-        CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1]
-        == "historical_edge_pct"
-    )
+    assert CANDIDATES_HEADER[CANDIDATES_HEADER.index("edge_pct") + 1] == "historical_edge_pct"
     # Must not displace the pinned last column.
     assert CANDIDATES_HEADER[-1] == "source_timestamps"
 
@@ -2167,85 +2225,96 @@ def test_swap_staged_pack_retries_on_permission_error(tmp_path):
     out_dir = tmp_path / "out"
     staging_dir.mkdir()
     out_dir.mkdir()
-    
-    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
-         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+
+    with (
+        mock.patch("outlier_scrapers.pack.os.replace") as mock_replace,
+        mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep,
+    ):
         # First call for backup succeeds, second call for swap fails once then succeeds
         mock_replace.side_effect = [None, PermissionError("locked"), None]
         backup_dir = _swap_staged_pack(staging_dir, out_dir)
-        
+
         assert backup_dir is not None
         assert mock_replace.call_count == 3
         mock_sleep.assert_called_once()
+
 
 def test_swap_staged_pack_exhausts_retries(tmp_path):
     staging_dir = tmp_path / "staging"
     out_dir = tmp_path / "out"
     staging_dir.mkdir()
     out_dir.mkdir()
-    
-    with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
-         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
+
+    with (
+        mock.patch("outlier_scrapers.pack.os.replace") as mock_replace,
+        mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep,
+    ):
         # First call for backup fails consistently
         mock_replace.side_effect = PermissionError("locked")
-        
+
         with pytest.raises(PermissionError):
             _swap_staged_pack(staging_dir, out_dir)
-            
+
         assert mock_replace.call_count == 10
         assert mock_sleep.call_count == 10
+
 
 def test_swap_staged_pack_immediate_rollback_on_other_error(tmp_path):
     staging_dir = tmp_path / "staging"
     out_dir = tmp_path / "out"
     staging_dir.mkdir()
     out_dir.mkdir()
-    
+
     with mock.patch("outlier_scrapers.pack.os.replace") as mock_replace:
+
         def replace_side_effect(src, dst):
             if str(src) == str(staging_dir):
                 raise ValueError("other error")
             Path(src).rename(dst)
-            
+
         mock_replace.side_effect = replace_side_effect
-        
+
         with pytest.raises(ValueError):
             _swap_staged_pack(staging_dir, out_dir)
-            
+
         assert mock_replace.call_count == 3
+
 
 def test_restore_published_pack_with_transient_lock(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     backup_dir = tmp_path / "backup"
     backup_dir.mkdir()
-    
-    with mock.patch("outlier_scrapers.pack.shutil.rmtree") as mock_rmtree, \
-         mock.patch("outlier_scrapers.pack.os.replace") as mock_replace, \
-         mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep:
-         
+
+    with (
+        mock.patch("outlier_scrapers.pack.shutil.rmtree") as mock_rmtree,
+        mock.patch("outlier_scrapers.pack.os.replace") as mock_replace,
+        mock.patch("outlier_scrapers.pack.time.sleep") as mock_sleep,
+    ):
         # simulate transient lock on rmtree then success
         mock_rmtree.side_effect = [PermissionError("lock"), None]
         # simulate transient lock on replace then success
         mock_replace.side_effect = [PermissionError("lock"), None]
-        
+
         _restore_published_pack(out_dir, backup_dir)
-        
+
         assert mock_rmtree.call_count == 2
         assert mock_replace.call_count == 2
         assert mock_sleep.call_count == 2
+
 
 def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()
     sidecar_path = out_dir / "portfolio_risk.json"
     sidecar_path.write_text('{"mode": "enforce"}', encoding="utf-8")
-    
+
     # Mock config to be enforce
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     policy_path = config_dir / "portfolio_risk.json"
-    policy_path.write_text("""{
+    policy_path.write_text(
+        """{
     "schema_version": "1.0",
     "policy_version": "1.0",
     "mode": "enforce",
@@ -2261,26 +2330,31 @@ def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
     "max_book_units": 8.0,
     "non_authoritative_book_policy": "flag_and_report_only",
     "shadow_multipliers_neutral": true
-}""", encoding="utf-8")
-    
+}""",
+        encoding="utf-8",
+    )
+
     import outlier_scrapers.paths as P
+
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
-    
+
     try:
         with pytest.raises(ValueError, match="Enforce pack already exists"):
             write_pack([], out_dir)
     finally:
         P.PROJECT_ROOT = original_project_root
 
+
 def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()
-    
+
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     policy_path = config_dir / "portfolio_risk.json"
-    policy_path.write_text("""{
+    policy_path.write_text(
+        """{
     "schema_version": "1.0",
     "policy_version": "1.0",
     "mode": "enforce",
@@ -2296,39 +2370,43 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
     "max_book_units": 8.0,
     "non_authoritative_book_policy": "flag_and_report_only",
     "shadow_multipliers_neutral": true
-}""", encoding="utf-8")
-    
+}""",
+        encoding="utf-8",
+    )
+
     import outlier_scrapers.paths as P
+
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
-    
+
     try:
         with pytest.raises(ValueError, match="feedback.sqlite3 not found"):
             write_pack([], out_dir)
-            
+
         # Create an empty db
         db_dir = tmp_path / "calibration"
         db_dir.mkdir()
         db_path = db_dir / "feedback.sqlite3"
         import sqlite3
+
         with sqlite3.connect(db_path) as conn:
             conn.execute("CREATE TABLE market_snapshots (captured_at TEXT)")
-            
+
         with pytest.raises(ValueError, match="only 0 days of shadow history found"):
             write_pack([], out_dir)
-            
+
         # Insert 13 days
         with sqlite3.connect(db_path) as conn:
             for i in range(1, 14):
                 conn.execute(f"INSERT INTO market_snapshots VALUES ('2026-07-{i:02d}T12:00:00Z')")
-                
+
         with pytest.raises(ValueError, match="only 13 days of shadow history found"):
             write_pack([], out_dir)
-            
+
         # Insert 14th day
         with sqlite3.connect(db_path) as conn:
             conn.execute("INSERT INTO market_snapshots VALUES ('2026-07-14T12:00:00Z')")
-            
+
         # Should not raise ValueError about 14 days
         try:
             write_pack([], out_dir)

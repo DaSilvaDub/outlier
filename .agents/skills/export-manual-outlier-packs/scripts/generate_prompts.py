@@ -124,6 +124,7 @@ def archive_old_packs(out_dir: Path, date_str: str) -> None:
         except OSError:
             pass
 
+
 def filter_min_unit_candidates(candidates_csv_text: str, min_units: float = 2.0) -> str:
     """Filter candidate rows to recommended candidates (recommended_units_pre_news >= min_units, default 2.0, or Board A fallback)."""
     f_in = io.StringIO(candidates_csv_text)
@@ -192,7 +193,7 @@ def _normalize_token(text: str) -> str:
 
 
 def _prop_label_suffix(market_label: str) -> str:
-    """"Player Name - Bases" -> "BASES"; falls back to the whole label if unstructured."""
+    """ "Player Name - Bases" -> "BASES"; falls back to the whole label if unstructured."""
     label = str(market_label or "")
     if " - " in label:
         label = label.rsplit(" - ", 1)[1]
@@ -216,16 +217,20 @@ def _is_master_card_row(row: dict, sport: str) -> bool:
 
     if market_type == "GAMELINE":
         token = _normalize_token(market_label)
-        if token != MASTER_CARD_MONEYLINE_TOKEN and token not in MASTER_CARD_SPREAD_TOKENS.get(sport, frozenset()):
+        if token != MASTER_CARD_MONEYLINE_TOKEN and token not in MASTER_CARD_SPREAD_TOKENS.get(
+            sport, frozenset()
+        ):
             return False
     elif sport == "MLB":
         if market_type not in MASTER_CARD_MLB_MARKET_TYPES and not (
-            market_type == "PLAYER_PROP" and _prop_label_suffix(market_label) in MASTER_CARD_MLB_PROP_LABEL_SUFFIXES
+            market_type == "PLAYER_PROP"
+            and _prop_label_suffix(market_label) in MASTER_CARD_MLB_PROP_LABEL_SUFFIXES
         ):
             return False
     elif sport == "WNBA":
         if market_type not in MASTER_CARD_WNBA_MARKET_TYPES and not (
-            market_type == "PLAYER_PROP" and _prop_label_suffix(market_label) in MASTER_CARD_WNBA_PROP_LABEL_SUFFIXES
+            market_type == "PLAYER_PROP"
+            and _prop_label_suffix(market_label) in MASTER_CARD_WNBA_PROP_LABEL_SUFFIXES
         ):
             return False
     else:
@@ -313,7 +318,10 @@ def load_prompt_template(filename: str) -> str:
                 return f.read()
     # Safety fallback to Master Cards prompt (A.md)
     for fallback_name in ["A.md"]:
-        for p in [repo_root / "prompts" / fallback_name, Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / fallback_name]:
+        for p in [
+            repo_root / "prompts" / fallback_name,
+            Path(r"C:\Users\dasil\Dev\GitHub\outlier\prompts") / fallback_name,
+        ]:
             if p.exists():
                 with open(p, "r", encoding="utf-8") as f:
                     return f.read()
@@ -322,6 +330,7 @@ def load_prompt_template(filename: str) -> str:
 
 def safe_write_text(filepath: Path, content: str, retries: int = 10, delay: float = 1.0) -> None:
     import time
+
     for attempt in range(retries):
         try:
             if filepath.exists():
@@ -349,11 +358,9 @@ def generate_for_dir(
     bankroll_data: tuple[str, str],
     no_clean: bool,
     spreads_data: tuple[str | None, str | None] | None = None,
+    ultimate_alt_data: tuple[str, str] | None = None,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    current_date = date.fromisoformat(date_str)
-    keep_dates = {date_str, (current_date - timedelta(days=1)).isoformat()}
 
     # Archive old files and clean archive folder (only keep 1 day old data)
     archive_old_packs(out_dir, date_str)
@@ -392,7 +399,9 @@ def generate_for_dir(
             f"{cards_template}\n\n### Pack Data\n{briefing}\n\n"
             f"### 2+ Unit Candidates Data\n```csv\n{cards_filtered}\n```\n"
         )
-        safe_write_text(desk1_dir / f"1_Master_Cards_{label}_pack_{date_str}.txt", full_cards_prompt)
+        safe_write_text(
+            desk1_dir / f"1_Master_Cards_{label}_pack_{date_str}.txt", full_cards_prompt
+        )
 
     totals_template = load_prompt_template("Totals_Analysis.md")
     game_totals, team_totals, _alt_team_totals = totals_data
@@ -402,6 +411,52 @@ def generate_for_dir(
         f"### Team Totals Data\n```csv\n{team_totals}\n```\n"
     )
 
+    safe_write_text(desk1_dir / f"2_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
+
+    # When the unified shadow artifact exists, emit one Ultimate Alt prompt and
+    # suppress the three legacy decision prompts. Their CSVs remain available
+    # in the pack for compatibility and audit.
+    if ultimate_alt_data is not None:
+        ultimate_rows, ultimate_parlays = ultimate_alt_data
+        if csv_has_data_rows(ultimate_rows):
+            ultimate_template = load_prompt_template("Ultimate_Alt_Analysis.md")
+            full_ultimate_prompt = (
+                f"{ultimate_template}\n\n### Pack Data\n{briefing}\n\n"
+                f"### Ultimate Alt Shadow Table\n```csv\n{ultimate_rows}\n```\n\n"
+                f"### Ultimate Alt Shadow Parlays\n```csv\n{ultimate_parlays}\n```\n"
+            )
+            safe_write_text(
+                desk1_dir / f"3_Master_Ultimate_Alt_Shadow_pack_{date_str}.txt",
+                full_ultimate_prompt,
+            )
+    else:
+        # Legacy prompt lanes remain available for packs created before the
+        # unified artifact was introduced.
+        _write_legacy_alt_prompts(
+            desk1_dir,
+            date_str,
+            briefing,
+            alt_props_data,
+            bankroll_data,
+            spreads_data,
+        )
+    _write_desk2_prompts(prompts_dir, desk1_dir, date_str, briefing, candidates)
+
+
+def _write_legacy_alt_prompts(
+    desk1_dir: Path,
+    date_str: str,
+    briefing: str,
+    alt_props_data: tuple[str, str],
+    bankroll_data: tuple[str, str],
+    spreads_data: tuple[str | None, str | None] | None,
+) -> None:
+    # "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low
+    # variance, high probability) — the market type differs (game/team total
+    # vs. player prop), not the underlying strategy. Both templates already
+    # describe themselves as bankroll parlays; only the market-type label
+    # differs in the output filename.
+    bankroll_template = load_prompt_template("Alt_Bankroll_Props_Analysis.md")
     alt_props_template = load_prompt_template("Alt_Player_Props_Analysis.md")
     alt_player_props, alt_player_props_parlays = alt_props_data
     full_alt_props_prompt = (
@@ -409,24 +464,19 @@ def generate_for_dir(
         f"### Alternate Player Props Data\n```csv\n{alt_player_props}\n```\n\n"
         f"### Alternate Player Props Parlays Data\n```csv\n{alt_player_props_parlays}\n```\n"
     )
-
-    safe_write_text(desk1_dir / f"2_Master_Totals_pack_{date_str}.txt", full_totals_prompt)
-
-    # "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low
-    # variance, high probability) — the market type differs (game/team total
-    # vs. player prop), not the underlying strategy. Both templates already
-    # describe themselves as bankroll parlays; only the market-type label
-    # differs in the output filename.
-    bankroll_template = load_prompt_template("Alt_Bankroll_Props_Analysis.md")
     mlb_bankroll_all, wnba_bankroll_all = bankroll_data
     mlb_bankroll = filter_bankroll_spreads(mlb_bankroll_all, keep_spreads=False)
     wnba_bankroll = filter_bankroll_spreads(wnba_bankroll_all, keep_spreads=False)
     if csv_has_data_rows(mlb_bankroll):
         full_mlb_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
-        safe_write_text(desk1_dir / f"3_Master_Alt_Total_MLB_pack_{date_str}.txt", full_mlb_bankroll)
+        safe_write_text(
+            desk1_dir / f"3_Master_Alt_Total_MLB_pack_{date_str}.txt", full_mlb_bankroll
+        )
     if csv_has_data_rows(wnba_bankroll):
         full_wnba_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (WNBA)\n```csv\n{wnba_bankroll}\n```\n"
-        safe_write_text(desk1_dir / f"3_Master_Alt_Total_WNBA_pack_{date_str}.txt", full_wnba_bankroll)
+        safe_write_text(
+            desk1_dir / f"3_Master_Alt_Total_WNBA_pack_{date_str}.txt", full_wnba_bankroll
+        )
 
     if csv_has_data_rows(alt_player_props):
         safe_write_text(
@@ -437,14 +487,10 @@ def generate_for_dir(
     spread_template = load_prompt_template("Alt_Spreads_Analysis.md")
     provided_mlb, provided_wnba = spreads_data or (None, None)
     mlb_spreads = (
-        provided_mlb
-        if provided_mlb is not None
-        else build_fallback_spreads(mlb_bankroll_all)
+        provided_mlb if provided_mlb is not None else build_fallback_spreads(mlb_bankroll_all)
     )
     wnba_spreads = (
-        provided_wnba
-        if provided_wnba is not None
-        else build_fallback_spreads(wnba_bankroll_all)
+        provided_wnba if provided_wnba is not None else build_fallback_spreads(wnba_bankroll_all)
     )
     for league, spread_csv in (("MLB", mlb_spreads), ("WNBA", wnba_spreads)):
         if not csv_has_data_rows(spread_csv):
@@ -458,7 +504,15 @@ def generate_for_dir(
             full_spread_prompt,
         )
 
-    # Desk 2 - Manual Sequence (Phase-specific prompts)
+
+def _write_desk2_prompts(
+    prompts_dir: Path,
+    desk1_dir: Path,
+    date_str: str,
+    briefing: str,
+    candidates: str,
+) -> None:
+    desk2_dir = prompts_dir / "Desk2_Manual"
     desk2_order_map = {
         "Q_chatgpt": (1, "PhaseQ"),
         "R_claude": (2, "PhaseR"),
@@ -492,8 +546,7 @@ def generate_for_dir(
     master_count = len(list(desk1_dir.glob("*_Master_*_pack_*.txt")))
     print(
         f"Successfully generated {master_count} Master Prompts and {desk2_count} "
-        f"Desk2 prompt files in {out_dir}/prompts "
-        f"(archived anything older than {min(keep_dates)})"
+        f"Desk2 prompt files in {prompts_dir}"
     )
 
 
@@ -520,7 +573,11 @@ def main() -> None:
         default=None,
         help="Additional output directory for prompts (repeatable). Always includes both the OneDrive Desktop and Google Drive 'today' folders.",
     )
-    parser.add_argument("--no-clean", action="store_true", help="Do not clean the output directory before generating")
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Do not clean the output directory before generating",
+    )
     args = parser.parse_args()
 
     out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
@@ -549,7 +606,9 @@ def main() -> None:
     candidates = filter_candidates_text_for_ai(candidates)
 
     briefing = briefing.replace("- Use this pack ONLY. Do not use memory or the web.\n", "")
-    briefing = briefing.replace("- If you need info not in the pack, list it under NEEDS — do not guess.\n", "")
+    briefing = briefing.replace(
+        "- If you need info not in the pack, list it under NEEDS — do not guess.\n", ""
+    )
 
     # Read totals data if available
     gt_path = latest_pack / "game_totals.csv"
@@ -565,7 +624,9 @@ def main() -> None:
     app_path = latest_pack / "alt_player_props.csv"
     app_parlays_path = latest_pack / "alt_player_props_parlays.csv"
     alt_player_props = app_path.read_text(encoding="utf-8") if app_path.exists() else ""
-    alt_player_props_parlays = app_parlays_path.read_text(encoding="utf-8") if app_parlays_path.exists() else ""
+    alt_player_props_parlays = (
+        app_parlays_path.read_text(encoding="utf-8") if app_parlays_path.exists() else ""
+    )
     alt_props_data = (alt_player_props, alt_player_props_parlays)
 
     # Read alt bankroll props
@@ -579,9 +640,24 @@ def main() -> None:
     # for compatibility; these files provide the explicit spread-only product.
     mlb_spreads_path = latest_pack / "mlb_alt_spreads.csv"
     wnba_spreads_path = latest_pack / "wnba_alt_spreads.csv"
-    mlb_spreads = mlb_spreads_path.read_text(encoding="utf-8") if mlb_spreads_path.exists() else None
-    wnba_spreads = wnba_spreads_path.read_text(encoding="utf-8") if wnba_spreads_path.exists() else None
+    mlb_spreads = (
+        mlb_spreads_path.read_text(encoding="utf-8") if mlb_spreads_path.exists() else None
+    )
+    wnba_spreads = (
+        wnba_spreads_path.read_text(encoding="utf-8") if wnba_spreads_path.exists() else None
+    )
     spreads_data = (mlb_spreads, wnba_spreads)
+
+    ultimate_alt_path = latest_pack / "ultimate_alt.csv"
+    ultimate_alt_parlays_path = latest_pack / "ultimate_alt_parlays.csv"
+    ultimate_alt_data = None
+    if ultimate_alt_path.exists():
+        ultimate_alt_data = (
+            ultimate_alt_path.read_text(encoding="utf-8"),
+            ultimate_alt_parlays_path.read_text(encoding="utf-8")
+            if ultimate_alt_parlays_path.exists()
+            else "",
+        )
 
     for out_dir in out_dirs:
         generate_for_dir(
@@ -594,9 +670,8 @@ def main() -> None:
             bankroll_data,
             args.no_clean,
             spreads_data=spreads_data,
+            ultimate_alt_data=ultimate_alt_data,
         )
-
-
 
 
 if __name__ == "__main__":

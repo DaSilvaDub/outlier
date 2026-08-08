@@ -32,10 +32,7 @@ def _totals_models_diverge(
 ) -> bool:
     if independent_probability is None or market_probability is None:
         return False
-    return (
-        abs(independent_probability - market_probability)
-        >= TOTALS_MODEL_DIVERGENCE_THRESHOLD
-    )
+    return abs(independent_probability - market_probability) >= TOTALS_MODEL_DIVERGENCE_THRESHOLD
 
 
 def _is_candidate_game_total(row: dict[str, Any]) -> bool:
@@ -49,9 +46,7 @@ def _is_candidate_game_total(row: dict[str, Any]) -> bool:
     return "total o/u" in sel or prop == "TOTAL"
 
 
-def _is_candidate_team_total(
-    row: dict[str, Any], *, sport: str | None = None
-) -> bool:
+def _is_candidate_team_total(row: dict[str, Any], *, sport: str | None = None) -> bool:
     if row.get("player_id"):
         return False
     mt = str(row.get("market_type") or "").upper()
@@ -81,13 +76,19 @@ def _research_leverage(prop: str, scope: str, sport: str) -> str:
     token = (prop or "").upper()
     scope_l = (scope or "").lower()
     if sport.upper() == "MLB":
-        if token == "TOTAL" or scope_l in ("first_5_innings", "first_3_innings") or "nrfi" in scope_l:
+        if (
+            token == "TOTAL"
+            or scope_l in ("first_5_innings", "first_3_innings")
+            or "nrfi" in scope_l
+        ):
             return "HIGH"
         if token in ("SPREAD", "MONEYLINE", "RUN_LINE", "GAMELINE"):
             return "LOW"
     return "MED"
 
+
 MIN_EDGE_TOTALS = 0.03
+SHADOW_MIN_EDGE_TOTALS = 0.04
 FULL_GAME_SCOPES = frozenset({"", "full_game", "game", "full"})
 
 # Flags that indicate a genuine signal disagreement (recent-form vs. market, or
@@ -124,6 +125,9 @@ GAME_TOTALS_HEADER = [
     "edge_pct",
     "implied_prob",
     "actionable",
+    "shadow_actionable_4pct",
+    "shadow_recommended_units",
+    "shadow_gate_reasons",
     "quality_flags",
     "devig_source",
     "recommended_units_pre_news",
@@ -295,9 +299,7 @@ def is_game_total_record(rec: dict[str, Any]) -> bool:
     return mt == "GAMELINE" and prop == "TOTAL"
 
 
-def is_team_total_record(
-    rec: dict[str, Any], *, sport: str | None = None
-) -> bool:
+def is_team_total_record(rec: dict[str, Any], *, sport: str | None = None) -> bool:
     """Full-game TEAM_PROP totals using the sport's scoring propositions."""
     if not is_full_game_total(rec):
         return False
@@ -423,7 +425,9 @@ def compute_side_edge(side: str, p_over: float, price: Any) -> tuple[float | Non
     return round(p_side - implied, 4), implied
 
 
-def pick_best_side(p_over: float, over_price: Any, under_price: Any) -> tuple[str, Any, float | None]:
+def pick_best_side(
+    p_over: float, over_price: Any, under_price: Any
+) -> tuple[str, Any, float | None]:
     over_edge, _ = compute_side_edge("OVER", p_over, over_price)
     under_edge, _ = compute_side_edge("UNDER", p_over, under_price)
     if over_edge is None and under_edge is None:
@@ -594,9 +598,9 @@ def build_totals(
         flags: list[str] = list(source_flags)
         cand = _resolve_candidate(cand_by_market, market_records, market_id)
 
-        context_event = (
-            ((games_norm or {}).get("context") or {}).get("events") or {}
-        ).get(event_id, {})
+        context_event = (((games_norm or {}).get("context") or {}).get("events") or {}).get(
+            event_id, {}
+        )
         event_start = (
             identity.get("event_starts_at")
             or (context_event.get("starts_at") if isinstance(context_event, dict) else None)
@@ -618,15 +622,28 @@ def build_totals(
         ladder = build_market_ladder(market_records)
         if not ladder:
             flags.append("INSUFFICIENT_DATA")
-            output.append(_empty_row(
-                sport, event_id, market_id, total_kind, team, matchup, scope, flags, cand, identity
-            ))
+            output.append(
+                _empty_row(
+                    sport,
+                    event_id,
+                    market_id,
+                    total_kind,
+                    team,
+                    matchup,
+                    scope,
+                    flags,
+                    cand,
+                    identity,
+                )
+            )
             continue
 
         ladder_p: dict[float, float] = {}
         line_flags: dict[float, list[str]] = {}
         for line, sides in ladder.items():
-            line_p_over, _bc, lf = aggregate_line_p_over(sides.get("over", {}), sides.get("under", {}))
+            line_p_over, _bc, lf = aggregate_line_p_over(
+                sides.get("over", {}), sides.get("under", {})
+            )
             if lf:
                 line_flags[line] = lf
             if line_p_over is not None:
@@ -675,7 +692,9 @@ def build_totals(
         )
 
         best_side, best_price, edge_pct = (
-            pick_best_side(blended_over, over_price, under_price) if blended_over is not None else ("OVER", over_price, None)
+            pick_best_side(blended_over, over_price, under_price)
+            if blended_over is not None
+            else ("OVER", over_price, None)
         )
         cand_side = str(cand.get("headline_side") or cand.get("best_side") or "").strip().upper()
         if cand_side and best_side and cand_side != best_side:
@@ -684,21 +703,16 @@ def build_totals(
         best_book = under_book if best_side == "UNDER" else over_book
 
         if fair_total is not None:
-            if (
-                best_side == "UNDER"
-                and fair_total > headline_line + FAIR_TOTAL_DIRECTION_TOLERANCE
-            ):
+            if best_side == "UNDER" and fair_total > headline_line + FAIR_TOTAL_DIRECTION_TOLERANCE:
                 flags.append("FAIR_TOTAL_DIVERGENCE")
                 flags.append("FAIR_TOTAL_SIDE_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")
             elif (
-                best_side == "OVER"
-                and fair_total < headline_line - FAIR_TOTAL_DIRECTION_TOLERANCE
+                best_side == "OVER" and fair_total < headline_line - FAIR_TOTAL_DIRECTION_TOLERANCE
             ):
                 flags.append("FAIR_TOTAL_DIVERGENCE")
                 flags.append("FAIR_TOTAL_SIDE_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")
-
 
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         p_side_market = (
@@ -714,9 +728,7 @@ def build_totals(
         p_side_independent = None
         if used_l10 and l10_over is not None:
             p_side_independent = (
-                float(l10_over["pct"])
-                if best_side == "OVER"
-                else 1.0 - float(l10_over["pct"])
+                float(l10_over["pct"]) if best_side == "OVER" else 1.0 - float(l10_over["pct"])
             )
         model_win_prob = p_side_conditional
         consensus_win_prob = p_side_market
@@ -725,7 +737,9 @@ def build_totals(
         if _totals_models_diverge(p_side_independent, p_side_market):
             flags.append("totals_model_divergence")
 
-        if independent_win_prob is not None and (independent_win_prob >= 0.98 or independent_win_prob <= 0.02):
+        if independent_win_prob is not None and (
+            independent_win_prob >= 0.98 or independent_win_prob <= 0.02
+        ):
             flags.append("MODEL_SATURATED")
             flags.append("SOURCE_INTEGRITY_FLAG")
         decimal_price = _american_to_decimal(best_price)
@@ -746,17 +760,11 @@ def build_totals(
                 push_prob = round(derived, 4)
                 no_push = 1.0 - float(push_prob)
                 model_win_prob = (
-                    p_side_conditional * no_push
-                    if p_side_conditional is not None
-                    else None
+                    p_side_conditional * no_push if p_side_conditional is not None else None
                 )
-                consensus_win_prob = (
-                    p_side_market * no_push if p_side_market is not None else None
-                )
+                consensus_win_prob = p_side_market * no_push if p_side_market is not None else None
                 independent_win_prob = (
-                    p_side_independent * no_push
-                    if p_side_independent is not None
-                    else None
+                    p_side_independent * no_push if p_side_independent is not None else None
                 )
                 if decimal_price is not None and model_win_prob is not None:
                     sizing = compute_sizing(
@@ -764,9 +772,7 @@ def build_totals(
                         model_prob=model_win_prob,
                         push_prob=float(push_prob),
                     )
-                    edge_pct = (
-                        round(sizing.edge_pct, 4) if sizing.edge_pct is not None else None
-                    )
+                    edge_pct = round(sizing.edge_pct, 4) if sizing.edge_pct is not None else None
                 else:
                     edge_pct = None
             else:
@@ -786,7 +792,9 @@ def build_totals(
             edge_pct = sizing.edge_pct
 
         quality_flags = ",".join(dict.fromkeys(flags)) if flags else ""
-        devig_source = "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
+        devig_source = (
+            "book_median" if book_count >= 2 else ("single_book" if book_count == 1 else "")
+        )
 
         hard_flags = [f for f in flags if f not in SOFT_QUALITY_FLAGS]
         has_soft_flag = any(f in SOFT_QUALITY_FLAGS for f in flags)
@@ -805,6 +813,14 @@ def build_totals(
             )
             else "false"
         )
+        shadow_gate_reasons: list[str] = []
+        if edge_pct is None or edge_pct < SHADOW_MIN_EDGE_TOTALS:
+            shadow_gate_reasons.append("EDGE_BELOW_4PCT")
+        if has_soft_flag:
+            shadow_gate_reasons.append("MODEL_DIVERGENCE_HARD_REJECT")
+        if actionable != "true" and not shadow_gate_reasons:
+            shadow_gate_reasons.append("LEGACY_INTEGRITY_GATE")
+        shadow_actionable = "true" if actionable == "true" and not shadow_gate_reasons else "false"
         if not quality_flags and actionable == "false" and p_over_headline is not None:
             if edge_pct is not None and edge_pct < MIN_EDGE_TOTALS:
                 quality_flags = "BELOW_MIN_EDGE"
@@ -816,6 +832,9 @@ def build_totals(
             recommended_units = sizing.recommended_units_pre_news or 0.0
             if has_soft_flag and recommended_units:
                 recommended_units = round(recommended_units * SOFT_FLAG_UNITS_DISCOUNT, 4)
+        shadow_recommended_units: float | str = ""
+        if shadow_actionable == "true" and sizing is not None:
+            shadow_recommended_units = sizing.recommended_units_pre_news or 0.0
 
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
@@ -840,16 +859,28 @@ def build_totals(
                 "book": best_book,
                 "best_side": best_side,
                 "best_price": best_price,
-                "projected_over_prob": round(p_over_headline, 4) if p_over_headline is not None else "",
+                "projected_over_prob": round(p_over_headline, 4)
+                if p_over_headline is not None
+                else "",
                 "projected_under_prob": round(p_under, 4) if p_under is not None else "",
-                "market_consensus_prob": round(consensus_win_prob, 4) if consensus_win_prob is not None else "",
-                "independent_model_prob": round(independent_win_prob, 4) if independent_win_prob is not None else "",
-                "final_blended_prob": round(model_win_prob, 4) if model_win_prob is not None else "",
+                "market_consensus_prob": round(consensus_win_prob, 4)
+                if consensus_win_prob is not None
+                else "",
+                "independent_model_prob": round(independent_win_prob, 4)
+                if independent_win_prob is not None
+                else "",
+                "final_blended_prob": round(model_win_prob, 4)
+                if model_win_prob is not None
+                else "",
                 "fair_total": fair_total if fair_total is not None else "",
                 "edge_pct": edge_pct if edge_pct is not None else "",
                 "implied_prob": implied_prob if implied_prob is not None else "",
                 "actionable": actionable,
-                "quality_flags": quality_flags or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
+                "shadow_actionable_4pct": shadow_actionable,
+                "shadow_recommended_units": shadow_recommended_units,
+                "shadow_gate_reasons": ";".join(shadow_gate_reasons),
+                "quality_flags": quality_flags
+                or ("INSUFFICIENT_DATA" if p_over_headline is None else ""),
                 "devig_source": devig_source,
                 "recommended_units_pre_news": recommended_units,
                 "sizing_flags": sizing_flags,
@@ -872,7 +903,10 @@ def build_totals(
         output.append(row)
 
     output.sort(
-        key=lambda r: (-(float(r["edge_pct"]) if r.get("edge_pct") not in (None, "") else -1.0), r.get("market_id", ""))
+        key=lambda r: (
+            -(float(r["edge_pct"]) if r.get("edge_pct") not in (None, "") else -1.0),
+            r.get("market_id", ""),
+        )
     )
     return output
 
