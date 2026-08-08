@@ -100,12 +100,15 @@ def test_copy_prompt_outputs_excludes_sequential_prompts_unless_opted_in(tmp_pat
 
     flat_q = out_dir / "Q_chatgpt_stale.txt"
     flat_numbered_q = out_dir / "1_PhaseQ_chatgpt_stale.txt"
+    unrelated = out_dir / "A_notes.txt"
     flat_q.write_text("STALE Q", encoding="utf-8")
     flat_numbered_q.write_text("STALE NUMBERED Q", encoding="utf-8")
+    unrelated.write_text("KEEP ME", encoding="utf-8")
     org.copy_prompt_outputs(out_dir, generic, hitrate, totals)
     assert all(not (path / "1_PhaseQ_pack.txt").exists() for path in (generic, hitrate, totals))
     assert not flat_q.exists()
     assert not flat_numbered_q.exists()
+    assert unrelated.read_text(encoding="utf-8") == "KEEP ME"
 
     included = tmp_path / "included-desk2"
     included.mkdir()
