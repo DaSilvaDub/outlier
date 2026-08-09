@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import time
 import uuid
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from outlier_scrapers import paths, probability_blend
+from outlier_scrapers.game_totals import is_full_game_total
 from outlier_scrapers.registry import (
     classify_foreign_market,
     get_sport_config,
@@ -717,6 +719,19 @@ def build_row(
     if is_excluded_market(market_token, market_type):
         return None
     scope = card.get("scope") or ref.get("scope")
+    market_type_upper = str(market_type or "").upper()
+    is_total_proposition = (
+        market_type_upper == "TEAM_PROP"
+        and is_team_total_proposition(proposition, sport=sport)
+    ) or (market_type_upper == "GAMELINE" and str(proposition or "").upper() == "TOTAL")
+    if is_total_proposition and not is_full_game_total({"scope": scope}):
+        # Period/partial-game totals (quarters, first-5-innings, etc.) are the
+        # exclusive domain of the dedicated totals pipeline (game_totals.py),
+        # which already filters them out of candidates.csv/Team totals. Letting
+        # them through here surfaces them unlabeled in the briefing's Top
+        # EV/signal cards, indistinguishable from the full-game market for the
+        # same team/game (see BETTING REPORTS/GENERIC/2026-08-08 review).
+        return None
     row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport
     row["event_id"] = event_id
@@ -1196,6 +1211,18 @@ def _matchup_display(row: dict[str, Any]) -> str:
     return matchup or "unknown matchup"
 
 
+_TOTALS_NAME_RE = re.compile(r"^(.*?)\s+(?:Total O/U|Team Total)\s+")
+
+
+def _totals_event_display(row: dict[str, Any]) -> str:
+    """Best-effort matchup/team label for a totals row (no matchup field on
+    GAME_TOTALS_HEADER — the name is embedded in `selection`)."""
+    match = _TOTALS_NAME_RE.match(str(row.get("selection") or ""))
+    if match:
+        return match.group(1)
+    return str(row.get("team") or "unknown matchup")
+
+
 def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
     matchup = _matchup_display(rows[0]) if rows else "unknown matchup"
     lines = [f"## {sport} game dossier — {matchup}", ""]
@@ -1447,6 +1474,18 @@ def build_briefing(
             lines.append(
                 f"- {r.get('sport')} {_matchup_display(r)} | event {eid} "
                 f"| first lock: {r.get('_event_starts_at') or 'n/a'}"
+            )
+    # Games that produced only Game/Team Totals markets (no player/team-prop
+    # candidates) never appear in `rows`, so without this they were silently
+    # missing from the Slate index while still being quoted later in the
+    # Game/Team totals tables — an unverifiable-looking event reference.
+    for r in (totals_rows or []) + (team_totals_rows or []):
+        eid = r.get("event_id")
+        if eid and eid not in seen:
+            seen.add(eid)
+            lines.append(
+                f"- {r.get('sport')} {_totals_event_display(r)} | event {eid} "
+                f"| first lock: n/a (totals-only event)"
             )
     if totals_rows is not None:
         lines.append("")

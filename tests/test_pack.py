@@ -1160,6 +1160,54 @@ def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():
     assert "spread1" not in top_ev
 
 
+def test_slate_index_includes_totals_only_events():
+    # A game that produced only Game/Team Totals candidates (no player/team
+    # prop rows) must still appear in the Slate index — otherwise its event_id
+    # looks unverifiable even though it's quoted later in the totals tables.
+    rows = [
+        {
+            "_board": "board_a",
+            "sport": "MLB",
+            "market_id": "m1",
+            "selection": "OVER",
+            "line": 1.5,
+            "price": -110,
+            "edge_pct": 0.05,
+            "recommended_units_pre_news": 1.0,
+            "event_id": "E1",
+            "_event_starts_at": None,
+        }
+    ]
+    game_totals = [
+        {
+            "sport": "MLB",
+            "market_id": "gt1",
+            "event_id": "E2",
+            "selection": "SEA @ PDX Total O/U UNDER 8.5",
+            "line": 8.5,
+            "actionable": "false",
+        }
+    ]
+    team_totals = [
+        {
+            "sport": "MLB",
+            "market_id": "tt1",
+            "event_id": "E3",
+            "selection": "SEA Team Total UNDER 3.5",
+            "line": 3.5,
+            "actionable": "false",
+        }
+    ]
+    text = build_briefing(
+        rows, "2026-08-08", totals_rows=game_totals, team_totals_rows=team_totals
+    )
+    slate_section = text.split("### Slate index", 1)[1]
+    assert "E1" in slate_section
+    assert "E2" in slate_section and "SEA @ PDX" in slate_section
+    assert "E3" in slate_section and "SEA" in slate_section
+    assert "totals-only event" in slate_section
+
+
 # 18. Selection is human-readable (name + label + side + line), not just the side token.
 def test_selection_human_readable():
     card = ev_card(side="OVER", line=5.5, player="A. Judge", market="HITS", market_type="MONEYLINE")
@@ -1234,6 +1282,40 @@ def test_mlb_team_total_uses_market_alias_when_proposition_is_missing():
 
     assert row["market_type"] == "TEAM_PROP"
     assert row["selection"] == "LAD Team Total OVER 4.5"
+
+
+def test_period_scoped_team_total_excluded_from_general_candidate_pool():
+    # Quarter/period team totals belong exclusively to the dedicated totals
+    # pipeline (game_totals.py). Letting them through build_row surfaces them
+    # unlabeled in the briefing's Top EV/signal cards, indistinguishable from
+    # the full-game team total for the same team/game.
+    card = {
+        "headline_side": "OVER",
+        "card_id": "tm-q1",
+        "proposition": "POINTS",
+        "market": "PTS",
+        "team": "LAS",
+        "matchup": "LAS @ ATL",
+        "scope": "1Q",
+        "board": "B",
+        "sides": {"OVER": {"outcome_id": "to-q1", "line": 23.5, "best_odds": -110}},
+    }
+    assert make_row(card, [], sport="WNBA") is None
+
+
+def test_period_scoped_game_total_excluded_from_general_candidate_pool():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "game-total-1h",
+        "proposition": "TOTAL",
+        "market": "TOTAL",
+        "team": "LAD",
+        "matchup": "LAD @ SF",
+        "scope": "1H",
+        "board": "B",
+        "sides": {"OVER": {"outcome_id": "game-over-1h", "line": 4.5, "best_odds": -110}},
+    }
+    assert make_row(card, [], sport="MLB") is None
 
 
 def test_untyped_mlb_total_with_team_stays_game_total():
