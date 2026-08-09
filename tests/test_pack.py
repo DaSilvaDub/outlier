@@ -1215,6 +1215,44 @@ def test_slate_index_includes_totals_only_events():
     assert "SEA" in e3_line and "totals-only event" in e3_line
 
 
+def test_slate_index_includes_ultimate_alt_only_events():
+    # An event priced solely by the Ultimate Alt Shadow lane (no player/team
+    # prop candidates, no Game/Team Totals row) must still appear in the
+    # Slate index — GROK's 2026-08-08 Ultimate Alt Shadow report flagged
+    # "NYM @ PIT" as absent from the index despite being quoted in its own
+    # shadow leg table.
+    rows = [
+        {
+            "_board": "board_a",
+            "sport": "MLB",
+            "market_id": "m1",
+            "selection": "OVER",
+            "line": 1.5,
+            "price": -110,
+            "edge_pct": 0.05,
+            "recommended_units_pre_news": 1.0,
+            "event_id": "E1",
+            "_event_starts_at": None,
+        }
+    ]
+    ultimate_alt_rows = [
+        {
+            "sport": "MLB",
+            "market_id": "alt1",
+            "event_id": "E4",
+            "matchup": "NYM @ PIT",
+            "event_starts_at": "2026-08-08T23:35:00+00:00",
+        }
+    ]
+    text = build_briefing(rows, "2026-08-08", ultimate_alt_rows=ultimate_alt_rows)
+    slate_index = text.split("### Slate index", 1)[1].split("### Game totals", 1)[0]
+    lines = slate_index.splitlines()
+    e1_line = next(line for line in lines if "event E1" in line)
+    e4_line = next(line for line in lines if "event E4" in line)
+    assert "alt-shadow-only event" not in e1_line
+    assert "NYM @ PIT" in e4_line and "alt-shadow-only event" in e4_line
+
+
 # 18. Selection is human-readable (name + label + side + line), not just the side token.
 def test_selection_human_readable():
     card = ev_card(side="OVER", line=5.5, player="A. Judge", market="HITS", market_type="MONEYLINE")
