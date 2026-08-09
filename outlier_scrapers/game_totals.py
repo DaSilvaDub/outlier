@@ -817,7 +817,12 @@ def build_totals(
         if edge_pct is None or edge_pct < SHADOW_MIN_EDGE_TOTALS:
             shadow_gate_reasons.append("EDGE_BELOW_4PCT")
         if has_soft_flag:
-            shadow_gate_reasons.append("MODEL_DIVERGENCE_HARD_REJECT")
+            # Not a data-integrity verdict: SOFT_QUALITY_FLAGS (above) are an
+            # explicit lower-conviction signal, not corrupted data. This name
+            # only says the row failed the stricter shadow-sizing gate, same
+            # as EDGE_BELOW_4PCT below — reasoning agents must not treat it as
+            # grounds to override actionable=true on the main board.
+            shadow_gate_reasons.append("MODEL_DIVERGENCE_SHADOW_GATE")
         if actionable != "true" and not shadow_gate_reasons:
             shadow_gate_reasons.append("LEGACY_INTEGRITY_GATE")
         shadow_actionable = "true" if actionable == "true" and not shadow_gate_reasons else "false"
