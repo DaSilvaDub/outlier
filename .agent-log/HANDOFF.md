@@ -5,9 +5,9 @@
 - **Last Commit SHA**: `6fd1668520650572bd6a9467bc506246dc07f810` on `fix/full-pipeline-debug-20260809`
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/92
 - **Files Touched**: `outlier_scrapers/pack.py`, `scripts/filter_perfect_hit_props.py`, `outlier_scrapers/line_movement.py`, `scripts/sync_agent_docs.py`, and their regression/lint tests.
-- **Fixes**: every `actionable=false` candidate now serializes `recommended_units_pre_news` as blank, including after enforce-mode portfolio allocation; rows capped to zero in enforce mode are demoted to `actionable=false` / `A_FLAGGED`; the optional perfect-hit prohibited-market branch no longer raises `NameError` and rejects Hits Allowed / Walks Allowed while preserving Total Bases; repository-wide Ruff import failures were cleaned up.
+- **Fixes**: every `actionable=false` candidate now serializes `recommended_units_pre_news` as blank, including after enforce-mode portfolio allocation; rows capped to zero in enforce mode are demoted to `actionable=false` / `A_FLAGGED`; the perfect-hit prohibited-market branch no longer raises `NameError`, rejects Hits Allowed / Walks Allowed while preserving Total Bases, and is enabled in the production organizer; repository-wide Ruff import failures were cleaned up.
 - **Verification**: saved-feed MLB/WNBA card rebuild succeeded (1,468/387 MLB and 664/141 WNBA player/game cards); diagnostic pack wrote 14 rows with zero invalid actionable rows, zero non-actionable rows carrying units, and zero excluded markets; 674 offline tests passed; Ruff, MyPy, Pyright, compileall, and diff checks passed; independent reviewer found no issues. Provider-facing reasoning suites were excluded and no paid reasoning calls were made.
-- **Next Steps**: wait for PR #92 hosted checks and review threads; merge only if all required checks are green, then run the canonical `report-sync.ps1` and confirm `REPORT STATUS: OK`.
+- **Next Steps**: run `C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1` as the absolute first action before any new work. Continue only after sharing its complete output and confirming `REPORT STATUS: OK` plus the final `RUN-NONCE:` line. Wait for PR #92 hosted checks and review threads; merge only if all required checks are green, then run the same canonical sync attestation again.
 
 ## Ultimate Alt Shadow slate-index gap fixed (2026-08-09)
 
