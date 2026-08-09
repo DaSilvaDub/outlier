@@ -950,7 +950,7 @@ def test_build_game_totals_model_divergence_is_soft_and_halves_units():
     assert float(row["edge_pct"]) >= MIN_EDGE_TOTALS
     assert row["actionable"] == "true"
     assert row["shadow_actionable_4pct"] == "false"
-    assert "MODEL_DIVERGENCE_HARD_REJECT" in row["shadow_gate_reasons"]
+    assert "MODEL_DIVERGENCE_SHADOW_GATE" in row["shadow_gate_reasons"]
     assert row["shadow_recommended_units"] == ""
     full_sizing = compute_sizing(
         decimal_price=float(row["decimal_price"]),
