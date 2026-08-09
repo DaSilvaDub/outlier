@@ -727,10 +727,12 @@ def build_row(
     if is_total_proposition and not is_full_game_total({"scope": scope}):
         # Period/partial-game totals (quarters, first-5-innings, etc.) are the
         # exclusive domain of the dedicated totals pipeline (game_totals.py),
-        # which already filters them out of candidates.csv/Team totals. Letting
-        # them through here surfaces them unlabeled in the briefing's Top
-        # EV/signal cards, indistinguishable from the full-game market for the
-        # same team/game (see BETTING REPORTS/GENERIC/2026-08-08 review).
+        # which already excludes them from its own totals projection outputs
+        # (Game/Team totals). Letting them through here — candidates.csv is
+        # built by this function, not game_totals.py — surfaces them unlabeled
+        # in the briefing's Top EV/signal cards, indistinguishable from the
+        # full-game market for the same team/game (see BETTING REPORTS/GENERIC
+        # /2026-08-08 review).
         return None
     row: dict[str, Any] = {k: "" for k in CANDIDATES_HEADER}
     row["sport"] = sport

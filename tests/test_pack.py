@@ -1201,11 +1201,18 @@ def test_slate_index_includes_totals_only_events():
     text = build_briefing(
         rows, "2026-08-08", totals_rows=game_totals, team_totals_rows=team_totals
     )
-    slate_section = text.split("### Slate index", 1)[1]
-    assert "E1" in slate_section
-    assert "E2" in slate_section and "SEA @ PDX" in slate_section
-    assert "E3" in slate_section and "SEA" in slate_section
-    assert "totals-only event" in slate_section
+    # Isolate the Slate index block itself (not the Game/Team totals tables
+    # that follow it and separately repeat "SEA"/"E2"/"E3") so these
+    # assertions actually verify the index formatting, not just that the
+    # strings appear somewhere later in the pack.
+    slate_index = text.split("### Slate index", 1)[1].split("### Game totals", 1)[0]
+    lines = slate_index.splitlines()
+    e1_line = next(line for line in lines if "event E1" in line)
+    e2_line = next(line for line in lines if "event E2" in line)
+    e3_line = next(line for line in lines if "event E3" in line)
+    assert "totals-only event" not in e1_line
+    assert "SEA @ PDX" in e2_line and "totals-only event" in e2_line
+    assert "SEA" in e3_line and "totals-only event" in e3_line
 
 
 # 18. Selection is human-readable (name + label + side + line), not just the side token.
