@@ -1421,6 +1421,7 @@ def build_briefing(
     totals_rows: list[dict[str, Any]] | None = None,
     team_totals_rows: list[dict[str, Any]] | None = None,
     coverage_lines: list[str] | None = None,
+    ultimate_alt_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     derived_market_ids = {
         (str(r.get("sport") or ""), str(r.get("market_id")))
@@ -1488,6 +1489,20 @@ def build_briefing(
             lines.append(
                 f"- {r.get('sport')} {_totals_event_display(r)} | event {eid} "
                 f"| first lock: n/a (totals-only event)"
+            )
+    # Events that only produced Ultimate Alt Shadow legs (spreads/totals/props
+    # priced solely by that lane) never appear in `rows`, `totals_rows`, or
+    # `team_totals_rows` either, so they were silently absent from the Slate
+    # index while still being quoted in the Ultimate Alt section below — the
+    # exact "event not in the supplied Slate index" gap flagged reviewing the
+    # 2026-08-08 GROK Ultimate Alt Shadow report (NYM @ PIT).
+    for r in ultimate_alt_rows or []:
+        eid = r.get("event_id")
+        if eid and eid not in seen:
+            seen.add(eid)
+            lines.append(
+                f"- {r.get('sport')} {_matchup_display(r)} | event {eid} "
+                f"| first lock: {r.get('event_starts_at') or 'n/a'} (alt-shadow-only event)"
             )
     if totals_rows is not None:
         lines.append("")
@@ -2024,6 +2039,7 @@ def write_pack(
             totals_rows if games_norm_by_league is not None else None,
             team_totals_rows if games_norm_by_league is not None else None,
             build_candidate_coverage_section(coverage) if coverage is not None else None,
+            ultimate_alt_rows,
         ),
         encoding="utf-8",
     )
