@@ -667,6 +667,25 @@ def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any
     row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
 
 
+def _apply_enforced_portfolio_units(row: dict[str, Any], allocated_units: Any) -> None:
+    """Apply enforce-mode units without reviving a non-actionable recommendation."""
+
+    units = _to_float(allocated_units)
+    is_actionable = str(row.get("actionable") or "").lower() == "true"
+    is_board_a = str(row.get("board") or "").upper() == "A"
+    if is_actionable and is_board_a and units is not None and units > 0:
+        row["recommended_units_pre_news"] = allocated_units
+        return
+
+    row["recommended_units_pre_news"] = ""
+    if is_actionable:
+        row["actionable"] = "false"
+        if is_board_a:
+            row["board"] = "A_FLAGGED"
+        if row.get("_board") == "board_a":
+            row["_board"] = "flagged"
+
+
 def build_row(
     card: dict[str, Any],
     ev_records: list[dict[str, Any]],
@@ -1847,7 +1866,7 @@ def write_pack(
             if wager_id and wager_id in alloc_result.allocated_units:
                 u_row["portfolio_units"] = alloc_result.allocated_units[wager_id]
                 if not policy.shadow_mode:
-                    u_row["recommended_units_pre_news"] = u_row["portfolio_units"]
+                    _apply_enforced_portfolio_units(u_row, u_row["portfolio_units"])
             for k, v in u_row.items():
                 if policy.shadow_mode and k in (
                     "recommended_units_pre_news",
