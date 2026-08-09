@@ -170,6 +170,26 @@ def test_ev_row_sized():
     assert row["sizing_flags"] == ""
 
 
+def test_non_actionable_zero_sizing_is_serialized_as_blank_units():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": -112,
+            "book_decimal_odds": 1.9,
+            "calculated_ev_pct": -0.05,
+        }
+    ]
+
+    row = make_row(card, ev)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["recommended_units_pre_news"] == ""
+
+
 def test_shadow_projection_populates_reserved_fields_without_changing_consensus_or_sizing():
     card = ev_card(
         line=5.5,
@@ -505,7 +525,7 @@ def test_stale_line_edge_gate_withholds_units():
 
 
 # 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
-def test_stale_line_gate_requires_both_flags():
+def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_units():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"])
     ev = [
         {
@@ -518,8 +538,9 @@ def test_stale_line_gate_requires_both_flags():
         }
     ]
     row = make_row(card, ev)
-    assert row["recommended_units_pre_news"] == 1.0
     assert "edge_suspect_stale_line" not in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
 
 
 # 8c2. A NaN/inf line must never crash build_row (found while adding the

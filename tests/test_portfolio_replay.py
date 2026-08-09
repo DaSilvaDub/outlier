@@ -1,6 +1,5 @@
 import json
 import sqlite3
-from pathlib import Path
 from outlier_scrapers.feedback import initialize_database, replay_portfolio
 
 def test_portfolio_replay(tmp_path):

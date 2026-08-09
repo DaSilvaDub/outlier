@@ -992,6 +992,8 @@ def build_row(
         and not dq_flags
     )
     row["actionable"] = "true" if is_actionable else "false"
+    if not is_actionable:
+        row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     signal = side_view.get("signal") or {}

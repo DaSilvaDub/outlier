@@ -14,8 +14,6 @@ from typing import Any
 
 from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
 from .schema import validate_raw_line_movement
-
-logger = logging.getLogger(__name__)
 from .normalizer import (
     game_sides,
     _to_float,
@@ -29,6 +27,9 @@ from .normalizer import (
 from .paths import league_paths
 from .props import write_json
 from .registry import SportConfig, get_sport_config, normalize_market, supported_leagues
+
+
+logger = logging.getLogger(__name__)
 
 
 SIDES = ("OVER", "UNDER")

@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import csv
-import importlib.util
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -87,6 +84,24 @@ def test_team_not_in_matchup():
     }
     opts = fphp.FilterOptions(require_team_in_matchup=True, allow_matchups=None)
     assert fphp.reject_reason(row, opts) == "team_not_in_matchup"
+
+
+def test_optional_prohibited_market_filter_uses_current_mlb_contract():
+    opts = fphp.FilterOptions(
+        drop_prohibited_markets=True,
+        require_team_in_matchup=False,
+    )
+
+    for market in ("Pitcher - Hits Allowed", "Pitcher - Walks Allowed"):
+        row = {"market_label": market, "side": "OVER", "matchup": "NYY @ PHI"}
+        assert fphp.reject_reason(row, opts) == f"prohibited_market_forbidden:{fphp.market_token(market)}"
+
+    total_bases = {
+        "market_label": "Batter - Total Bases",
+        "side": "OVER",
+        "matchup": "NYY @ PHI",
+    }
+    assert fphp.reject_reason(total_bases, opts) is None
 
 
 def test_allowlist_from_dossiers(tmp_path: Path):

@@ -1,5 +1,4 @@
 import json
-import pytest
 from pathlib import Path
 from outlier_scrapers.portfolio_report import run_report, generate_text_report, parse_args
 

@@ -7,13 +7,13 @@ Audited Gates:
 1. Pack hard-ban exclusion (HR, Walks Allowed tokens); generation whitelist is normalizer-owned
 2. Valid Event Slate Indexing (No UNINDEXED_SLATE_GAME false positives for indexed games)
 3. Briefing Pack Deduplication (No duplicate totals in flagged cards)
-4. Non-Actionable Stake Protection (Zero recommended units on actionable=false rows)
+4. Non-Actionable Stake Protection (Blank recommended units on actionable=false rows)
 """
 
-import pytest
 from outlier_scrapers.pack import is_excluded_market, build_briefing
 from outlier_scrapers.game_totals import build_game_totals
 from tests.test_game_totals import _norm_record
+from tests.test_pack import ev_card, make_row
 from datetime import datetime, timezone
 
 def test_audit_prohibited_markets_exclusion():
@@ -79,10 +79,20 @@ def test_audit_briefing_totals_deduplication():
     assert "Non-actionable flagged cards" not in briefing
 
 def test_audit_non_actionable_zero_units_rule():
-    """Gate 4: Ensure non-actionable candidate rows never carry non-zero unit recommendations."""
-    non_actionable_row = {
-        "actionable": "false",
-        "recommended_units_pre_news": "",
-        "data_quality_flags": "edge_suspect_thin_liquidity"
-    }
-    assert non_actionable_row["recommended_units_pre_news"] == ""
+    """Gate 4: Ensure non-actionable candidate rows carry no unit recommendation."""
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": -112,
+            "book_decimal_odds": 1.9,
+            "calculated_ev_pct": -0.05,
+        }
+    ]
+
+    row = make_row(card, ev)
+
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""

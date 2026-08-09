@@ -37,6 +37,7 @@ from typing import Iterable
 
 HR_RE = re.compile(r"\bhome\s*runs?\b|\bhr\b", re.I)
 MILESTONE_RE = re.compile(r"\bto\s+record\b|\bmilestone\b", re.I)
+PROHIBITED_MARKETS_RE = re.compile(r"\bwalks?\s+allowed\b|\bhits?\s+allowed\b", re.I)
 MATCHUP_SPLIT_RE = re.compile(r"\s*@\s*|\s+vs\.?\s+", re.I)
 DOSSIER_NAME_RE = re.compile(r"_([a-z0-9]+)---([a-z0-9]+)\.md$", re.I)
 MATCHUP_INLINE_RE = re.compile(r"([A-Z]{2,3})\s*@\s*([A-Z]{2,3})")

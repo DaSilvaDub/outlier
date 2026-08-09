@@ -7,7 +7,6 @@ all AI harnesses (Codex, Claude, Grok, Gemini/Antigravity).
 
 from pathlib import Path
 import re
-import sys
 
 REPO_ROOT = Path(r"C:\Users\dasil\Dev\GitHub\outlier")
 USER_HOME = Path(r"C:\Users\dasil")
