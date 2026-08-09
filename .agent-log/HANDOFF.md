@@ -1,5 +1,17 @@
 # Handoff
 
+## Totals slate-index gap + period-total leak fixed (2026-08-09)
+
+- **Implementation commit**: `7034abb` on `fix/totals-slate-index-and-period-leak`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/89 (open, not yet merged)
+- **Origin**: found by reviewing the four `CLAUDE_Master_*_report_2026-08-08.md` reports (`BETTING REPORTS\GENERIC\2026-08-08\`) that the same session generated via `analyze-outlier-generic-prompts` — two of the reasoning agent's flagged anomalies traced back to real `outlier_scrapers/pack.py` gaps, verified by reading the source before touching anything.
+- **Fix 1 — Slate index omitted totals-only events**: `build_briefing()`'s `### Slate index` only walked `rows` (player/team-prop candidates), so a game that produced only Game/Team Totals markets (no props) never got an event_id there, even though it was quoted later in the Game/Team totals tables — looked like an unverifiable event reference in the report. Now unions event_ids from `totals_rows`/`team_totals_rows` too, via new `_totals_event_display()` helper (parses a matchup/team label out of `selection` since `GAME_TOTALS_HEADER` has no matchup field).
+- **Fix 2 — Period totals leaking into "Top signal cards" unlabeled**: `game_totals.py`'s dedicated totals pipeline already drops quarter/period totals via `is_full_game_total()`, but `build_row()` (the general props candidate pool) had no equivalent filter for TEAM_PROP/GAMELINE-TOTAL propositions. A period-scoped team total's `market_id` never lands in `game_totals.py`'s output, so it dodged `build_briefing`'s `derived_market_ids` dedup and surfaced unlabeled next to the full-game market for the same team/game (observed live: "MIN Team Total OVER 23.5" beside the correct "MIN Team Total OVER 94.5"). `build_row()` now imports and applies `is_full_game_total()` and excludes period totals from the general pool.
+- **Not a bug, corrected in the report review**: the Totals report's own headline claim ("systemic data-integrity problem," round-number `independent_model_prob` as "corrupted/placeholder") was a misdiagnosis by the reasoning agent — `independent_model_prob` for totals is an L10 (last-10-games) hit rate (`outlier_scrapers/totals_model.py:214`), which lands on multiples of 0.10 by construction, and `MODEL_DIVERGENCE_HARD_REJECT` (`game_totals.py:816-823`) is an intentionally strict "shadow gate," not corruption. No code change needed there.
+- **Files touched**: `outlier_scrapers/pack.py`, `tests/test_pack.py` (3 new tests).
+- **Verification**: focused `tests/test_pack.py`+`tests/test_pack_integrity.py` `107 passed`; full suite `723 passed`; ruff clean; mypy clean on `pack.py`.
+- **Next steps**: review and merge PR #89 after hosted checks pass, then run the canonical post-merge sync verifier (`report-sync.ps1`).
+
 ## Sequential prompt export is opt-in (2026-08-08)
 
 - **Implementation commit**: `f611805f2a6627de75467f5cb831da66feb43c86` on `feat/opt-in-sequential-prompts`
