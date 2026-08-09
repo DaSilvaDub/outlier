@@ -1,5 +1,16 @@
 # Handoff
 
+## Totals shadow-gate reason renamed after results audit (2026-08-09)
+
+- **Implementation commit**: `ca087eb` on `fix/totals-shadow-gate-label`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/90 (open, not yet merged)
+- **Origin**: user asked to check the 2026-08-08 GENERIC reports (CLAUDE + GROK, non-alt Master Cards/Totals and GROK's Ultimate Alt Shadow) against the real MLB Stats API / ESPN box scores for that date and grade accuracy. Pulled actual results for every recommended pick.
+- **Revises the "not a bug" call below (2026-08-09, same day, earlier entry)**: that review concluded `MODEL_DIVERGENCE_HARD_REJECT` needed no change because it's "an intentionally strict shadow gate, not corruption" — correct about the *logic* (it never blocked `actionable=true`), but that review had no real outcomes to check against. This pass did: CLAUDE's Totals report quoted the literal string `MODEL_DIVERGENCE_HARD_REJECT` as its basis for calling the pack a "systemic data-integrity problem" and went 0-for-0 (rejected everything, including at least 4 rows that would have won: LAA@MIA U8.5, CHC@KC U9.5, DET TT O3.5, MIN TT O94.5). GROK took 4 of the exact same soft-flagged rows and went 3-1 (+1.18u). The flag itself (`totals_model_divergence`, an L10 hit-rate signal disagreeing with market consensus — see the note below) is legitimate lower-conviction context, not corrupted data; the problem was purely that its shadow-gate reason string said "HARD_REJECT" while the code's own `SOFT_QUALITY_FLAGS` classification says otherwise, and that contradiction is exactly what led one reasoning agent astray.
+- **Fix**: renamed the reason string `MODEL_DIVERGENCE_HARD_REJECT` → `MODEL_DIVERGENCE_SHADOW_GATE` in `game_totals.py` (`build_game_totals`), added a comment clarifying it's not a data-integrity verdict, updated the matching assertion in `tests/test_game_totals.py`. No change to `actionable` / `shadow_actionable_4pct` computation.
+- **2026-08-08 report scorecard for reference**: CLAUDE Master Cards Both 2-3 (40%), MLB-only 1-3 (25%), WNBA-only 1-0; CLAUDE Totals 0 bets (correctly avoided the day's losers but also missed ~4 winners via the mislabeled gate above). GROK Master Cards 1-2 (33%), WNBA 0 bets (stood down, would have won), Totals 3-1 (75%, +1.18u), Ultimate Alt Shadow 2-2 (tracking only). All 3 strikeout-UNDER picks (Burns, Sale, Cole) lost the same day; Alcantara's SO OVER and Clark's assists OVER both hit — small one-day sample, not a pattern to act on by itself.
+- **Verification**: `tests/test_game_totals.py` 40 passed; `tests/test_pack.py` + `tests/test_feedback.py` 139 passed; no remaining references to the old string.
+- **Next steps**: review and merge PR #90, then run `report-sync.ps1`. GROK's Alt Shadow report also flagged `NYM @ PIT` missing from the main slate index (same category as PR #89's slate-index fix, still open) — worth spot-checking after #89 merges to confirm it's actually covered, since it wasn't re-verified this session.
+
 ## Totals slate-index gap + period-total leak fixed (2026-08-09)
 
 - **Implementation commit**: `7034abb` on `fix/totals-slate-index-and-period-leak`
