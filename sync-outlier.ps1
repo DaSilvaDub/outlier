@@ -149,7 +149,7 @@ if ($ValidateOnly) {
   # Upgrade marker validation (the reason for the whole sync fix)
   $hasPlayerId = $gitPack -match 'player_id'
   $hasRankRoundRobin = $gitPack -match 'round_robin_then_fill|rank_rows'
-  $hasLock = $gitDaily -match '_acquire_pack_lock|_atomic_write_manifest'
+  $hasLock = $gitDaily -match '_acquire_writer_lock|_atomic_write_manifest'
   $hasDecisions = $gitPack -match 'decisions\.csv'
   $hasCHeader = $gitPack -match 'CANDIDATES_HEADER'
   Write-Info "Upgrade markers: player_id=$hasPlayerId roundrobin=$hasRankRoundRobin lock=$hasLock decisions=$hasDecisions CANDIDATES=$hasCHeader"
@@ -206,7 +206,7 @@ $gitDailyFull = git show HEAD:outlier_scrapers/daily_job.py 2>$null
 $hasPlayerId = $gitPackFull -match 'player_id'
 $hasRank = $gitPackFull -match 'round_robin_then_fill'
 $hasSelectStrict = $gitPackFull -match 'select_date'
-$hasLock = $gitDailyFull -match '_acquire_pack_lock'
+$hasLock = $gitDailyFull -match '_acquire_writer_lock'
 $hasWriteDecisions = $gitPackFull -match 'decisions\.csv'
 
 if (-not ($hasPlayerId -and $hasRank -and $hasLock -and $hasWriteDecisions)) {

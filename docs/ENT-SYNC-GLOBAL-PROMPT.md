@@ -49,7 +49,7 @@ RUN-NONCE: 2bf030bbd1b24567  utc=2026-07-26T03:28:39Z  head=1d701f1  status=OK
 - The paste must END with "RUN-NONCE:". Missing it = truncated/edited = invalid.
 - Underlying gates still printed: "VALIDATE: OK", "State vs origin/master: MATCH",
   all 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py;
-  _acquire_pack_lock in daily_job.py; decisions.csv), canonical HEAD == origin/master,
+  _acquire_writer_lock in daily_job.py; decisions.csv), canonical HEAD == origin/master,
   and "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)."
 
 For ANY question about "does commit X exist", "I searched every branch + .codex/.gemini worktree", "closest commit is d756cb4", "d05eb21 not found", sizes, or state:

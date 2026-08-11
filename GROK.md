@@ -20,7 +20,7 @@ Underlying gates, still printed:
 - VALIDATE: OK
 - State vs origin/master: MATCH
 - All 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py;
-  _acquire_pack_lock in daily_job.py; decisions.csv)
+  _acquire_writer_lock in daily_job.py; decisions.csv)
 - Current HEAD on canonical == origin/master
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).

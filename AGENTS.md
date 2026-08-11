@@ -89,7 +89,7 @@ Use the canonical absolute path always. This runs bootstrap + -SyncAllWorktrees 
   The nonce is per-run, so a re-pasted old nonce is detectable against its `utc`/`head`.
 - The individual gates are still printed and still meaningful: VALIDATE: OK,
   State vs origin/master: MATCH, all 5 upgrade markers (player_id, round_robin_then_fill,
-  CANDIDATES_HEADER in pack.py; _acquire_pack_lock in daily_job.py; decisions.csv), and
+  CANDIDATES_HEADER in pack.py; _acquire_writer_lock in daily_job.py; decisions.csv), and
   "This report was produced by scripts/verify-sync.ps1 (never ad-hoc)".
 - For any "searched every... d05eb21 not found" question the *only* acceptable answer is a fresh full paste of the above command.
 

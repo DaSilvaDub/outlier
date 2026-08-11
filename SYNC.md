@@ -119,7 +119,7 @@ Execute exactly:
 Report the *full* console output. You may only continue when the trailer shows
 `REPORT STATUS: OK` — which requires VALIDATE: OK, HEAD matching origin/master, and all five
 pipeline upgrade markers (player_id / CANDIDATES_HEADER / round_robin / decisions.csv in
-pack.py, _acquire_pack_lock in daily_job.py). If it says FAILED, read the `failures:` list,
+pack.py, _acquire_writer_lock in daily_job.py). If it says FAILED, read the `failures:` list,
 then re-run and/or escalate. Note the script now exits non-zero on failure, so it can be
 checked programmatically instead of by eye.
 

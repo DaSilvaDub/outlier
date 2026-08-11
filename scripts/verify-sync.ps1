@@ -203,7 +203,7 @@ $gitDaily = git show origin/master:outlier_scrapers/daily_job.py
 $hasPlayer   = $gitPack -match 'player_id'
 $hasRound    = $gitPack -match 'round_robin_then_fill'
 $hasCand     = $gitPack -match 'CANDIDATES_HEADER'
-$hasLock     = $gitDaily -match '_acquire_pack_lock'
+$hasLock     = $gitDaily -match '_acquire_writer_lock'
 $hasDec      = $gitPack -match 'decisions\.csv'
 
 $markerHits = @($hasPlayer, $hasRound, $hasCand, $hasLock, $hasDec) | Where-Object { $_ }
@@ -217,7 +217,7 @@ if ($hasPlayer -and $hasRound -and $hasCand -and $hasLock -and $hasDec) {
   if (-not $hasPlayer) { $absent += 'player_id (pack.py)' }
   if (-not $hasRound)  { $absent += 'round_robin_then_fill (pack.py)' }
   if (-not $hasCand)   { $absent += 'CANDIDATES_HEADER (pack.py)' }
-  if (-not $hasLock)   { $absent += '_acquire_pack_lock (daily_job.py)' }
+  if (-not $hasLock)   { $absent += '_acquire_writer_lock (daily_job.py)' }
   if (-not $hasDec)    { $absent += 'decisions.csv (pack.py)' }
   Write-Bad ("MISSING MARKERS ({0}/5): {1}" -f $markerHits.Count, ($absent -join ', '))
   $vFailures.Add("origin/master missing markers: $($absent -join ', ')")
@@ -252,7 +252,7 @@ foreach ($line in $wtList) {
   $mPlayer = [bool]($pIdx -match 'player_id')
   $mRound  = [bool]($pIdx -match 'round_robin_then_fill')
   $mCand   = [bool]($pIdx -match 'CANDIDATES_HEADER')
-  $mLock   = [bool]($dIdx -match '_acquire_pack_lock')
+  $mLock   = [bool]($dIdx -match '_acquire_writer_lock')
 
   $ok = $mPlayer -and $mRound -and $mCand -and $mLock
   $status = if ($ok) { 'OK' } else { 'MISSING MARKERS or STALE' }
@@ -325,7 +325,7 @@ foreach ($fc in $knownFullClones) {
   $mP = [bool]($fcPack -match 'player_id')
   $mR = [bool]($fcPack -match 'round_robin_then_fill')
   $mC = [bool]($fcPack -match 'CANDIDATES_HEADER')
-  $mL = [bool]($fcDaily -match '_acquire_pack_lock')
+  $mL = [bool]($fcDaily -match '_acquire_writer_lock')
   $ok = $mP -and $mR -and $mC -and $mL
 
   # An empty HEAD is a failed probe, not a healthy clone at "".
