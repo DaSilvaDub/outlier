@@ -67,8 +67,8 @@ class _Component:
 
 
 def _failure(
-    feed: str,
-    stream: str,
+    feed: Any,
+    stream: Any,
     id_type: str,
     identifier: Any,
     reason: Any,
