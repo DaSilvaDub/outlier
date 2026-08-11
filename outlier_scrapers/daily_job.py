@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
@@ -19,14 +19,12 @@ from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
 from . import feedback
+from . import feed_health
 from . import results
 from . import run_desk
 from . import runner_common as rc
 
 logger = logging.getLogger(__name__)
-
-FRESHNESS_MAX_AGE = timedelta(hours=6)
-FRESHNESS_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 # run_desk writes uppercase overall statuses (FULL/PARTIAL/DATA_ONLY); compare lowercased.
 SUCCESS_OVERALL_STATUSES = ("ok", "degraded", "partial", "full")
@@ -128,41 +126,27 @@ def run_explicit_refresh(leagues: list[str]) -> bool:
 
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
-    from . import paths
-
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        raise ValueError("now must be timezone-aware")
-    now = now.astimezone(timezone.utc)
-    logger.info("Checking data freshness before building pack...")
-    for lg in leagues:
-        reports = paths.league_paths(lg).reports
-        for fname in ("games_line_movement_status_latest.json", "line_movement_status_latest.json"):
-            status_file = reports / fname
-            if not status_file.exists():
-                logger.error(f"Missing status file: {status_file}")
-                return False
-            try:
-                data = json.loads(status_file.read_text(encoding="utf-8"))
-                gen_at = data.get("generated_at")
-                if not gen_at:
-                    logger.error(f"Missing generated_at in {status_file}")
-                    return False
-                dt = datetime.fromisoformat(str(gen_at).replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    logger.error(f"Timezone missing from generated_at in {status_file}: {gen_at}")
-                    return False
-                age = now - dt.astimezone(timezone.utc)
-                if age < -FRESHNESS_FUTURE_TOLERANCE:
-                    logger.error(f"Future-dated data in {status_file}: {gen_at}")
-                    return False
-                if age > FRESHNESS_MAX_AGE:
-                    logger.error(f"Stale data (>6h old) in {status_file}: {gen_at}")
-                    return False
-            except Exception as e:
-                logger.error(f"Error checking freshness for {status_file}: {e}")
-                return False
-    return True
+    logger.info("Checking unified feed health before building pack...")
+    all_safe = True
+    for league in leagues:
+        try:
+            health = feed_health.build_feed_health(league, now=now, write=True)
+            safe, reasons = feed_health.validate_feed_health(health)
+        except Exception as exc:
+            logger.error("%s feed-health evaluation failed: %s", league, exc)
+            all_safe = False
+            continue
+        if not safe:
+            logger.error("%s feed health is unsafe: %s", league, "; ".join(reasons))
+            all_safe = False
+        else:
+            logger.info(
+                "%s feed health accepted (coverage=%.2f%%, failed_ids=%d)",
+                league,
+                float(health.get("coverage_pct") or 0.0),
+                len(health.get("failed_ids") or []),
+            )
+    return all_safe
 
 
 def run_pack(leagues: list[str]) -> Path | None:
@@ -246,9 +230,10 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
         return None
 
 
-def _acquire_pack_lock(pack_dir: Path) -> Path | None:
-    lock_dir = pack_dir / ".pack_lock"
-    pack_dir.mkdir(parents=True, exist_ok=True)
+def _acquire_writer_lock() -> Path | None:
+    packs_dir = PROJECT_ROOT / "packs"
+    lock_dir = packs_dir / ".daily_job_lock"
+    packs_dir.mkdir(parents=True, exist_ok=True)
     try:
         lock_dir.mkdir(exist_ok=False)
         return lock_dir
@@ -256,7 +241,7 @@ def _acquire_pack_lock(pack_dir: Path) -> Path | None:
         return None
 
 
-def _release_pack_lock(lock_dir: Path | None) -> None:
+def _release_writer_lock(lock_dir: Path | None) -> None:
     if lock_dir and lock_dir.exists():
         try:
             lock_dir.rmdir()
@@ -270,6 +255,109 @@ def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True, default=str), encoding="utf-8")
     os.replace(tmp, mpath)
     logger.info("Wrote %s", mpath)
+
+
+def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
+    result_collection = {"status": "skipped"}
+    if not args.skip_result_collection:
+        result_collection = collect_completed_results(
+            leagues,
+            args.feedback_db,
+            args.results_output,
+            lookback_days=args.results_lookback_days,
+        )
+
+    settlement_stats = {
+        "file_count": 0,
+        "processed_count": 0,
+        "retained_count": 0,
+        "unmatched_count": 0,
+        "ambiguous_count": 0,
+        "duplicate_count": 0,
+        "updated_count": 0,
+    }
+    if not args.skip_settlement_ingest:
+        imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
+        if imported is None:
+            return 1
+        settlement_stats = imported
+
+    if not perform_auth_check(leagues):
+        if not orchestrate_login(leagues):
+            logger.error("Authentication failed. Aborting pipeline.")
+            return 1
+
+    if not run_explicit_refresh(leagues):
+        logger.error("Refresh pipeline failed. Aborting.")
+        return 1
+
+    if not check_freshness(leagues):
+        logger.error("Feed-health check failed. Aborting pipeline before pack build.")
+        return 1
+
+    pack_dir = run_pack(leagues)
+    if pack_dir is None:
+        logger.error("Pack generation failed. Aborting.")
+        return 1
+
+    profile = args.analysis_profile
+    if args.run_reasoning and profile == "local":
+        profile = "openai"
+
+    pack_rows = _count_pack_rows(pack_dir)
+    empty_pack = pack_rows == 0
+    if empty_pack:
+        logger.warning("Pack is empty after safety filters; skipping all analysis desk passes.")
+
+    run_steps = []
+    if profile == "openai":
+        run_steps = ["A"]
+    elif profile == "full":
+        run_steps = ["A", "B", "C", "D", "E"]
+
+    if not empty_pack and (run_steps or profile == "local"):
+        logger.info("Running analysis desk (profile=%s)...", profile)
+        try:
+            if profile == "local":
+                desk_code = run_desk.orchestrate_desk(
+                    pack_dir, steps=["E"], force=False, allow_local_synth=True
+                )
+            else:
+                desk_code = run_desk.orchestrate_desk(
+                    pack_dir, steps=run_steps, force=False, allow_local_synth=True
+                )
+            if desk_code != 0:
+                logger.warning("Desk completed with non-zero (may be partial/degraded).")
+        except Exception as exc:
+            logger.error("Desk orchestration error: %s", exc)
+
+    status_path = pack_dir / "reasoning_status.json"
+    overall = "ok" if empty_pack else "degraded"
+    if not empty_pack and status_path.exists():
+        try:
+            status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+            overall = status_payload.get("overall", "ok")
+        except Exception:
+            overall = "degraded"
+
+    manifest = {
+        "run_id": f"{pack_dir.name}-{int(time.time())}",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "leagues": leagues,
+        "profile": profile,
+        "overall": overall,
+        "pack_rows": pack_rows,
+        "status_file": str(status_path) if status_path.exists() else None,
+        "settlement_ingest": settlement_stats,
+        "result_collection": result_collection,
+    }
+    _atomic_write_manifest(pack_dir, manifest)
+
+    final_code = 0 if str(overall).lower() in SUCCESS_OVERALL_STATUSES else 1
+    logger.info(
+        "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall
+    )
+    return final_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -306,115 +394,15 @@ def main(argv: list[str] | None = None) -> int:
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
 
     load_environment()
-
-    result_collection = {"status": "skipped"}
-    if not args.skip_result_collection:
-        result_collection = collect_completed_results(
-            leagues,
-            args.feedback_db,
-            args.results_output,
-            lookback_days=args.results_lookback_days,
-        )
-
-    settlement_stats = {
-        "file_count": 0,
-        "processed_count": 0,
-        "retained_count": 0,
-        "unmatched_count": 0,
-        "ambiguous_count": 0,
-        "duplicate_count": 0,
-        "updated_count": 0,
-    }
-    if not args.skip_settlement_ingest:
-        imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
-        if imported is None:
-            return 1
-        settlement_stats = imported
-
-    if not perform_auth_check(leagues):
-        if not orchestrate_login(leagues):
-            logger.error("Authentication failed. Aborting pipeline.")
-            return 1
-
-    if not run_explicit_refresh(leagues):
-        logger.error("Refresh pipeline failed. Aborting.")
-        return 1
-
-    if not check_freshness(leagues):
-        logger.error("Freshness check failed. Aborting pipeline before pack build.")
-        return 1
-
-    pack_dir = run_pack(leagues)
-    if pack_dir is None:
-        logger.error("Pack generation failed. Aborting.")
-        return 1
-
-    lock_dir = _acquire_pack_lock(pack_dir)
+    lock_dir = _acquire_writer_lock()
     if lock_dir is None:
-        logger.error(f"Writer lock conflict for {pack_dir} (another daily job running).")
+        logger.error("Writer lock conflict at packs/.daily_job_lock (another daily job running).")
         return 2
 
     try:
-        profile = args.analysis_profile
-        if args.run_reasoning and profile == "local":
-            profile = "openai"
-
-        pack_rows = _count_pack_rows(pack_dir)
-        empty_pack = pack_rows == 0
-        if empty_pack:
-            logger.warning("Pack is empty after safety filters; skipping all analysis desk passes.")
-
-        run_steps = []
-        if profile == "openai":
-            run_steps = ["A"]
-        elif profile == "full":
-            run_steps = ["A", "B", "C", "D", "E"]
-
-        if not empty_pack and (run_steps or profile == "local"):
-            logger.info("Running analysis desk (profile=%s)...", profile)
-            try:
-                if profile == "local":
-                    desk_code = run_desk.orchestrate_desk(
-                        pack_dir, steps=["E"], force=False, allow_local_synth=True
-                    )
-                else:
-                    desk_code = run_desk.orchestrate_desk(
-                        pack_dir, steps=run_steps, force=False, allow_local_synth=True
-                    )
-                if desk_code != 0:
-                    logger.warning("Desk completed with non-zero (may be partial/degraded).")
-            except Exception as e:
-                logger.error("Desk orchestration error: %s", e)
-
-        status_path = pack_dir / "reasoning_status.json"
-        overall = "ok" if empty_pack else "degraded"
-        if not empty_pack and status_path.exists():
-            try:
-                st = json.loads(status_path.read_text(encoding="utf-8"))
-                overall = st.get("overall", "ok")
-            except Exception:
-                overall = "degraded"
-
-        manifest = {
-            "run_id": f"{pack_dir.name}-{int(time.time())}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "leagues": leagues,
-            "profile": profile,
-            "overall": overall,
-            "pack_rows": pack_rows,
-            "status_file": str(status_path) if status_path.exists() else None,
-            "settlement_ingest": settlement_stats,
-            "result_collection": result_collection,
-        }
-        _atomic_write_manifest(pack_dir, manifest)
-
-        final_code = 0 if str(overall).lower() in SUCCESS_OVERALL_STATUSES else 1
-        logger.info(
-            "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall
-        )
-        return final_code
+        return _run_locked_pipeline(args, leagues)
     finally:
-        _release_pack_lock(lock_dir)
+        _release_writer_lock(lock_dir)
 
 
 if __name__ == "__main__":

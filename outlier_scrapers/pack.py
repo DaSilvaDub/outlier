@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import feed_health, paths, probability_blend
 from outlier_scrapers.game_totals import is_full_game_total
 from outlier_scrapers.registry import (
     classify_foreign_market,
@@ -679,6 +679,8 @@ def build_row(
     injuries: dict[str, str],
     projections_by_outcome: dict[str, dict[str, Any]] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    stream: str = "props",
+    health_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     headline_side = card.get("headline_side")
     if headline_side is None:
@@ -929,6 +931,15 @@ def build_row(
         dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
+    health_failures = feed_health.matching_failures(health_payload or {}, stream, row)
+    if health_failures:
+        dq_flags.append("SOURCE_INTEGRITY_FLAG")
+        for failure in health_failures:
+            feed = re.sub(r"[^a-z0-9_]+", "_", str(failure.get("feed") or "unknown").lower())
+            reason = re.sub(
+                r"[^a-z0-9_]+", "_", str(failure.get("reason") or "failed").lower()
+            ).strip("_")
+            dq_flags.append(f"source_health:{feed}:{reason or 'failed'}")
     event_starts_at = event_starts.get(str(event_id)) if event_id else None
     row["_event_starts_at"] = event_starts_at
     hours_to_game = probability_blend.hours_before_game(row.get("as_of"), event_starts_at)
@@ -1073,6 +1084,7 @@ def process_stream(
     injuries: dict[str, str],
     projections_payload: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    health_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -1107,6 +1119,8 @@ def process_stream(
             injuries,
             projections_by_outcome,
             blend_artifact,
+            stream,
+            health_payload,
         )
         if row is not None:
             row["_stream"] = stream
@@ -1308,6 +1322,7 @@ ROLE_BLOCK = [
 
 DERIVED_PACK_OUTPUTS = (
     "candidate_coverage.json",
+    "feed_health.json",
     "chatgpt_a.md",
     "gemini_b.md",
     "chatgpt_c.md",
@@ -1328,75 +1343,57 @@ DERIVED_PACK_OUTPUTS = (
     "ultimate_alt_parlays.csv",
 )
 
-FRESH_COVERAGE_WARN = 0.9
+FEED_STATUS_FIELDS = (
+    "props_status",
+    "games_status",
+    "insights_status",
+    "injuries_status",
+    "line_movement_status",
+    "game_line_movement_status",
+    "cards_status",
+)
 
 
-def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[bool, str]:
-    if report is None:
-        return False, f"- {label}: NO STATUS (not run / missing report)"
-    status = report.get("status") or "unknown"
-    fetched = report.get("markets_fetched")
-    requested = report.get("markets_requested")
-    errors = report.get("fetch_error_count") or 0
-    age = report.get("props_age_hours")
-    gen_at = report.get("generated_at")
-    reasons: list[str] = []
-    if gen_at:
-        try:
-            dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
-            if (datetime.now().astimezone() - dt).total_seconds() > 6 * 3600:
-                reasons.append("stale (>6h old)")
-        except Exception:
-            pass
-    else:
-        reasons.append("stale (missing timestamp)")
-    if status != "ok":
-        reasons.append(f"status={status}")
-    if report.get("props_is_stale"):
-        age_txt = f"{round(age, 1)}h" if isinstance(age, (int, float)) else "?h"
-        reasons.append(f"props {age_txt} stale")
-    if errors:
-        error_ids = [str(m) for m in (report.get("error_market_ids") or []) if m]
-        if error_ids:
-            shown = ", ".join(error_ids[:8])
-            more = f" (+{len(error_ids) - 8} more)" if len(error_ids) > 8 else ""
-            reasons.append(f"{errors} fetch errors [missing markets: {shown}{more}]")
-        else:
-            reasons.append(f"{errors} fetch errors")
-    if (
-        isinstance(fetched, int)
-        and isinstance(requested, int)
-        and requested
-        and fetched / requested < FRESH_COVERAGE_WARN
-    ):
-        reasons.append(f"{fetched}/{requested} markets")
-    if not reasons:
-        cov = f" ({fetched}/{requested})" if requested else ""
-        return True, f"- {label}: OK{cov}"
-    return False, f"- {label}: CAVEAT — " + "; ".join(reasons)
-
-
-def build_freshness_section(leagues: Sequence[str]) -> list[str]:
+def build_freshness_section(
+    leagues: Sequence[str],
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
     lines = ["### Freshness / Coverage"]
-    all_ok = True
     for raw in leagues:
         lg = raw.strip().upper()
         if not lg:
             continue
-        reports = paths.league_paths(lg).reports
-        for stream, fname in (
-            ("games line-movement", "games_line_movement_status_latest.json"),
-            ("props line-movement", "line_movement_status_latest.json"),
-        ):
-            ok, line = _summarize_lm_status(load_json(reports / fname), f"{lg} {stream}")
-            all_ok = all_ok and ok
-            lines.append(line)
-    if not all_ok:
-        lines.append(
-            "Streams marked CAVEAT: their line-movement/signal are context-only (not authoritative). "
-            "Prefer EV sizing where available; soften conclusions that rely on movement/steam for those streams. "
-            "Current odds may still be fresh from the props/games fetch."
+        health = (feed_health_by_league or {}).get(lg)
+        if health is None:
+            health = feed_health.build_feed_health(lg, write=True)
+        safe, reasons = feed_health.validate_feed_health(health)
+        statuses = ", ".join(
+            f"{field.removesuffix('_status')}={health.get(field, 'missing')}"
+            for field in FEED_STATUS_FIELDS
         )
+        latest_age = health.get("latest_source_age")
+        oldest_age = health.get("oldest_source_age")
+        age_text = (
+            f"{latest_age:.2f}h..{oldest_age:.2f}h"
+            if isinstance(latest_age, (int, float)) and isinstance(oldest_age, (int, float))
+            else "unknown"
+        )
+        verdict = "OK" if safe else "UNSAFE"
+        lines.append(
+            f"- {lg}: {verdict}; coverage={float(health.get('coverage_pct') or 0.0):.2f}%; "
+            f"source_age={age_text}; {statuses}"
+        )
+        failed = health.get("failed_ids") or []
+        if failed:
+            shown = [
+                f"{item.get('feed')}:{item.get('stream')}:{item.get('id_type')}:{item.get('id')}"
+                for item in failed[:8]
+                if isinstance(item, dict)
+            ]
+            more = f" (+{len(failed) - len(shown)} more)" if len(failed) > len(shown) else ""
+            lines.append(f"  - failed_ids: {', '.join(shown)}{more}")
+        if reasons:
+            lines.append(f"  - gate: {'; '.join(reasons)}")
     return lines
 
 
@@ -1541,6 +1538,7 @@ def write_pack(
     props_norm_by_league: dict[str, Any] | None = None,
     target_date: str | None = None,
     coverage: dict[str, dict[str, int]] | None = None,
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
     opportunity_rows: list[dict[str, Any]] | None = None,
     projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -2049,6 +2047,10 @@ def write_pack(
         (out_dir / "candidate_coverage.json").write_text(
             json.dumps(coverage, indent=2, sort_keys=True), encoding="utf-8"
         )
+    if feed_health_by_league is not None:
+        (out_dir / "feed_health.json").write_text(
+            json.dumps(feed_health_by_league, indent=2, sort_keys=True), encoding="utf-8"
+        )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:
@@ -2131,6 +2133,20 @@ def write_pack(
     )
 
 
+def build_feed_health_by_league(leagues: Sequence[str]) -> dict[str, dict[str, Any]]:
+    health_by_league: dict[str, dict[str, Any]] = {}
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        health = feed_health.build_feed_health(league, write=True)
+        safe, reasons = feed_health.validate_feed_health(health)
+        if not safe:
+            raise RuntimeError(f"{league} feed health unsafe: {'; '.join(reasons)}")
+        health_by_league[league] = health
+    return health_by_league
+
+
 def build_pack_with_coverage(
     leagues: Sequence[str],
     requested_date: str | None,
@@ -2139,6 +2155,7 @@ def build_pack_with_coverage(
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
@@ -2147,6 +2164,12 @@ def build_pack_with_coverage(
         lg = raw_league.strip().upper()
         if not lg:
             continue
+        health_payload = (feed_health_by_league or {}).get(lg)
+        if health_payload is None:
+            health_payload = feed_health.build_feed_health(lg, write=True)
+        safe, reasons = feed_health.validate_feed_health(health_payload)
+        if not safe:
+            raise RuntimeError(f"{lg} feed health unsafe: {'; '.join(reasons)}")
         lp = paths.league_paths(lg)
         cards_dir = lp.root / "cards"
         norm = lp.normalized
@@ -2170,6 +2193,7 @@ def build_pack_with_coverage(
             injuries,
             projections_payload,
             blend_artifact,
+            health_payload,
         )
         games_rows = process_stream(
             games_cards,
@@ -2182,6 +2206,7 @@ def build_pack_with_coverage(
             injuries,
             projections_payload,
             blend_artifact,
+            health_payload,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
@@ -2336,9 +2361,13 @@ def main(argv: Sequence[str] | None = None) -> Path:
     )
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
+    feed_health_by_league = build_feed_health_by_league(leagues)
     blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
     opportunity_rows: list[dict[str, Any]] = []
-    build_kwargs: dict[str, Any] = {"opportunity_rows_out": opportunity_rows}
+    build_kwargs: dict[str, Any] = {
+        "opportunity_rows_out": opportunity_rows,
+        "feed_health_by_league": feed_health_by_league,
+    }
     if blend_artifact is not None:
         build_kwargs["blend_artifact"] = blend_artifact
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
@@ -2350,7 +2379,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     )
     props_norm_by_league = load_props_norm_by_league(leagues)
     projection_records = load_projection_records(leagues)
-    freshness = build_freshness_section(leagues)
+    freshness = build_freshness_section(leagues, feed_health_by_league)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:
         write_pack(
@@ -2361,6 +2390,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             props_norm_by_league=props_norm_by_league,
             target_date=target_date,
             coverage=coverage,
+            feed_health_by_league=feed_health_by_league,
             opportunity_rows=opportunity_rows,
             projection_records=projection_records,
         )
@@ -2384,6 +2414,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 props_norm_by_league=props_norm_by_league,
                 target_date=target_date,
                 coverage=coverage,
+                feed_health_by_league=feed_health_by_league,
                 opportunity_rows=opportunity_rows,
                 projection_records=projection_records,
             )

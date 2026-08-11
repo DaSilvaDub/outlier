@@ -1,3 +1,5 @@
+import json
+
 from outlier_scrapers.normalizer import game_sides, normalize_games
 from outlier_scrapers.registry import get_sport_config
 
@@ -412,6 +414,20 @@ def test_games_export_flags_markets_failure_as_error(tmp_path, monkeypatch):
     assert status["record_count"] == 0
     assert status["fetch_errors"], "markets failure must be recorded"
     assert any(e.get("step") == "markets" for e in status["fetch_errors"])
+    assert status["league"] == "MLB"
+    assert status["generated_at"]
+    assert status["target_event_count"] == 1
+    assert status["markets_fetch_requested_count"] > 0
+    assert status["markets_fetch_succeeded_count"] == 0
+    assert all(error["event_id"] == "e1" for error in status["fetch_errors"])
+    assert all(error.get("market_type") for error in status["fetch_errors"])
+
+    from outlier_scrapers.paths import league_paths
+
+    persisted = json.loads(
+        (league_paths("MLB").reports / "games_status_latest.json").read_text(encoding="utf-8")
+    )
+    assert persisted == status
 
 
 def test_games_export_flags_partial_on_matchup_failure(tmp_path, monkeypatch):
@@ -429,6 +445,67 @@ def test_games_export_flags_partial_on_matchup_failure(tmp_path, monkeypatch):
     assert status["status"] == "partial"
     assert status["record_count"] >= 2
     assert any(e.get("step") == "matchup" for e in status["fetch_errors"])
+    assert status["matchup_fetch_requested_count"] == 1
+    assert status["matchup_fetch_succeeded_count"] == 0
+
+
+def test_games_status_counts_event_insights_and_unique_team_injuries(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.games import export_games_for_league
+    from outlier_scrapers.registry import GAME_MARKET_TYPES
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+
+    class CoverageClient(FakeGamesClient):
+        def fetch_schedule(self, league_id):
+            local_now = datetime.now().astimezone()
+            self.target_date = local_now.date()
+            scheduled = local_now.replace(hour=18, minute=0, second=0, microsecond=0).isoformat()
+            first = _games_event(scheduled, self.target_date)
+            second = {
+                **_games_event(scheduled, self.target_date),
+                "id": "e2",
+                "eventId": "e2",
+                "home": {"id": "h1", "teamId": "h1", "name": "Yankees"},
+                "away": {"id": "a2", "teamId": "a2", "name": "Mets"},
+            }
+            return {"events": [first, second]}
+
+        def fetch_event_insights(self, event_id):
+            if event_id == "e2":
+                raise RuntimeError("insights unavailable")
+            return {"insights": []}
+
+        def fetch_team_injuries(self, league_id, team_id):
+            if team_id == "a2":
+                raise RuntimeError("injuries unavailable")
+            return {"players": []}
+
+    client = CoverageClient()
+    client.fetch_schedule("MLB")
+    status = export_games_for_league(client, "MLB", target_date=client.target_date)
+
+    assert status["status"] == "partial"
+    assert status["target_event_count"] == 2
+    assert status["matchup_fetch_requested_count"] == 2
+    assert status["matchup_fetch_succeeded_count"] == 2
+    assert status["markets_fetch_requested_count"] == 2 * len(GAME_MARKET_TYPES)
+    assert status["markets_fetch_succeeded_count"] == 2 * len(GAME_MARKET_TYPES)
+    assert status["insights_fetch_requested_count"] == 2
+    assert status["insights_fetch_succeeded_count"] == 1
+    assert status["injury_fetch_requested_count"] == 3
+    assert status["injury_fetch_succeeded_count"] == 2
+    assert {error["step"] for error in status["fetch_errors"]} == {"insights", "injuries"}
+    assert next(error for error in status["fetch_errors"] if error["step"] == "insights")[
+        "event_id"
+    ] == "e2"
+    injury_error = next(
+        error for error in status["fetch_errors"] if error["step"] == "injuries"
+    )
+    assert injury_error["event_id"] == "e2"
+    assert injury_error["team_id"] == "a2"
 
 
 # --------------------------------------------------------------------------- #
@@ -707,3 +784,34 @@ def test_games_export_stamps_injury_team_id(tmp_path, monkeypatch):
     assert "h1" in teams_ctx
     assert teams_ctx["h1"]["injuries"][0]["playerId"] == "p1"
     assert teams_ctx["h1"]["injuries"][0]["teamId"] == "h1"  # stamped upstream
+
+
+def test_games_main_failure_replaces_old_ok_status(tmp_path, monkeypatch):
+    from outlier_scrapers import games as games_mod
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.paths import league_paths
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    status_path = league_paths("MLB").ensure().reports / "games_status_latest.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "league": "MLB",
+                "status": "ok",
+                "generated_at": "2026-08-11T04:00:00-04:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(games_mod, "OutlierApiClient", lambda: object())
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("games refresh failed")
+
+    monkeypatch.setattr(games_mod, "export_games_for_league", fail)
+
+    assert games_mod.main(["--league", "MLB"]) == 1
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["status"] == "error"
+    assert status["error"] == "games refresh failed"
+    assert status["generated_at"] != "2026-08-11T04:00:00-04:00"

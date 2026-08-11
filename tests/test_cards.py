@@ -1001,3 +1001,43 @@ def test_ev_fallback_uses_current_line_not_arbitrary_side_ev(tmp_path, monkeypat
     assert side["line"] == 8.5
     assert side["ev"]["best_ev_pct"] == 1.0  # matched by current_line, not the 9.9 at 6.5
     assert side["ev"]["is_alt_line_fallback"] is False
+
+
+@pytest.mark.parametrize(
+    ("export_name", "builder_name", "status_name"),
+    [
+        ("export_cards_for_league", "build_cards_payload", "cards_status_latest.json"),
+        (
+            "export_game_cards_for_league",
+            "build_game_cards_payload",
+            "games_cards_status_latest.json",
+        ),
+    ],
+)
+def test_card_success_status_uses_produced_payload_timestamp(
+    tmp_path, monkeypatch, export_name, builder_name, status_name
+):
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.paths import league_paths
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    produced_at = "2026-08-11T05:15:00-04:00"
+    payload = {
+        "league": "MLB",
+        "generated_at": produced_at,
+        "missing_feeds": [],
+        "coverage": {"cards_total": 0, "board_a_cards": 0, "board_b_cards": 0},
+        "snapshot_skew": {"is_skewed": False},
+        "board_a": [],
+        "board_b": [],
+    }
+    monkeypatch.setattr(cards, builder_name, lambda league: payload)
+    monkeypatch.setattr(cards, "render_html", lambda produced: "<html></html>")
+
+    status = getattr(cards, export_name)("MLB")
+
+    assert status["generated_at"] == produced_at
+    persisted = json.loads(
+        (league_paths("MLB").reports / status_name).read_text(encoding="utf-8")
+    )
+    assert persisted["generated_at"] == produced_at

@@ -83,6 +83,14 @@ def export_games_for_league(
     injuries_by_team: dict[str, list[dict[str, Any]]] = {}
     fetch_errors: list[dict[str, Any]] = []
     markets_step_errors = 0
+    matchup_fetch_requested_count = 0
+    matchup_fetch_succeeded_count = 0
+    markets_fetch_requested_count = 0
+    markets_fetch_succeeded_count = 0
+    insights_fetch_requested_count = 0
+    insights_fetch_succeeded_count = 0
+    injury_fetch_requested_count = 0
+    injury_fetch_succeeded_count = 0
 
     def _record_error(step: str, event_id: str, exc: Exception, **extra: Any) -> None:
         fetch_errors.append({"step": step, "event_id": event_id, "error": str(exc)[:200], **extra})
@@ -101,22 +109,28 @@ def export_games_for_league(
         }
 
         # 1. Matchup
+        matchup_fetch_requested_count += 1
         try:
             event_payload["matchup"] = client.fetch_event_matchup(event_id)
+            matchup_fetch_succeeded_count += 1
         except Exception as e:
             _record_error("matchup", event_id, e)
 
         # 2. Insights
+        insights_fetch_requested_count += 1
         try:
             event_payload["insights"] = client.fetch_event_insights(event_id).get("insights", [])
+            insights_fetch_succeeded_count += 1
         except Exception as e:
             _record_error("insights", event_id, e)
 
         # 3. Markets (core payload — a failure here is escalated below)
         for market_type in GAME_MARKET_TYPES:
+            markets_fetch_requested_count += 1
             try:
                 markets_resp = client.fetch_event_markets(event_id, market_type)
                 event_payload["markets"].extend(markets_resp.get("markets") or [])
+                markets_fetch_succeeded_count += 1
             except Exception as e:
                 markets_step_errors += 1
                 _record_error("markets", event_id, e, market_type=market_type)
@@ -128,9 +142,11 @@ def export_games_for_league(
                 team_id = str(team_payload.get("teamId") or team_payload.get("id") or "")
                 if team_id and team_id not in seen_team_ids:
                     seen_team_ids.add(team_id)
+                    injury_fetch_requested_count += 1
                     try:
                         injuries_resp = client.fetch_team_injuries(config.league_id, team_id)
                         injuries_by_team[team_id] = injuries_resp.get("players") or []
+                        injury_fetch_succeeded_count += 1
                     except Exception as e:
                         _record_error("injuries", event_id, e, team_id=team_id)
 
@@ -203,26 +219,31 @@ def export_games_for_league(
     record_count = normalized["record_count"]
     if markets_step_errors and record_count == 0:
         status_value = "error"
-        return {
-            "status": status_value,
-            "record_count": record_count,
-            "enrichment_count": len(enrichment_map),
-            "fetch_errors": fetch_errors,
-            "fetch_error_count": len(fetch_errors),
-        }
     elif fetch_errors:
         status_value = "partial"
     else:
         status_value = "ok"
 
-    return {
+    status = {
+        "league": config.league_id,
         "status": status_value,
         "generated_at": datetime.now().astimezone().isoformat(),
         "record_count": record_count,
         "enrichment_count": len(enrichment_map),
+        "target_event_count": len(target_events),
+        "matchup_fetch_requested_count": matchup_fetch_requested_count,
+        "matchup_fetch_succeeded_count": matchup_fetch_succeeded_count,
+        "markets_fetch_requested_count": markets_fetch_requested_count,
+        "markets_fetch_succeeded_count": markets_fetch_succeeded_count,
+        "insights_fetch_requested_count": insights_fetch_requested_count,
+        "insights_fetch_succeeded_count": insights_fetch_succeeded_count,
+        "injury_fetch_requested_count": injury_fetch_requested_count,
+        "injury_fetch_succeeded_count": injury_fetch_succeeded_count,
         "fetch_errors": fetch_errors,
         "fetch_error_count": len(fetch_errors),
     }
+    write_json(paths.reports / "games_status_latest.json", status)
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,6 +251,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         client = OutlierApiClient()
     except AuthRequiredError as exc:
+        paths = league_paths(args.league).ensure()
+        write_json(
+            paths.reports / "games_status_latest.json",
+            {
+                "league": paths.league,
+                "status": "error",
+                "generated_at": datetime.now().astimezone().isoformat(),
+                "error": str(exc)[:300],
+            },
+        )
         print(f"auth_required: {exc}")
         return 1
 
@@ -255,6 +286,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1 if status["status"] == "error" else 0
     except Exception as e:
+        paths = league_paths(args.league).ensure()
+        write_json(
+            paths.reports / "games_status_latest.json",
+            {
+                "league": paths.league,
+                "status": "error",
+                "generated_at": datetime.now().astimezone().isoformat(),
+                "error": str(e)[:300],
+            },
+        )
         print(f"{args.league} games: failed ({e})")
         return 1
 

@@ -34,6 +34,20 @@ def _referenced_event_ids(props_payload: dict[str, Any]) -> set[str]:
     return event_ids
 
 
+def _missing_schedule_event_ids(
+    schedule_payload: dict[str, Any], props_payload: dict[str, Any]
+) -> list[str]:
+    """Return referenced prop events whose schedule rows lack a start time."""
+    events = [e for e in (schedule_payload.get("events") or []) if isinstance(e, dict)]
+    start_keys = ("scheduledTime", "startTime", "startDate", "date", "scheduled")
+    known = {
+        str(event.get("eventId") or event.get("id") or "").strip()
+        for event in events
+        if any(event.get(key) for key in start_keys)
+    }
+    return sorted(_referenced_event_ids(props_payload) - known)
+
+
 def enrich_schedule_for_props(
     client: OutlierApiClient,
     schedule_payload: dict[str, Any],
@@ -51,13 +65,8 @@ def enrich_schedule_for_props(
     """
     events = [e for e in (schedule_payload.get("events") or []) if isinstance(e, dict)]
     start_keys = ("scheduledTime", "startTime", "startDate", "date", "scheduled")
-    known = {
-        str(event.get("eventId") or event.get("id") or "").strip()
-        for event in events
-        if any(event.get(key) for key in start_keys)
-    }
     errors: list[dict[str, str]] = []
-    missing = sorted(_referenced_event_ids(props_payload) - known)
+    missing = _missing_schedule_event_ids(schedule_payload, props_payload)
     for event_id in missing[max_missing_events:]:
         errors.append({"event_id": event_id, "error": "event detail fetch cap exceeded"})
     for event_id in missing[:max_missing_events]:
@@ -102,6 +111,9 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
     paths = league_paths(config.league_id).ensure()
     schedule_payload = client.fetch_schedule(config.league_id)
     props_payload = client.fetch_player_props(config.league_id)
+    schedule_event_fetch_requested_count = len(
+        _missing_schedule_event_ids(schedule_payload, props_payload)
+    )
     schedule_payload, schedule_event_errors = enrich_schedule_for_props(
         client, schedule_payload, props_payload
     )
@@ -138,6 +150,7 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
         "raw_latest": str(raw_latest),
         "normalized_latest": str(normalized_latest),
         "record_count": normalized["record_count"],
+        "schedule_event_fetch_requested_count": schedule_event_fetch_requested_count,
         "schedule_event_fetch_error_count": len(schedule_event_errors),
         "schedule_event_fetch_errors": schedule_event_errors,
     }

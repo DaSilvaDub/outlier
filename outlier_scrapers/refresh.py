@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+from datetime import datetime
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .api import OutlierApiClient
 from .cards import export_cards_for_league, export_game_cards_for_league
@@ -9,9 +14,50 @@ from .discover import summarize_league, write_discovery_report
 from .games import export_games_for_league
 from .insights import export_insights_for_league
 from .line_movement import export_line_movement_for_league
+from .paths import league_paths
 from .probable_pitchers import export_probable_pitchers
 from .props import export_props_for_league
 from .registry import supported_leagues
+
+
+_PRODUCER_STATUS_FILES = {
+    "props": "props_export_status_latest.json",
+    "insights": "insights_status_latest.json",
+    "line_movement": "line_movement_status_latest.json",
+    "games": "games_status_latest.json",
+    "game_line_movement": "games_line_movement_status_latest.json",
+    "cards": "cards_status_latest.json",
+    "game_cards": "games_cards_status_latest.json",
+}
+
+
+def _atomic_write_failure_status(league: str, producer: str, exc: Exception) -> None:
+    """Replace a producer's prior status so a failed refresh cannot look healthy."""
+    status_path = league_paths(league).ensure().reports / _PRODUCER_STATUS_FILES[producer]
+    payload = {
+        "league": league.strip().upper(),
+        "status": "error",
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "error": str(exc)[:300],
+    }
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=status_path.parent,
+            prefix=f".{status_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, status_path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -83,6 +129,19 @@ def main(argv: list[str] | None = None) -> int:
         try:
             client = OutlierApiClient()
         except Exception as exc:
+            requested_api_producers = (
+                ("props", args.props),
+                ("insights", args.insights),
+                ("line_movement", args.line_movement),
+                ("games", args.games),
+                ("game_line_movement", args.game_line_movement),
+                ("cards", args.cards),
+                ("game_cards", args.game_cards),
+            )
+            for league in args.league:
+                for producer, requested in requested_api_producers:
+                    if requested:
+                        _atomic_write_failure_status(league, producer, exc)
             print(f"auth_required: {exc}")
             return 1
 
@@ -106,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{league.upper()} props: exported {status['record_count']} records")
             except Exception as exc:
                 print(f"{league.upper()} props: failed ({str(exc)[:200]})")
+                _atomic_write_failure_status(league, "props", exc)
                 props_failed = True
                 exit_code = 1
 
@@ -115,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{league.upper()} insights: exported {status['record_count']} insights")
             except Exception as exc:
                 print(f"{league.upper()} insights: failed ({str(exc)[:200]})")
+                _atomic_write_failure_status(league, "insights", exc)
                 exit_code = 1
 
         if args.games:
@@ -134,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
             except Exception as exc:
                 print(f"{league.upper()} games: failed ({str(exc)[:200]})")
+                _atomic_write_failure_status(league, "games", exc)
                 games_failed = True
                 exit_code = 1
 
@@ -155,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.line_movement:
             if args.props and props_failed:
                 print(f"{league.upper()} line movement: skipped (props failed)")
+                _atomic_write_failure_status(
+                    league,
+                    "line_movement",
+                    RuntimeError("skipped because props refresh failed"),
+                )
                 line_movement_failed = True
                 exit_code = 1
             else:
@@ -166,12 +233,18 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except Exception as exc:
                     print(f"{league.upper()} line movement: failed ({str(exc)[:200]})")
+                    _atomic_write_failure_status(league, "line_movement", exc)
                     line_movement_failed = True
                     exit_code = 1
 
         if args.game_line_movement:
             if args.games and games_failed:
                 print(f"{league.upper()} game line movement: skipped (games failed)")
+                _atomic_write_failure_status(
+                    league,
+                    "game_line_movement",
+                    RuntimeError("skipped because games refresh failed"),
+                )
                 exit_code = 1
                 game_line_movement_failed = True
             else:
@@ -184,10 +257,12 @@ def main(argv: list[str] | None = None) -> int:
                     print(
                         f"{league.upper()} game line movement: missing input ({exc}). Run with --games first."
                     )
+                    _atomic_write_failure_status(league, "game_line_movement", exc)
                     exit_code = 1
                     game_line_movement_failed = True
                 except Exception as exc:
                     print(f"{league.upper()} game line movement: failed ({str(exc)[:200]})")
+                    _atomic_write_failure_status(league, "game_line_movement", exc)
                     exit_code = 1
                     game_line_movement_failed = True
 
@@ -195,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
             # Cards rebuild standard boards here
             if (args.props and props_failed) or (args.line_movement and line_movement_failed):
                 print(f"{league.upper()} cards: skipped (upstream feeds failed)")
+                _atomic_write_failure_status(
+                    league,
+                    "cards",
+                    RuntimeError("skipped because an upstream player feed failed"),
+                )
                 exit_code = 1
             else:
                 try:
@@ -205,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except Exception as exc:
                     print(f"{league.upper()} cards: failed ({str(exc)[:200]})")
+                    _atomic_write_failure_status(league, "cards", exc)
                     exit_code = 1
 
         if args.game_cards:
@@ -217,7 +298,16 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except Exception as exc:
                     print(f"{league.upper()} game cards: failed ({str(exc)[:200]})")
+                    _atomic_write_failure_status(league, "game_cards", exc)
                     exit_code = 1
+            else:
+                print(f"{league.upper()} game cards: skipped (upstream feeds failed)")
+                _atomic_write_failure_status(
+                    league,
+                    "game_cards",
+                    RuntimeError("skipped because an upstream game feed failed"),
+                )
+                exit_code = 1
 
     return exit_code
 

@@ -10,12 +10,12 @@ from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _opportunity_key,
     _restore_published_pack,
-    _summarize_lm_status,
     _swap_staged_pack,
     american_to_decimal,
     build_briefing,
     build_dossier,
     build_freshness_section,
+    build_feed_health_by_league,
     build_injuries,
     build_pack,
     build_pack_with_coverage,
@@ -34,6 +34,31 @@ from outlier_scrapers.pack import (
 from outlier_scrapers.sizing import compute_historical_edge
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
+
+
+def _healthy_feed_health() -> dict:
+    return {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "ok",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 100.0,
+        "oldest_source_age": 0.2,
+        "latest_source_age": 0.1,
+        "failed_ids": [],
+        "schema_version": "1.0",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _default_healthy_feed_health(monkeypatch):
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.build_feed_health",
+        lambda _league, **_kwargs: _healthy_feed_health(),
+    )
 
 
 def test_opportunity_key_normalizes_lines_and_preserves_zero_identity():
@@ -60,6 +85,8 @@ def make_row(
     projections=None,
     blend_artifact=None,
     odds_ts="ODDS_TS",
+    stream="props",
+    health_payload=None,
 ):
     return build_row(
         card,
@@ -73,6 +100,8 @@ def make_row(
         injuries or {},
         projections or {},
         blend_artifact,
+        stream,
+        health_payload,
     )
 
 
@@ -168,6 +197,102 @@ def test_ev_row_sized():
     assert isinstance(row["edge_pct"], float)
     assert row["recommended_units_pre_news"] == 1.0
     assert row["sizing_flags"] == ""
+
+
+def test_matching_feed_failure_downgrades_only_the_affected_candidate():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    health = _healthy_feed_health()
+    health["line_movement_status"] = "partial"
+    health["failed_ids"] = [
+        {
+            "feed": "line_movement",
+            "stream": "props",
+            "id_type": "market_id",
+            "id": "m1",
+            "reason": "http_404",
+        }
+    ]
+
+    row = make_row(card, ev, stream="props", health_payload=health)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["recommended_units_pre_news"] == ""
+    assert "SOURCE_INTEGRITY_FLAG" in row["data_quality_flags"]
+    assert "source_health:line_movement:http_404" in row["data_quality_flags"]
+
+
+def test_feed_failure_isolated_from_unrelated_stream():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    health = _healthy_feed_health()
+    health["game_line_movement_status"] = "partial"
+    health["failed_ids"] = [
+        {
+            "feed": "game_line_movement",
+            "stream": "games",
+            "id_type": "market_id",
+            "id": "m1",
+            "reason": "http_404",
+        }
+    ]
+
+    row = make_row(card, ev, stream="props", health_payload=health)
+
+    assert row["actionable"] == "true"
+    assert row["board"] == "A"
+    assert "SOURCE_INTEGRITY_FLAG" not in row["data_quality_flags"]
+
+
+@pytest.mark.parametrize("stream", ["props", "games"])
+def test_event_injury_failure_downgrades_both_candidate_streams(stream):
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE", event_id="event-1")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "event_id": "event-1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    health = _healthy_feed_health()
+    health["injuries_status"] = "partial"
+    health["failed_ids"] = [
+        {
+            "feed": "injuries",
+            "stream": "all",
+            "id_type": "event_id",
+            "id": "event-1",
+            "reason": "fetch_failed",
+        }
+    ]
+
+    row = make_row(card, ev, stream=stream, health_payload=health)
+
+    assert row["actionable"] == "false"
+    assert "source_health:injuries:fetch_failed" in row["data_quality_flags"]
 
 
 def test_non_actionable_zero_sizing_is_serialized_as_blank_units():
@@ -1087,6 +1212,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         out_dir,
         games_norm_by_league=games_norm,
         coverage=coverage,
+        feed_health_by_league={"MLB": _healthy_feed_health(), "WNBA": _healthy_feed_health()},
         projection_records=projection_records,
     )
     assert (out_dir / "candidates.csv").exists()
@@ -1095,6 +1221,8 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert len(projection_lines) == 2
     assert json.loads(projection_lines[0])["row_id"] == "go"
     assert (out_dir / "candidate_coverage.json").exists()
+    health_snapshot = json.loads((out_dir / "feed_health.json").read_text())
+    assert health_snapshot["MLB"]["schema_version"] == "1.0"
     assert (out_dir / "game_totals.csv").exists()
     assert (out_dir / "team_totals.csv").exists()
     assert (out_dir / "sections" / "game_totals.md").exists()
@@ -1483,108 +1611,53 @@ def test_public_money_signal_flags_not_data_quality_or_actionable():
     assert "public_money_heavy" not in str(row2.get("signal_flags") or "")
 
 
-# 20. Freshness/coverage banner flags a stale/partial stream and an OK stream.
-def test_freshness_section_flags_stale_and_ok(tmp_path, monkeypatch):
-    reports = tmp_path / "data" / "MLB" / "reports"
-    reports.mkdir(parents=True)
-    from datetime import datetime
-
-    report = {
-        "status": "ok",
-        "markets_fetched": 10,
-        "markets_requested": 10,
-        "props_age_hours": 0.5,
-        "generated_at": datetime.now().astimezone().isoformat(),
+# 20. Freshness/coverage banner renders the unified seven-feed contract.
+def test_freshness_section_renders_unified_health():
+    health = {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "partial",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 99.8,
+        "oldest_source_age": 0.5,
+        "latest_source_age": 0.1,
+        "failed_ids": [
+            {
+                "feed": "line_movement",
+                "stream": "props",
+                "id_type": "market_id",
+                "id": "m-failed",
+                "reason": "http_404",
+            }
+        ],
+        "schema_version": "1.0",
     }
-    from outlier_scrapers.pack import _summarize_lm_status
-
-    ok, line = _summarize_lm_status(report, "MLB props line-movement")
-    assert ok is True
-    assert "OK" in line
-    assert "CAVEAT" not in line
-
-    (reports / "games_line_movement_status_latest.json").write_text(
-        json.dumps(
-            {
-                "status": "ok",
-                "markets_fetched": 8,
-                "markets_requested": 8,
-                "fetch_error_count": 0,
-                "props_is_stale": False,
-                "generated_at": datetime.now().astimezone().isoformat(),
-            }
-        )
-    )
-    (reports / "line_movement_status_latest.json").write_text(
-        json.dumps(
-            {
-                "status": "partial",
-                "markets_fetched": 42,
-                "markets_requested": 890,
-                "fetch_error_count": 3,
-                "props_is_stale": True,
-                "props_age_hours": 67.0,
-                "generated_at": datetime.now().astimezone().isoformat(),
-            }
-        )
-    )
-
-    def fake_lp(lg):
-        root = tmp_path / "data" / lg.upper()
-        return P.LeaguePaths(
-            league=lg.upper(),
-            root=root,
-            raw=root / "raw",
-            normalized=root / "normalized",
-            reports=reports,
-        )
-
-    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
-    section = build_freshness_section(["MLB"])
+    section = build_freshness_section(["MLB"], {"MLB": health})
     text = "\n".join(section)
     assert "### Freshness / Coverage" in text
-    assert "MLB games line-movement: OK" in text
-    assert "MLB props line-movement: CAVEAT" in text
-    assert "stale" in text and "context-only" in text
+    assert "MLB: OK" in text
+    assert "coverage=99.80%" in text
+    assert "props=ok" in text
+    assert "injuries=ok" in text
+    assert "game_line_movement=ok" in text
+    assert "line_movement:props:market_id:m-failed" in text
     # And it embeds into the briefing.
     assert "Freshness / Coverage" in build_briefing([], "2026-06-24", section)
 
 
-def test_summarize_lm_status_stale_generated_at():
-    from datetime import datetime, timedelta
-    from outlier_scrapers.pack import _summarize_lm_status
+def test_standalone_pack_health_gate_fails_closed(monkeypatch):
+    unsafe = _healthy_feed_health()
+    unsafe["props_status"] = "missing"
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.build_feed_health",
+        lambda _league, **_kwargs: unsafe,
+    )
 
-    # 7 hours ago
-    stale_dt = datetime.now().astimezone() - timedelta(hours=7)
-
-    report = {
-        "status": "ok",
-        "markets_fetched": 10,
-        "markets_requested": 10,
-        "props_age_hours": 0.5,
-        "generated_at": stale_dt.isoformat(),
-    }
-
-    ok, line = _summarize_lm_status(report, "MLB games line-movement")
-    assert ok is False
-    assert "CAVEAT" in line
-    assert "stale (>6h old)" in line
-
-
-def test_summarize_lm_status_missing_generated_at():
-    from outlier_scrapers.pack import _summarize_lm_status
-
-    report = {
-        "status": "ok",
-        "markets_fetched": 10,
-        "markets_requested": 10,
-        "props_age_hours": 0.5,
-    }
-
-    ok, line = _summarize_lm_status(report, "MLB games line-movement")
-    assert ok is False
-    assert "CAVEAT" in line
-    assert "missing timestamp" in line
+    with pytest.raises(RuntimeError, match="MLB feed health unsafe"):
+        build_feed_health_by_league(["MLB"])
 
 
 # 22. House rule: pack hard-bans HR and Walks Allowed tokens.
@@ -1876,29 +1949,23 @@ def test_write_pack_invalidates_stale_derived_outputs(tmp_path):
 
 
 # 21. All-clean streams produce no UNRELIABLE guidance line.
-def test_freshness_section_all_ok(tmp_path, monkeypatch):
-    from datetime import datetime
-
-    reports = tmp_path / "reports"
-    reports.mkdir(parents=True)
-    clean = {
-        "status": "ok",
-        "markets_fetched": 8,
-        "markets_requested": 8,
-        "fetch_error_count": 0,
-        "generated_at": datetime.now().astimezone().isoformat(),
+def test_freshness_section_all_ok():
+    health = {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "ok",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 100.0,
+        "oldest_source_age": 0.2,
+        "latest_source_age": 0.1,
+        "failed_ids": [],
+        "schema_version": "1.0",
     }
-    (reports / "games_line_movement_status_latest.json").write_text(json.dumps(clean))
-    (reports / "line_movement_status_latest.json").write_text(json.dumps(clean))
-
-    def fake_lp(lg):
-        return P.LeaguePaths(
-            league=lg.upper(), root=tmp_path, raw=tmp_path, normalized=tmp_path, reports=reports
-        )
-
-    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
-    text = "\n".join(build_freshness_section(["WNBA"]))
-    assert "CAVEAT" not in text and "UNRELIABLE" not in text
+    text = "\n".join(build_freshness_section(["WNBA"], {"WNBA": health}))
+    assert "WNBA: OK" in text and "UNSAFE" not in text
 
 
 # --- Ledger context surfacing (report data-quality fixes) --------------------
@@ -2262,38 +2329,6 @@ def test_nan_line_is_flagged_non_numeric():
     assert market_validation_flags("MLB", card, {}, None, "PLAYER_PROP", "p1", "NaN") == [
         "non_numeric_line"
     ]
-
-
-def test_lm_status_names_missing_markets():
-    import datetime
-
-    report = {
-        "status": "partial",
-        "generated_at": datetime.datetime.now().astimezone().isoformat(),
-        "markets_fetched": 90,
-        "markets_requested": 100,
-        "fetch_error_count": 3,
-        "error_market_ids": ["aaa", "bbb", "ccc"],
-    }
-    ok, msg = _summarize_lm_status(report, "MLB props LM")
-    assert ok is False
-    assert "missing markets: aaa, bbb, ccc" in msg
-
-
-def test_lm_status_caps_and_counts_extra_missing_markets():
-    import datetime
-
-    ids = [f"m{i}" for i in range(12)]
-    report = {
-        "status": "partial",
-        "generated_at": datetime.datetime.now().astimezone().isoformat(),
-        "markets_fetched": 88,
-        "markets_requested": 100,
-        "fetch_error_count": 12,
-        "error_market_ids": ids,
-    }
-    _, msg = _summarize_lm_status(report, "MLB props LM")
-    assert "(+4 more)" in msg  # 12 total, first 8 shown
 
 
 # 26. WNBA home-away unresolved flag.

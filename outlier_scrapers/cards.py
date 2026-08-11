@@ -1294,6 +1294,7 @@ def export_cards_for_league(league: str) -> dict[str, Any]:
     status = {
         "league": paths.league,
         "status": "ok",
+        "generated_at": payload["generated_at"],
         "missing_feeds": payload.get("missing_feeds", []),
         "cards_latest_json": str(latest_json),
         "cards_latest_html": str(latest_html),
@@ -1410,6 +1411,7 @@ def export_game_cards_for_league(league: str) -> dict[str, Any]:
     status = {
         "league": paths.league,
         "status": "ok",
+        "generated_at": payload["generated_at"],
         "missing_feeds": payload.get("missing_feeds", []),
         "cards_latest_json": str(latest_json),
         "cards_latest_html": str(latest_html),

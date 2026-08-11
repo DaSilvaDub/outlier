@@ -3,9 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -57,8 +56,8 @@ def test_daily_job_orchestrates_login_and_refresh(tmp_path):
         patch("outlier_scrapers.daily_job.run_explicit_refresh", return_value=True),
         patch("outlier_scrapers.daily_job.check_freshness", return_value=True),
         patch("outlier_scrapers.daily_job.run_pack", return_value=fake_pack),
-        patch("outlier_scrapers.daily_job._acquire_pack_lock", return_value=tmp_path / ".lock"),
-        patch("outlier_scrapers.daily_job._release_pack_lock", return_value=None),
+        patch("outlier_scrapers.daily_job._acquire_writer_lock", return_value=tmp_path / ".lock"),
+        patch("outlier_scrapers.daily_job._release_writer_lock", return_value=None),
         patch("outlier_scrapers.daily_job._atomic_write_manifest", return_value=None),
         patch("outlier_scrapers.daily_job.run_desk.orchestrate_desk", return_value=0),
     ):
@@ -178,8 +177,10 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path / ".l")
-    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
+    monkeypatch.setattr(
+        "outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l"
+    )
+    monkeypatch.setattr("outlier_scrapers.daily_job._release_writer_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
     calls = {}
@@ -210,8 +211,10 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda leagues: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_pack_lock", lambda p: tmp_path / ".l")
-    monkeypatch.setattr("outlier_scrapers.daily_job._release_pack_lock", lambda lock_dir: None)
+    monkeypatch.setattr(
+        "outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l"
+    )
+    monkeypatch.setattr("outlier_scrapers.daily_job._release_writer_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
     def fake_desk_fail(*a, **k):
@@ -234,8 +237,8 @@ def _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall: str) -> int:
     monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
-    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
-    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
     monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda _pack, _data: None)
 
     def fake_desk(pack_dir, **_kwargs):
@@ -332,56 +335,172 @@ def test_orchestrate_login_skips_auth_recheck_on_clean_success(tmp_path, monkeyp
     assert calls["auth_checks"] == []
 
 
-def _write_movement_statuses(reports: Path, generated_at: str) -> None:
-    reports.mkdir(parents=True)
-    payload = json.dumps({"generated_at": generated_at})
-    for name in ("games_line_movement_status_latest.json", "line_movement_status_latest.json"):
-        (reports / name).write_text(payload, encoding="utf-8")
+def _healthy_feed_health() -> dict:
+    return {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "ok",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 100.0,
+        "oldest_source_age": 0.2,
+        "latest_source_age": 0.1,
+        "failed_ids": [],
+        "schema_version": "1.0",
+    }
 
 
-def test_check_freshness_accepts_recent_aware_timestamps(tmp_path, monkeypatch):
+def test_check_freshness_accepts_unified_health(monkeypatch):
     _require_daily_job()
     now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
-    reports = tmp_path / "reports"
-    _write_movement_statuses(reports, (now - timedelta(minutes=10)).isoformat())
+    written = []
     monkeypatch.setattr(
-        "outlier_scrapers.paths.league_paths", lambda _league: SimpleNamespace(reports=reports)
+        daily_job.feed_health,
+        "build_feed_health",
+        lambda league, **kwargs: written.append((league, kwargs)) or _healthy_feed_health(),
     )
 
     assert daily_job.check_freshness(["MLB"], now=now)
+    assert written == [("MLB", {"now": now, "write": True})]
 
 
 @pytest.mark.parametrize(
-    "generated_at",
+    ("field", "value"),
     [
-        "2026-07-07T05:59:59+00:00",  # older than six hours
-        "2026-07-07T12:06:00+00:00",  # implausibly future-dated
-        "2026-07-07T11:50:00",  # timezone is required
-        "not-a-timestamp",
+        ("props_status", "missing"),
+        ("games_status", "stale"),
+        ("cards_status", "error"),
+        ("coverage_pct", 89.99),
     ],
 )
-def test_check_freshness_rejects_untrustworthy_timestamps(tmp_path, monkeypatch, generated_at):
+def test_check_freshness_rejects_unsafe_unified_health(monkeypatch, field, value):
     _require_daily_job()
-    reports = tmp_path / "reports"
-    _write_movement_statuses(reports, generated_at)
+    health = _healthy_feed_health()
+    health[field] = value
     monkeypatch.setattr(
-        "outlier_scrapers.paths.league_paths", lambda _league: SimpleNamespace(reports=reports)
+        daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
     )
 
-    now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
-    assert not daily_job.check_freshness(["MLB"], now=now)
+    assert not daily_job.check_freshness(["MLB"])
 
 
-def test_check_freshness_rejects_missing_status_file(tmp_path, monkeypatch):
+def test_check_freshness_rejects_malformed_source(monkeypatch):
     _require_daily_job()
-    reports = tmp_path / "reports"
-    reports.mkdir()
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("malformed status")
+
+    monkeypatch.setattr(daily_job.feed_health, "build_feed_health", fail)
+
+    assert not daily_job.check_freshness(["MLB"])
+
+
+def test_writer_lock_conflict_prevents_every_pipeline_mutation(monkeypatch):
+    _require_daily_job()
+    called = []
+    monkeypatch.setattr(daily_job, "load_environment", lambda: called.append("environment"))
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: None)
     monkeypatch.setattr(
-        "outlier_scrapers.paths.league_paths", lambda _league: SimpleNamespace(reports=reports)
+        daily_job,
+        "collect_completed_results",
+        lambda *_args, **_kwargs: called.append("results"),
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "ingest_pending_settlements",
+        lambda *_args, **_kwargs: called.append("settlements"),
+    )
+    monkeypatch.setattr(daily_job, "perform_auth_check", lambda *_args: called.append("auth"))
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda *_args: called.append("refresh"))
+    monkeypatch.setattr(daily_job, "run_pack", lambda *_args: called.append("pack"))
+
+    assert daily_job.main(["--leagues", "MLB"]) == 2
+    assert called == ["environment"]
+
+
+def test_writer_lock_precedes_mutations_and_spans_manifest(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = []
+    lock = tmp_path / ".daily_job_lock"
+    fake_pack = tmp_path / "packs" / "2026-07-07"
+    fake_pack.mkdir(parents=True)
+    (fake_pack / "candidates.csv").write_text("market_id,line\n", encoding="utf-8")
+
+    monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
+    monkeypatch.setattr(
+        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "_release_writer_lock",
+        lambda actual: calls.append("release") if actual == lock else None,
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "collect_completed_results",
+        lambda *_args, **_kwargs: calls.append("results") or {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "ingest_pending_settlements",
+        lambda *_args, **_kwargs: calls.append("settlements") or {"updated_count": 0},
+    )
+    monkeypatch.setattr(
+        daily_job, "perform_auth_check", lambda *_args: calls.append("auth") or True
+    )
+    monkeypatch.setattr(
+        daily_job, "run_explicit_refresh", lambda *_args: calls.append("refresh") or True
+    )
+    monkeypatch.setattr(
+        daily_job, "check_freshness", lambda *_args: calls.append("health") or True
+    )
+    monkeypatch.setattr(
+        daily_job, "run_pack", lambda *_args: calls.append("pack") or fake_pack
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "_atomic_write_manifest",
+        lambda *_args: calls.append("manifest"),
     )
 
-    now = datetime(2026, 7, 7, 12, tzinfo=timezone.utc)
-    assert not daily_job.check_freshness(["MLB"], now=now)
+    assert daily_job.main(["--leagues", "MLB"]) == 0
+    assert calls == [
+        "environment",
+        "lock",
+        "results",
+        "settlements",
+        "auth",
+        "refresh",
+        "health",
+        "pack",
+        "manifest",
+        "release",
+    ]
+
+
+def test_early_pipeline_failure_still_releases_writer_lock(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = []
+    lock = tmp_path / ".daily_job_lock"
+    monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
+    monkeypatch.setattr(
+        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "_release_writer_lock",
+        lambda actual: calls.append("release") if actual == lock else None,
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "ingest_pending_settlements",
+        lambda *_args, **_kwargs: calls.append("settlements") or None,
+    )
+
+    assert daily_job.main(["--leagues", "MLB", "--skip-result-collection"]) == 1
+    assert calls == ["environment", "lock", "settlements", "release"]
 
 
 def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
@@ -395,8 +514,8 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
-    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
-    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
     manifest = {}
     monkeypatch.setattr(
         daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data)
@@ -443,8 +562,8 @@ def test_daily_job_runs_desk_for_actionable_totals_only(tmp_path, monkeypatch):
     monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
-    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
-    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
     manifest = {}
     monkeypatch.setattr(
         daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data)
@@ -488,8 +607,8 @@ def test_daily_job_runs_desk_for_actionable_team_totals_only(tmp_path, monkeypat
     monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda _leagues: fake_pack)
-    monkeypatch.setattr(daily_job, "_acquire_pack_lock", lambda _pack: tmp_path / ".lock")
-    monkeypatch.setattr(daily_job, "_release_pack_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
     manifest = {}
     monkeypatch.setattr(
         daily_job, "_atomic_write_manifest", lambda _pack, data: manifest.update(data)
