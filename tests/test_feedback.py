@@ -415,16 +415,51 @@ def test_recapture_cannot_rewrite_finalized_prediction_history(tmp_path, freeze_
         feedback.import_decisions(changed_input, db_path)
 
 
+def _healthy_feed_health() -> dict:
+    return {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "ok",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 100.0,
+        "oldest_source_age": 0.2,
+        "latest_source_age": 0.1,
+        "failed_ids": [],
+        "schema_version": "1.0",
+    }
+
+
+def _stub_pack_feed_health(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pack,
+        "build_feed_health_by_league",
+        lambda leagues: {league: _healthy_feed_health() for league in leagues},
+    )
+
+
 def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     row = _candidate()
 
-    def fake_build(_leagues, _date, _top_ev, _top_signal, *, opportunity_rows_out=None):
+    def fake_build(
+        _leagues,
+        _date,
+        _top_ev,
+        _top_signal,
+        *,
+        opportunity_rows_out=None,
+        feed_health_by_league=None,
+    ):
         assert opportunity_rows_out is not None
+        assert feed_health_by_league is not None
         opportunity_rows_out.append(dict(row))
         return [row], "2026-07-13", {}, {}
 
+    _stub_pack_feed_health(monkeypatch)
     monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
-    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues: [])
+    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
 
     out_dir = pack.main(["--leagues", "WNBA"])
@@ -445,13 +480,23 @@ def test_pack_main_does_not_publish_when_feedback_capture_fails(tmp_path, monkey
     (out_dir / "keep-me.txt").write_text("previous published pack", encoding="utf-8")
     (out_dir / "candidates.csv").write_text("old pack", encoding="utf-8")
 
-    def fake_build(_leagues, _date, _top_ev, _top_signal, *, opportunity_rows_out=None):
+    def fake_build(
+        _leagues,
+        _date,
+        _top_ev,
+        _top_signal,
+        *,
+        opportunity_rows_out=None,
+        feed_health_by_league=None,
+    ):
         assert opportunity_rows_out is not None
+        assert feed_health_by_league is not None
         opportunity_rows_out.append(dict(row))
         return [row], "2026-07-13", {}, {}
 
+    _stub_pack_feed_health(monkeypatch)
     monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
-    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues: [])
+    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         feedback,
@@ -473,13 +518,23 @@ def test_pack_swap_failure_rolls_back_ledger_and_restores_published_pack(tmp_pat
     out_dir.mkdir(parents=True)
     (out_dir / "candidates.csv").write_text("old pack", encoding="utf-8")
 
-    def fake_build(_leagues, _date, _top_ev, _top_signal, *, opportunity_rows_out=None):
+    def fake_build(
+        _leagues,
+        _date,
+        _top_ev,
+        _top_signal,
+        *,
+        opportunity_rows_out=None,
+        feed_health_by_league=None,
+    ):
         assert opportunity_rows_out is not None
+        assert feed_health_by_league is not None
         opportunity_rows_out.append(dict(row))
         return [row], "2026-07-13", {}, {}
 
+    _stub_pack_feed_health(monkeypatch)
     monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
-    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues: [])
+    monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         pack,

@@ -8,6 +8,23 @@ import pytest
 from outlier_scrapers import pack, paths as pack_paths, run_desk
 
 
+def _healthy_feed_health() -> dict:
+    return {
+        "props_status": "ok",
+        "games_status": "ok",
+        "insights_status": "ok",
+        "injuries_status": "ok",
+        "line_movement_status": "ok",
+        "game_line_movement_status": "ok",
+        "cards_status": "ok",
+        "coverage_pct": 100.0,
+        "oldest_source_age": 0.2,
+        "latest_source_age": 0.1,
+        "failed_ids": [],
+        "schema_version": "1.0",
+    }
+
+
 @pytest.fixture
 def desk_pack(monkeypatch, tmp_path):
     monkeypatch.setattr(run_desk.paths, "PROJECT_ROOT", tmp_path)
@@ -184,15 +201,28 @@ def mlb_wnba_e2e_pack(monkeypatch, tmp_path):
     for league in ("MLB", "WNBA"):
         _seed_league_data(tmp_path / "data" / league, league)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+    health_by_league = {
+        league: _healthy_feed_health() for league in ("MLB", "WNBA")
+    }
 
     rows, target, games_norm, coverage = pack.build_pack_with_coverage(
-        ["MLB", "WNBA"], None, 15, 10
+        ["MLB", "WNBA"],
+        None,
+        15,
+        10,
+        feed_health_by_league=health_by_league,
     )
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}, f"pack build missing a league: {sports}"
 
     pack_dir = tmp_path / "packs" / target
-    pack.write_pack(rows, pack_dir, games_norm_by_league=games_norm, coverage=coverage)
+    pack.write_pack(
+        rows,
+        pack_dir,
+        games_norm_by_league=games_norm,
+        coverage=coverage,
+        feed_health_by_league=health_by_league,
+    )
 
     for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(key, "test-key")
