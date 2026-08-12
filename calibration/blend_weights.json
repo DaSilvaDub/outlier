@@ -1,0 +1,56 @@
+{
+  "dimensions": {
+    "data_quality_tier": {
+      "HIGH": {
+        "brier_score": 0.2408198068,
+        "market_weight": 0.94835955,
+        "model_weight": 0.05164045,
+        "n": 40,
+        "raw_market_weight": 1.0
+      }
+    },
+    "league": {
+      "MLB": {
+        "brier_score": 0.2267458816,
+        "market_weight": 0.82910525,
+        "model_weight": 0.17089475,
+        "n": 36,
+        "raw_market_weight": 0.78710495
+      }
+    },
+    "market_type": {
+      "TEAM_PROP": {
+        "brier_score": 0.2435539509,
+        "market_weight": 0.92536009,
+        "model_weight": 0.07463991,
+        "n": 47,
+        "raw_market_weight": 0.95462891
+      }
+    },
+    "odds_range": {},
+    "time_before_game": {
+      "6_TO_24H": {
+        "brier_score": 0.2361897566,
+        "market_weight": 0.84463118,
+        "model_weight": 0.15536882,
+        "n": 50,
+        "raw_market_weight": 0.82370652
+      }
+    }
+  },
+  "eligible_samples": 52,
+  "generated_at": "2026-08-12T01:42:49.459778+00:00",
+  "global": {
+    "brier_score": 0.2339620529,
+    "market_weight": 0.87950561,
+    "model_weight": 0.12049439,
+    "n": 52
+  },
+  "min_samples": 30,
+  "model_version": "blend-brier-v1-557c451ec6cf",
+  "objective": "brier_score",
+  "prior_strength": 30.0,
+  "schema_version": 1,
+  "status": "active",
+  "trained_through": "2026-08-10T21:18:35.642117-04:00"
+}

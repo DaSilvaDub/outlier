@@ -1,0 +1,392 @@
+{
+  "artifact_fingerprint": "7822220422bb",
+  "artifact_version": "stake-cal-v1-7822220422bb",
+  "confidence_level": 0.8,
+  "dimensions": {
+    "data_quality_tier": {
+      "HIGH": {
+        "losses": 2866.0,
+        "n": 6499,
+        "observed_mean": 0.5590090783,
+        "predicted_mean": 0.5473796564,
+        "reliability_factor": 1.0212456233,
+        "shrunk_observed_mean": 0.5590101657,
+        "shrunk_predicted_mean": 0.5474225573,
+        "shrunk_reliability_factor": 1.0211675758,
+        "wins": 3633.0
+      },
+      "LOW": {
+        "losses": 36.0,
+        "n": 67,
+        "observed_mean": 0.4626865672,
+        "predicted_mean": 0.573554533,
+        "reliability_factor": 0.8067002187,
+        "shrunk_observed_mean": 0.4925502295,
+        "shrunk_predicted_mean": 0.5683468384,
+        "shrunk_reliability_factor": 0.8666367018,
+        "wins": 31.0
+      },
+      "MEDIUM": {
+        "losses": 721.0,
+        "n": 1654,
+        "observed_mean": 0.5640870617,
+        "predicted_mean": 0.5927204437,
+        "reliability_factor": 0.9516915903,
+        "shrunk_observed_mean": 0.5640008149,
+        "shrunk_predicted_mean": 0.5920790401,
+        "shrunk_reliability_factor": 0.9525768972,
+        "wins": 933.0
+      }
+    },
+    "league": {
+      "MLB": {
+        "losses": 2744.0,
+        "n": 6448,
+        "observed_mean": 0.5744416873,
+        "predicted_mean": 0.5679952498,
+        "reliability_factor": 1.0113494567,
+        "shrunk_observed_mean": 0.574371314,
+        "shrunk_predicted_mean": 0.5679430164,
+        "shrunk_reliability_factor": 1.0113185608,
+        "wins": 3704.0
+      },
+      "WNBA": {
+        "losses": 879.0,
+        "n": 1772,
+        "observed_mean": 0.5039503386,
+        "predicted_mean": 0.515674257,
+        "reliability_factor": 0.9772648755,
+        "shrunk_observed_mean": 0.5048709058,
+        "shrunk_predicted_mean": 0.5163575322,
+        "shrunk_reliability_factor": 0.9777545099,
+        "wins": 893.0
+      }
+    },
+    "market_type": {
+      "3PTS": {
+        "losses": 64.0,
+        "n": 143,
+        "observed_mean": 0.5524475524,
+        "predicted_mean": 0.5573755144,
+        "reliability_factor": 0.9911586321,
+        "shrunk_observed_mean": 0.5536264292,
+        "shrunk_predicted_mean": 0.5572612033,
+        "shrunk_reliability_factor": 0.993477432,
+        "wins": 79.0
+      },
+      "AST": {
+        "losses": 96.0,
+        "n": 167,
+        "observed_mean": 0.4251497006,
+        "predicted_mean": 0.5265129222,
+        "reliability_factor": 0.8074819871,
+        "shrunk_observed_mean": 0.4455704176,
+        "shrunk_predicted_mean": 0.5311124245,
+        "shrunk_reliability_factor": 0.8389380422,
+        "wins": 71.0
+      },
+      "BB": {
+        "losses": 382.0,
+        "n": 1183,
+        "observed_mean": 0.6770921386,
+        "predicted_mean": 0.6713470499,
+        "reliability_factor": 1.0085575542,
+        "shrunk_observed_mean": 0.6741775534,
+        "shrunk_predicted_mean": 0.6685119948,
+        "shrunk_reliability_factor": 1.0084748795,
+        "wins": 801.0
+      },
+      "ER": {
+        "losses": 70.0,
+        "n": 178,
+        "observed_mean": 0.606741573,
+        "predicted_mean": 0.5222685259,
+        "reliability_factor": 1.1617425577,
+        "shrunk_observed_mean": 0.5998912128,
+        "shrunk_predicted_mean": 0.5272369578,
+        "shrunk_reliability_factor": 1.1378019008,
+        "wins": 108.0
+      },
+      "GAMELINE": {
+        "losses": 67.0,
+        "n": 143,
+        "observed_mean": 0.5314685315,
+        "predicted_mean": 0.5362156782,
+        "reliability_factor": 0.9911469453,
+        "shrunk_observed_mean": 0.5362853888,
+        "shrunk_predicted_mean": 0.5397707029,
+        "shrunk_reliability_factor": 0.9935429729,
+        "wins": 76.0
+      },
+      "H": {
+        "losses": 608.0,
+        "n": 1422,
+        "observed_mean": 0.5724331927,
+        "predicted_mean": 0.5833647827,
+        "reliability_factor": 0.9812611416,
+        "shrunk_observed_mean": 0.5721607247,
+        "shrunk_predicted_mean": 0.5828141946,
+        "shrunk_reliability_factor": 0.9817206409,
+        "wins": 814.0
+      },
+      "HRR": {
+        "losses": 692.0,
+        "n": 1551,
+        "observed_mean": 0.5538362347,
+        "predicted_mean": 0.5182357906,
+        "reliability_factor": 1.0686954564,
+        "shrunk_observed_mean": 0.5539388819,
+        "shrunk_predicted_mean": 0.5189659714,
+        "shrunk_reliability_factor": 1.0673896024,
+        "wins": 859.0
+      },
+      "OUTS": {
+        "losses": 85.0,
+        "n": 162,
+        "observed_mean": 0.475308642,
+        "predicted_mean": 0.5207137753,
+        "reliability_factor": 0.9128021276,
+        "shrunk_observed_mean": 0.4884238139,
+        "shrunk_predicted_mean": 0.526339173,
+        "shrunk_reliability_factor": 0.9279640182,
+        "wins": 77.0
+      },
+      "PA": {
+        "losses": 100.0,
+        "n": 192,
+        "observed_mean": 0.4791666667,
+        "predicted_mean": 0.5027335228,
+        "reliability_factor": 0.9531225687,
+        "shrunk_observed_mean": 0.4899881634,
+        "shrunk_predicted_mean": 0.5100284955,
+        "shrunk_reliability_factor": 0.9607074266,
+        "wins": 92.0
+      },
+      "PLAYER_PROP": {
+        "losses": 125.0,
+        "n": 225,
+        "observed_mean": 0.4444444444,
+        "predicted_mean": 0.5297860389,
+        "reliability_factor": 0.8389130929,
+        "shrunk_observed_mean": 0.4579504794,
+        "shrunk_predicted_mean": 0.5329543073,
+        "shrunk_reliability_factor": 0.859267808,
+        "wins": 100.0
+      },
+      "PR": {
+        "losses": 119.0,
+        "n": 242,
+        "observed_mean": 0.5082644628,
+        "predicted_mean": 0.5034355144,
+        "reliability_factor": 1.0095919899,
+        "shrunk_observed_mean": 0.513887398,
+        "shrunk_predicted_mean": 0.5093120739,
+        "shrunk_reliability_factor": 1.0089833412,
+        "wins": 123.0
+      },
+      "PRA": {
+        "losses": 97.0,
+        "n": 206,
+        "observed_mean": 0.5291262136,
+        "predicted_mean": 0.5040192079,
+        "reliability_factor": 1.0498135891,
+        "shrunk_observed_mean": 0.5329549672,
+        "shrunk_predicted_mean": 0.5107179934,
+        "shrunk_reliability_factor": 1.0435406117,
+        "wins": 109.0
+      },
+      "PTS": {
+        "losses": 116.0,
+        "n": 226,
+        "observed_mean": 0.4867256637,
+        "predicted_mean": 0.5068010274,
+        "reliability_factor": 0.9603880762,
+        "shrunk_observed_mean": 0.4952241104,
+        "shrunk_predicted_mean": 0.5126504758,
+        "shrunk_reliability_factor": 0.9660073164,
+        "wins": 110.0
+      },
+      "RA": {
+        "losses": 96.0,
+        "n": 176,
+        "observed_mean": 0.4545454545,
+        "predicted_mean": 0.5064735406,
+        "reliability_factor": 0.8974712756,
+        "shrunk_observed_mean": 0.4697930692,
+        "shrunk_predicted_mean": 0.5137904503,
+        "shrunk_reliability_factor": 0.9143670711,
+        "wins": 80.0
+      },
+      "REB": {
+        "losses": 93.0,
+        "n": 218,
+        "observed_mean": 0.5733944954,
+        "predicted_mean": 0.5129339057,
+        "reliability_factor": 1.1178720866,
+        "shrunk_observed_mean": 0.5716829527,
+        "shrunk_predicted_mean": 0.5182301656,
+        "shrunk_reliability_factor": 1.1031448778,
+        "wins": 125.0
+      },
+      "SO": {
+        "losses": 71.0,
+        "n": 139,
+        "observed_mean": 0.4892086331,
+        "predicted_mean": 0.5228122689,
+        "reliability_factor": 0.9357252348,
+        "shrunk_observed_mean": 0.501641256,
+        "shrunk_predicted_mean": 0.5288307396,
+        "shrunk_reliability_factor": 0.9485856597,
+        "wins": 68.0
+      },
+      "TB": {
+        "losses": 614.0,
+        "n": 1411,
+        "observed_mean": 0.5648476258,
+        "predicted_mean": 0.5487523076,
+        "reliability_factor": 1.0293307526,
+        "shrunk_observed_mean": 0.5647310009,
+        "shrunk_predicted_mean": 0.5489181094,
+        "shrunk_reliability_factor": 1.028807378,
+        "wins": 797.0
+      },
+      "TEAM_PROP": {
+        "losses": 118.0,
+        "n": 214,
+        "observed_mean": 0.4485981308,
+        "predicted_mean": 0.5180949054,
+        "reliability_factor": 0.8658609189,
+        "shrunk_observed_mean": 0.4622023453,
+        "shrunk_predicted_mean": 0.52284344,
+        "shrunk_reliability_factor": 0.8840167245,
+        "wins": 96.0
+      }
+    },
+    "odds_range": {
+      "+101_TO_+149": {
+        "losses": 796.0,
+        "n": 1476,
+        "observed_mean": 0.460704607,
+        "predicted_mean": 0.4490219655,
+        "reliability_factor": 1.0260179735,
+        "shrunk_observed_mean": 0.4626675778,
+        "shrunk_predicted_mean": 0.4511672714,
+        "shrunk_reliability_factor": 1.0254901168,
+        "wins": 680.0
+      },
+      "-100_TO_+100": {
+        "losses": 160.0,
+        "n": 287,
+        "observed_mean": 0.4425087108,
+        "predicted_mean": 0.4826873552,
+        "reliability_factor": 0.9167605201,
+        "shrunk_observed_mean": 0.4535563794,
+        "shrunk_predicted_mean": 0.489693251,
+        "shrunk_reliability_factor": 0.9262050855,
+        "wins": 127.0
+      },
+      "-120_TO_-101": {
+        "losses": 936.0,
+        "n": 1914,
+        "observed_mean": 0.5109717868,
+        "predicted_mean": 0.5092118089,
+        "reliability_factor": 1.0034562786,
+        "shrunk_observed_mean": 0.5117167552,
+        "shrunk_predicted_mean": 0.5099449032,
+        "shrunk_reliability_factor": 1.003474595,
+        "wins": 978.0
+      },
+      "-199_TO_-121": {
+        "losses": 1361.0,
+        "n": 3304,
+        "observed_mean": 0.5880750605,
+        "predicted_mean": 0.5878669596,
+        "reliability_factor": 1.0003539933,
+        "shrunk_observed_mean": 0.5878156485,
+        "shrunk_predicted_mean": 0.5875866599,
+        "shrunk_reliability_factor": 1.0003897104,
+        "wins": 1943.0
+      },
+      "<=-200": {
+        "losses": 370.0,
+        "n": 1239,
+        "observed_mean": 0.7013720743,
+        "predicted_mean": 0.6924750812,
+        "reliability_factor": 1.0128481057,
+        "shrunk_observed_mean": 0.6980121137,
+        "shrunk_predicted_mean": 0.6892656542,
+        "shrunk_reliability_factor": 1.0126895333,
+        "wins": 869.0
+      }
+    },
+    "time_before_game": {
+      "0_TO_1H": {
+        "losses": 260.0,
+        "n": 584,
+        "observed_mean": 0.5547945205,
+        "predicted_mean": 0.5599957642,
+        "reliability_factor": 0.9907119946,
+        "shrunk_observed_mean": 0.5550120069,
+        "shrunk_predicted_mean": 0.5598355308,
+        "shrunk_reliability_factor": 0.991384034,
+        "wins": 324.0
+      },
+      "1_TO_6H": {
+        "losses": 321.0,
+        "n": 700,
+        "observed_mean": 0.5414285714,
+        "predicted_mean": 0.5531134855,
+        "reliability_factor": 0.9788742918,
+        "shrunk_observed_mean": 0.5421607839,
+        "shrunk_predicted_mean": 0.5532615472,
+        "shrunk_reliability_factor": 0.9799357765,
+        "wins": 379.0
+      },
+      "24H_PLUS": {
+        "losses": 103.0,
+        "n": 203,
+        "observed_mean": 0.4926108374,
+        "predicted_mean": 0.5148049756,
+        "reliability_factor": 0.9568882601,
+        "shrunk_observed_mean": 0.5011904389,
+        "shrunk_predicted_mean": 0.5202012861,
+        "shrunk_reliability_factor": 0.9634548246,
+        "wins": 100.0
+      },
+      "6_TO_24H": {
+        "losses": 2939.0,
+        "n": 6733,
+        "observed_mean": 0.5634932422,
+        "predicted_mean": 0.5580700695,
+        "reliability_factor": 1.0097177272,
+        "shrunk_observed_mean": 0.5634744007,
+        "shrunk_predicted_mean": 0.5580640644,
+        "shrunk_reliability_factor": 1.0096948301,
+        "wins": 3794.0
+      }
+    }
+  },
+  "eligible_samples": 8220,
+  "generated_at": "2026-08-12T01:43:15.570644+00:00",
+  "global": {
+    "losses": 3623.0,
+    "n": 8220,
+    "observed_mean": 0.5592457421,
+    "predicted_mean": 0.5567163205,
+    "reliability_factor": 1.0045434659,
+    "shrunk_observed_mean": 0.5592457421,
+    "shrunk_predicted_mean": 0.5567163205,
+    "shrunk_reliability_factor": 1.0045434659,
+    "wins": 4597.0
+  },
+  "min_samples": 30,
+  "objective": "reliability_shrinkage_kelly_ratio",
+  "policy_fingerprint": "",
+  "prior_strength": 30.0,
+  "schema_version": 1,
+  "source_probability_column": "final_blended_prob",
+  "status": "active",
+  "trained_through": "2026-08-10T21:20:11.217597-04:00",
+  "training_cutoff": "2026-08-12T01:42:50.802517+00:00",
+  "uncertainty_method": "wilson_one_sided"
+}
