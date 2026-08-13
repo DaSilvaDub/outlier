@@ -23,6 +23,7 @@ from . import feed_health
 from . import results
 from . import run_desk
 from . import runner_common as rc
+from . import t30_reprice
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Explicit diagnostic escape hatch; normal daily runs import pending results.",
     )
+    parser.add_argument(
+        "--t30-reprice-only",
+        action="store_true",
+        help="Run the due/idempotent T-30 pass under the normal daily writer lock.",
+    )
+    parser.add_argument(
+        "--t30-pack-dir",
+        type=Path,
+        help="Pack to reprice; defaults to packs/<local-today>.",
+    )
+    parser.add_argument(
+        "--force-t30",
+        action="store_true",
+        help="Bypass the T-30 timing and already-completed gates.",
+    )
     args = parser.parse_args(argv)
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
@@ -400,6 +416,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        if args.t30_reprice_only:
+            t30_pack_dir = args.t30_pack_dir or (
+                PROJECT_ROOT / "packs" / datetime.now().astimezone().date().isoformat()
+            )
+            try:
+                t30_result = t30_reprice.run_t30_reprice(
+                    t30_pack_dir,
+                    feedback_db=args.feedback_db or feedback.DEFAULT_DB_PATH,
+                    force=args.force_t30,
+                )
+            except Exception as exc:
+                logger.error("T-30 repricing failed: %s", exc)
+                return 1
+            logger.info(
+                "T-30 repricing %s (%s).",
+                "completed" if t30_result.completed else "skipped",
+                t30_result.reason,
+            )
+            return 0
         return _run_locked_pipeline(args, leagues)
     finally:
         _release_writer_lock(lock_dir)
