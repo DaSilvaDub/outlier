@@ -623,3 +623,46 @@ def test_daily_job_runs_desk_for_actionable_team_totals_only(tmp_path, monkeypat
     assert daily_job.main(["--analysis-profile", "full"]) == 0
     assert calls and calls[0]["steps"] == ["A", "B", "C", "D", "E"]
     assert manifest["pack_rows"] == 1
+
+
+def test_t30_only_runs_under_daily_writer_lock(tmp_path, monkeypatch):
+    _require_daily_job()
+    calls = []
+    lock = tmp_path / ".daily_job_lock"
+    pack_dir = tmp_path / "pack"
+    feedback_db = tmp_path / "feedback.sqlite3"
+    monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
+    monkeypatch.setattr(
+        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
+    )
+    monkeypatch.setattr(
+        daily_job,
+        "_release_writer_lock",
+        lambda _lock: calls.append("release"),
+    )
+
+    def fake_t30(path, *, feedback_db, force):
+        calls.append(("t30", path, feedback_db, force))
+        return type("Result", (), {"completed": True, "reason": "due"})()
+
+    monkeypatch.setattr(daily_job.t30_reprice, "run_t30_reprice", fake_t30)
+
+    assert (
+        daily_job.main(
+            [
+                "--t30-reprice-only",
+                "--t30-pack-dir",
+                str(pack_dir),
+                "--feedback-db",
+                str(feedback_db),
+                "--force-t30",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        "environment",
+        "lock",
+        ("t30", pack_dir, feedback_db, True),
+        "release",
+    ]

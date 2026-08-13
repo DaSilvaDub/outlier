@@ -451,6 +451,7 @@ def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
         *,
         opportunity_rows_out=None,
         feed_health_by_league=None,
+        blend_artifact=None,
     ):
         assert opportunity_rows_out is not None
         assert feed_health_by_league is not None
@@ -488,6 +489,7 @@ def test_pack_main_does_not_publish_when_feedback_capture_fails(tmp_path, monkey
         *,
         opportunity_rows_out=None,
         feed_health_by_league=None,
+        blend_artifact=None,
     ):
         assert opportunity_rows_out is not None
         assert feed_health_by_league is not None
@@ -526,6 +528,7 @@ def test_pack_swap_failure_rolls_back_ledger_and_restores_published_pack(tmp_pat
         *,
         opportunity_rows_out=None,
         feed_health_by_league=None,
+        blend_artifact=None,
     ):
         assert opportunity_rows_out is not None
         assert feed_health_by_league is not None

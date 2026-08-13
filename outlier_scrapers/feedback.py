@@ -1142,6 +1142,7 @@ def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, A
     units = _float(row.get("recommended_units_pre_news"), field="units") or 0.0
     play = bool(snapshot["selected"]) and _truthy(row.get("actionable")) and units > 0
     decision_id = _stable_id("decision", snapshot["snapshot_id"])
+    t30_status = _text(row.get("t30_status")).upper()
     return {
         "decision_id": decision_id,
         "snapshot_id": snapshot["snapshot_id"],
@@ -1154,8 +1155,8 @@ def _decision_seed(snapshot: dict[str, Any], row: dict[str, Any]) -> dict[str, A
         "units": units if play else 0.0,
         "kill_reason": ""
         if play
-        else (snapshot["data_quality_flags"] or "not_selected_or_actionable"),
-        "news_override": "",
+        else (t30_status or snapshot["data_quality_flags"] or "not_selected_or_actionable"),
+        "news_override": t30_status,
         "policy_fingerprint": snapshot.get("policy_fingerprint", ""),
         "portfolio_mode": snapshot.get("portfolio_mode", ""),
         "pre_cap_units": snapshot.get("pre_cap_units"),
@@ -1170,6 +1171,9 @@ def capture_pack(
     *,
     recorded_pack_path: Path | None = None,
     connection: sqlite3.Connection | None = None,
+    source_filename: str | None = None,
+    snapshot_namespace: str = "",
+    decision_filename: str = "decisions.csv",
 ) -> CaptureStats:
     """Persist a dated pack's opportunity snapshots and seed pipeline decisions.
 
@@ -1182,13 +1186,26 @@ def capture_pack(
         raise FeedbackError(f"Pack directory does not exist: {pack_dir}")
 
     fallback_timestamp = _pack_fallback_timestamp(pack_dir)
-    source_rows = _load_pack_rows(pack_dir)
+    if source_filename:
+        source_path = pack_dir / source_filename
+        if not source_path.exists():
+            raise FeedbackError(f"Pack source does not exist: {source_path}")
+        source_rows = []
+        for row in _read_csv(source_path):
+            row["selected"] = "true"
+            source_rows.append(("candidates", row))
+    else:
+        source_rows = _load_pack_rows(pack_dir)
     snapshots: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
     for source, row in source_rows:
         snapshot = _snapshot_from_pack_row(
             source, row, pack_dir, fallback_timestamp, recorded_pack_path
         )
+        if snapshot_namespace:
+            snapshot["snapshot_id"] = _stable_id(
+                snapshot_namespace, snapshot["snapshot_id"]
+            )
         snapshots.append(snapshot)
         decisions.append(_decision_seed(snapshot, row))
 
@@ -1315,8 +1332,28 @@ def capture_pack(
             if row is not None:
                 current.append(dict(row))
 
-    _write_csv(pack_dir / "decisions.csv", DECISION_FIELDS, current)
+    _write_csv(pack_dir / decision_filename, DECISION_FIELDS, current)
     return CaptureStats(snapshots=len(snapshots), decisions=len(current))
+
+
+def capture_t30_pack(
+    pack_dir: Path,
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    recorded_pack_path: Path | None = None,
+    connection: sqlite3.Connection | None = None,
+) -> CaptureStats:
+    """Persist only the dedicated T-30 output under a separate snapshot namespace."""
+
+    return capture_pack(
+        pack_dir,
+        db_path,
+        recorded_pack_path=recorded_pack_path,
+        connection=connection,
+        source_filename="t30_reprice.csv",
+        snapshot_namespace="t30",
+        decision_filename="t30_decisions.csv",
+    )
 
 
 def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> ImportStats:
