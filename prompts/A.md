@@ -60,6 +60,7 @@ For every betting verdict, preserve the exact pack values.
 Use verbatim whenever present:
 
 * `market_id`
+* `outcome_id`
 * `event_id`
 * `team`
 * `team_name`
@@ -75,7 +76,7 @@ Use verbatim whenever present:
 
 Never reconstruct these from abbreviations, IDs, favorite/underdog assumptions, or outside sources.
 
-For game totals and team totals, use the exact `totals_id` supplied by the relevant `game_totals` or `team_totals` data as the `market_id`. Quote its selection, line, and price exactly.
+For game totals and team totals, `market_id` is the exact `market_id` column from the relevant `game_totals` or `team_totals` data; `outcome_id` is the exact `totals_id` from that same row. Quote its selection, line, and price exactly. Never substitute one for the other.
 
 External research may validate contextual facts. It may NEVER:
 

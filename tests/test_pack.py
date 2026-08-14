@@ -1272,6 +1272,20 @@ def test_briefing_role_block():
     assert "first lock: n/a" in text
 
 
+# 17b. Total bases is recommendable (2026-08-12 market-policy ruling): the MLB
+#      whitelist permits TB and A.md Sec5.2 never named it among the
+#      never-recommend markets, so ROLE_BLOCK's variance taxonomy must not
+#      call it high variance. Guards against silently re-diverging from the
+#      ruling in docs/plans/2026-08-12-structured-ai-verdicts.md.
+def test_role_block_does_not_flag_total_bases_as_high_variance():
+    from outlier_scrapers.pack import ROLE_BLOCK
+
+    variance_line = next(line for line in ROLE_BLOCK if "High variance" in line)
+    assert "total bases" not in variance_line.lower()
+    for market in ("3PM", "hits allowed", "turnovers"):
+        assert market in variance_line
+
+
 def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():
     signal = {
         "_board": "board_b",

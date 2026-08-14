@@ -457,6 +457,137 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _is_original_recommendation(row: dict[str, Any]) -> bool:
+    """Return whether a published candidate is an actionable morning recommendation."""
+
+    units = _to_float(row.get("recommended_units_pre_news"))
+    return (
+        str(row.get("board") or "A").upper() == "A"
+        and str(row.get("actionable") or "").lower() == "true"
+        and units is not None
+        and units > 0
+    )
+
+
+def _freeze_t30_originals(
+    out_dir: Path,
+    rows: list[dict[str, Any]],
+    *,
+    games_norm_by_league: dict[str, Any] | None,
+    props_norm_by_league: dict[str, Any] | None,
+    totals_rows: Sequence[dict[str, Any]] = (),
+) -> None:
+    """Freeze the first published recommendations and late-news baseline."""
+
+    recommendations_path = out_dir / "original_recommendations.csv"
+    context_path = out_dir / "original_t30_context.json"
+    existing = (recommendations_path.exists(), context_path.exists())
+    if existing == (True, True):
+        return
+    if existing != (False, False):
+        raise ValidationError(
+            "Incomplete T-30 original snapshot: original_recommendations.csv and "
+            "original_t30_context.json must either both exist or both be absent."
+        )
+
+    injuries_by_league: dict[str, dict[str, str]] = {}
+    lineups_by_league: dict[str, dict[str, Any]] = {}
+    event_starts: dict[str, str] = {}
+    probable_pitchers_by_league: dict[str, dict[str, dict[str, Any]]] = {}
+    league_tokens = set((games_norm_by_league or {}).keys()) | set(
+        (props_norm_by_league or {}).keys()
+    )
+    leagues = sorted(
+        str(league).strip().upper() for league in league_tokens if str(league).strip()
+    )
+    from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
+
+    for league in leagues:
+        games_payload = (games_norm_by_league or {}).get(league)
+        props_payload = (props_norm_by_league or {}).get(league)
+        injuries_by_league[league] = build_injuries(games_payload)
+        event_context = ((games_payload or {}).get("context") or {}).get("events") or {}
+        lineups_by_league[league] = {
+            str(event_id): event.get("lineups")
+            for event_id, event in event_context.items()
+            if isinstance(event, dict) and isinstance(event.get("lineups"), dict)
+        }
+        event_starts.update(build_event_starts(props_payload, games_payload))
+        probable_pitchers_by_league[league] = load_probable_pitcher_lookup(league)
+
+    def normalize_original(row: dict[str, Any]) -> dict[str, Any]:
+        if row.get("total_kind") not in (None, ""):
+            normalized: dict[str, Any] = {field: "" for field in CANDIDATES_HEADER}
+            total_side = str(row.get("best_side") or "").upper()
+            candidate_match = next(
+                (
+                    candidate
+                    for candidate in rows
+                    if str(candidate.get("sport") or "").upper()
+                    == str(row.get("sport") or "").upper()
+                    and str(candidate.get("event_id") or "") == str(row.get("event_id") or "")
+                    and str(candidate.get("market_id") or "")
+                    == str(row.get("market_id") or "")
+                    and _to_float(candidate.get("line")) == _to_float(row.get("line"))
+                    and total_side in str(candidate.get("selection") or "").upper()
+                ),
+                {},
+            )
+            normalized.update(candidate_match)
+            normalized.update(row)
+            # totals_id is a pack representation key, not the current provider
+            # outcome identity.  Prefer the source candidate's outcome; if it is
+            # absent, leave it blank so T-30 requires the exact normalized side.
+            normalized["outcome_id"] = candidate_match.get("outcome_id") or ""
+            normalized["market_type"] = (
+                "TEAM_PROP" if str(row.get("total_kind")).lower() == "team" else "GAMELINE"
+            )
+            normalized["board"] = "A"
+            normalized["model_prob"] = row.get("final_blended_prob") or row.get(
+                "market_consensus_prob"
+            )
+            normalized["model_prob_source"] = row.get("devig_source") or "totals_model"
+            normalized["data_quality_flags"] = row.get("quality_flags") or ""
+            normalized["_event_starts_at"] = event_starts.get(str(row.get("event_id")), "")
+            return normalized
+        return dict(row)
+
+    def recommendation_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+        numeric_line = _to_float(row.get("line"))
+        return (
+            str(row.get("sport") or "").upper(),
+            str(row.get("event_id") or ""),
+            str(row.get("market_id") or ""),
+            str(row.get("outcome_id") or ""),
+            "" if numeric_line is None else f"{numeric_line:.10g}",
+        )
+
+    # Specialized totals rows are authoritative for totals also represented in
+    # the candidate ledger, matching feedback._load_pack_rows semantics.
+    original_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for source_row in [*totals_rows, *rows]:
+        normalized = normalize_original(source_row)
+        if not _is_original_recommendation(normalized):
+            continue
+        key = recommendation_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        original_rows.append(normalized)
+    _write_csv(recommendations_path, CANDIDATES_HEADER, original_rows)
+
+    context = {
+        "schema_version": 1,
+        "captured_at": datetime.now().astimezone().isoformat(),
+        "event_starts": event_starts,
+        "injuries_by_league": injuries_by_league,
+        "lineups_by_league": lineups_by_league,
+        "probable_pitchers_by_league": probable_pitchers_by_league,
+    }
+    context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _home_away(matchup: Any, team: Any) -> str:
     """Resolve whether ``team`` is HOME or AWAY within an ``AWAY @ HOME`` matchup.
 
@@ -1280,7 +1411,7 @@ ROLE_BLOCK = [
     " the STATED signed side covers, not the probability of winning the game; a heavily"
     " favored team can correctly show a positive (cushion) line if that is the side priced.",
     "- Variance taxonomy to anchor evaluation:",
-    "   * High variance: 3PM, hits allowed, total bases, turnovers.",
+    "   * High variance: 3PM, hits allowed, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
     "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
     " legs. Do NOT size stacked same-event bets as independent — their outcomes"
@@ -2013,6 +2144,14 @@ def write_pack(
         writer.writeheader()
         writer.writerows(rows)
 
+    _freeze_t30_originals(
+        out_dir,
+        rows,
+        games_norm_by_league=games_norm_by_league,
+        props_norm_by_league=props_norm_by_league,
+        totals_rows=[*totals_rows, *team_totals_rows],
+    )
+
     selected_keys = {_opportunity_key(row) for row in rows}
     opportunity_output: list[dict[str, Any]] = []
     for source_row in opportunity_rows if opportunity_rows is not None else rows:
@@ -2401,6 +2540,12 @@ def main(argv: Sequence[str] | None = None) -> Path:
         out_dir.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
         if out_dir.exists():
+            recommendation_path = out_dir / "original_recommendations.csv"
+            context_path = out_dir / "original_t30_context.json"
+            if recommendation_path.exists() != context_path.exists():
+                raise ValidationError(
+                    "Incomplete published T-30 original snapshot: refusing to rebuild the pack."
+                )
             shutil.copytree(out_dir, staging_dir)
         conn = None
         backup_dir: Path | None = None
