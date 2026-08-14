@@ -1,6 +1,7 @@
 """Focused Prompt C tests using the June 28 pack target."""
 
 import csv
+import json
 
 import pytest
 from google import genai
@@ -47,6 +48,7 @@ def _write_candidates(pack_dir, *, line="8.5", price="-110"):
                 "sport": "MLB",
                 "event_id": "e1",
                 "market_id": "m1",
+                "outcome_id": "m1",
                 "market_type": "TOTAL",
                 "selection": f"OVER {line}",
                 "line": line,
@@ -114,6 +116,10 @@ def test_success_uses_grounding_and_authoritative_june28_inputs(c_env, mock_gena
     contents = models.kwargs["contents"]
     assert "Prompt C body" in contents
     assert "2026-06-28" in contents
+    assert "pack_date: 2026-06-28" in contents
+    assert "candidates_sha256:" in contents
+    assert "game_totals_sha256:" in contents
+    assert "team_totals_sha256:" in contents
     assert "m1" in contents
     assert "OVER 8.5" in contents
     assert "-110" in contents
@@ -190,6 +196,7 @@ def test_totals_only_output_validates_against_totals_id(c_env, monkeypatch):
         row.update(
             totals_id="total:m1:8.5:OVER",
             market_id="m1",
+            outcome_id="total:m1:8.5:OVER",
             selection="A @ B Total OVER 8.5",
             line="8.5",
             price="-110",
@@ -253,3 +260,46 @@ def test_dateutil_is_a_declared_dependency():
     data = tomllib.loads((paths.PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = data["project"]["dependencies"]
     assert any(d.lower().startswith("python-dateutil") for d in deps)
+
+
+def test_json_finding_envelope_validates(c_env, monkeypatch):
+    _, pack_dir = c_env
+    envelope = {
+        "schema_version": "1.0",
+        "pass": "C",
+        "pack_date": "2026-06-28",
+        "candidates_sha256": "x",
+        "game_totals_sha256": "x",
+        "team_totals_sha256": "x",
+        "findings": [
+            {
+                "market_id": "m1",
+                "outcome_id": "m1",
+                "stream": "candidates",
+                "selection": "OVER 8.5",
+                "line": "8.5",
+                "price": "-110",
+                "verdict": "CONFIRMS",
+                "claim": "Starter confirmed",
+                "source_name": "MLB",
+                "source_tier": 1,
+                "source_timestamp": "2026-06-28T12:00:00Z",
+                "evidence": [],
+            }
+        ],
+        "no_sourced_findings": False,
+    }
+    # Hashes in the fixture are placeholders; the runner overwrites them only
+    # for FINDING-pipe conversion. JSON must echo the live pack hashes.
+    from outlier_scrapers import pack_index
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=pack_dir / "no-policy.json"
+    )
+    envelope["candidates_sha256"] = index.candidates_sha256
+    envelope["game_totals_sha256"] = index.game_totals_sha256
+    envelope["team_totals_sha256"] = index.team_totals_sha256
+    monkeypatch.setattr(
+        c_research, "call_gemini", lambda *a, **k: json.dumps(envelope)
+    )
+    assert c_research.run_c_research(pack_dir) == 0

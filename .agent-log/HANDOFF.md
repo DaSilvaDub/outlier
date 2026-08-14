@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 6**.
+its 15-step Build order are done and committed. Continue at **step 7**.
 
 ## Last Commit SHA
 
@@ -101,14 +101,30 @@ visible across worktrees/ents, not because the work is ready for review.
   markdown snapshot/restore is still in place — runners are not yet publishing
   through this path (that is steps 6–9). Desk snapshot is step 12.
 
-## Next: step 6 — pass C runner rewiring
+## What's done (step 6)
 
-Replace `c_research.validate_output` / `_market_index` with the shared
-`verdict_gate` against the finding envelope. Add `pack_date` and the three pack
-hashes to C's `research_input` (the prompt already claims they are supplied).
-`tests/test_c_research.py` is the acceptance bar — note the reasoning-guard
-hook blocks any bash command whose text contains the substring "reasoning",
-including that filename. Do not start step 7 (Gemini probe) until C is green.
+- `c_research.validate_output` now parses a finding envelope (JSON, or the
+  legacy `FINDING |` pipe format converted in-memory) and runs
+  `verdict_gate.validate_envelope`. Gate reject codes are mapped back to the
+  existing RunnerError messages so the old acceptance tests stay valid.
+- C's `source_timestamp` window (`pack_date-2d .. +1d`) lives in
+  `verdict_gate._check_finding_timestamp`. Unparseable pack dates still skip
+  the window only.
+- `run_c_research` builds a real `PackIndex`, puts `pack_date` + the three
+  pack hashes into `research_input`, and includes `structured_request_fields`
+  in the request hash.
+- Existing `tests/test_c_research.py` fixtures remain the acceptance bar
+  (pipe format). One new test covers a native JSON finding envelope.
+- 70 tests passed (`test_c_research` + `test_verdict_gate`). C still writes
+  `chatgpt_c.md`; it does not yet call `publish_pass` (later runner wiring).
+
+## Next: step 7 — grounded Gemini structured-output probe
+
+A one-off recorded probe of grounded Gemini structured output against
+`google-genai` 2.10.0, written up in the plan, before B's wiring. C's
+fallback-parser path from step 6 already covers the case where the probe
+says native structured output is unavailable. Do not start step 8 (pass A
+end-to-end) until that probe is recorded or explicitly deferred.
 
 ## Session mechanics that will save you time
 

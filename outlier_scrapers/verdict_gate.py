@@ -216,6 +216,7 @@ def validate_envelope(
                 now,
                 policy,
                 current_publications or {},
+                pack_date=env.pack_date,
             )
         )
     violations[0:0] = extra_warns
@@ -307,6 +308,7 @@ def _validate_record(
     now: datetime,
     policy: VerdictPolicy,
     publications: Mapping[str, UpstreamPublication],
+    pack_date: str = "",
 ) -> list[Violation]:
     found: list[Violation] = []
     outcome_id = record.outcome_id
@@ -357,6 +359,7 @@ def _validate_record(
     _check_injury(record, index, now, policy, publications, add)
 
     if isinstance(record, FindingRecord):
+        _check_finding_timestamp(record, pack_date, add)
         return found
 
     _check_lock(outcome_id, row, index, now, add)
@@ -585,6 +588,32 @@ def _check_injury(
         if item.player_id and (pack_ok or grounded_ok):
             continue
         add("unsupported_injury_claim", "injury claim is not bound to pack flags or grounded source.")
+
+
+def _check_finding_timestamp(record: FindingRecord, pack_date_str: str, add) -> None:
+    """C's source_timestamp window: pack_date-2d .. pack_date+1d.
+
+    An unparseable pack_date disables the window only. The timestamp itself
+    must still parse.
+    """
+    parsed = _parse_start(record.source_timestamp)
+    if parsed is None:
+        add(
+            "unparseable_timestamp",
+            f"unparseable timestamp: {record.source_timestamp}",
+        )
+        return
+    try:
+        pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return
+    day = parsed.date()
+    if not (pack_date - timedelta(days=2) <= day <= pack_date + timedelta(days=1)):
+        add(
+            "stale_finding_timestamp",
+            f"timestamp '{record.source_timestamp}' is outside the valid window "
+            f"for pack date {pack_date_str}",
+        )
 
 
 def _check_lock(outcome_id: str, row: Any, index: PackIndex, now: datetime, add) -> None:
