@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 9**.
+its 15-step Build order are done and committed. Continue at **step 10**.
 
 ## Last Commit SHA
 
@@ -139,11 +139,20 @@ visible across worktrees/ents, not because the work is ready for review.
   fake client in `tests/test_pass_a_publish.py` (2 passed). No live OpenAI call.
 - Legacy `chatgpt_a.md` is still written after a successful publish.
 
-## Next: step 9 — pass B, then D
+## What's done (step 9)
 
-B gets candidates input and a verdict envelope through the same gate +
-publish path. D follows. Use fake clients. Do not start step 10 (E) until
-B and D publish versioned directories.
+- Shared `runner_common.publish_verdict_pass` parses a verdict envelope, gates
+  it, and publishes `verdicts/<pass>/<publication_id>/`.
+- Pass B now includes candidates + pack hashes in the Gemini input, requests
+  a structured schema, then publishes `verdicts/B`.
+- Pass D requests a forced `emit_verdicts` tool, then publishes `verdicts/D`.
+- Tests: `tests/test_pass_b_d_publish.py` (4 passed, fake clients, no live APIs).
+
+## Next: step 10 — pass E
+
+Reconciliation envelope consuming A/D/B verdicts and C findings.
+`unsourced_synthesis` and upstream-stake-ceiling. Fake Claude client. Do not
+start step 11 (no-E fallback) until E publishes.
 
 ## Session mechanics that will save you time
 

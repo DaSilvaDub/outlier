@@ -1,9 +1,7 @@
-"""Gemini Prompt B runner — wide-scan research pass (input: briefing.md).
+"""Gemini Prompt B runner — wide-scan research pass.
 
-Targets Gemini 3.1 Pro Preview via the google-genai SDK with Google Search
-grounding (Prompt B is web-allowed). This automates a single grounded pass; it
-is NOT the full Gemini Deep Research UI product (see plan caveats). Output is
-``gemini_b.md`` with the same hash-based idempotency as the other runners.
+Targets Gemini via the google-genai SDK with Google Search grounding.
+Output is gemini_b.md plus a versioned verdicts/B publication.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from pathlib import Path
 from typing import Sequence
 import time
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import GEMINI_MODEL
 from outlier_scrapers import runner_common as rc
@@ -93,7 +91,6 @@ def call_gemini(
     raise rc.RunnerError("Failed after maximum retries")
 
 
-
 def run_gemini_b(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None
 ) -> int:
@@ -111,6 +108,10 @@ def run_gemini_b(
             rc.load_all_totals(pack_dir)
         )
         briefing_sha256 = rc.sha256_text(briefing_text)
+        candidates_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
+        )
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -122,8 +123,14 @@ def run_gemini_b(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,
+                "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
                 "team_totals_hash": team_totals_sha256,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -136,9 +143,31 @@ def run_gemini_b(
 
         logger.info("Calling Gemini (Prompt B)...")
         briefing_input = rc.append_totals_block(
-            briefing_text, totals_bytes, team_totals_bytes
+            "pack_date: "
+            + pack_dir.name
+            + f"\ncandidates_sha256: {candidates_sha256}\n"
+            + f"game_totals_sha256: {game_totals_sha256}\n"
+            + f"team_totals_sha256: {team_totals_sha256}\n\n"
+            + briefing_text
+            + "\n\nAuthoritative candidates.csv:\n"
+            + candidates_bytes.decode("utf-8-sig"),
+            totals_bytes,
+            team_totals_bytes,
         )
-        output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, briefing_input, client=client)
+        schema = rc.request_structured("verdict").schema
+        output_text = call_gemini(
+            prompt_text, pack.ROLE_BLOCK, briefing_input, client=client, schema=schema
+        )
+        rc.publish_verdict_pass(
+            pack_dir,
+            output_text,
+            pass_="B",
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"
@@ -146,6 +175,7 @@ def run_gemini_b(
             f"grounding: {GROUNDING}\n"
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"briefing_sha256: {briefing_sha256}\n"
+            f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
             f"team_totals_sha256: {team_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"

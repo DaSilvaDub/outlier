@@ -606,3 +606,74 @@ def publish_pass(
         path=dest,
         wrote=wrote,
     )
+
+
+def publish_verdict_pass(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    pass_: str,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    model: str,
+    now: datetime | None = None,
+) -> PublishResult:
+    """Parse a verdict envelope, gate it, and publish. Raises RunnerError on fail."""
+    from outlier_scrapers import pack_index, paths, verdicts
+    from outlier_scrapers.verdict_gate import validate_envelope
+
+    try:
+        parsed = parse_envelope(output_text, "verdict")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise RunnerError(f"Pass {pass_} output is not a valid verdict envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
+        raise RunnerError(f"Pass {pass_} output did not parse as a verdict envelope")
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    gate = validate_envelope(parsed, index, now or datetime.now().astimezone())
+    if gate.pass_fails:
+        raise RunnerError(
+            f"Pass {pass_} failed structured validation: " + ",".join(gate.fail_reasons)
+        )
+
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    status = {
+        "envelope_present": True,
+        "envelope_kind": "verdict",
+        "schema_version": parsed.envelope.schema_version,
+        "record_count": len(parsed.envelope.verdicts),
+        "bet_count": sum(1 for rec in parsed.envelope.verdicts if rec.verdict == "BET"),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    lines = [f"# Pass {pass_}", ""]
+    for rec in parsed.envelope.verdicts:
+        lines.append(
+            f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} ({rec.recommended_units}u)"
+        )
+    artifacts = PassArtifacts(
+        pass_=pass_,
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=model,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=write_violations(gate.violations),
+        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+    )
+    return publish_pass(pack_dir, artifacts, now=now)
