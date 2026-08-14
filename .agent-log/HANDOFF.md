@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 8**.
+its 15-step Build order are done and committed. Continue at **step 9**.
 
 ## Last Commit SHA
 
@@ -130,11 +130,20 @@ visible across worktrees/ents, not because the work is ready for review.
   retries prompt-only when the API rejects a structured config.
 - Tests: `tests/test_gemini_structured.py`.
 
-## Next: step 8 — pass A end to end with a fake OpenAI client
+## What's done (step 8)
 
-Verdict envelope, artifacts via `publish_pass`, status fragment. Do not call
-the live OpenAI API; use a fake client. Do not start step 9 (B/D) until A
-publishes through the versioned directory path.
+- Pass A parses the model output as a verdict envelope, runs `verdict_gate`,
+  and `publish_pass`es `verdicts/A/<publication_id>/` plus `current.json`.
+- Identity/tamper failures return 1 and do not publish or write `chatgpt_a.md`.
+- The OpenAI call requests `json_schema` (`outlier_verdicts`). Tests use a
+  fake client in `tests/test_pass_a_publish.py` (2 passed). No live OpenAI call.
+- Legacy `chatgpt_a.md` is still written after a successful publish.
+
+## Next: step 9 — pass B, then D
+
+B gets candidates input and a verdict envelope through the same gate +
+publish path. D follows. Use fake clients. Do not start step 10 (E) until
+B and D publish versioned directories.
 
 ## Session mechanics that will save you time
 

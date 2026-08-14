@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import sys
@@ -8,9 +9,10 @@ from pathlib import Path
 from typing import Sequence
 import time
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, pack_index, paths, verdicts
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
+from outlier_scrapers.verdict_gate import validate_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ def call_openai_responses_api(
         raw_csv_bytes, totals_bytes, team_totals_bytes
     )
     full_prompt = prompt_text + "\n\nData:\n" + data_block
+    structured = rc.request_structured("verdict")
 
     max_custom_retries = 10
     for attempt in range(max_custom_retries):
@@ -69,6 +72,14 @@ def call_openai_responses_api(
                 store=False,
                 instructions="\n".join(role_block),
                 input=[{"role": "user", "content": full_prompt}],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "outlier_verdicts",
+                        "schema": structured.schema,
+                        "strict": True,
+                    }
+                },
             )
             if not response.output_text or not response.output_text.strip():
                 raise ReasoningError("Received empty or whitespace-only response from API")
@@ -94,6 +105,76 @@ def call_openai_responses_api(
 
     raise ReasoningError("Failed after maximum retries")
 
+
+def _report_fragment(envelope: verdicts.VerdictEnvelope) -> bytes:
+    lines = ["# Pass A", ""]
+    for record in envelope.verdicts:
+        lines.append(
+            f"- {record.verdict} {record.selection} {record.line} {record.price} "
+            f"({record.recommended_units}u)"
+        )
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _status_fragment(envelope: verdicts.VerdictEnvelope, gate) -> bytes:
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    payload = {
+        "envelope_present": True,
+        "envelope_kind": "verdict",
+        "schema_version": envelope.schema_version,
+        "record_count": len(envelope.verdicts),
+        "bet_count": sum(1 for record in envelope.verdicts if record.verdict == "BET"),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    return json.dumps(payload, sort_keys=True).encode("utf-8")
+
+
+def _publish_pass_a(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+) -> None:
+    try:
+        parsed = rc.parse_envelope(output_text, "verdict")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise ReasoningError(f"Pass A output is not a valid verdict envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
+        raise ReasoningError("Pass A output did not parse as a verdict envelope")
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    gate = validate_envelope(parsed, index, datetime.now().astimezone())
+    if gate.pass_fails:
+        raise ReasoningError(
+            "Pass A failed structured validation: " + ",".join(gate.fail_reasons)
+        )
+    artifacts = rc.PassArtifacts(
+        pass_="A",
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=rc.write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=MODEL,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=rc.write_violations(gate.violations),
+        report_fragment=_report_fragment(parsed.envelope),
+        status_fragment=_status_fragment(parsed.envelope, gate),
+    )
+    rc.publish_pass(pack_dir, artifacts)
 
 
 def run_reasoning(
@@ -151,9 +232,8 @@ def run_reasoning(
                 if existing_hash == request_sha256:
                     logger.info("Output exists and matches hash. Skipping.")
                     return 0
-                else:
-                    logger.info("Hash mismatch. Re-running reasoning.")
-                    out_file.unlink()
+                logger.info("Hash mismatch. Re-running.")
+                out_file.unlink()
 
         logger.info("Calling OpenAI Responses API...")
         output_text = call_openai_responses_api(
@@ -163,6 +243,14 @@ def run_reasoning(
             totals_bytes,
             team_totals_bytes,
             client=client,
+        )
+        _publish_pass_a(
+            pack_dir,
+            output_text,
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
         )
 
         utc_timestamp = datetime.now(timezone.utc).isoformat()
@@ -196,12 +284,12 @@ def run_reasoning(
         logger.error(str(e))
         return 1
     except Exception as e:
-        logger.error(f"Unexpected reasoning error: {type(e).__name__}")
+        logger.error(f"Unexpected runner error: {type(e).__name__}")
         return 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Reasoning runner for Outlier AI research desk.")
+    parser = argparse.ArgumentParser(description="Pass A runner for Outlier AI research desk.")
     parser.add_argument("--date", default=datetime.now().astimezone().strftime("%Y-%m-%d"))
     parser.add_argument("--force", action="store_true", help="Force replace output.")
     args = parser.parse_args(argv)
