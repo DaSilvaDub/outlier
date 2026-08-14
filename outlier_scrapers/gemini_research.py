@@ -31,9 +31,16 @@ OUT_NAME = "gemini_b.md"
 PROMPT_FILE = "B.md"
 
 
-def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, client=None) -> str:
+def call_gemini(
+    prompt_text: str,
+    role_block: list[str],
+    briefing_text: str,
+    client=None,
+    schema: dict | None = None,
+) -> str:
     from google import genai
-    from google.genai import types
+
+    from outlier_scrapers import gemini_structured
 
     if client is None:
         load_environment()
@@ -43,10 +50,10 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
         client = genai.Client(api_key=api_key)
 
     full_prompt = prompt_text + "\n\nBriefing:\n" + briefing_text
-    config = types.GenerateContentConfig(
-        system_instruction="\n".join(role_block),
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+    config, mode = gemini_structured.build_grounded_config(
+        role_block=role_block,
         max_output_tokens=MAX_TOKENS,
+        schema=schema,
     )
     max_retries = 10
     for attempt in range(max_retries):
@@ -58,7 +65,24 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
             if not text.strip():
                 raise rc.RunnerError("Received empty or whitespace-only response from API")
             return text
+        except rc.RunnerError:
+            raise
         except Exception as e:
+            if (
+                schema
+                and mode != "prompt_only"
+                and gemini_structured.looks_like_structured_config_rejection(e)
+            ):
+                logger.warning(
+                    "Grounded structured config rejected (%s); falling back to prompt-only JSON.",
+                    mode,
+                )
+                config, mode = gemini_structured.build_grounded_config(
+                    role_block=role_block,
+                    max_output_tokens=MAX_TOKENS,
+                    schema=None,
+                )
+                continue
             if "429" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
                     logger.warning(f"Gemini API rate limited, retrying in {2 ** attempt}s...")

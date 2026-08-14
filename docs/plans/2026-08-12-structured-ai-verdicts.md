@@ -555,6 +555,25 @@ Two constraints shape this:
   defensive extractor: locate the outermost JSON object, parse, validate. A provider that regresses
   gets caught by the parser rather than silently degrading to prose.
 
+### Recorded probe (step 7) — 2026-08-14
+
+Offline construction probe against the installed `google-genai` **2.10.0**
+(`outlier_scrapers/gemini_structured.py`). No `generate_content` call was made
+and no `GEMINI_API_KEY` was used.
+
+| Check | Result |
+| --- | --- |
+| `GenerateContentConfig` fields | `response_mime_type`, `response_schema`, `response_json_schema` present |
+| Construct `google_search` + `response_json_schema` | **OK** (SDK accepted the object) |
+| Construct `google_search` + `response_schema` | **OK** (SDK accepted the object) |
+| Live grounded generate with a schema | **not invoked** |
+
+Construction success is not live-API acceptance. B and C therefore keep the
+plan's best-effort rule: attempt a grounded structured config, and on any
+config/API rejection fall back to prompt-instructed JSON plus
+`verdicts.parse_envelope`. C's step-6 fallback parser already covers the
+unavailable case. `call_gemini(..., schema=)` implements that retry.
+
 Cache invalidation: `verdicts.SCHEMA_VERSION` and the serialized schema hash join the `request_data`
 dict in every runner's `compute_request_hash` call, so any schema change invalidates existing
 `request_sha256` values and forces a re-run rather than reusing an envelope shaped to the old

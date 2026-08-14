@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 7**.
+its 15-step Build order are done and committed. Continue at **step 8**.
 
 ## Last Commit SHA
 
@@ -118,13 +118,23 @@ visible across worktrees/ents, not because the work is ready for review.
 - 70 tests passed (`test_c_research` + `test_verdict_gate`). C still writes
   `chatgpt_c.md`; it does not yet call `publish_pass` (later runner wiring).
 
-## Next: step 7 — grounded Gemini structured-output probe
+## What's done (step 7)
 
-A one-off recorded probe of grounded Gemini structured output against
-`google-genai` 2.10.0, written up in the plan, before B's wiring. C's
-fallback-parser path from step 6 already covers the case where the probe
-says native structured output is unavailable. Do not start step 8 (pass A
-end-to-end) until that probe is recorded or explicitly deferred.
+- Offline construction probe of installed `google-genai` 2.10.0. The SDK
+  accepts `GenerateContentConfig` with `google_search` plus either
+  `response_json_schema` or `response_schema`. **No live `generate_content`
+  call was made.**
+- Recorded in the plan (`Recorded probe (step 7) — 2026-08-14`) and in
+  `outlier_scrapers/gemini_structured.py`.
+- Recommendation remains `attempt_then_fallback`. `call_gemini(..., schema=)`
+  retries prompt-only when the API rejects a structured config.
+- Tests: `tests/test_gemini_structured.py`.
+
+## Next: step 8 — pass A end to end with a fake OpenAI client
+
+Verdict envelope, artifacts via `publish_pass`, status fragment. Do not call
+the live OpenAI API; use a fake client. Do not start step 9 (B/D) until A
+publishes through the versioned directory path.
 
 ## Session mechanics that will save you time
 
