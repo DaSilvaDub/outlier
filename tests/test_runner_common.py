@@ -1,6 +1,8 @@
 import csv
 import hashlib
 import io
+import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -295,3 +297,172 @@ def test_has_actionable_any_totals():
     assert not runner_common.has_actionable_any_totals(game, None)
     assert runner_common.has_actionable_any_totals(game, team)
     assert runner_common.has_actionable_team_totals(team)
+
+
+# ---------------------------------------------------------------------------
+# Step 5: structured request + versioned publication
+# ---------------------------------------------------------------------------
+
+
+def _artifacts(**overrides):
+    files = {
+        "verdicts_json": b'{"schema_version":"1.0","pass":"A","verdicts":[]}',
+        "violations_json": b"[]",
+        "report_fragment": b"# A fragment\n",
+        "status_fragment": b'{"envelope_present":true,"record_count":0}',
+    }
+    files.update(overrides)
+    return runner_common.PassArtifacts(
+        pass_="A",
+        request_sha256="a" * 64,
+        schema_version="1.0",
+        verdicts_json=files["verdicts_json"],
+        violations_json=files["violations_json"],
+        report_fragment=files["report_fragment"],
+        status_fragment=files["status_fragment"],
+    )
+
+
+def test_request_structured_returns_schema_for_kind():
+    from outlier_scrapers import verdicts
+
+    req = runner_common.request_structured("verdict")
+    assert req.kind == "verdict"
+    assert req.schema_version == verdicts.SCHEMA_VERSION
+    assert req.schema == verdicts.json_schema_for("verdict")
+
+
+def test_parse_envelope_delegates_to_verdicts():
+    from outlier_scrapers import verdicts
+    from tests.test_verdicts import verdict_envelope_dict
+
+    raw = json.dumps(verdict_envelope_dict())
+    parsed = runner_common.parse_envelope(raw, "verdict")
+    assert isinstance(parsed.envelope, verdicts.VerdictEnvelope)
+    assert parsed.envelope.pass_ == "A"
+
+
+def test_write_envelope_round_trips_through_parse():
+    from outlier_scrapers import verdicts
+    from tests.test_verdicts import verdict_envelope_dict
+
+    parsed = runner_common.parse_envelope(json.dumps(verdict_envelope_dict()), "verdict")
+    blob = runner_common.write_envelope(
+        parsed.envelope,
+        request_sha256="b" * 64,
+        model="test-model",
+        candidates_sha256="a" * 64,
+        game_totals_sha256="b" * 64,
+        team_totals_sha256="c" * 64,
+    )
+    data = json.loads(blob.decode("utf-8"))
+    assert data["request_sha256"] == "b" * 64
+    assert data["model"] == "test-model"
+    assert data["pass"] == "A"
+    assert "publication_id" not in data
+    reparsed = runner_common.parse_envelope(blob.decode("utf-8"), "verdict")
+    env = reparsed.envelope
+    assert isinstance(env, verdicts.VerdictEnvelope)
+    assert env.verdicts[0].outcome_id == "out_123"
+
+
+def test_build_repair_block_lists_code_outcome_and_pack_value():
+    from outlier_scrapers.verdict_gate import Violation
+
+    block = runner_common.build_repair_block(
+        [
+            Violation(
+                code="line_tampered",
+                outcome_id="out1",
+                market_id="mkt1",
+                detail="line 6.5 != pack line 5.5.",
+                severity="reject",
+            )
+        ]
+    )
+    assert "line_tampered" in block
+    assert "out1" in block
+    assert "5.5" in block
+    assert "6.5" not in block.split("pack_value=", 1)[1]
+
+
+def test_structured_request_fields_include_three_hashes_and_schema():
+    extra = runner_common.structured_request_fields(
+        candidates_sha256="c" * 64,
+        game_totals_sha256="g" * 64,
+        team_totals_sha256="t" * 64,
+    )
+    assert extra["candidates_sha256"] == "c" * 64
+    assert extra["game_totals_sha256"] == "g" * 64
+    assert extra["team_totals_sha256"] == "t" * 64
+    assert extra["schema_version"] == "1.0"
+    hashed = runner_common.compute_request_hash({**{"model": "m"}, **extra})
+    assert len(hashed) == 64
+
+
+def test_publication_id_covers_all_four_files():
+    base = _artifacts()
+    changed_md = _artifacts(report_fragment=b"# renderer fix\n")
+    assert runner_common.publication_id_for(base) != runner_common.publication_id_for(changed_md)
+    assert runner_common.publication_id_for(base) == runner_common.publication_id_for(_artifacts())
+
+
+def test_publish_pass_writes_versioned_dir_and_current_pointer(tmp_path):
+    artifacts = _artifacts()
+    result = runner_common.publish_pass(tmp_path, artifacts, now=datetime(2026, 8, 14, tzinfo=timezone.utc))
+    dest = tmp_path / "verdicts" / "A" / result.publication_id
+    assert dest.is_dir()
+    for name in runner_common.PUBLICATION_FILES:
+        assert (dest / name).is_file()
+    assert (dest / "manifest.json").is_file()
+    current = json.loads((tmp_path / "verdicts" / "A" / "current.json").read_text(encoding="utf-8"))
+    assert current["publication_id"] == result.publication_id
+    assert current["request_sha256"] == artifacts.request_sha256
+    assert result.wrote is True
+
+
+def test_manifest_hash_equals_directory_name(tmp_path):
+    result = runner_common.publish_pass(tmp_path, _artifacts())
+    dest = tmp_path / "verdicts" / "A" / result.publication_id
+    recomputed = runner_common.recompute_publication_id(dest)
+    assert recomputed == result.publication_id
+    (dest / "report_fragment.md").write_bytes(b"tampered")
+    assert runner_common.recompute_publication_id(dest) != result.publication_id
+
+
+def test_identical_republish_is_noop(tmp_path):
+    artifacts = _artifacts()
+    first = runner_common.publish_pass(tmp_path, artifacts)
+    second = runner_common.publish_pass(tmp_path, artifacts)
+    assert first.publication_id == second.publication_id
+    assert second.wrote is False
+    parent = tmp_path / "verdicts" / "A"
+    assert list(parent.glob("*.tmp-*")) == []
+    assert [p.name for p in parent.iterdir() if p.is_dir()] == [first.publication_id]
+
+
+def test_different_envelope_same_request_hash_gets_new_directory(tmp_path):
+    first = runner_common.publish_pass(tmp_path, _artifacts())
+    second = runner_common.publish_pass(
+        tmp_path, _artifacts(verdicts_json=b'{"schema_version":"1.0","pass":"A","verdicts":[{"x":1}]}')
+    )
+    assert first.publication_id != second.publication_id
+    parent = tmp_path / "verdicts" / "A"
+    assert (parent / first.publication_id).is_dir()
+    assert (parent / second.publication_id).is_dir()
+    current = json.loads((parent / "current.json").read_text(encoding="utf-8"))
+    assert current["publication_id"] == second.publication_id
+    assert current["request_sha256"] == first.request_sha256
+
+
+def test_crash_before_pointer_swap_leaves_previous_current(tmp_path):
+    first = runner_common.publish_pass(tmp_path, _artifacts())
+    parent = tmp_path / "verdicts" / "A"
+    new_art = _artifacts(report_fragment=b"# new\n")
+    new_id = runner_common.publication_id_for(new_art)
+    staging = parent / f"{new_id}.tmp-99999"
+    staging.mkdir()
+    (staging / "report_fragment.md").write_bytes(new_art.report_fragment)
+    current = json.loads((parent / "current.json").read_text(encoding="utf-8"))
+    assert current["publication_id"] == first.publication_id
+    assert not (parent / new_id).exists()

@@ -1,6 +1,4 @@
 import argparse
-import hashlib
-import json
 import logging
 import os
 import sys
@@ -138,9 +136,13 @@ def run_reasoning(
             "candidates_hash": candidates_sha256,
             "game_totals_hash": game_totals_sha256,
             "team_totals_hash": team_totals_sha256,
+            **rc.structured_request_fields(
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            ),
         }
-        canonical_json = json.dumps(request_data, sort_keys=True).encode("utf-8")
-        request_sha256 = hashlib.sha256(canonical_json).hexdigest()
+        request_sha256 = rc.compute_request_hash(request_data)
 
         if out_file.exists():
             if refresh_if_stale:

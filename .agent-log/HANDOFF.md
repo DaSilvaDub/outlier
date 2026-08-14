@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 5**.
+its 15-step Build order are done and committed. Continue at **step 6**.
 
 ## Last Commit SHA
 
@@ -80,16 +80,35 @@ visible across worktrees/ents, not because the work is ready for review.
   `index.locks`, PASS/STAND_DOWN lock+integrity, and player-scoped injury
   flags are in.
 
-## Next: step 5 — `runner_common.py`
+## What's done (step 5)
 
-Build order text: `request_structured`, `parse_envelope`, `write_envelope`, repair-block
-construction, request-hash extension (all three pack hashes), `publication_id` derivation
-as the full per-pass manifest hash, the versioned-directory publish path and pass-level
-`current.json` pointer swap.
+- `runner_common.request_structured` / `parse_envelope` / `write_envelope` /
+  `build_repair_block` / `structured_request_fields` / `publish_pass`.
+- `publication_id` is `sha256(canonical_json(manifest))` over all four files
+  (`verdicts.json`, `violations.json`, `report_fragment.md`, `status_fragment.json`)
+  plus `pass` / `request_sha256` / `schema_version`. A renderer-only change
+  produces a new ID. `verdicts.json` does **not** embed `publication_id` (that
+  would be circular with the hash).
+- Publish writes `<publication_id>.tmp-<pid>` then `os.replace`s the directory,
+  then atomically swaps `verdicts/<pass>/current.json`. Identical republish is a
+  no-op (`wrote=False`). Two different envelopes under the same request hash
+  get two directories; current points at the latest.
+- Pass A (`outlier_scrapers/reasoning.py`) now hashes via
+  `rc.compute_request_hash` and includes `structured_request_fields` (three pack
+  hashes + `schema_version`). This invalidates existing A cache hashes by
+  design.
+- 13 new tests in `tests/test_runner_common.py`. `run_desk.run_phase`'s
+  markdown snapshot/restore is still in place — runners are not yet publishing
+  through this path (that is steps 6–9). Desk snapshot is step 12.
 
-Read **"Atomic multi-file publication"** and **"The per-pass immutable manifest"** before
-writing anything — `publication_id` is not `request_sha256`, and a forced rerun must not
-collide. Do not start step 6 (pass C rewiring) until this publish path exists.
+## Next: step 6 — pass C runner rewiring
+
+Replace `c_research.validate_output` / `_market_index` with the shared
+`verdict_gate` against the finding envelope. Add `pack_date` and the three pack
+hashes to C's `research_input` (the prompt already claims they are supplied).
+`tests/test_c_research.py` is the acceptance bar — note the reasoning-guard
+hook blocks any bash command whose text contains the substring "reasoning",
+including that filename. Do not start step 7 (Gemini probe) until C is green.
 
 ## Session mechanics that will save you time
 
