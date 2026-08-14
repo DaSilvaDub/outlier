@@ -1,0 +1,331 @@
+name: AI PR Review Consensus
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: ai-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare trusted review context
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch bounded PR diff
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/ai_pr_review.py prepare
+          --event-path "$GITHUB_EVENT_PATH"
+          --instructions AGENTS.md
+          --max-diff-chars "${{ vars.AI_REVIEW_MAX_DIFF_CHARS || '600000' }}"
+          --output review-context.json
+
+      - name: Upload review context
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-context
+          path: review-context.json
+          if-no-files-found: error
+          retention-days: 1
+
+  codex-review:
+    name: Codex - correctness and regressions
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ai-review-context
+
+      - name: Run Codex review
+        env:
+          AI_PROVIDER_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: >-
+          python scripts/ai_pr_review.py review
+          --provider codex
+          --model "${{ vars.OPENAI_REVIEW_MODEL || 'gpt-5.3-codex' }}"
+          --prompt-file .github/ai-review/codex.md
+          --context review-context.json
+          --output codex.json
+
+      - name: Upload Codex review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-codex
+          path: codex.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  claude-review:
+    name: Claude - architecture and data flow
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ai-review-context
+
+      - name: Run Claude review
+        env:
+          AI_PROVIDER_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: >-
+          python scripts/ai_pr_review.py review
+          --provider claude
+          --model "${{ vars.ANTHROPIC_REVIEW_MODEL || 'claude-opus-4-8' }}"
+          --prompt-file .github/ai-review/claude.md
+          --context review-context.json
+          --output claude.json
+
+      - name: Upload Claude review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-claude
+          path: claude.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  gemini-review:
+    name: Gemini - tests, typing, and security
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ai-review-context
+
+      - name: Run Gemini review
+        env:
+          AI_PROVIDER_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          python scripts/ai_pr_review.py review
+          --provider gemini
+          --model "${{ vars.GEMINI_REVIEW_MODEL || 'gemini-3.5-flash' }}"
+          --prompt-file .github/ai-review/gemini.md
+          --context review-context.json
+          --output gemini.json
+
+      - name: Upload Gemini review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-gemini
+          path: gemini.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  grok-review:
+    name: Grok - adversarial edge cases
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ai-review-context
+
+      - name: Run Grok review
+        env:
+          AI_PROVIDER_API_KEY: ${{ secrets.XAI_API_KEY }}
+        run: >-
+          python scripts/ai_pr_review.py review
+          --provider grok
+          --model "${{ vars.XAI_REVIEW_MODEL || 'grok-4.6' }}"
+          --prompt-file .github/ai-review/grok.md
+          --context review-context.json
+          --output grok.json
+
+      - name: Upload Grok review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-grok
+          path: grok.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  consensus:
+    name: Consensus - reviews plus required CI
+    if: always() && needs.prepare.result == 'success'
+    needs:
+      - prepare
+      - codex-review
+      - claude-review
+      - gemini-review
+      - grok-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Download review artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: ai-review-*
+          path: review-artifacts
+          merge-multiple: true
+
+      - name: Build consensus and wait for CI
+        env:
+          AI_PROVIDER_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/ai_pr_review.py consensus
+          --model "${{ vars.OPENAI_CONSENSUS_MODEL || 'gpt-5.6-terra' }}"
+          --prompt-file .github/ai-review/consensus.md
+          --context review-artifacts/review-context.json
+          --reviews-dir review-artifacts
+          --required-checks "${{ vars.AI_REQUIRED_CHECKS || 'test,typecheck' }}"
+          --ci-timeout-seconds 900
+          --output consensus.json
+
+      - name: Upload consensus
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ai-review-consensus
+          path: consensus.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  publish:
+    name: Publish reviews and enforce verdict
+    if: always() && needs.prepare.result == 'success'
+    needs:
+      - prepare
+      - codex-review
+      - claude-review
+      - gemini-review
+      - grok-review
+      - consensus
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all review artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: ai-review-*
+          path: review-artifacts
+          merge-multiple: true
+
+      - name: Update the five PR comments
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/ai_pr_review.py publish
+          --event-path "$GITHUB_EVENT_PATH"
+          --results-dir review-artifacts
+
+      - name: Enforce AI merge verdict
+        run: >-
+          python scripts/ai_pr_review.py gate
+          --results-dir review-artifacts
