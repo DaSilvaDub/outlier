@@ -3,13 +3,15 @@
 ## Task
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
-review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-3 of
-its 15-step Build order are done and committed. Continue at **step 4**.
+review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
+its 15-step Build order are done and committed. Continue at **step 5**.
 
 ## Last Commit SHA
 
-`f759b6c` — `feat(verdicts): structured AI schema validation, steps 0-3`, on branch
-`claude/structured-ai-schema-validation-afd7a9`, pushed to origin.
+`f759b6c` — `feat(verdicts): structured AI schema validation, steps 0-3`
+plus the step-4 commit on this branch (`claude/structured-ai-schema-validation-afd7a9`),
+pushed to origin. Step 4 lives in `outlier_scrapers/verdict_gate.py` and
+`tests/test_verdict_gate.py`.
 
 ## PR
 
@@ -56,29 +58,36 @@ visible across worktrees/ents, not because the work is ready for review.
   construction does not actually include them yet. Step 6 (C's runner rewiring) must add
   them to the text sent to the model, or the prompt's promise is false.
 
-## Next: step 4 — `outlier_scrapers/verdict_gate.py`
+## What's done (step 4)
 
-Build order text: *"gates in the table order above, one test-driven commit per code group,
-including the pass-failing-vs-judgement violation classification and the scoped
-`desk_prohibited_markets` check."*
+- `outlier_scrapers/verdict_gate.py`: `validate_envelope(envelope, index, now)` — no I/O,
+  no clock reads, no network. Envelope-level gates (`envelope_unparseable`, `schema_invalid`,
+  `pack_mismatch`) short-circuit. Per-record gates cover the plan table: identity/tamper,
+  players, injury (A pack-flags / B-C grounded / E cite-only), lock, integrity, variance,
+  scoped `desk_prohibited_markets` (HRR any-scope, BB `PLAYER_PROP` only, team BB clean),
+  MLB whitelist after the desk ban, 2B OVER `side_restricted`, longshot `+150`/`+149`,
+  and per-row stake caps / increment / negative. PASS/STAND_DOWN skip stake+variance
+  but not identity/tamper. Findings have no stake to violate.
+- Failure classes are hard-coded: identity/tamper fail the pass on any record;
+  judgement rejects count toward `reject_fail_ratio` only on model-attempted `BET`s;
+  a zero-BET all-`STAND_DOWN` slate never trips the ratio.
+- 54 tests in `tests/test_verdict_gate.py`. `ruff`/`mypy`/`pyright` clean on the new files.
+- **Known limitation, do not silently invent later:** envelope-level
+  `portfolio.allocate_portfolio_risk` group-ceiling reporting (`stake_above_policy_cap`
+  with a named binding constraint across the accepted BET set) is not wired yet. Per-row
+  `max_wager_units` / row-cap checks are. Add the allocate path when a test needs it,
+  likely as the first follow-up inside step 5's runner wiring or a small step-4b commit.
 
-Read the plan's **"The deterministic gates"** section (the full violation table) and
-**"Repair loop and failure policy"** (the pass-failing vs. judgement-outcome split — this
-one has a documented history of being gotten wrong twice across review rounds, read it
-carefully before implementing). Also re-read **"Resolved market policy"** for the exact
-`desk_prohibited_markets` scoping (`{market, scope}` pairs, not bare strings — BB is
-`PLAYER_PROP`-scoped, HRR is any-scope).
+## Next: step 5 — `runner_common.py`
 
-`verdict_gate.py` is a pure function of `(envelope, index, now)` — no I/O, no clock reads
-beyond the `now` parameter, no network. It consumes `verdicts.py`'s parsed envelope types
-and `pack_index.py`'s `PackIndex`, and produces `Violation` records (`{code, outcome_id,
-market_id, detail, severity}` — `severity` is `reject` or `warn`).
+Build order text: `request_structured`, `parse_envelope`, `write_envelope`, repair-block
+construction, request-hash extension (all three pack hashes), `publication_id` derivation
+as the full per-pass manifest hash, the versioned-directory publish path and pass-level
+`current.json` pointer swap.
 
-TDD as usual: `tests/test_verdict_gate.py`, one red-path test per violation code from the
-gates table (each built from a fixture pack whose row is valid except for the single
-property under test), plus a green-path test and the adversarial fixtures listed in the
-plan's Testing section (line one tick off, stake at exactly `max_units` vs. one increment
-above, 2B OVER, `+150` vs `+149`, etc.).
+Read **"Atomic multi-file publication"** and **"The per-pass immutable manifest"** before
+writing anything — `publication_id` is not `request_sha256`, and a forced rerun must not
+collide. Do not start step 6 (pass C rewiring) until this publish path exists.
 
 ## Session mechanics that will save you time
 
