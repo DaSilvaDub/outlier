@@ -71,6 +71,7 @@ def totals_row(*, kind=TOTAL_KIND_GAME, **overrides):
             "selection": "Over 8.5",
             "line": "8.5",
             "price": "-110",
+            "book": "FD",
         }
     )
     row.update(overrides)
@@ -295,6 +296,8 @@ def test_totals_market_id_accepts_totals_id_compatibility_alias(tmp_path):
     )
     assert "market_id_mismatch" not in codes(result)
     assert "unknown_market" not in codes(result)
+    assert "locked_market" not in codes(result)
+    assert result.violations == ()
 
 
 def test_stream_mismatch(tmp_path):
@@ -960,6 +963,52 @@ def test_judgement_rejects_above_ratio_fail_the_pass(tmp_path):
     result = gate(parsed, index)
     assert result.pass_fails is True
     assert result.reject_fail_ratio == pytest.approx(2 / 3)
+
+
+def test_priced_line_still_checks_book_tamper(tmp_path):
+    index = build_index(tmp_path, candidates=[candidate_row(priced_line="6.5")])
+    result = gate(parse_verdict(index, line="6.5", book="DK"), index)
+    only_code(result, "book_tampered")
+
+
+def test_stand_down_on_locked_row_records_lock_but_does_not_fail_pass(tmp_path):
+    index = build_index(tmp_path, candidates=[candidate_row(_event_starts_at=PAST)])
+    result = gate(parse_verdict(index, verdict="STAND_DOWN", recommended_units=0.0), index)
+    only_code(result, "locked_market")
+    assert result.pass_fails is False
+
+
+def test_injury_flag_on_teammate_does_not_support_other_player(tmp_path):
+    rows = [
+        candidate_row(injury_flags="IL:hamstring"),
+        candidate_row(
+            outcome_id="out2",
+            market_id="mkt2",
+            player_id="p2",
+            selection="Player Two Over 5.5",
+            injury_flags="",
+        ),
+    ]
+    index = build_index(tmp_path, candidates=rows)
+    evidence = [
+        {
+            "claim": "Player Two is out with an injury.",
+            "kind": "pack",
+            "subject_type": "player",
+            "player_id": "p2",
+        }
+    ]
+    result = gate(
+        parse_verdict(
+            index,
+            outcome_id="out2",
+            market_id="mkt2",
+            selection="Player Two Over 5.5",
+            evidence=evidence,
+        ),
+        index,
+    )
+    only_code(result, "unsupported_injury_claim")
 
 
 def test_violation_class_split_is_hard_coded():

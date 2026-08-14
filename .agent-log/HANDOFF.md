@@ -72,11 +72,13 @@ visible across worktrees/ents, not because the work is ready for review.
   judgement rejects count toward `reject_fail_ratio` only on model-attempted `BET`s;
   a zero-BET all-`STAND_DOWN` slate never trips the ratio.
 - 54 tests in `tests/test_verdict_gate.py`. `ruff`/`mypy`/`pyright` clean on the new files.
-- **Known limitation, do not silently invent later:** envelope-level
-  `portfolio.allocate_portfolio_risk` group-ceiling reporting (`stake_above_policy_cap`
-  with a named binding constraint across the accepted BET set) is not wired yet. Per-row
-  `max_wager_units` / row-cap checks are. Add the allocate path when a test needs it,
-  likely as the first follow-up inside step 5's runner wiring or a small step-4b commit.
+- **Still open inside step 4 (reviewer, not blocking step 5 start):**
+  envelope-level `portfolio.allocate_portfolio_risk` group ceilings; C
+  `source_timestamp` window (still in `c_research.validate_output` until step 6);
+  E stake-narrowing vs min(cited upstream stakes). Per-row caps, scoped desk
+  bans, identity/tamper vs judgement, priced_line+other-tamper, totals lock via
+  `index.locks`, PASS/STAND_DOWN lock+integrity, and player-scoped injury
+  flags are in.
 
 ## Next: step 5 — `runner_common.py`
 

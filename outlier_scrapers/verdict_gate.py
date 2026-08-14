@@ -182,6 +182,10 @@ def validate_envelope(
     the system clock and never touches the filesystem.
     """
     policy = policy or VerdictPolicy()
+    extra_warns: list[Violation] = []
+    if isinstance(envelope, ParsedEnvelope):
+        extra_warns.extend(_parse_warning_violations(envelope.warnings))
+        envelope = envelope.envelope
     parsed_or_fail = _coerce_envelope(envelope, kind)
     if isinstance(parsed_or_fail, GateResult):
         return parsed_or_fail
@@ -214,8 +218,22 @@ def validate_envelope(
                 current_publications or {},
             )
         )
+    violations[0:0] = extra_warns
 
     return _classify_result(records, tuple(violations), policy)
+
+
+def _parse_warning_violations(warnings: tuple[verdicts.ParseWarning, ...]) -> list[Violation]:
+    return [
+        Violation(
+            code=item.code,
+            outcome_id=item.outcome_id,
+            market_id=item.market_id,
+            detail=item.detail,
+            severity=item.severity or "warn",
+        )
+        for item in warnings
+    ]
 
 
 def _coerce_envelope(
@@ -338,11 +356,13 @@ def _validate_record(
         _check_synthesis(record, publications, add)
     _check_injury(record, index, now, policy, publications, add)
 
-    if _is_stake_exempt(record):
+    if isinstance(record, FindingRecord):
         return found
 
     _check_lock(outcome_id, row, index, now, add)
     _check_integrity(row, add)
+    if _is_stake_exempt(record):
+        return found
     _check_markets(record, row, policy, add)
     _check_stakes(record, row, index, add)
     return found
@@ -385,8 +405,7 @@ def _check_tamper(record: Any, row: Any, add) -> None:
                 "priced_line_unreconciled",
                 f"priced_line is {required_priced!r}; verdict line is {record.line!r}.",
             )
-        return
-    if not _numeric_equal(record.line, str(data.get("line") or "")):
+    elif not _numeric_equal(record.line, str(data.get("line") or "")):
         add("line_tampered", f"line {record.line!r} != pack line {data.get('line')!r}.")
     if not _numeric_equal(record.price, str(data.get("price") or "")):
         add("price_tampered", f"price {record.price!r} != pack price {data.get('price')!r}.")
@@ -480,10 +499,10 @@ def _check_synthesis(
             if pub and record.outcome_id in pub.outcome_ids:
                 verdict_backing = True
                 break
-    if record.verdict == "BET" and not verdict_backing:
+    if not verdict_backing:
         add(
             "unsourced_synthesis",
-            "E BET is not sourced by a current A/D/B verdict on this outcome_id.",
+            "E record is not sourced by a current A/D/B verdict on this outcome_id.",
         )
 
 
@@ -512,12 +531,6 @@ def _timestamp_in_window(raw: str | None, now: datetime, max_age_h: float) -> bo
 def _injury_supported_by_pack(player_id: str | None, index: PackIndex) -> bool:
     if not player_id:
         return False
-    info = index.players.get(player_id)
-    if info is None:
-        return False
-    flags = index.injuries.get(info.event_id) or ""
-    if flags:
-        return True
     for row in (*index.rows.values(), *index.dropped.values()):
         if str(row.data.get("player_id") or "") == player_id and str(
             row.data.get("injury_flags") or ""
@@ -578,23 +591,32 @@ def _check_lock(outcome_id: str, row: Any, index: PackIndex, now: datetime, add)
     if outcome_id in index.dropped:
         add("locked_market", f"outcome_id {outcome_id!r} is in the lock drop set.")
         return
-    start_raw = str(row.data.get("_event_starts_at") or "")
+    event_id = str(row.data.get("event_id") or "")
+    start_raw = str(row.data.get("_event_starts_at") or index.locks.get(event_id) or "")
     start = _parse_start(start_raw)
-    if start is None or start <= now:
-        add("locked_market", f"event start {start_raw!r} is unparseable or already locked at validation time.")
+    if start is not None:
+        if start <= now:
+            add("locked_market", f"event start {start_raw!r} is already locked at validation time.")
+        return
+    if row.stream == "candidates":
+        add(
+            "locked_market",
+            f"event start {start_raw!r} is unparseable; pregame state cannot be verified.",
+        )
 
 
 def _check_integrity(row: Any, add) -> None:
-    flags_raw = str(row.data.get("data_quality_flags") or "")
+    flags_raw = str(row.data.get("data_quality_flags") or row.data.get("quality_flags") or "")
     flags = {part.strip() for part in flags_raw.split(",") if part.strip()}
     # ev_line_fallback:priced_at=… is a priced-line signal, not a standalone DQ here.
     exact = {f for f in flags if not f.startswith("ev_line_fallback:")}
     if not pack.DISQUALIFYING_DQ_FLAGS.isdisjoint(exact) or any(
         f.startswith(pack.CROSS_SPORT_DQ_PREFIX) for f in flags
     ):
-        add("integrity_flag", f"row carries disqualifying data_quality_flags {sorted(flags)}.")
+        add("integrity_flag", f"row carries disqualifying flags {sorted(flags)}.")
         return
-    if str(row.data.get("actionable") or "").lower() != "true":
+    actionable = str(row.data.get("actionable") or "")
+    if actionable and actionable.lower() != "true":
         add("integrity_flag", "row actionable is not true.")
         return
     if str(row.data.get("board") or "") == "A_FLAGGED":
