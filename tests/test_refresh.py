@@ -9,6 +9,17 @@ class FakeClient:
     pass
 
 
+def test_refresh_runs_slate_strategy_without_api(monkeypatch, capsys):
+    def fake_export(league):
+        return {"status": "ok", "events": [{"event_id": "e1"}, {"event_id": "e2"}]}
+
+    monkeypatch.setattr(refresh_mod, "export_slate_strategy_for_league", fake_export)
+    result = refresh_mod.main(["--league", "WNBA", "--slate-strategy"])
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "WNBA slate strategy: exported 2 events" in captured.out
+
+
 def test_refresh_auth_failure_replaces_all_requested_statuses(tmp_path, monkeypatch):
     from outlier_scrapers import paths as paths_mod
     from outlier_scrapers.paths import league_paths
@@ -22,7 +33,11 @@ def test_refresh_auth_failure_replaces_all_requested_statuses(tmp_path, monkeypa
 
     assert refresh_mod.main(["--league", "MLB", "--all"]) == 1
     reports = league_paths("MLB").reports
+    local_only = {"slate_strategy_status_latest.json"}
     for status_name in refresh_mod._PRODUCER_STATUS_FILES.values():
+        if status_name in local_only:
+            assert not (reports / status_name).exists()
+            continue
         status = json.loads((reports / status_name).read_text(encoding="utf-8"))
         assert status["status"] == "error"
         assert status["error"] == "session expired"
@@ -251,6 +266,11 @@ def test_refresh_skips_game_cards_when_game_line_movement_fails(
         ),
         ("--cards", "export_cards_for_league", "cards_status_latest.json"),
         ("--game-cards", "export_game_cards_for_league", "games_cards_status_latest.json"),
+        (
+            "--slate-strategy",
+            "export_slate_strategy_for_league",
+            "slate_strategy_status_latest.json",
+        ),
     ],
 )
 def test_refresh_failure_replaces_exact_producer_success_status(

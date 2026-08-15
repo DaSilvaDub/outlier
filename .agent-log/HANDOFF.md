@@ -1,24 +1,19 @@
 # Handoff
 
-## Last Commit SHA
+**Last Commit SHA**: (this branch, PR #96 review fixes)
+**PR**: https://github.com/DaSilvaDub/outlier/pull/96 (`claude/slate-strategy-pre-direction-65e483` -> `master`)
 
-`13317dba098a95fb55fc21646de095d1d530f1ec` (merged invariant-sync follow-up; this handoff-only coordination commit follows it.)
+**Files Touched**:
+- outlier_scrapers/slate_strategy.py
+- outlier_scrapers/form_source.py
+- outlier_scrapers/cards.py
+- outlier_scrapers/refresh.py
+- tests/test_slate_strategy.py
+- tests/test_form_source.py
+- tests/test_cards.py
+- tests/test_refresh.py
 
-## Files Touched
-
-- PR #97 merged as `59d3ce529e849ebd8b4e6a36526f20a46d981e29`.
-- All 14 PR #97 review threads were resolved after their fixes were verified.
-- PR #102 merged as `13317dba098a95fb55fc21646de095d1d530f1ec`,
-  making structured-verdict invariants 9 and 10 durable across sync runs.
-- Canonical `master`, `origin/master`, registered worktrees, and known readable
-  full clones passed the final sync verifier.
-
-## Next Steps
-
-- No code or merge work remains for PR #97.
-- Verification: 1,032 offline tests passed for PR #97; hosted pytest and typecheck
-  passed for PRs #97 and #102; the sync regression has 2 focused tests, clean
-  Ruff, idempotent regeneration, and a clean diff check.
-- Optional external administration: replenish OpenAI, Anthropic, and xAI credits
-  if the advisory multi-provider consensus workflow should become green. Gemini
-  and CodeRabbit completed successfully.
+**Next Steps**:
+- Review comments on PR #96 addressed on current master: real `normalize_games` contract, ESPN/Outlier team aliases, nested OUT injuries, event-scoped A_FLAGGED strategy conflicts, MLB skipped instead of fake-empty.
+- Targeted pytest: 87 strategy/cards/refresh tests + 14 related pack/games tests, ruff clean.
+- Rebase leftover from SyncAll clobber was discarded; this branch was reset onto `origin/master` then patched.

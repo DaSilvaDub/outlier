@@ -1,7 +1,13 @@
+import json
 from datetime import date
 
 from outlier_scrapers.form_source import FinalEvent
-from outlier_scrapers.slate_strategy import MatchupContext, build_event_strategy, window_player_form
+from outlier_scrapers.slate_strategy import (
+    MatchupContext,
+    build_event_strategy,
+    export_slate_strategy_for_league,
+    window_player_form,
+)
 
 
 def _event(
@@ -77,3 +83,101 @@ def test_build_event_strategy_leakage():
     
     # No directions for p2
     assert not any(d.player_key == "p2" for d in out.directions)
+
+
+def test_out_injury_nested_schema_filters_playmaker():
+    recent = [
+        _event(f"e{i}", "AWAY", "HOME", 100, 90, {"PLAYMAKER": {"PTS": 8, "AST": 6}})
+        for i in range(4)
+    ]
+    ctx = MatchupContext("event", "AWAY", "HOME", recent, {"PLAYMAKER"}, set())
+    injuries = [
+        {
+            "firstName": "Play",
+            "lastName": "Maker",
+            "teamId": "t1",
+            "injury": {"status": "Out"},
+        }
+    ]
+    out = build_event_strategy(ctx, injuries=injuries)
+    assert not any(d.player_key == "PLAYMAKER" for d in out.directions)
+
+
+def _write_normalized_games(data_dir, league, *, records, events, teams):
+    out = data_dir / league / "normalized"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{league.lower()}_games_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-08-13T00:00:00Z",
+                "league": league,
+                "primary_record_array": "records",
+                "records": records,
+                "context": {"events": events, "teams": teams, "insights": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_export_reads_normalize_games_contract(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers import slate_strategy as strat
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    _write_normalized_games(
+        tmp_path / "data",
+        "WNBA",
+        records=[{"event_id": "e1", "matchup": "LVA @ SEA", "team": "LVA"}],
+        events={"e1": {"away_team_id": "a1", "home_team_id": "h1", "lineups": {}}},
+        teams={
+            "a1": {
+                "injuries": [
+                    {
+                        "firstName": "Play",
+                        "lastName": "Maker",
+                        "injury": {"status": "Out"},
+                    }
+                ]
+            }
+        },
+    )
+    recent = [
+        _event(f"g{i}", "LVA", "SEA", 88, 80, {"PLAYMAKER": {"PTS": 8, "AST": 6}})
+        for i in range(4)
+    ]
+    monkeypatch.setattr(strat, "iter_recent_finals", lambda *a, **k: recent)
+
+    result = export_slate_strategy_for_league("WNBA")
+
+    assert result["status"] == "ok"
+    assert len(result["events"]) == 1
+    event = result["events"][0]
+    assert event["event_id"] == "e1"
+    assert event["matchup"] == "LVA @ SEA"
+    assert event["team_form"]["away"]["gp"] == 4
+    assert not any(d["player_key"] == "PLAYMAKER" for d in event["directions"])
+    reports = paths_mod.league_paths("WNBA").reports
+    assert (reports / "slate_strategy_latest.json").exists()
+    assert "LVA @ SEA" in (reports / "slate_strategy_latest.md").read_text(encoding="utf-8")
+
+
+def test_export_rejects_legacy_events_array(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    out = tmp_path / "data" / "WNBA" / "normalized"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "wnba_games_latest.json").write_text(
+        json.dumps({"events": [{"event_id": "e1", "away_team": "LVA", "home_team": "SEA"}]}),
+        encoding="utf-8",
+    )
+    result = export_slate_strategy_for_league("WNBA")
+    assert result["status"] == "error"
+    assert result["reason"] == "unrecognized_games_contract"
+
+
+def test_export_skips_mlb():
+    result = export_slate_strategy_for_league("MLB")
+    assert result["status"] == "skipped"
+    assert result["events"] == []
