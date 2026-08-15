@@ -7,6 +7,7 @@ versioned per-pass publication path — so per-prompt runners stay thin.
 
 from __future__ import annotations
 
+import ast
 import csv
 import hashlib
 import io
@@ -432,9 +433,23 @@ def write_violations(violations: Sequence[Any]) -> bytes:
 
 
 def _pack_value_from_detail(detail: str) -> str:
-    for marker in ("pack line ", "pack price ", "pack selection ", "pack book "):
+    markers = (
+        ("priced_line is ", "; verdict line is "),
+        ("pack line ", None),
+        ("pack price ", None),
+        ("pack selection ", None),
+        ("pack book ", None),
+    )
+    for marker, terminator in markers:
         if marker in detail:
-            return detail.split(marker, 1)[1].rstrip(".").strip()
+            raw = detail.split(marker, 1)[1]
+            if terminator is not None:
+                raw = raw.split(terminator, 1)[0]
+            raw = raw.rstrip(".").strip()
+            try:
+                return str(ast.literal_eval(raw))
+            except (SyntaxError, ValueError):
+                return raw
     return ""
 
 
@@ -630,7 +645,7 @@ def publish_verdict_pass(
 ) -> PublishResult:
     """Parse a verdict envelope, gate it, and publish. Raises RunnerError on fail."""
     from outlier_scrapers import pack_index, paths, verdicts
-    from outlier_scrapers.verdict_gate import validate_envelope
+    from outlier_scrapers.verdict_gate import load_verdict_policy, validate_envelope
 
     try:
         parsed = parse_envelope(output_text, "verdict")
@@ -639,10 +654,11 @@ def publish_verdict_pass(
     if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
         raise RunnerError(f"Pass {pass_} output did not parse as a verdict envelope")
 
-    index = pack_index.build_pack_index(
-        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    index = pack_index.build_pack_index(pack_dir)
+    policy = load_verdict_policy(paths.PROJECT_ROOT / "config" / "verdict_policy.json")
+    gate = validate_envelope(
+        parsed, index, now or datetime.now().astimezone(), policy=policy
     )
-    gate = validate_envelope(parsed, index, now or datetime.now().astimezone())
     if gate.pass_fails:
         raise RunnerError(
             f"Pass {pass_} failed structured validation: " + ",".join(gate.fail_reasons)
@@ -700,7 +716,7 @@ def publish_finding_pass(
 ) -> PublishResult:
     """Parse a pass-C finding envelope, gate it, and publish. Raises RunnerError on fail."""
     from outlier_scrapers import pack_index, paths, verdicts
-    from outlier_scrapers.verdict_gate import validate_envelope
+    from outlier_scrapers.verdict_gate import load_verdict_policy, validate_envelope
 
     try:
         parsed = parse_envelope(output_text, "finding")
@@ -709,10 +725,11 @@ def publish_finding_pass(
     if not isinstance(parsed.envelope, verdicts.FindingEnvelope):
         raise RunnerError("Pass C output did not parse as a finding envelope")
 
-    index = pack_index.build_pack_index(
-        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    index = pack_index.build_pack_index(pack_dir)
+    policy = load_verdict_policy(paths.PROJECT_ROOT / "config" / "verdict_policy.json")
+    gate = validate_envelope(
+        parsed, index, now or datetime.now().astimezone(), policy=policy
     )
-    gate = validate_envelope(parsed, index, now or datetime.now().astimezone())
     # Findings never carry a BET verdict, so `_is_attempted_bet` never matches
     # one and the gate's reject_fail_ratio (attempted-bet-only) never fires.
     # Any reject-severity content violation must still fail the pass -- there
@@ -760,7 +777,7 @@ def publish_finding_pass(
 
 def load_current_publications(pack_dir: Path) -> dict[str, Any]:
     """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
-    from outlier_scrapers.verdict_gate import UpstreamPublication
+    from outlier_scrapers.verdict_gate import UpstreamPublication, _is_injury_text
 
     loaded: dict[str, Any] = {}
     for pass_name in ("A", "D", "B", "C"):
@@ -777,6 +794,15 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
         records = data.get(key) or []
         record_ids = {str(row.get("record_id") or "") for row in records}
         outcome_ids = {str(row.get("outcome_id") or "") for row in records}
+        injury_supported_record_ids = {
+            str(row.get("record_id") or "")
+            for row in records
+            if _is_injury_text(str(row.get("claim") or ""))
+            or any(
+                isinstance(item, dict) and _is_injury_text(str(item.get("claim") or ""))
+                for item in (row.get("evidence") or [])
+            )
+        }
         stakes: dict[str, float] = {}
         if pass_name != "C":
             for row in records:
@@ -792,6 +818,9 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
             publication_id=pub_id,
             record_ids=frozenset(item for item in record_ids if item),
             outcome_ids=frozenset(item for item in outcome_ids if item),
+            injury_supported_record_ids=frozenset(
+                item for item in injury_supported_record_ids if item
+            ),
             stakes=stakes,
         )
     return loaded
@@ -853,7 +882,8 @@ def publish_reconciliation_pass(
 ) -> PublishResult:
     """Parse a reconciliation envelope, gate it against current pubs, publish E."""
     from outlier_scrapers import pack_index, paths, verdicts
-    from outlier_scrapers.verdict_gate import validate_envelope
+    from outlier_scrapers.desk_snapshot import fingerprint_locks
+    from outlier_scrapers.verdict_gate import load_verdict_policy, validate_envelope
 
     try:
         parsed = parse_envelope(output_text, "reconciliation")
@@ -862,52 +892,61 @@ def publish_reconciliation_pass(
     if not isinstance(parsed.envelope, verdicts.ReconciliationEnvelope):
         raise RunnerError("Pass E output did not parse as a reconciliation envelope")
 
-    index = pack_index.build_pack_index(
-        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
-    )
-    pubs = load_current_publications(pack_dir)
-    gate = validate_envelope(
-        parsed, index, now or datetime.now().astimezone(), current_publications=pubs
-    )
-    if gate.pass_fails:
-        raise RunnerError(
-            "Pass E failed structured validation: " + ",".join(gate.fail_reasons)
+    with fingerprint_locks(pack_dir, operation="publish_E", now=now):
+        index = pack_index.build_pack_index(pack_dir)
+        pubs = load_current_publications(pack_dir)
+        policy = load_verdict_policy(paths.PROJECT_ROOT / "config" / "verdict_policy.json")
+        gate = validate_envelope(
+            parsed,
+            index,
+            now or datetime.now().astimezone(),
+            policy=policy,
+            current_publications=pubs,
         )
+        if gate.pass_fails:
+            raise RunnerError(
+                "Pass E failed structured validation: " + ",".join(gate.fail_reasons)
+            )
 
-    codes: dict[str, int] = {}
-    for item in gate.violations:
-        codes[item.code] = codes.get(item.code, 0) + 1
-    status = {
-        "envelope_present": True,
-        "envelope_kind": "reconciliation",
-        "schema_version": parsed.envelope.schema_version,
-        "record_count": len(parsed.envelope.reconciliations),
-        "bet_count": sum(1 for rec in parsed.envelope.reconciliations if rec.verdict == "BET"),
-        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
-        "violation_codes": codes,
-        "mode": "shadow",
-        "repair_attempts": 0,
-        "structured_output_native": True,
-    }
-    lines = ["# Pass E", ""]
-    for rec in parsed.envelope.reconciliations:
-        lines.append(
-            f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} ({rec.recommended_units}u)"
-        )
-    artifacts = PassArtifacts(
-        pass_="E",
-        request_sha256=request_sha256,
-        schema_version=verdicts.SCHEMA_VERSION,
-        verdicts_json=write_envelope(
-            parsed.envelope,
+        codes: dict[str, int] = {}
+        for item in gate.violations:
+            codes[item.code] = codes.get(item.code, 0) + 1
+        status = {
+            "envelope_present": True,
+            "envelope_kind": "reconciliation",
+            "schema_version": parsed.envelope.schema_version,
+            "record_count": len(parsed.envelope.reconciliations),
+            "bet_count": sum(
+                1 for rec in parsed.envelope.reconciliations if rec.verdict == "BET"
+            ),
+            "rejected_count": sum(
+                1 for item in gate.violations if item.severity == "reject"
+            ),
+            "violation_codes": codes,
+            "mode": "shadow",
+            "repair_attempts": 0,
+            "structured_output_native": True,
+        }
+        lines = ["# Pass E", ""]
+        for rec in parsed.envelope.reconciliations:
+            lines.append(
+                f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} "
+                f"({rec.recommended_units}u)"
+            )
+        artifacts = PassArtifacts(
+            pass_="E",
             request_sha256=request_sha256,
-            model=model,
-            candidates_sha256=candidates_sha256,
-            game_totals_sha256=game_totals_sha256,
-            team_totals_sha256=team_totals_sha256,
-        ),
-        violations_json=write_violations(gate.violations),
-        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
-        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
-    )
-    return publish_pass(pack_dir, artifacts, now=now)
+            schema_version=verdicts.SCHEMA_VERSION,
+            verdicts_json=write_envelope(
+                parsed.envelope,
+                request_sha256=request_sha256,
+                model=model,
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            ),
+            violations_json=write_violations(gate.violations),
+            report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+            status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+        )
+        return publish_pass(pack_dir, artifacts, now=now, hold_locks=False)

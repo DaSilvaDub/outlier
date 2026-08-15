@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from outlier_scrapers import pack, pack_index, verdict_gate, verdicts
+from outlier_scrapers import pack, pack_index, verdict_gate, verdict_policy, verdicts
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, TOTAL_KIND_GAME, TOTAL_KIND_TEAM
 
 FUTURE = (datetime.now().astimezone() + timedelta(hours=6)).isoformat()
@@ -168,6 +168,22 @@ def test_green_path_compliant_bet_has_zero_violations(tmp_path):
     result = gate(parse_verdict(index), index)
     assert result.violations == ()
     assert result.pass_fails is False
+
+
+def test_validate_envelope_default_policy_does_not_load_file(tmp_path, monkeypatch):
+    index = build_index(tmp_path)
+
+    def unexpected_load(*args, **kwargs):
+        raise AssertionError("validate_envelope must not load policy from disk")
+
+    monkeypatch.setattr(verdict_gate, "load_verdict_policy", unexpected_load)
+    result = gate(parse_verdict(index), index)
+    assert result.violations == ()
+
+
+def test_gate_reexports_canonical_policy_contract():
+    assert verdict_gate.VerdictPolicy is verdict_policy.VerdictPolicy
+    assert verdict_gate.load_verdict_policy is verdict_policy.load_verdict_policy
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +373,28 @@ def test_priced_line_unreconciled_from_ev_fallback_flag(tmp_path):
     only_code(result, "priced_line_unreconciled")
 
 
+def test_priced_line_unreconciled_from_semicolon_multi_flag(tmp_path):
+    index = build_index(
+        tmp_path,
+        candidates=[
+            candidate_row(
+                data_quality_flags="source_note;ev_line_fallback:priced_at=6.5",
+            )
+        ],
+    )
+    result = gate(parse_verdict(index, line="5.5"), index)
+    only_code(result, "priced_line_unreconciled")
+
+
+def test_quality_flag_tokenizer_supports_both_columns_and_delimiters():
+    assert verdict_gate._quality_flag_tokens(
+        {
+            "data_quality_flags": "current_one;current_two",
+            "quality_flags": "legacy_one,legacy_two",
+        }
+    ) == ("current_one", "current_two", "legacy_one", "legacy_two")
+
+
 # ---------------------------------------------------------------------------
 # Players
 # ---------------------------------------------------------------------------
@@ -533,6 +571,15 @@ def test_integrity_flag_disqualifying_dq(tmp_path):
     only_code(result, "integrity_flag")
 
 
+def test_integrity_flag_disqualifying_dq_after_semicolon_fails_closed(tmp_path):
+    index = build_index(
+        tmp_path,
+        candidates=[candidate_row(data_quality_flags="source_note;spread_sign_conflict")],
+    )
+    result = gate(parse_verdict(index), index)
+    only_code(result, "integrity_flag")
+
+
 def test_integrity_flag_actionable_false(tmp_path):
     index = build_index(tmp_path, candidates=[candidate_row(actionable="false")])
     result = gate(parse_verdict(index), index)
@@ -565,6 +612,12 @@ def test_tb_is_not_high_variance(tmp_path):
 
 def test_prohibited_market_hrr_any_scope(tmp_path):
     index = build_index(tmp_path, candidates=[candidate_row(market_label="HRR")])
+    result = gate(parse_verdict(index), index)
+    only_code(result, "prohibited_market")
+
+
+def test_prohibited_market_home_runs_alias(tmp_path):
+    index = build_index(tmp_path, candidates=[candidate_row(market_label="HOME_RUNS")])
     result = gate(parse_verdict(index), index)
     only_code(result, "prohibited_market")
 
@@ -699,7 +752,7 @@ def test_unsourced_synthesis_when_no_upstream_verdict(tmp_path):
         "candidates_sha256": index.candidates_sha256,
         "game_totals_sha256": index.game_totals_sha256,
         "team_totals_sha256": index.team_totals_sha256,
-        "upstream_publication_ids": {"A": "pub_a"},
+        "upstream_publication_ids": {"A": None, "D": None, "B": None, "C": "pub_c"},
         "reconciliations": [
             {
                 "market_id": "mkt1",
@@ -741,7 +794,7 @@ def test_stale_citation_publication_id(tmp_path):
         "candidates_sha256": index.candidates_sha256,
         "game_totals_sha256": index.game_totals_sha256,
         "team_totals_sha256": index.team_totals_sha256,
-        "upstream_publication_ids": {"A": "pub_a_old"},
+        "upstream_publication_ids": {"A": "pub_a_old", "D": None, "B": None, "C": None},
         "reconciliations": [
             {
                 "market_id": "mkt1",
@@ -771,7 +824,7 @@ def test_stale_citation_publication_id(tmp_path):
         )
     }
     result = gate(parsed, index, current_publications=pubs)
-    only_code(result, "stale_citation")
+    assert codes(result) == ["stale_upstream_publications", "stale_citation"]
 
 
 def test_e_injury_claim_without_citation_fails_even_with_pack_flags(tmp_path):
@@ -783,7 +836,12 @@ def test_e_injury_claim_without_citation_fails_even_with_pack_flags(tmp_path):
         "candidates_sha256": index.candidates_sha256,
         "game_totals_sha256": index.game_totals_sha256,
         "team_totals_sha256": index.team_totals_sha256,
-        "upstream_publication_ids": {"A": "pub_a", "B": "pub_b"},
+        "upstream_publication_ids": {
+            "A": "pub_a",
+            "D": None,
+            "B": "pub_b",
+            "C": None,
+        },
         "reconciliations": [
             {
                 "market_id": "mkt1",
@@ -837,7 +895,12 @@ def test_e_injury_claim_citing_validated_b_finding_passes(tmp_path):
         "candidates_sha256": index.candidates_sha256,
         "game_totals_sha256": index.game_totals_sha256,
         "team_totals_sha256": index.team_totals_sha256,
-        "upstream_publication_ids": {"A": "pub_a", "B": "pub_b"},
+        "upstream_publication_ids": {
+            "A": "pub_a",
+            "D": None,
+            "B": "pub_b",
+            "C": None,
+        },
         "reconciliations": [
             {
                 "market_id": "mkt1",

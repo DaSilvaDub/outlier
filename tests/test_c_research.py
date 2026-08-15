@@ -303,3 +303,50 @@ def test_json_finding_envelope_validates(c_env, monkeypatch):
         c_research, "call_gemini", lambda *a, **k: json.dumps(envelope)
     )
     assert c_research.run_c_research(pack_dir) == 0
+
+
+def test_json_finding_envelope_wrapped_in_prose_and_fence_validates(c_env, monkeypatch):
+    _, pack_dir = c_env
+    from outlier_scrapers import pack_index
+
+    index = pack_index.build_pack_index(pack_dir, policy_path=pack_dir / "no-policy.json")
+    envelope = {
+        "schema_version": "1.0",
+        "pass": "C",
+        "pack_date": "2026-06-28",
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        "findings": [
+            {
+                "market_id": "m1",
+                "outcome_id": "m1",
+                "stream": "candidates",
+                "selection": "OVER 8.5",
+                "line": "8.5",
+                "price": "-110",
+                "verdict": "CONFIRMS",
+                "claim": "Starter confirmed",
+                "source_name": "MLB",
+                "source_tier": 1,
+                "source_timestamp": "2026-06-28T12:00:00Z",
+                "evidence": [],
+            }
+        ],
+        "no_sourced_findings": False,
+    }
+    wrapped = "Here is the finding envelope:\n```json\n" + json.dumps(envelope) + "\n```\n"
+    monkeypatch.setattr(c_research, "call_gemini", lambda *a, **k: wrapped)
+
+    assert c_research.run_c_research(pack_dir) == 0
+
+
+def test_arbitrary_prose_is_not_accepted_as_prompt_c_output():
+    candidates = {"m1": {"selection": "OVER 8.5", "line": "8.5", "price": "-110"}}
+
+    with pytest.raises(c_research.rc.RunnerError, match="not a FINDING record"):
+        c_research.validate_output("Starter looks healthy according to reports.", candidates, "2026-06-28")
+
+
+def test_no_sourced_findings_sentinel_remains_valid():
+    c_research.validate_output(c_research.NO_FINDINGS, {}, "2026-06-28")

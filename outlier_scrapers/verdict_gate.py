@@ -7,12 +7,10 @@ and 'Repair loop and failure policy'.
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from outlier_scrapers import pack, verdicts
@@ -23,6 +21,10 @@ from outlier_scrapers.normalizer import (
 )
 from outlier_scrapers.pack_index import PackIndex
 from outlier_scrapers.utils import _parse_start
+from outlier_scrapers.verdict_policy import (
+    VerdictPolicy,
+    load_verdict_policy as load_verdict_policy,
+)
 from outlier_scrapers.verdicts import (
     EnvelopeUnparseableError,
     FindingEnvelope,
@@ -54,26 +56,10 @@ ENVELOPE_CODES = frozenset(
         "envelope_unparseable",
         "schema_invalid",
         "pack_mismatch",
+        "stale_upstream_publications",
     }
 )
 WARN_CODES = frozenset({"unbound_name_in_prose"})
-
-DEFAULT_VARIANCE_MARKETS = (
-    "3PM",
-    "THREES",
-    "THREE_POINTERS_MADE",
-    "HA",
-    "HITS_ALLOWED",
-    "TO",
-    "TURNOVERS",
-)
-DEFAULT_DESK_PROHIBITED = (
-    {"market": "HR", "scope": "any"},
-    {"market": "HOME_RUNS", "scope": "any"},
-    {"market": "WALKS_ALLOWED", "scope": "any"},
-    {"market": "HRR", "scope": "any"},
-    {"market": "BB", "scope": "PLAYER_PROP"},
-)
 
 _INJURY_RE = re.compile(
     r"\b(injur(?:y|ed)|scratch(?:ed)?|lineup|availability|questionable|"
@@ -82,17 +68,7 @@ _INJURY_RE = re.compile(
 )
 _SIDE_OVER_RE = re.compile(r"\bover\b", re.IGNORECASE)
 _SIDE_UNDER_RE = re.compile(r"\bunder\b", re.IGNORECASE)
-
-_VERDICT_POLICY_KEYS = {
-    "mode",
-    "repair_attempts",
-    "reject_fail_ratio",
-    "prohibited_variance_markets",
-    "desk_prohibited_markets",
-    "enforce_mlb_whitelist",
-    "external_evidence_max_age_h",
-}
-
+_DESK_MARKET_ALIASES = {"HOME_RUNS": "HR"}
 
 @dataclass(frozen=True)
 class Violation:
@@ -101,17 +77,6 @@ class Violation:
     market_id: str
     detail: str
     severity: str  # "reject" | "warn"
-
-
-@dataclass(frozen=True)
-class VerdictPolicy:
-    mode: str = "shadow"
-    repair_attempts: int = 1
-    reject_fail_ratio: float = 0.5
-    prohibited_variance_markets: tuple[str, ...] = DEFAULT_VARIANCE_MARKETS
-    desk_prohibited_markets: tuple[dict[str, str], ...] = DEFAULT_DESK_PROHIBITED
-    enforce_mlb_whitelist: bool = True
-    external_evidence_max_age_h: float = 24.0
 
 
 @dataclass(frozen=True)
@@ -140,32 +105,6 @@ def violation_class(code: str) -> str:
     if code in WARN_CODES:
         return "warn"
     return "judgement"
-
-
-def load_verdict_policy(path: Path | str | None = None) -> VerdictPolicy:
-    if path is None:
-        return VerdictPolicy()
-    path = Path(path)
-    if not path.exists():
-        return VerdictPolicy()
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    extra = set(data) - _VERDICT_POLICY_KEYS
-    if extra:
-        raise ValueError(f"Unknown keys in verdict policy: {extra}")
-    return VerdictPolicy(
-        mode=data.get("mode", "shadow"),
-        repair_attempts=int(data.get("repair_attempts", 1)),
-        reject_fail_ratio=float(data.get("reject_fail_ratio", 0.5)),
-        prohibited_variance_markets=tuple(
-            data.get("prohibited_variance_markets", DEFAULT_VARIANCE_MARKETS)
-        ),
-        desk_prohibited_markets=tuple(
-            data.get("desk_prohibited_markets", DEFAULT_DESK_PROHIBITED)
-        ),
-        enforce_mlb_whitelist=bool(data.get("enforce_mlb_whitelist", True)),
-        external_evidence_max_age_h=float(data.get("external_evidence_max_age_h", 24.0)),
-    )
 
 
 def validate_envelope(
@@ -207,8 +146,14 @@ def validate_envelope(
             )
         )
 
-    records = _records_of(env)
     violations: list[Violation] = []
+    publications = current_publications or {}
+    if isinstance(env, ReconciliationEnvelope) and current_publications is not None:
+        violation = _check_upstream_publication_ids(env, publications)
+        if violation is not None:
+            violations.append(violation)
+
+    records = _records_of(env)
     for record in records:
         violations.extend(
             _validate_record(
@@ -216,13 +161,39 @@ def validate_envelope(
                 index,
                 now,
                 policy,
-                current_publications or {},
+                publications,
                 pack_date=env.pack_date,
             )
         )
     violations[0:0] = extra_warns
 
     return _classify_result(records, tuple(violations), policy)
+
+
+def _check_upstream_publication_ids(
+    envelope: ReconciliationEnvelope,
+    publications: Mapping[str, UpstreamPublication],
+) -> Violation | None:
+    """Bind E's publication manifest to the snapshots validated under the lock."""
+    actual = envelope.upstream_publication_ids
+    mismatches: dict[str, tuple[str | None, str | None]] = {}
+    for pass_ in ("A", "D", "B"):
+        pub = publications.get(pass_)
+        if pub is not None and actual.get(pass_) != pub.publication_id:
+            mismatches[pass_] = (actual.get(pass_), pub.publication_id)
+    actual_c = actual.get("C")
+    current_c = publications.get("C")
+    if actual_c and (current_c is None or actual_c != current_c.publication_id):
+        mismatches["C"] = (actual_c, current_c.publication_id if current_c else None)
+    if not mismatches:
+        return None
+    return Violation(
+        code="stale_upstream_publications",
+        outcome_id="",
+        market_id="",
+        detail=f"E upstream publication ids do not match current snapshots: {mismatches!r}.",
+        severity="reject",
+    )
 
 
 def _parse_warning_violations(warnings: tuple[verdicts.ParseWarning, ...]) -> list[Violation]:
@@ -388,13 +359,20 @@ def _numeric_equal(left: str, right: str) -> bool:
         return str(left).strip() == str(right).strip()
 
 
+def _quality_flag_tokens(row_data: Mapping[str, str]) -> tuple[str, ...]:
+    """Return normalized DQ flags from current and legacy flag columns."""
+    tokens: list[str] = []
+    for key in ("data_quality_flags", "quality_flags"):
+        raw = str(row_data.get(key) or "")
+        tokens.extend(part.strip() for part in re.split(r"[;,]", raw) if part.strip())
+    return tuple(tokens)
+
+
 def _priced_line_required(row_data: Mapping[str, str]) -> str | None:
     priced = str(row_data.get("priced_line") or "").strip()
     if priced:
         return priced
-    flags = str(row_data.get("data_quality_flags") or "")
-    for part in flags.split(","):
-        part = part.strip()
+    for part in _quality_flag_tokens(row_data):
         if part.startswith("ev_line_fallback:priced_at="):
             return part.split("=", 1)[1]
     return None
@@ -651,8 +629,7 @@ def _check_lock(outcome_id: str, row: Any, index: PackIndex, now: datetime, add)
 
 
 def _check_integrity(row: Any, add) -> None:
-    flags_raw = str(row.data.get("data_quality_flags") or row.data.get("quality_flags") or "")
-    flags = {part.strip() for part in flags_raw.split(",") if part.strip()}
+    flags = set(_quality_flag_tokens(row.data))
     # ev_line_fallback:priced_at=… is a priced-line signal, not a standalone DQ here.
     exact = {f for f in flags if not f.startswith("ev_line_fallback:")}
     if not pack.DISQUALIFYING_DQ_FLAGS.isdisjoint(exact) or any(
@@ -689,10 +666,11 @@ def _check_markets(record: Any, row: Any, policy: VerdictPolicy, add) -> None:
 
     market_type = str(row.data.get("market_type") or "")
     sport = str(row.data.get("sport") or "").upper()
+    desk_token = _DESK_MARKET_ALIASES.get(token, token)
     for rule in policy.desk_prohibited_markets:
-        rule_market = _market_token(rule.get("market", ""))
-        scope = str(rule.get("scope") or "any")
-        if token != rule_market:
+        rule_market = _market_token(rule.market)
+        scope = str(rule.scope or "any")
+        if desk_token != rule_market:
             continue
         if scope == "any" or scope == market_type:
             add(

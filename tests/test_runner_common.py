@@ -386,6 +386,24 @@ def test_build_repair_block_lists_code_outcome_and_pack_value():
     assert "6.5" not in block.split("pack_value=", 1)[1]
 
 
+def test_build_repair_block_uses_authoritative_priced_line():
+    from outlier_scrapers.verdict_gate import Violation
+
+    block = runner_common.build_repair_block(
+        [
+            Violation(
+                code="priced_line_unreconciled",
+                outcome_id="out1",
+                market_id="mkt1",
+                detail="priced_line is '6.5'; verdict line is '5.5'.",
+                severity="reject",
+            )
+        ]
+    )
+    assert "pack_value=6.5" in block
+    assert "5.5" not in block
+
+
 def test_structured_request_fields_include_three_hashes_and_schema():
     extra = runner_common.structured_request_fields(
         candidates_sha256="c" * 64,

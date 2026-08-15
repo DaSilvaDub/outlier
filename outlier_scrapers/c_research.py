@@ -22,7 +22,7 @@ from dateutil import parser as date_parser
 
 from outlier_scrapers import gemini_research, pack, pack_index, paths, verdicts
 from outlier_scrapers import runner_common as rc
-from outlier_scrapers.verdict_gate import validate_envelope
+from outlier_scrapers.verdict_gate import VerdictPolicy, load_verdict_policy, validate_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,19 @@ def _to_envelope_json(
     stripped = output_text.strip()
     if stripped == NO_FINDINGS:
         return None
-    if stripped.lstrip().startswith("{"):
+
+    # Structured output is the primary contract.  The shared parser tolerates
+    # surrounding prose and Markdown fences, so probe it before treating the
+    # response as a legacy FINDING-pipe payload.
+    try:
+        rc.parse_envelope(stripped, "finding")
+    except verdicts.EnvelopeUnparseableError:
+        pass
+    except verdicts.SchemaInvalidError:
+        # Preserve the schema-specific error from validate_output instead of
+        # misreporting an extracted-but-invalid JSON object as malformed pipe.
+        return stripped
+    else:
         return stripped
     return _pipe_to_envelope(stripped, pack_date_str, index)
 
@@ -244,6 +256,7 @@ def validate_output(
     pack_date_str: str,
     *,
     now: datetime | None = None,
+    policy: VerdictPolicy | None = None,
 ) -> None:
     """Reject output that is unstructured, changes an authoritative quote, or has out-of-bounds dates."""
     stripped = output_text.strip()
@@ -273,7 +286,7 @@ def validate_output(
         raise rc.RunnerError(f"Prompt C output failed schema validation: {exc}") from exc
 
     when = now or datetime.now().astimezone()
-    _raise_for_gate(validate_envelope(parsed, index, when))
+    _raise_for_gate(validate_envelope(parsed, index, when, policy=policy))
 
 
 def run_c_research(
@@ -294,8 +307,9 @@ def run_c_research(
             pack_dir,
             allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
-        index = pack_index.build_pack_index(
-            pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+        index = pack_index.build_pack_index(pack_dir)
+        verdict_policy = load_verdict_policy(
+            paths.PROJECT_ROOT / "config" / "verdict_policy.json"
         )
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
@@ -340,7 +354,7 @@ def run_c_research(
         )
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)
-        validate_output(output_text, index, pack_dir.name)
+        validate_output(output_text, index, pack_dir.name, policy=verdict_policy)
 
         envelope_json = _to_envelope_json(output_text, pack_dir.name, index)
         if envelope_json is None:

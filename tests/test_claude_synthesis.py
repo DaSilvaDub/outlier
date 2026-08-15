@@ -22,6 +22,7 @@ def _envelope_dict(pack_dir) -> dict:
     index = pack_index.build_pack_index(
         pack_dir, policy_path=pack_dir / "no-such-portfolio-policy.json"
     )
+    publications = rc.load_current_publication_documents(pack_dir)
     return {
         "schema_version": verdicts.SCHEMA_VERSION,
         "pass": "E",
@@ -29,7 +30,12 @@ def _envelope_dict(pack_dir) -> dict:
         "candidates_sha256": index.candidates_sha256,
         "game_totals_sha256": index.game_totals_sha256,
         "team_totals_sha256": index.team_totals_sha256,
-        "upstream_publication_ids": {},
+        "upstream_publication_ids": {
+            "A": publications["A"].publication_id,
+            "D": publications["D"].publication_id,
+            "B": publications["B"].publication_id,
+            "C": publications["C"].publication_id if "C" in publications else None,
+        },
         "reconciliations": [],
         "slate_notes": [],
         "needs": [],

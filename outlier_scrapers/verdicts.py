@@ -175,7 +175,7 @@ class ReconciliationEnvelope:
     candidates_sha256: str
     game_totals_sha256: str
     team_totals_sha256: str
-    upstream_publication_ids: dict[str, str]
+    upstream_publication_ids: dict[str, str | None]
     reconciliations: tuple[ReconciliationRecord, ...]
     slate_notes: tuple[str, ...] = ()
     needs: tuple[str, ...] = ()

@@ -12,7 +12,7 @@ import time
 from outlier_scrapers import pack, pack_index, paths, verdicts
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
-from outlier_scrapers.verdict_gate import validate_envelope
+from outlier_scrapers.verdict_gate import VerdictPolicy, load_verdict_policy, validate_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,7 @@ def _publish_pass_a(
     candidates_sha256: str,
     game_totals_sha256: str,
     team_totals_sha256: str,
+    policy: VerdictPolicy | None = None,
 ) -> None:
     try:
         parsed = rc.parse_envelope(output_text, "verdict")
@@ -150,10 +151,16 @@ def _publish_pass_a(
         raise ReasoningError(f"Pass A output is not a valid verdict envelope: {exc}") from exc
     if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
         raise ReasoningError("Pass A output did not parse as a verdict envelope")
-    index = pack_index.build_pack_index(
-        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    index = pack_index.build_pack_index(pack_dir)
+    verdict_policy = policy or load_verdict_policy(
+        paths.PROJECT_ROOT / "config" / "verdict_policy.json"
     )
-    gate = validate_envelope(parsed, index, datetime.now().astimezone())
+    gate = validate_envelope(
+        parsed,
+        index,
+        datetime.now().astimezone(),
+        policy=verdict_policy,
+    )
     if gate.pass_fails:
         raise ReasoningError(
             "Pass A failed structured validation: " + ",".join(gate.fail_reasons)

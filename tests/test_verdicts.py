@@ -94,7 +94,12 @@ def reconciliation_envelope_dict(**overrides):
         "pass": "E",
         "pack_date": "2026-08-12",
         **_base_hashes(),
-        "upstream_publication_ids": {"A": "pub_a", "D": "pub_d", "B": "pub_b"},
+        "upstream_publication_ids": {
+            "A": "pub_a",
+            "D": "pub_d",
+            "B": "pub_b",
+            "C": None,
+        },
         "reconciliations": [
             {
                 "market_id": "mkt_123",
@@ -171,7 +176,12 @@ def test_parse_reconciliation_envelope_green_path():
     env = parsed.envelope
     assert isinstance(env, verdicts.ReconciliationEnvelope)
     assert env.pass_ == "E"
-    assert env.upstream_publication_ids == {"A": "pub_a", "D": "pub_d", "B": "pub_b"}
+    assert env.upstream_publication_ids == {
+        "A": "pub_a",
+        "D": "pub_d",
+        "B": "pub_b",
+        "C": None,
+    }
     assert len(env.reconciliations) == 1
     record = env.reconciliations[0]
     assert record.verdict == "BET"

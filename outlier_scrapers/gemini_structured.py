@@ -100,49 +100,47 @@ def build_grounded_config(
     """
     from google.genai import types
 
-    tools = [types.Tool(google_search=types.GoogleSearch())]
-    base = {
-        "system_instruction": "\n".join(role_block),
-        "tools": tools,
-        "max_output_tokens": max_output_tokens,
-    }
+    tools: types.ToolListUnion = [types.Tool(google_search=types.GoogleSearch())]
+    system_instruction = "\n".join(role_block)
+
+    def prompt_only_config() -> Any:
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=tools,
+            max_output_tokens=max_output_tokens,
+        )
+
     if schema is None:
-        return types.GenerateContentConfig(**base), "prompt_only"
+        return prompt_only_config(), "prompt_only"
 
-    attempts: list[tuple[str, dict[str, Any]]] = []
-    if prefer_json_schema:
-        attempts.append(
-            (
-                "response_json_schema",
-                {**base, "response_mime_type": "application/json", "response_json_schema": schema},
-            )
-        )
-        attempts.append(
-            (
-                "response_schema",
-                {**base, "response_mime_type": "application/json", "response_schema": schema},
-            )
-        )
-    else:
-        attempts.append(
-            (
-                "response_schema",
-                {**base, "response_mime_type": "application/json", "response_schema": schema},
-            )
-        )
-        attempts.append(
-            (
-                "response_json_schema",
-                {**base, "response_mime_type": "application/json", "response_json_schema": schema},
-            )
-        )
+    attempts = (
+        ("response_json_schema", "response_schema")
+        if prefer_json_schema
+        else ("response_schema", "response_json_schema")
+    )
 
-    for mode, kwargs in attempts:
+    for mode in attempts:
         try:
-            return types.GenerateContentConfig(**kwargs), mode
+            if mode == "response_json_schema":
+                config = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=tools,
+                    max_output_tokens=max_output_tokens,
+                    response_mime_type="application/json",
+                    response_json_schema=schema,
+                )
+            else:
+                config = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=tools,
+                    max_output_tokens=max_output_tokens,
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                )
+            return config, mode
         except Exception:
             continue
-    return types.GenerateContentConfig(**base), "prompt_only"
+    return prompt_only_config(), "prompt_only"
 
 
 def looks_like_structured_config_rejection(exc: BaseException) -> bool:

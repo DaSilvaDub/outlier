@@ -1,0 +1,10 @@
+{
+  "events": [
+    {
+      "eventId": "wnba-event-1",
+      "away": {"alias": "NYL", "teamId": "nyl-id"},
+      "home": {"alias": "LVA", "teamId": "lva-id"}
+    }
+  ]
+}
+
