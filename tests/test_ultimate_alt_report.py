@@ -6,6 +6,7 @@ import pytest
 from outlier_scrapers.ultimate_alt import ULTIMATE_ALT_HEADER, ULTIMATE_ALT_PARLAYS_HEADER
 from outlier_scrapers.ultimate_alt_report import (
     ReportInputError,
+    _parse_args,
     analyze_report,
     main,
     render_report,
@@ -268,3 +269,9 @@ def test_invalid_pack_date_does_not_publish(tmp_path: Path) -> None:
             output=tmp_path / "report.md",
             pack_date="08/08/2099",
         )
+
+
+def test_cli_defaults_match_canonical_ultimate_alt_artifacts() -> None:
+    args = _parse_args(["--output", "report.md", "--pack-date", "2099-08-08"])
+    assert args.alt_csv == "ultimate_alt.csv"
+    assert args.parlay_csv == "ultimate_alt_parlays.csv"

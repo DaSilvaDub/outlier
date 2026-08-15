@@ -1,6 +1,10 @@
 from datetime import date
+import logging
+from types import SimpleNamespace
 
+import pytest
 from outlier_scrapers.form_source import FinalEvent
+from outlier_scrapers import slate_strategy
 from outlier_scrapers.slate_strategy import MatchupContext, build_event_strategy, window_player_form
 
 
@@ -77,3 +81,36 @@ def test_build_event_strategy_leakage():
     
     # No directions for p2
     assert not any(d.player_key == "p2" for d in out.directions)
+
+
+def test_export_logs_exception_with_traceback_on_recent_finals_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    games_file = tmp_path / "games.json"
+    games_file.write_text(
+        '{"events":[{"event_id":"e1","away_team":"AWAY","home_team":"HOME","injuries":[]}]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        slate_strategy,
+        "league_paths",
+        lambda _league: SimpleNamespace(
+            games_normalized_latest=lambda: games_file,
+            ensure=lambda: SimpleNamespace(reports=tmp_path),
+        ),
+    )
+
+    def _boom(_league: str, _teams: set[str], _limit: int):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(slate_strategy, "iter_recent_finals", _boom)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        slate_strategy.export_slate_strategy_for_league("WNBA")
+
+    assert any(
+        record.getMessage() == "Failed to fetch recent finals" and record.exc_info
+        for record in caplog.records
+    )

@@ -83,10 +83,10 @@ class ReportAnalysis:
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate an Ultimate Alt shadow audit report.")
-    parser.add_argument("--alt-csv", default="alt.csv", help="Path to ultimate_alt.csv")
+    parser.add_argument("--alt-csv", default="ultimate_alt.csv", help="Path to ultimate_alt.csv")
     parser.add_argument(
         "--parlay-csv",
-        default="parlays.csv",
+        default="ultimate_alt_parlays.csv",
         help="Path to ultimate_alt_parlays.csv",
     )
     parser.add_argument("--output", required=True, help="Markdown report output path")

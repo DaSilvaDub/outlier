@@ -214,8 +214,8 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
     
     try:
         recent_games = iter_recent_finals(league, teams, 10)
-    except Exception as exc:
-        logger.error(f"Failed to fetch recent finals: {exc}")
+    except Exception:
+        logger.exception("Failed to fetch recent finals")
         raise
     
     out_events: list[dict[str, Any]] = []
