@@ -375,7 +375,7 @@ def orchestrate_desk(
         status["final_report"] = {"source": source, "file": str(fpath.name)}
 
     try:
-        from outlier_scrapers import desk_snapshot
+        from outlier_scrapers import desk_snapshot, verdict_policy, verdict_store
 
         snapshot = desk_snapshot.maybe_advance_desk(pack_dir)
         if snapshot is not None:
@@ -386,6 +386,12 @@ def orchestrate_desk(
             if snapshot.get("synthesis_source"):
                 status.setdefault("final_report", {})
                 status["final_report"]["source"] = snapshot["synthesis_source"]
+        policy = verdict_policy.load_verdict_policy()
+        status["verdicts"] = {
+            "policy_mode": policy.mode,
+            "rejected_count": verdict_store.rejected_count_from_snapshot(pack_dir),
+            "synthesis_source": (snapshot or {}).get("synthesis_source"),
+        }
     except Exception as ex:
         status["notes"].append(f"desk snapshot skipped: {ex}")
 

@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 14**.
+its 15-step Build order are done and committed. Continue at **step 15**.
 
 ## Last Commit SHA
 
@@ -206,11 +206,26 @@ visible across worktrees/ents, not because the work is ready for review.
 - Tests: `test_derived_outputs_never_name_verdicts_subtree` and
   `test_rebuild_cleanup_leaves_verdicts_tree_intact` in `tests/test_pack.py`.
 
-## Next: step 14 — policy, status, verdict_records
+## What's done (step 14)
 
-`config/verdict_policy.json`, `run_desk` status block, `daily_job` summary,
-and the `verdict_records` table/migration. Do not start step 15 until 14
-exists.
+- `config/verdict_policy.json` + `verdict_policy.load_verdict_policy`: missing
+  file yields defaults; unknown keys raise. BB is player-scoped.
+- `verdict_store.py`: `verdict_records` PK
+  `(decision_id, pass, publication_id, record_id)`. Additive
+  `CREATE TABLE IF NOT EXISTS` on a legacy decisions-only DB. Two C
+  `record_id`s and two forced-rerun `publication_id`s both persist.
+- `reduce_c_verdict`: CONTRADICTS > CONFIRMS > NEUTRAL, else empty.
+- `run_desk` status grows a `verdicts` block (`policy_mode`,
+  `rejected_count` from the snapshot's named publications,
+  `synthesis_source`). `daily_job.py` was not edited this step — it is
+  T30-staged; call `verdict_store.rejected_count_from_snapshot` from there
+  once T30 is isolated.
+- Tests: `tests/test_verdict_policy.py`, `tests/test_verdict_store.py`.
+
+## Next: step 15 — docs
+
+`docs/feedback-loop.md` cross-reference, `AGENTS.md` invariant entry,
+`.agent-log/HANDOFF.md`.
 
 ## Session mechanics that will save you time
 
