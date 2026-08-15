@@ -4,7 +4,7 @@ import json
 import re
 import unicodedata
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -45,6 +45,7 @@ class FinalEvent:
     away_score: float
     home_score: float
     players: dict[str, dict[str, float]]
+    player_teams: dict[str, str] = field(default_factory=dict)
 
 
 def _fetch_json(url: str, *, timeout: int = 30) -> dict[str, Any]:
@@ -67,6 +68,33 @@ def _token(value: Any) -> str:
 def _team_token(value: Any) -> str:
     token = _token(value)
     return TEAM_ALIASES.get(token, token)
+
+
+_ESPN_TO_ALIAS = {espn: outlier for outlier, espn in TEAM_ALIASES.items()}
+
+
+def canon_team(sport: str, value: Any) -> str:
+    """Map ESPN abbreviations and display names onto Outlier aliases when known."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        from outlier_scrapers.registry import get_sport_config, normalize_team
+
+        config = get_sport_config(sport, allow_disabled=True)
+        canonical = normalize_team(config, raw)
+        if canonical:
+            return canonical
+        espn_token = _token(raw)
+        mapped = _ESPN_TO_ALIAS.get(espn_token)
+        if mapped:
+            back = normalize_team(config, mapped)
+            if back:
+                return back
+            return mapped
+    except ValueError:
+        pass
+    return _team_token(raw)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -155,16 +183,20 @@ def _scoreboard_events(payload: dict[str, Any], sport: str, event_date: date) ->
     return results
 
 
-def _boxscore_players(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
+def _parse_boxscore(payload: dict[str, Any]) -> tuple[dict[str, dict[str, float]], dict[str, str]]:
     raw_boxscore = payload.get("boxscore")
     boxscore: dict[str, Any] = raw_boxscore if isinstance(raw_boxscore, dict) else {}
     teams = boxscore.get("players")
     if not isinstance(teams, list):
-        return {}
+        return {}, {}
     players: dict[str, dict[str, float]] = defaultdict(dict)
+    player_teams: dict[str, str] = {}
     for team in teams:
         if not isinstance(team, dict):
             continue
+        team_alias = _competitor_alias({"team": team.get("team")}) or str(
+            team.get("displayName") or team.get("name") or ""
+        )
         groups = team.get("statistics")
         if isinstance(groups, dict):
             groups = [groups]
@@ -190,7 +222,10 @@ def _boxscore_players(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
                 values = athlete_row.get("stats")
                 if not name or not isinstance(values, list) or len(values) != len(labels):
                     continue
-                bucket = players[_token(name)]
+                player_key = _token(name)
+                bucket = players[player_key]
+                if team_alias:
+                    player_teams[player_key] = team_alias
                 for label, value in zip(labels, values, strict=True):
                     key = _token(label)
                     parsed = _made(value)
@@ -202,7 +237,12 @@ def _boxscore_players(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
                         if outs is not None:
                             bucket["OUTS"] = outs
                             bucket[f"{group_name}:OUTS"] = outs
-    return dict(players)
+    return dict(players), player_teams
+
+
+def _boxscore_players(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
+    players, _teams = _parse_boxscore(payload)
+    return players
 
 
 def _mlb_boxscore_players(payload: dict[str, Any]) -> dict[str, dict[str, float]]:
@@ -301,54 +341,76 @@ def _mlb_events(
     return events
 
 
+class UnsupportedSport(ResultsError):
+    """Raised when a league is intentionally not collected in v1."""
+
+
 def iter_recent_finals(sport: str, teams: set[str], n: int = 10, as_of: date | None = None) -> list[FinalEvent]:
     if not as_of:
         as_of = date.today()
     if sport == "MLB":
-        return []  # MLB not in v1 strategy plan
-    
+        raise UnsupportedSport("MLB is not in the v1 slate-strategy plan")
+
     sport_path = SPORT_PATHS.get(sport)
     if not sport_path:
-        return []
-    
-    events_by_team = defaultdict(list)
-    all_events = {}
-    
+        raise UnsupportedSport(f"{sport} is not in the v1 slate-strategy plan")
+
+    wanted = {canon_team(sport, team) for team in teams if canon_team(sport, team)}
+    events_by_team: dict[str, list[FinalEvent]] = defaultdict(list)
+    all_events: dict[str, FinalEvent] = {}
+    days_ok = 0
+    days_failed = 0
+
     for days_back in range(1, 22):
         day = as_of - timedelta(days=days_back)
         scoreboard_url = f"{ESPN_BASE_URL}/{sport_path}/scoreboard?{urlencode({'dates': day.strftime('%Y%m%d')})}"
         try:
             payload = _fetch_json(scoreboard_url)
             day_events = _scoreboard_events(payload, sport, day)
+            days_ok += 1
         except ResultsError:
+            days_failed += 1
             continue
-        
+
         for event in day_events:
             if event.provider_event_id in all_events:
                 continue
-            if event.away not in teams and event.home not in teams:
+            away_key = canon_team(sport, event.away)
+            home_key = canon_team(sport, event.home)
+            if away_key not in wanted and home_key not in wanted:
                 continue
-            
+
             summary_url = f"{ESPN_BASE_URL}/{sport_path}/summary?{urlencode({'event': event.provider_event_id})}"
             try:
-                players = _boxscore_players(_fetch_json(summary_url))
+                players, player_teams = _parse_boxscore(_fetch_json(summary_url))
             except ResultsError:
-                players = {}
-            
-            enriched = FinalEvent(**{**event.__dict__, "players": players})
+                players, player_teams = {}, {}
+
+            enriched = FinalEvent(
+                provider_event_id=event.provider_event_id,
+                sport=event.sport,
+                event_date=event.event_date,
+                away=event.away,
+                home=event.home,
+                away_score=event.away_score,
+                home_score=event.home_score,
+                players=players,
+                player_teams=player_teams,
+            )
             all_events[event.provider_event_id] = enriched
-            
-            if event.away in teams:
-                events_by_team[event.away].append(enriched)
-            if event.home in teams:
-                events_by_team[event.home].append(enriched)
-        
-        if all(len(events_by_team[t]) >= n for t in teams):
+            if away_key in wanted:
+                events_by_team[away_key].append(enriched)
+            if home_key in wanted:
+                events_by_team[home_key].append(enriched)
+
+        if wanted and all(len(events_by_team[team]) >= n for team in wanted):
             break
-    
-    # Flatten and sort
-    result_map = {}
-    for t_events in events_by_team.values():
-        for ev in t_events[:n]:
+
+    if days_ok == 0 and days_failed > 0:
+        raise ResultsError(f"every ESPN scoreboard day failed for {sport}")
+
+    result_map: dict[str, FinalEvent] = {}
+    for team_events in events_by_team.values():
+        for ev in team_events[:n]:
             result_map[ev.provider_event_id] = ev
-    return sorted(list(result_map.values()), key=lambda x: x.event_date)
+    return sorted(result_map.values(), key=lambda item: item.event_date)
