@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 10**.
+its 15-step Build order are done and committed. Continue at **step 11**.
 
 ## Last Commit SHA
 
@@ -148,11 +148,20 @@ visible across worktrees/ents, not because the work is ready for review.
 - Pass D requests a forced `emit_verdicts` tool, then publishes `verdicts/D`.
 - Tests: `tests/test_pass_b_d_publish.py` (4 passed, fake clients, no live APIs).
 
-## Next: step 10 — pass E
+## What's done (step 10)
 
-Reconciliation envelope consuming A/D/B verdicts and C findings.
-`unsourced_synthesis` and upstream-stake-ceiling. Fake Claude client. Do not
-start step 11 (no-E fallback) until E publishes.
+- `publish_reconciliation_pass` + `load_current_publications` load A/D/B/C
+  `current.json` and gate E against them.
+- E BET without A/D/B backing is `unsourced_synthesis`. E stake may not exceed
+  min(cited A/D/B stakes). Tamper still fails the pass.
+- Pass E requests `emit_reconciliations` and publishes `verdicts/E`.
+- Tests: `tests/test_pass_e_publish.py` (4) plus existing gate tests (61 total).
+
+## Next: step 11 — no-E fallback
+
+Quorum rule when E is missing: A+D+B BET -> min stake; any PASS/STAND_DOWN or
+missing B -> STAND_DOWN insufficient_quorum. Do not start step 12 (desk
+snapshot) until the fallback module exists.
 
 ## Session mechanics that will save you time
 

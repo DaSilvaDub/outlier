@@ -1,14 +1,13 @@
-"""Claude Prompt E runner — synthesis pass (inputs: briefing + A/B/D outputs).
+"""Claude Prompt E runner — reconciliation pass.
 
-Combines the prior structured outputs into the final guide via Claude Opus 4.8.
-A (chatgpt_a.md), B (gemini_b.md), D (claude_d.md), and briefing.md are
-required; C (chatgpt_c.md, manual Deep Research) is included when present.
-Output is ``claude_e.md`` with hash-based idempotency over every input.
+Combines validated A/B/D (and optional C) publications into a reconciliation
+envelope. Output is claude_e.md plus verdicts/E/<publication_id>.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -16,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import CLAUDE_MODEL
 from outlier_scrapers import runner_common as rc
@@ -54,8 +53,10 @@ def gather_inputs(pack_dir: Path) -> dict[str, str]:
     return collected
 
 
-def build_user_content(prompt_text: str, inputs: dict[str, str]) -> str:
+def build_user_content(prompt_text: str, inputs: dict[str, str], extra: str = "") -> str:
     sections = [prompt_text]
+    if extra:
+        sections.append("\n\n===== PACK IDENTITY =====\n" + extra)
     for label, text in inputs.items():
         sections.append(f"\n\n===== {label.upper()} =====\n{text}")
     return "".join(sections)
@@ -69,12 +70,15 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
         client = anthropic.Anthropic(timeout=600.0, max_retries=1)
+    structured = rc.request_structured("reconciliation")
     try:
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system="\n".join(role_block),
             messages=[{"role": "user", "content": user_content}],
+            tools=[{"name": "emit_reconciliations", "input_schema": structured.schema}],
+            tool_choice={"type": "tool", "name": "emit_reconciliations"},
         ) as stream:
             message = stream.get_final_message()
     except anthropic.APIError as e:
@@ -87,6 +91,12 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
 
     if getattr(message, "stop_reason", None) == "refusal":
         raise rc.RunnerError("Claude refused the request (stop_reason=refusal).")
+    for block in message.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "emit_reconciliations"
+        ):
+            return json.dumps(getattr(block, "input", {}))
     text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
     if not text.strip():
         raise rc.RunnerError("Received empty or whitespace-only response from API")
@@ -109,6 +119,13 @@ def run_claude_e(
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
+        _candidates_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
+        )
 
         input_hashes = {label: rc.sha256_text(text) for label, text in inputs.items()}
         request_sha256 = rc.compute_request_hash(
@@ -119,6 +136,11 @@ def run_claude_e(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "input_hashes": input_hashes,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -130,8 +152,23 @@ def run_claude_e(
             out_file.unlink()
 
         logger.info("Calling Claude (Prompt E synthesis)...")
-        user_content = build_user_content(prompt_text, inputs)
+        identity = (
+            f"pack_date: {pack_dir.name}\n"
+            f"candidates_sha256: {candidates_sha256}\n"
+            f"game_totals_sha256: {game_totals_sha256}\n"
+            f"team_totals_sha256: {team_totals_sha256}\n"
+        )
+        user_content = build_user_content(prompt_text, inputs, extra=identity)
         output_text = call_claude(user_content, pack.ROLE_BLOCK, client=client)
+        rc.publish_reconciliation_pass(
+            pack_dir,
+            output_text,
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"

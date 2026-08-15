@@ -677,3 +677,115 @@ def publish_verdict_pass(
         status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
     )
     return publish_pass(pack_dir, artifacts, now=now)
+
+
+def load_current_publications(pack_dir: Path) -> dict[str, Any]:
+    """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
+    from outlier_scrapers.verdict_gate import UpstreamPublication
+
+    loaded: dict[str, Any] = {}
+    for pass_name in ("A", "D", "B", "C"):
+        pointer = pack_dir / "verdicts" / pass_name / "current.json"
+        if not pointer.exists():
+            continue
+        current = json.loads(pointer.read_text(encoding="utf-8"))
+        pub_id = str(current.get("publication_id") or "")
+        envelope_path = pack_dir / "verdicts" / pass_name / pub_id / "verdicts.json"
+        if not pub_id or not envelope_path.exists():
+            continue
+        data = json.loads(envelope_path.read_text(encoding="utf-8"))
+        key = "findings" if pass_name == "C" else "verdicts"
+        records = data.get(key) or []
+        record_ids = {str(row.get("record_id") or "") for row in records}
+        outcome_ids = {str(row.get("outcome_id") or "") for row in records}
+        stakes: dict[str, float] = {}
+        if pass_name != "C":
+            for row in records:
+                if str(row.get("verdict") or "") != "BET":
+                    continue
+                outcome_id = str(row.get("outcome_id") or "")
+                try:
+                    stakes[outcome_id] = float(row.get("recommended_units") or 0)
+                except (TypeError, ValueError):
+                    continue
+        loaded[pass_name] = UpstreamPublication(
+            pass_=pass_name,
+            publication_id=pub_id,
+            record_ids=frozenset(item for item in record_ids if item),
+            outcome_ids=frozenset(item for item in outcome_ids if item),
+            stakes=stakes,
+        )
+    return loaded
+
+
+def publish_reconciliation_pass(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    model: str,
+    now: datetime | None = None,
+) -> PublishResult:
+    """Parse a reconciliation envelope, gate it against current pubs, publish E."""
+    from outlier_scrapers import pack_index, paths, verdicts
+    from outlier_scrapers.verdict_gate import validate_envelope
+
+    try:
+        parsed = parse_envelope(output_text, "reconciliation")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise RunnerError(f"Pass E output is not a valid reconciliation envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.ReconciliationEnvelope):
+        raise RunnerError("Pass E output did not parse as a reconciliation envelope")
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    pubs = load_current_publications(pack_dir)
+    gate = validate_envelope(
+        parsed, index, now or datetime.now().astimezone(), current_publications=pubs
+    )
+    if gate.pass_fails:
+        raise RunnerError(
+            "Pass E failed structured validation: " + ",".join(gate.fail_reasons)
+        )
+
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    status = {
+        "envelope_present": True,
+        "envelope_kind": "reconciliation",
+        "schema_version": parsed.envelope.schema_version,
+        "record_count": len(parsed.envelope.reconciliations),
+        "bet_count": sum(1 for rec in parsed.envelope.reconciliations if rec.verdict == "BET"),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    lines = ["# Pass E", ""]
+    for rec in parsed.envelope.reconciliations:
+        lines.append(
+            f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} ({rec.recommended_units}u)"
+        )
+    artifacts = PassArtifacts(
+        pass_="E",
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=model,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=write_violations(gate.violations),
+        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+    )
+    return publish_pass(pack_dir, artifacts, now=now)

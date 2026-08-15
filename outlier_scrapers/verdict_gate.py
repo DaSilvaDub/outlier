@@ -121,6 +121,7 @@ class UpstreamPublication:
     record_ids: frozenset[str]
     outcome_ids: frozenset[str] = field(default_factory=frozenset)
     injury_supported_record_ids: frozenset[str] = field(default_factory=frozenset)
+    stakes: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -506,6 +507,21 @@ def _check_synthesis(
         add(
             "unsourced_synthesis",
             "E record is not sourced by a current A/D/B verdict on this outcome_id.",
+        )
+        return
+    if record.verdict != "BET":
+        return
+    upstream_stakes = []
+    for cite in cites:
+        if cite.pass_ not in {"A", "D", "B"}:
+            continue
+        pub = publications.get(cite.pass_)
+        if pub and record.outcome_id in pub.stakes:
+            upstream_stakes.append(pub.stakes[record.outcome_id])
+    if upstream_stakes and record.recommended_units > min(upstream_stakes) + 1e-9:
+        add(
+            "stake_above_row_cap",
+            f"E stake {record.recommended_units} exceeds min upstream stake {min(upstream_stakes)}.",
         )
 
 
