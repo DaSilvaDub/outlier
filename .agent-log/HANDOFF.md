@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 15**.
+its 15-step Build order are **done**. This branch is the full plan.
 
 ## Last Commit SHA
 
@@ -222,10 +222,26 @@ visible across worktrees/ents, not because the work is ready for review.
   once T30 is isolated.
 - Tests: `tests/test_verdict_policy.py`, `tests/test_verdict_store.py`.
 
-## Next: step 15 — docs
+## What's done (step 15)
 
-`docs/feedback-loop.md` cross-reference, `AGENTS.md` invariant entry,
-`.agent-log/HANDOFF.md`.
+- `docs/feedback-loop.md`: `verdict_records` child table, no `E_verdict`,
+  `C_verdict` reduction, and `desk_snapshot.json` as the reader pointer,
+  linking the structured-verdicts plan.
+- `AGENTS.md` + `docs/ENT-SYNC-GLOBAL-PROMPT.md` invariant #10 (structured
+  desk verdicts). AGENTS also gained the missing #9 (whitelisted ≠
+  recommendable) so it matches ENT-SYNC.
+
+## Next
+
+The 15-step plan is implemented on this branch. Draft PR
+https://github.com/DaSilvaDub/outlier/pull/97 is ready to leave draft when
+you want review. Do **not** commit the leftover T30 staged files
+(`daily_job.py`, `feedback.py`, `form_source.py`, `slate_strategy.py`,
+`t30_reprice.py`, `ultimate_alt_report.py`, `tests/test_daily_job.py`).
+`daily_job` can later call `verdict_store.rejected_count_from_snapshot`
+once T30 is isolated. SyncAllWorktrees will keep stomping feature files
+with origin/master until this PR merges — restore from HEAD after every
+report-sync.
 
 ## Session mechanics that will save you time
 
