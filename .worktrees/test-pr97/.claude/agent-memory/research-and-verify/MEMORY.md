@@ -1,0 +1,1 @@
+- [Outlier Master Cards pack notes](outlier_master_cards_pack_notes.md) — Master Cards now splits into MLB/WNBA/Both files with per-league market+odds whitelists (TB allowed for MLB again); huge CSV rows need 1-line Read chunks.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Generic Outlier Prompts"
+  short_description: "Analyze shared generic master prompts"
+  default_prompt: "Use $analyze-outlier-generic-prompts to analyze an exact generic Outlier master prompt and save its report in the shared generic folder."

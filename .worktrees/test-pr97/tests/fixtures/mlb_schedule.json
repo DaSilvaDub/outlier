@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "eventId": "mlb-event-1",
+      "away": {"alias": "NYY", "teamId": "nyy-id"},
+      "home": {"alias": "BOS", "teamId": "bos-id"},
+      "startTime": "2026-06-19T19:05:00Z"
+    },
+    {
+      "eventId": "mlb-event-2",
+      "away": {"alias": "NYY", "teamId": "nyy-id"},
+      "home": {"alias": "BOS", "teamId": "bos-id"},
+      "startTime": "2026-06-19T22:05:00Z"
+    }
+  ]
+}
+

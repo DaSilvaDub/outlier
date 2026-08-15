@@ -1,0 +1,16 @@
+#!/bin/bash
+if git diff --cached --name-only | grep -q '^\.tmp\.driveupload/'; then
+    echo "ERROR: Cannot commit files in .tmp.driveupload/"
+    exit 1
+fi
+
+for f in $(git diff --cached --name-only); do
+    if [ -f "$f" ]; then
+        size=$(wc -c < "$f")
+        if [ "$size" -gt 52428800 ]; then
+            echo "ERROR: Cannot commit file larger than 50MB: $f"
+            exit 1
+        fi
+    fi
+done
+exit 0

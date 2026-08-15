@@ -1,0 +1,56 @@
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+*.log.err
+
+# Stray debug/scratch/report artifacts previously committed by accident at repo
+# root. Removed from tracking; ignored here so they don't get re-added.
+.tmp_pytest_*.txt
+scratch_*.py
+login_page.html
+totals_output.txt
+betting_report_*.md
+terminals/
+
+# Standalone Outlier auth/session material. Do not commit secrets.
+config/*
+!config/.gitkeep
+config/outlier_session.json
+config/.outlier_session/
+config/api_bearer_token.txt
+config/api_request_headers.json
+
+# Live scraper outputs.
+data/*
+!data/.gitkeep
+packs/ 
+
+# Permanent local feedback data and generated calibration reports.
+calibration/*.sqlite3
+calibration/*.sqlite3-shm
+calibration/*.sqlite3-wal
+calibration/reports/
+calibration/exports/
+calibration/settlements/generated/
+
+# Local credentials for headless auth - never commit.
+.env
+*.env
+*.egg-info/
+
+copilot-worktrees/
+
+# Local tooling and throwaway debug/scratch work (screenshots, debug scripts).
+.codex/
+scratch/
+
+# AI agent session logs / introspection (noise across ents, not part of source)
+.agent-log/
+
+# Local hookify rules (personal/local dev-time guardrails, not shared source)
+.claude/*.local.md
+
+.tmp.driveupload/

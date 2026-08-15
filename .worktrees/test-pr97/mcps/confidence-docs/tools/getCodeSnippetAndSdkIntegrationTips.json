@@ -1,0 +1,17 @@
+{
+  "name": "getCodeSnippetAndSdkIntegrationTips",
+  "description": "Get complete integration guides with code examples and README documentation for integrating Confidence feature flags.\nintegrate Confidence with OpenFeature best practices\nReturns full integration examples including OpenFeature provider setup, best practices, and configuration for the specified SDK\nUnlike searchDocumentation which searches general docs, this returns ready-to-use integration code for specific SDKs\nUse this tool explicitly when the user wants code snippets or integration guides for a particular programming language or SDK.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "sdk": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "string",
+        "description": "The SDK or programming language to get code snippets for. Supported values: 'java', 'kotlin', 'javascript', 'typescript', 'python', 'swift', 'go', 'react'. If not specified, the tool will attempt to infer from the project."
+      }
+    },
+    "required": [
+      "sdk"
+    ]
+  }
+}

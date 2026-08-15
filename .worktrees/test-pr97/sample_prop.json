@@ -1,0 +1,216 @@
+{
+  "outcome": {
+    "leagueId": "MLB",
+    "eventId": "a22cb5f47d5173295e28d03c2ecd1960f2626471",
+    "playerId": "fe0e47290891f9cc7eea27f24e398dcc879d979b",
+    "teamId": "aaa1da9cc82290594e1c4b7dc0a2a122bb33a10b",
+    "oppTeamId": "a7f8dcff541fcc5e3911a902c222865bdb88747e",
+    "marketId": "00d67460875f064aadec47bc439ae4f036ace599",
+    "outcomeId": "1648a02e3d6eeb0f499bf009043c0bed3fdfc8ec",
+    "marketLabel": "Michael Harris II - Bases",
+    "includeOvertime": true,
+    "proposition": "BASES",
+    "line": 1.5,
+    "position": "OVER",
+    "outcomeLabel": "Over",
+    "bestOdds": "+130",
+    "primary": true,
+    "active": true,
+    "books": [
+      "FANDUEL",
+      "DRAFTKINGS",
+      "PRIZEPICKS",
+      "HARDROCK",
+      "FANATICS",
+      "PROPHETX",
+      "NOVIG",
+      "CAESARS",
+      "SLEEPER",
+      "UNDERDOG",
+      "FLIFF",
+      "MIDNITE"
+    ],
+    "bookOdds": {
+      "FANDUEL": {
+        "odds": "-105",
+        "decimal": 1.9523809523809523,
+        "fraction": {
+          "numerator": 20,
+          "denominator": 21
+        },
+        "identifier": {
+          "bookEventId": "35791918",
+          "bookMarketId": "42.590368173|737.175752510",
+          "bookOutcomeId": "45452225",
+          "bookProps": {
+            "rampMarketId": "42.590368173"
+          }
+        }
+      },
+      "DRAFTKINGS": {
+        "odds": "+128",
+        "decimal": 2.2800000000000002,
+        "fraction": {
+          "numerator": 32,
+          "denominator": 25
+        },
+        "identifier": {
+          "bookEventId": "34358049",
+          "bookMarketId": "349047185",
+          "bookOutcomeId": "0QA349047185#2203905088_13L84240Q11079725557Q20",
+          "bookProps": {
+            "urlOutcomeId": "0QA349047185%232203905088_13L84240Q11079725557Q20"
+          }
+        }
+      },
+      "PRIZEPICKS": {
+        "odds": "+100",
+        "decimal": 2.0,
+        "fraction": {
+          "numerator": 1,
+          "denominator": 1
+        },
+        "identifier": {
+          "bookEventId": "NYM",
+          "bookMarketId": "13002490",
+          "bookOutcomeId": "13002490||over",
+          "bookProps": {
+            "odds_type": "demon",
+            "exclude_ev": "False",
+            "odds_label": "\u00f0\u0178\u02dc\u02c6",
+            "outcomeAlias": "o-1.5"
+          }
+        }
+      },
+      "HARDROCK": {
+        "odds": "+120",
+        "decimal": 2.2,
+        "fraction": {
+          "numerator": 6,
+          "denominator": 5
+        },
+        "identifier": {
+          "bookEventId": "991925733477712121",
+          "bookMarketId": "165217520033333512",
+          "bookOutcomeId": "4231967983548891400"
+        }
+      },
+      "FANATICS": {
+        "odds": "+130",
+        "decimal": 2.3,
+        "fraction": {
+          "numerator": 13,
+          "denominator": 10
+        },
+        "identifier": {
+          "bookEventId": "4850432",
+          "bookMarketId": "638015354",
+          "bookOutcomeId": "1574524648"
+        }
+      },
+      "PROPHETX": {
+        "odds": "+130",
+        "decimal": 2.3,
+        "fraction": {
+          "numerator": 13,
+          "denominator": 10
+        },
+        "identifier": {
+          "bookEventId": "10078643",
+          "bookMarketId": "10078643|490010393|1.5",
+          "bookOutcomeId": "68365d8f455b03142e465bda1767723f"
+        }
+      },
+      "NOVIG": {
+        "odds": "+130",
+        "decimal": 2.3,
+        "fraction": {
+          "numerator": 13,
+          "denominator": 10
+        },
+        "identifier": {
+          "bookEventId": "019f33b8-c94f-7823-bce7-fba84df35487",
+          "bookMarketId": "019f3437-a107-72d2-bb54-3aa2c923cd41",
+          "bookOutcomeId": "019f3437-a107-72d2-bb54-3abc77a50f79"
+        }
+      },
+      "CAESARS": {
+        "odds": "+121",
+        "decimal": 2.21,
+        "fraction": {
+          "numerator": 121,
+          "denominator": 100
+        },
+        "identifier": {
+          "bookEventId": "f169955a-e703-4036-a029-19387e20b3fb",
+          "bookMarketId": "ea61ba35-e160-3e3e-834f-f265de7fddc4",
+          "bookOutcomeId": "e231bb53-6b4a-30bc-88f3-1f78dcfbf0c2"
+        }
+      },
+      "SLEEPER": {
+        "odds": "+108",
+        "decimal": 2.08,
+        "fraction": {
+          "numerator": 27,
+          "denominator": 25
+        },
+        "identifier": {
+          "bookEventId": "1301365470724628480",
+          "bookMarketId": "1301365470724628480|normal|total_bases_over_under_player_2414",
+          "bookOutcomeId": "1379613856870985762"
+        }
+      },
+      "UNDERDOG": {
+        "odds": "-109",
+        "decimal": 1.9215000000000002,
+        "fraction": {
+          "numerator": 47,
+          "denominator": 51
+        },
+        "identifier": {
+          "bookEventId": "144098",
+          "bookMarketId": "2bfff24e-cdc8-4919-9ff5-948e9c86d4d4",
+          "bookOutcomeId": "005564cc-1c9a-4b92-89a3-f52d3abfb705",
+          "bookProps": {
+            "sportId": "MLB"
+          }
+        }
+      },
+      "FLIFF": {
+        "odds": "+110",
+        "decimal": 2.1,
+        "fraction": {
+          "numerator": 11,
+          "denominator": 10
+        },
+        "identifier": {
+          "bookEventId": "388147_c_p_203_prematch",
+          "bookMarketId": "7db8c30c",
+          "bookOutcomeId": "3237228_p_606_universal"
+        }
+      },
+      "MIDNITE": {
+        "odds": "+100",
+        "decimal": 2.0,
+        "fraction": {
+          "numerator": 1,
+          "denominator": 1
+        },
+        "identifier": {
+          "bookEventId": "59292236",
+          "bookMarketId": "2579570462",
+          "bookOutcomeId": "10522642953"
+        }
+      }
+    }
+  },
+  "stats": {
+    "l20": 0.4,
+    "l10": 0.3,
+    "l5": 0.6,
+    "h2h": 0.37,
+    "curSeason": 0.43,
+    "prevSeason": 0.39
+  },
+  "groupId": "BATTER_PROPS"
+}
