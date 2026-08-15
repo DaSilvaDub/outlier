@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 13**.
+its 15-step Build order are done and committed. Continue at **step 14**.
 
 ## Last Commit SHA
 
@@ -195,11 +195,22 @@ visible across worktrees/ents, not because the work is ready for review.
   `maybe_advance_desk` after phases.
 - Tests: `tests/test_desk_snapshot.py` (11).
 
-## Next: step 13 — pack rebuild exclusion
+## What's done (step 13)
 
-Confirm `packs/<date>/verdicts/` is never named in `DERIVED_PACK_OUTPUTS` and
-add the guard test so the first post-merge rebuild cannot `unlink()` a
-directory. Do not start step 14 until 13 exists.
+- `DERIVED_PACK_OUTPUTS` still does not name `verdicts` or anything under it.
+  `VERDICTS_SUBTREE` and a comment pin that invariant.
+- `clear_derived_pack_outputs(out_dir)` is the rebuild cleanup: it unlinks
+  the named derived files, skips directories, and refuses any path under
+  `packs/<date>/verdicts/` so a future accidental add cannot `unlink()` a
+  directory or wipe the snapshot.
+- Tests: `test_derived_outputs_never_name_verdicts_subtree` and
+  `test_rebuild_cleanup_leaves_verdicts_tree_intact` in `tests/test_pack.py`.
+
+## Next: step 14 — policy, status, verdict_records
+
+`config/verdict_policy.json`, `run_desk` status block, `daily_job` summary,
+and the `verdict_records` table/migration. Do not start step 15 until 14
+exists.
 
 ## Session mechanics that will save you time
 
