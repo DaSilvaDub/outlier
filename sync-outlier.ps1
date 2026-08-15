@@ -227,6 +227,7 @@ if ($SyncAllWorktrees) {
   $porcelain = git worktree list --porcelain 2>$null
   $currentWt = $here
   $aligned = 0
+  $preserved = 0
   $lines = $porcelain -split "`n"
   $wtPath = $null
   foreach ($line in $lines) {
@@ -236,24 +237,59 @@ if ($SyncAllWorktrees) {
       $normWt = ($wtPath -replace '\\','/').TrimEnd('/')
       $normHere = ($currentWt -replace '\\','/').TrimEnd('/')
       if ($normWt -ne $normHere) {
-        Write-Info "Aligning worktree: $wtPath"
         git -C $wtPath fetch origin --prune --tags 2>$null
-        # Non-destructive for the files we care about (the ones that were invisible before).
-        # Uses the tree at origin/master so even feature-branch worktrees see the blessed pack/daily/sync versions.
-        # Whole outlier_scrapers package: syncing pack.py without its imports (sizing.py etc.)
-        # caused the 2026-07-17 "cannot import name 'compute_historical_edge'" ImportError.
-        git -C $wtPath checkout origin/master -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
-        try {
-          $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
-        } catch {}
         $newHead = git -C $wtPath rev-parse --short HEAD 2>$null
-        Write-Info "  -> files updated from origin/master (HEAD remains $newHead)"
-        $aligned++
+
+        # Only materialize worktrees that actually LACK the pipeline upgrade.
+        #
+        # `git checkout origin/master -- <paths>` writes master's content into both the
+        # index and the working tree. Run against a feature worktree that already has the
+        # upgrade, it silently destroys that branch's in-progress work (the whole
+        # outlier_scrapers package, tests/test_daily_job.py, prompts/C.md, the sync tooling)
+        # for zero benefit -- 2026-08-15: this staged master over 13 files of a committed
+        # feature branch, and would have destroyed them outright had they been uncommitted.
+        # Every ent runs report-sync (-> SyncAllWorktrees) as its mandatory first action, so
+        # one ent's session start was silently clobbering every other ent's worktree.
+        #
+        # The upgrade markers are the repo's own definition of "has the pipeline upgrade"
+        # (scripts/verify-sync.ps1 validates exactly these). A worktree whose OWN commit
+        # carries all four needs no materialization and still reports markers=present, so
+        # skipping it keeps the verify report green while preserving branch work.
+        $wtPack  = git -C $wtPath show 'HEAD:outlier_scrapers/pack.py' 2>$null
+        $wtDaily = git -C $wtPath show 'HEAD:outlier_scrapers/daily_job.py' 2>$null
+        $hasUpgrade = ($wtPack -match 'player_id') -and ($wtPack -match 'round_robin_then_fill') -and
+                      ($wtPack -match 'CANDIDATES_HEADER') -and ($wtDaily -match '_acquire_writer_lock')
+
+        if ($hasUpgrade) {
+          Write-Info "Preserving worktree (already has upgrade markers): $wtPath"
+          Write-Info "  -> left untouched (HEAD $newHead)"
+          $preserved++
+        }
+        else {
+          Write-Info "Aligning worktree: $wtPath"
+          # A stale worktree still gets materialized -- that is the d05eb21 fix. Warn first
+          # if it has local changes to the paths about to be overwritten, so the loss is
+          # never silent; committing them is what makes this branch preserved next run.
+          $wtDirty = git -C $wtPath status --porcelain -- outlier_scrapers tests/test_daily_job.py prompts/C.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+          if ($wtDirty) {
+            Write-Warn "  !! local changes in this stale worktree will be overwritten from origin/master:"
+            foreach ($d in @($wtDirty)) { Write-Warn "     $d" }
+            Write-Warn "     (commit them and re-run: a worktree carrying the upgrade markers is preserved)"
+          }
+          # Whole outlier_scrapers package: syncing pack.py without its imports (sizing.py etc.)
+          # caused the 2026-07-17 "cannot import name 'compute_historical_edge'" ImportError.
+          git -C $wtPath checkout origin/master -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+          try {
+            $null = Get-Content -Raw (Join-Path $wtPath 'outlier_scrapers\pack.py') -EA SilentlyContinue | Out-Null
+          } catch {}
+          Write-Info "  -> files updated from origin/master (HEAD remains $newHead)"
+          $aligned++
+        }
       }
       $wtPath = $null
     }
   }
-  Write-Info "SyncAllWorktrees complete. Materialized into $aligned additional worktree(s)."
+  Write-Info "SyncAllWorktrees complete. Materialized into $aligned additional worktree(s); preserved $preserved already-current worktree(s)."
   Write-Info "Note: feature worktrees keep their branch; run bootstrap inside them for any local reset needs."
 
   # Align known full clones (ai-runners etc.). These have independent .git so must be
