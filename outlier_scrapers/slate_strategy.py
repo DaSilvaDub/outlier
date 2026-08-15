@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from outlier_scrapers import paths
 from outlier_scrapers.form_source import iter_recent_finals, FinalEvent
 from outlier_scrapers.paths import league_paths
 
@@ -201,8 +200,8 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
     if not games_payload.get("events"):
         return {"status": "empty", "events": []}
     
-    teams = set()
-    matchups = []
+    teams: set[str] = set()
+    matchups: list[dict[str, Any]] = []
     for g in games_payload["events"]:
         matchups.append({
             "event_id": g["event_id"], 
@@ -215,11 +214,11 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
     
     try:
         recent_games = iter_recent_finals(league, teams, 10)
-    except Exception as e:
-        logger.error(f"Failed to fetch recent finals: {e}")
-        raise e
+    except Exception as exc:
+        logger.error(f"Failed to fetch recent finals: {exc}")
+        raise
     
-    out_events = []
+    out_events: list[dict[str, Any]] = []
     status = "ok"
     for m in matchups:
         away = m["away"]
@@ -227,8 +226,8 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
         event_id = m["event_id"]
         
         # Populate away/home players from recent games to ensure we evaluate the right participants
-        away_players = set()
-        home_players = set()
+        away_players: set[str] = set()
+        home_players: set[str] = set()
         for g in recent_games:
             if g.away == away or g.home == away:
                 away_players.update(g.players.keys())
@@ -276,8 +275,8 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
     
     # Markdown Rendering (Fix 8)
     md_lines = [f"# Slate strategy — {league} {doc['date']}", ""]
-    for e in out_events:
-        md_lines.append(f"## {e['matchup']}")
+    for event_row in out_events:
+        md_lines.append(f"## {event_row['matchup']}")
         md_lines.append("### Last 5 / Last 10")
         
         # Ensure the table header is properly rendered
@@ -285,34 +284,34 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
         md_lines.append("|---|---|---|---|---|---|---|")
         
         # Add Rows for Away & Home
-        away_form = e["team_form"].get("away", {})
-        home_form = e["team_form"].get("home", {})
+        away_form = event_row["team_form"].get("away", {})
+        home_form = event_row["team_form"].get("home", {})
         
         if away_form:
-            md_lines.append(f"| {e['away']} | {away_form.get('wins', 0)} | {away_form.get('ppg', 0):.1f} | {away_form.get('opp_ppg', 0):.1f} | - | - | - |")
+            md_lines.append(f"| {event_row['away']} | {away_form.get('wins', 0)} | {away_form.get('ppg', 0):.1f} | {away_form.get('opp_ppg', 0):.1f} | - | - | - |")
         if home_form:
-            md_lines.append(f"| {e['home']} | {home_form.get('wins', 0)} | {home_form.get('ppg', 0):.1f} | {home_form.get('opp_ppg', 0):.1f} | - | - | - |")
+            md_lines.append(f"| {event_row['home']} | {home_form.get('wins', 0)} | {home_form.get('ppg', 0):.1f} | {home_form.get('opp_ppg', 0):.1f} | - | - | - |")
         
         md_lines.append("")
         md_lines.append("### Trends")
-        if not e["trends"]:
+        if not event_row["trends"]:
             md_lines.append("- No standout trends")
-        for t in e["trends"]:
+        for t in event_row["trends"]:
             md_lines.append(f"- {t['severity']} — {t['id']} ({t['text']})")
             
         md_lines.append("")
         md_lines.append("### Directions")
-        if not e["directions"]:
+        if not event_row["directions"]:
             md_lines.append("- None")
-        for d in e["directions"]:
+        for d in event_row["directions"]:
             reasons = d.get('reasons') or []
             md_lines.append(f"- {d['confidence']} {d['side']} {d.get('player') or d.get('team')} {d['market_family']} — {', '.join(reasons)}")
             
         md_lines.append("")
         md_lines.append("### Avoids")
-        if not e["avoids"]:
+        if not event_row["avoids"]:
             md_lines.append("- None")
-        for a in e["avoids"]:
+        for a in event_row["avoids"]:
             md_lines.append(f"- {a['team']} {a['market_family']} — {a['reason']}")
             
         md_lines.append("")

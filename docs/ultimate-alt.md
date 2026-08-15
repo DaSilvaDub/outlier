@@ -45,6 +45,26 @@ only after all gates pass:
 - closing-price data on at least 80% of settled legs; and
 - non-negative average closing-price CLV.
 
+## Deterministic shadow report
+
+Generate an auditable Markdown report from the two canonical CSV artifacts with
+an explicit pack date and output path:
+
+```powershell
+python generate_shadow_report.py `
+  --alt-csv path\to\ultimate_alt.csv `
+  --parlay-csv path\to\ultimate_alt_parlays.csv `
+  --pack-date 2026-08-15 `
+  --source-prompt path\to\Ultimate_Alt_Analysis.md `
+  --output path\to\ultimate_alt_shadow_report.md
+```
+
+The command validates complete CSV schemas, degrades malformed legs individually,
+requires canonical wager identity, and accepts only supplied parlays that retain
+the cross-event, multi-market, price, EV, and shadow-only gates. Publication is
+atomic. A `CONTINUE` verdict authorizes continued shadow evaluation only; it never
+authorizes activation or promotion.
+
 ## Main totals shadow comparison
 
 The live totals contract remains a 3% minimum edge. New columns in
