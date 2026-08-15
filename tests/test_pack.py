@@ -1272,6 +1272,51 @@ def test_briefing_role_block():
     assert "first lock: n/a" in text
 
 
+# 17b. Total bases is recommendable (2026-08-12 market-policy ruling): the MLB
+#      whitelist permits TB and A.md Sec5.2 never named it among the
+#      never-recommend markets, so ROLE_BLOCK's variance taxonomy must not
+#      call it high variance. Guards against silently re-diverging from the
+#      ruling in docs/plans/2026-08-12-structured-ai-verdicts.md.
+def test_role_block_does_not_flag_total_bases_as_high_variance():
+    from outlier_scrapers.pack import ROLE_BLOCK
+
+    variance_line = next(line for line in ROLE_BLOCK if "High variance" in line)
+    assert "total bases" not in variance_line.lower()
+    for market in ("3PM", "hits allowed", "turnovers"):
+        assert market in variance_line
+
+
+def test_derived_outputs_never_name_verdicts_subtree():
+    from outlier_scrapers.pack import DERIVED_PACK_OUTPUTS, VERDICTS_SUBTREE
+
+    assert VERDICTS_SUBTREE == "verdicts"
+    assert VERDICTS_SUBTREE not in DERIVED_PACK_OUTPUTS
+    for name in DERIVED_PACK_OUTPUTS:
+        normalized = str(name).replace("\\", "/")
+        assert not normalized.startswith(f"{VERDICTS_SUBTREE}/")
+        assert normalized != VERDICTS_SUBTREE
+
+
+def test_rebuild_cleanup_leaves_verdicts_tree_intact(tmp_path):
+    from outlier_scrapers.pack import clear_derived_pack_outputs
+
+    pack_dir = tmp_path / "packs" / "2026-08-15"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "chatgpt_a.md").write_text("stale A\n", encoding="utf-8")
+    (pack_dir / "manual_betting_report.md").write_text("stale report\n", encoding="utf-8")
+    verdicts = pack_dir / "verdicts" / "A" / "pub123"
+    verdicts.mkdir(parents=True)
+    (verdicts / "verdicts.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (pack_dir / "verdicts" / "desk_snapshot.json").write_text("{}\n", encoding="utf-8")
+
+    clear_derived_pack_outputs(pack_dir)
+
+    assert not (pack_dir / "chatgpt_a.md").exists()
+    assert not (pack_dir / "manual_betting_report.md").exists()
+    assert (verdicts / "verdicts.json").is_file()
+    assert (pack_dir / "verdicts" / "desk_snapshot.json").is_file()
+
+
 def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():
     signal = {
         "_board": "board_b",

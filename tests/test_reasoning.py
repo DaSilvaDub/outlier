@@ -1,9 +1,10 @@
 import csv
+import json
 
 import pytest
 import openai
 
-from outlier_scrapers import pack, reasoning
+from outlier_scrapers import pack, pack_index, reasoning, verdicts
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 
 
@@ -66,35 +67,69 @@ def _write_game_totals(pack_dir, *, market_id="gm1", selection="Total O/U OVER 8
         writer.writerow(row)
 
 
+def _valid_envelope(pack_dir) -> str:
+    """A schema-valid, gate-clean pass-A envelope for the pack as it stands now.
+
+    `verdicts` is deliberately empty: these tests cover runner mechanics
+    (request shape, hashing, caching, file writes), not verdict content, which
+    tests/test_pass_a_publish.py covers against a real indexed row. The three
+    pack hashes must match the live pack or the gate rejects with pack_mismatch,
+    so this is built at call time -- several tests mutate the pack first.
+    """
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=pack_dir / "no-such-portfolio-policy.json"
+    )
+    return json.dumps(
+        {
+            "schema_version": verdicts.SCHEMA_VERSION,
+            "pass": "A",
+            "pack_date": pack_dir.name,
+            "candidates_sha256": index.candidates_sha256,
+            "game_totals_sha256": index.game_totals_sha256,
+            "team_totals_sha256": index.team_totals_sha256,
+            "verdicts": [],
+            "slate_notes": [],
+            "needs": [],
+        }
+    )
+
+
 class MockResponse:
-    def __init__(self, text="mocked output"):
+    def __init__(self, text):
         self.output_text = text
 
 
 class MockResponsesAPI:
-    def __init__(self):
+    def __init__(self, pack_dir=None):
         self.called = False
         self.kwargs = {}
-        self.mock_text = "mocked output"
+        # None => build a valid envelope at call time. Tests that want a
+        # specific (usually invalid) payload assign mock_text directly.
+        self.mock_text = None
+        self._pack_dir = pack_dir
 
     def create(self, *args, **kwargs):
         self.called = True
         self.kwargs = kwargs
-        return MockResponse(self.mock_text)
+        text = self.mock_text
+        if text is None:
+            text = _valid_envelope(self._pack_dir)
+        return MockResponse(text)
 
 
 class MockClient:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, pack_dir=None, **kwargs):
         self.client_kwargs = kwargs
-        self.responses = MockResponsesAPI()
+        self.responses = MockResponsesAPI(pack_dir)
 
 
 @pytest.fixture
-def mock_openai(monkeypatch):
+def mock_openai(monkeypatch, reasoning_env):
+    _, _, pack_dir = reasoning_env
     clients = []
 
     def mock_init(*args, **kwargs):
-        client = MockClient(*args, **kwargs)
+        client = MockClient(*args, pack_dir=pack_dir, **kwargs)
         clients.append(client)
         return client
 
@@ -152,7 +187,9 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     assert content.startswith("---\n")
     assert "request_sha256:" in content
     assert "game_totals_sha256:" in content
-    assert "mocked output" in content
+    # Body is the model's raw structured output, not prose.
+    assert '"schema_version": "1.0"' in content
+    assert '"pass": "A"' in content
 
 
 def test_reasoning_time_lock_filter_drops_started_events(reasoning_env, mock_openai):

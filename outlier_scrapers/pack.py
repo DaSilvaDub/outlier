@@ -1411,7 +1411,7 @@ ROLE_BLOCK = [
     " the STATED signed side covers, not the probability of winning the game; a heavily"
     " favored team can correctly show a positive (cushion) line if that is the side priced.",
     "- Variance taxonomy to anchor evaluation:",
-    "   * High variance: 3PM, hits allowed, total bases, turnovers.",
+    "   * High variance: 3PM, hits allowed, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
     "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
     " legs. Do NOT size stacked same-event bets as independent — their outcomes"
@@ -1451,6 +1451,12 @@ ROLE_BLOCK = [
     "- Prefer Tier-1: official league/team injury reports, confirmed lineups, NWS weather.",
 ]
 
+# Versioned desk publications live under packs/<date>/verdicts/. That subtree
+# must never appear here: rebuild cleanup uses Path.unlink(), which raises on
+# a directory, and wiping the snapshot on every rebuild would discard the
+# coherence contract. Retention is desk_snapshot.prune_publications only.
+VERDICTS_SUBTREE = "verdicts"
+
 DERIVED_PACK_OUTPUTS = (
     "candidate_coverage.json",
     "feed_health.json",
@@ -1473,6 +1479,29 @@ DERIVED_PACK_OUTPUTS = (
     "ultimate_alt.csv",
     "ultimate_alt_parlays.csv",
 )
+
+
+def clear_derived_pack_outputs(out_dir: Path) -> None:
+    """Unlink derived files named in DERIVED_PACK_OUTPUTS.
+
+    Never touches packs/<date>/verdicts/ (directory or any path under it).
+    Directory entries are skipped so a future accidental add of ``verdicts``
+    cannot crash rebuild with IsADirectoryError.
+    """
+    verdicts_root = (out_dir / VERDICTS_SUBTREE).resolve()
+    for name in DERIVED_PACK_OUTPUTS:
+        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(f"{VERDICTS_SUBTREE}/"):
+            continue
+        target = out_dir / name
+        try:
+            resolved = target.resolve()
+        except OSError:
+            continue
+        if resolved == verdicts_root or verdicts_root in resolved.parents:
+            continue
+        if target.is_dir():
+            continue
+        target.unlink(missing_ok=True)
 
 FEED_STATUS_FIELDS = (
     "props_status",
@@ -1744,8 +1773,7 @@ def write_pack(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pack_date = target_date or out_dir.name
-    for name in DERIVED_PACK_OUTPUTS:
-        (out_dir / name).unlink(missing_ok=True)
+    clear_derived_pack_outputs(out_dir)
     dossiers_dir = out_dir / "dossiers"
     if dossiers_dir.exists():
         for stale_dossier in dossiers_dir.glob("*.md"):

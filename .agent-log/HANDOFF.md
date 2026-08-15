@@ -1,20 +1,29 @@
 # Handoff
 
 ## Last Commit SHA
-0784e95465c20e6bec4e4e60c16e3ec5e62de5c7 (PR #99 feature commit before this handoff-only commit)
+
+`19559b6d38310c5b6ba313765f81ca15b114d8b2` (PR #97 review and hosted-CI fixes; this handoff-only commit follows it.)
 
 ## Files Touched
-- `outlier_scrapers/ultimate_alt_report.py` and `generate_shadow_report.py`: reusable, parameterized, fail-closed Ultimate Alt shadow reporting with atomic publication.
-- `tests/test_ultimate_alt_report.py` and `docs/ultimate-alt.md`: regression coverage and operator documentation for the shadow-only contract.
-- `tests/test_form_source.py`: tests aligned with the current ESPN scoreboard and boxscore parser contract.
-- `outlier_scrapers/slate_strategy.py` and `tests/test_slate_strategy.py`: restored type safety and current `FinalEvent` construction.
 
-## Verification
-- Full pytest: 841 passed.
-- Ruff: all changed Python files passed.
-- Mypy: no issues in 51 source files.
-- Pyright: 0 errors and 0 warnings.
-- `git diff --check`: passed.
+- `outlier_scrapers/verdict_gate.py`, `verdict_policy.py`, `runner_common.py`,
+  `verdicts.py`: fail-closed flag parsing, canonical policy loading, authoritative
+  repair values, current-publication binding, injury-support metadata, and atomic
+  Pass E validation/publication.
+- `outlier_scrapers/c_research.py`, `reasoning.py`, `gemini_structured.py`:
+  prose-wrapped structured findings, production policy paths, and SDK-safe types.
+- Focused regression tests for all review repairs and Pass E integration gaps.
+- `outlier_scrapers/desk_snapshot.py` and `tests/test_gemini_structured.py`:
+  Linux-safe ctypes typing and version-tolerant Gemini SDK construction probe.
+- Merged `origin/master` at `c0a1e62dda35a529130bf44d7c61116924d4755b`
+  while preserving structured-verdict invariants 9 and 10.
 
 ## Next Steps
-Draft PR #99 is open: https://github.com/DaSilvaDub/outlier/pull/99. Confirm the hosted offline test and typecheck jobs. Before marking the PR ready, configure Actions secrets `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `XAI_API_KEY`, then confirm all four provider reviews, the consensus comment, and the `AI Merge Verdict` check on a same-repository PR. Local `alt.csv` and `parlays.csv` remain untracked and were not committed. No live provider calls or paid Outlier reasoning jobs were invoked.
+
+- Verification: `1032 passed`; Ruff clean; MyPy clean across 59 source files;
+  Pyright reported 0 errors and 0 warnings; `git diff --check` clean. Provider API
+  keys were cleared for the full suite and no live reasoning/provider calls ran.
+- Push the hosted-CI follow-up to `claude/structured-ai-schema-validation-afd7a9`
+  and verify the rerun of PR #97's required checks.
+- Review threads remain unresolved until separately authorized; no replies or
+  resolutions were posted during this handoff.

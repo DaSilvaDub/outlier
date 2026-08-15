@@ -58,6 +58,7 @@ For every betting verdict, preserve the exact pack values.
 Use verbatim whenever present:
 
 * `market_id`
+* `outcome_id`
 * `event_id`
 * `team`
 * `team_name`
@@ -73,7 +74,7 @@ Use verbatim whenever present:
 
 Never reconstruct these from abbreviations, IDs, favorite/underdog assumptions, or outside sources.
 
-For game totals and team totals, use the exact `totals_id` supplied by the relevant `game_totals` or `team_totals` data as the `market_id`. Quote its selection, line, and price exactly.
+For game totals and team totals, `market_id` is the exact `market_id` column from the relevant `game_totals` or `team_totals` data; `outcome_id` is the exact `totals_id` from that same row. Quote its selection, line, and price exactly. Never substitute one for the other.
 
 External research may validate contextual facts. It may NEVER:
 
@@ -635,6 +636,43 @@ Provide only:
 * necessary audit calculations
 * final betting recommendations
 
-Now analyze the following betting pack:
+# RECONCILIATION PASS — INPUTS AND REQUIRED OUTPUT
 
-[PASTE BETTING PACK HERE]
+You are the reconciliation pass. You do **not** originate bets. Passes A, D and B
+have already produced verdicts that were validated against the pack; your job is to
+reconcile them into one final position per market.
+
+## What you are given
+
+* `PACK IDENTITY` — `pack_date`, the three pack hashes, and `upstream_publication_ids`.
+* One `UPSTREAM PASS <X>` block per upstream pass, each headed with its
+  `publication_id` and containing that pass's **validated envelope as JSON**. Every
+  record in it carries a `record_id`, an `outcome_id`, and its quoted
+  `selection` / `line` / `price` / `book`.
+* `BRIEFING` — narrative context only. Never source a number, market identity, line,
+  price, or book from it.
+
+## Required output
+
+Emit a reconciliation envelope through the `emit_reconciliations` tool. Rules:
+
+1. **Echo `upstream_publication_ids` exactly as supplied.** Do not alter or invent one.
+2. **Every reconciliation must cite its sources.** `cites` entries take the form
+   `{"pass": "<A|D|B|C>", "publication_id": "<that pass's publication_id>",
+   "record_id": "<a record_id copied verbatim from that pass's envelope>"}`.
+   Copy both values from the `UPSTREAM PASS` blocks above — never construct them.
+3. **You may only narrow.** Every `outcome_id` you reconcile must already appear in a
+   cited **verdict** pass (A, D or B). You may not introduce a market none of them
+   proposed. A pass C finding is supporting evidence only; it can never by itself
+   justify a BET.
+4. **Never raise a stake.** `recommended_units` may not exceed the smallest
+   `recommended_units` among the upstream records you cite for that `outcome_id`.
+   Reducing it, or standing the market down entirely, is always permitted.
+5. **Quote identity verbatim.** `market_id`, `outcome_id`, `stream`, `selection`,
+   `line`, `price` and `book` must match the upstream record exactly. Any deviation
+   is treated as a fabricated market and rejects the whole pass.
+6. Use `narrative` to explain the reconciliation — where the passes agreed, where they
+   conflicted, and why the surviving verdict and stake are what they are.
+
+If the upstream passes leave nothing worth backing, return an empty
+`reconciliations` list rather than manufacturing a position.

@@ -17,7 +17,19 @@ top-N ranking step and then captures the pack into
 - `decisions`: one decision per market snapshot, seeded as `PLAY` or
   `STAND_DOWN`. A/B/C/D and final verdicts remain blank until imported from the
   pack-local `decisions.csv`. A later price/time snapshot gets its own decision
-  instead of rewriting the earlier verdict history.
+  instead of rewriting the earlier verdict history. There is no `E_verdict`
+  column — pass E (or the no-E fallback) is the desk report, not a fifth
+  scalar on this row.
+- `verdict_records` (child of `decisions`): one row per structured envelope
+  record, primary key `(decision_id, pass, publication_id, record_id)`. This is
+  where C's multiple findings per `outcome_id` and forced-rerun publications
+  live. Legacy `C_verdict` on `decisions` is a lossy reduction
+  (`CONTRADICTS` > `CONFIRMS` > `NEUTRAL`, else empty). Schema and helpers:
+  `outlier_scrapers/verdict_store.py`. The coherent set of publications to
+  persist is `packs/<date>/verdicts/desk_snapshot.json`, never a pass-level
+  `current.json` that may have moved on. Plan:
+  [2026-08-12-structured-ai-verdicts.md](plans/2026-08-12-structured-ai-verdicts.md)
+  (Verdict persistence, The desk-level snapshot).
 - `settlements`: the result, closing line/price, CLV, PnL, and would-have result
   joined to a decision/snapshot.
 
