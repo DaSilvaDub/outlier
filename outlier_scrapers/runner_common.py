@@ -687,6 +687,77 @@ def publish_verdict_pass(
     return publish_pass(pack_dir, artifacts, now=now)
 
 
+def publish_finding_pass(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    model: str,
+    now: datetime | None = None,
+) -> PublishResult:
+    """Parse a pass-C finding envelope, gate it, and publish. Raises RunnerError on fail."""
+    from outlier_scrapers import pack_index, paths, verdicts
+    from outlier_scrapers.verdict_gate import validate_envelope
+
+    try:
+        parsed = parse_envelope(output_text, "finding")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise RunnerError(f"Pass C output is not a valid finding envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.FindingEnvelope):
+        raise RunnerError("Pass C output did not parse as a finding envelope")
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    gate = validate_envelope(parsed, index, now or datetime.now().astimezone())
+    # Findings never carry a BET verdict, so `_is_attempted_bet` never matches
+    # one and the gate's reject_fail_ratio (attempted-bet-only) never fires.
+    # Any reject-severity content violation must still fail the pass -- there
+    # is no acceptable ratio of tampered/unsourced findings for pass C.
+    rejects = [item for item in gate.violations if item.severity == "reject"]
+    if gate.pass_fails or rejects:
+        reasons = tuple(gate.fail_reasons) or tuple(item.code for item in rejects)
+        raise RunnerError("Pass C failed structured validation: " + ",".join(reasons))
+
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    status = {
+        "envelope_present": True,
+        "envelope_kind": "finding",
+        "schema_version": parsed.envelope.schema_version,
+        "record_count": len(parsed.envelope.findings),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    lines = ["# Pass C", ""]
+    for rec in parsed.envelope.findings:
+        lines.append(f"- {rec.verdict} {rec.selection} {rec.line} {rec.price}: {rec.claim}")
+    artifacts = PassArtifacts(
+        pass_="C",
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=model,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=write_violations(gate.violations),
+        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+    )
+    return publish_pass(pack_dir, artifacts, now=now)
+
+
 def load_current_publications(pack_dir: Path) -> dict[str, Any]:
     """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
     from outlier_scrapers.verdict_gate import UpstreamPublication

@@ -238,27 +238,15 @@ def _publish_pass(pack_dir, pass_name: str, *, units: float = 1.0) -> dict:
             model="fake",
         )
     else:
-        # c_research does not publish yet (it still only writes chatgpt_c.md), so
-        # there is no publish_finding_pass to call. Build the publication directly
-        # to exercise E's optional-C branch; this is what C's publish will emit.
-        parsed = rc.parse_envelope(envelope_json, "finding")
-        artifacts = rc.PassArtifacts(
-            pass_="C",
+        result = rc.publish_finding_pass(
+            pack_dir,
+            envelope_json,
             request_sha256=request_sha256,
-            schema_version=verdicts.SCHEMA_VERSION,
-            verdicts_json=rc.write_envelope(
-                parsed.envelope,
-                request_sha256=request_sha256,
-                model="fake",
-                candidates_sha256=index.candidates_sha256,
-                game_totals_sha256=index.game_totals_sha256,
-                team_totals_sha256=index.team_totals_sha256,
-            ),
-            violations_json=rc.write_violations([]),
-            report_fragment=b"# Pass C\n",
-            status_fragment=b'{"envelope_kind":"finding"}',
+            candidates_sha256=index.candidates_sha256,
+            game_totals_sha256=index.game_totals_sha256,
+            team_totals_sha256=index.team_totals_sha256,
+            model="fake",
         )
-        result = rc.publish_pass(pack_dir, artifacts)
 
     data = json.loads((result.path / "verdicts.json").read_text(encoding="utf-8"))
     key = "findings" if pass_name == "C" else "verdicts"

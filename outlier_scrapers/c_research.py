@@ -209,6 +209,35 @@ def _raise_for_gate(result) -> None:
         raise rc.RunnerError("Prompt C output failed structured validation")
 
 
+def _to_envelope_json(
+    output_text: str,
+    pack_date_str: str,
+    index: pack_index.PackIndex,
+) -> str | None:
+    """Normalize FINDING-pipe or JSON output to envelope JSON. None means NO_SOURCED_FINDINGS."""
+    stripped = output_text.strip()
+    if stripped == NO_FINDINGS:
+        return None
+    if stripped.lstrip().startswith("{"):
+        return stripped
+    return _pipe_to_envelope(stripped, pack_date_str, index)
+
+
+def _empty_findings_envelope_json(pack_date_str: str, index: pack_index.PackIndex) -> str:
+    return json.dumps(
+        {
+            "schema_version": verdicts.SCHEMA_VERSION,
+            "pass": "C",
+            "pack_date": pack_date_str,
+            "candidates_sha256": index.candidates_sha256,
+            "game_totals_sha256": index.game_totals_sha256,
+            "team_totals_sha256": index.team_totals_sha256,
+            "findings": [],
+            "no_sourced_findings": True,
+        }
+    )
+
+
 def validate_output(
     output_text: str,
     candidates: dict[str, dict[str, str]] | pack_index.PackIndex,
@@ -233,10 +262,8 @@ def validate_output(
             team_totals_sha256=_dummy_hash(),
         )
 
-    if stripped.lstrip().startswith("{"):
-        raw = stripped
-    else:
-        raw = _pipe_to_envelope(stripped, pack_date_str, index)
+    raw = _to_envelope_json(output_text, pack_date_str, index)
+    assert raw is not None  # NO_FINDINGS already handled above
 
     try:
         parsed = rc.parse_envelope(raw, "finding")
@@ -314,6 +341,19 @@ def run_c_research(
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)
         validate_output(output_text, index, pack_dir.name)
+
+        envelope_json = _to_envelope_json(output_text, pack_dir.name, index)
+        if envelope_json is None:
+            envelope_json = _empty_findings_envelope_json(pack_dir.name, index)
+        rc.publish_finding_pass(
+            pack_dir,
+            envelope_json,
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"
