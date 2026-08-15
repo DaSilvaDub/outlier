@@ -79,9 +79,10 @@ def _pid_is_running(pid: int) -> bool:
         import ctypes
 
         process_query = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(process_query, False, int(pid))
+        kernel32 = getattr(ctypes, "windll").kernel32
+        handle = kernel32.OpenProcess(process_query, False, int(pid))
         if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.CloseHandle(handle)
             return True
         return False
     try:

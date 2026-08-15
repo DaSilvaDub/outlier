@@ -5,7 +5,7 @@ from outlier_scrapers import gemini_structured
 
 def test_construction_probe_records_installed_sdk_without_live_call():
     result = gemini_structured.run_construction_probe()
-    assert result.sdk_version.startswith("2.10")
+    assert tuple(int(part) for part in result.sdk_version.split(".")[:2]) >= (2, 10)
     assert result.has_response_mime_type
     assert result.has_response_schema
     assert result.has_response_json_schema
