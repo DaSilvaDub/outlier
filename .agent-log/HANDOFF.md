@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 12**.
+its 15-step Build order are done and committed. Continue at **step 13**.
 
 ## Last Commit SHA
 
@@ -176,12 +176,30 @@ visible across worktrees/ents, not because the work is ready for review.
 - Do not start step 12 (desk snapshot / `_desk_publication_ready`) until this
   module exists — it now does.
 
-## Next: step 12 — desk snapshot
+## What's done (step 12)
 
-Locking layer (`.writer_lock`), `_desk_publication_ready` (live fingerprint
-+ E upstream-publication equality), `desk_snapshot.json` from E's pins plus
-E's own ID **or** this fallback's `publications` plus `"E": null`, then
-legacy projection + retention. Do not start step 13 until 12 exists.
+- `outlier_scrapers/desk_snapshot.py`: `.writer_lock` (`mkdir` + `owner.json`),
+  stale recovery (same-host dead PID after 30m; other host never auto-breaks;
+  no-owner sentinel breakable by age), `--break-stale-lock` on `run_desk`.
+  Fingerprint-reading paths take `.daily_job_lock` then `.writer_lock`.
+- `desk_publication_ready` checks live CSV hashes vs each of A/D/B's current
+  publications. Flat files (`gemini_b.md`) do not count. E is usable only if
+  its hashes match *and* `upstream_publication_ids` equal the selected A/D/B
+  (and C when E pinned C). Otherwise the no-E fallback is computed inline.
+- `desk_snapshot.json` is committed first, then `desk_snapshot_history.jsonl`.
+  Readers resolving the snapshot still see the original A after A is
+  republished. Legacy `chatgpt_a.md` is rebuilt from the snapshot only;
+  `latest_preview.md` is marked non-authoritative. Retention deletes a
+  versioned dir only when it is unreachable *and* older than the age cutoff.
+- `publish_pass` holds the fingerprint locks. `orchestrate_desk` calls
+  `maybe_advance_desk` after phases.
+- Tests: `tests/test_desk_snapshot.py` (11).
+
+## Next: step 13 — pack rebuild exclusion
+
+Confirm `packs/<date>/verdicts/` is never named in `DERIVED_PACK_OUTPUTS` and
+add the guard test so the first post-merge rebuild cannot `unlink()` a
+directory. Do not start step 14 until 13 exists.
 
 ## Session mechanics that will save you time
 

@@ -188,15 +188,7 @@ def _load_candidates(pack_dir: Path) -> list[dict]:
 
 
 def produce_manual_betting_report(pack_dir: Path) -> Path:
-    """Render from validated envelopes when A/D/B are published; else today's pack quote."""
-    from outlier_scrapers import verdict_report
-
-    rendered = verdict_report.try_render_from_envelopes(pack_dir)
-    if rendered is not None:
-        text, _source = rendered
-        rc.atomic_write(pack_dir, "manual_betting_report.md", "", text)
-        return pack_dir / "manual_betting_report.md"
-
+    """Minimal manual report per contract. Quotes pack lines exactly. C findings included if present."""
     rows = _load_candidates(pack_dir)
     # Only quote provably-pregame candidates (same house rule as the model
     # prompts) so this fallback report can't surface a locked/started event.
@@ -347,12 +339,9 @@ def orchestrate_desk(
     has_final, source, fpath = _has_final_report(pack_dir)
     if not has_final and allow_local_synth:
         try:
-            from outlier_scrapers import verdict_report
-
             fpath = produce_manual_betting_report(pack_dir)
             has_final = True
-            report_text = fpath.read_text(encoding="utf-8") if fpath else ""
-            source = verdict_report.read_synthesis_source(report_text) or "local_synthesis"
+            source = "local_synthesis"
             status["notes"].append("produced manual_betting_report.md via local synthesis")
         except Exception as ex:
             status["notes"].append(f"manual report synthesis failed: {ex}")
