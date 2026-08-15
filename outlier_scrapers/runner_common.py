@@ -1,8 +1,8 @@
 """Shared scaffolding for the AI research-desk reasoning/research runners.
 
 Holds the provider-agnostic mechanics — request-hash, candidates validation,
-game/team totals context injection, atomic front-matter write — so per-prompt
-runners stay thin.
+game/team totals context injection, atomic front-matter write, and the
+versioned per-pass publication path — so per-prompt runners stay thin.
 """
 
 from __future__ import annotations
@@ -13,11 +13,14 @@ import io
 import json
 import logging
 import os
+import shutil
 import tempfile
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Sequence
 
-from outlier_scrapers import pack
+from outlier_scrapers import pack, verdicts
 
 GAME_TOTALS_NAME = "game_totals.csv"
 TEAM_TOTALS_NAME = "team_totals.csv"
@@ -327,3 +330,470 @@ def atomic_write(pack_dir: Path, out_name: str, front_matter: str, body: str) ->
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise RunnerError(f"Failed to write output: {type(e).__name__}") from e
+
+
+PUBLICATION_FILES = (
+    "verdicts.json",
+    "violations.json",
+    "report_fragment.md",
+    "status_fragment.json",
+)
+
+
+@dataclass(frozen=True)
+class StructuredRequest:
+    kind: str
+    schema_version: str
+    schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PassArtifacts:
+    pass_: str
+    request_sha256: str
+    schema_version: str
+    verdicts_json: bytes
+    violations_json: bytes
+    report_fragment: bytes
+    status_fragment: bytes
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    publication_id: str
+    request_sha256: str
+    path: Path
+    wrote: bool
+
+
+def request_structured(kind: str) -> StructuredRequest:
+    """Schema + version a runner hands to a provider before the Markdown stage."""
+    return StructuredRequest(
+        kind=kind,
+        schema_version=verdicts.SCHEMA_VERSION,
+        schema=verdicts.json_schema_for(kind),
+    )
+
+
+def parse_envelope(raw_text: str, kind: str) -> verdicts.ParsedEnvelope:
+    return verdicts.parse_envelope(raw_text, kind)
+
+
+def _rename_pass_keys(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {("pass" if key == "pass_" else key): _rename_pass_keys(val) for key, val in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_rename_pass_keys(val) for val in obj]
+    return obj
+
+
+def write_envelope(
+    envelope: verdicts.VerdictEnvelope | verdicts.FindingEnvelope | verdicts.ReconciliationEnvelope,
+    *,
+    request_sha256: str,
+    model: str = "",
+    candidates_sha256: str = "",
+    game_totals_sha256: str = "",
+    team_totals_sha256: str = "",
+) -> bytes:
+    """Serialize a parsed envelope for verdicts.json.
+
+    `publication_id` is intentionally omitted: it is the hash of this file
+    (plus the other three artifacts) and cannot appear inside the hashed bytes.
+    """
+    body = _rename_pass_keys(asdict(envelope))
+    body["request_sha256"] = request_sha256
+    if model:
+        body["model"] = model
+    if candidates_sha256:
+        body["candidates_sha256"] = candidates_sha256
+    if game_totals_sha256:
+        body["game_totals_sha256"] = game_totals_sha256
+    if team_totals_sha256:
+        body["team_totals_sha256"] = team_totals_sha256
+    return json.dumps(body, sort_keys=True).encode("utf-8")
+
+
+def write_violations(violations: Sequence[Any]) -> bytes:
+    from outlier_scrapers.verdict_gate import violation_class
+
+    rows = [
+        {
+            "code": item.code,
+            "outcome_id": item.outcome_id,
+            "market_id": item.market_id,
+            "detail": item.detail,
+            "severity": item.severity,
+            "class": violation_class(item.code),
+        }
+        for item in violations
+    ]
+    return json.dumps(rows, sort_keys=True).encode("utf-8")
+
+
+def _pack_value_from_detail(detail: str) -> str:
+    for marker in ("pack line ", "pack price ", "pack selection ", "pack book "):
+        if marker in detail:
+            return detail.split(marker, 1)[1].rstrip(".").strip()
+    return ""
+
+
+def build_repair_block(violations: Sequence[Any]) -> str:
+    """Machine-generated repair text: code, outcome_id, authoritative pack value.
+
+    The retry must never restate a number the model is expected to produce.
+    """
+    lines = ["REPAIR"]
+    for item in violations:
+        pack_value = _pack_value_from_detail(item.detail)
+        line = f"- code={item.code} outcome_id={item.outcome_id}"
+        if pack_value:
+            line += f" pack_value={pack_value}"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def structured_request_fields(
+    *,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    schema_version: str | None = None,
+) -> dict[str, str]:
+    """Keys that must join every structured-output request hash."""
+    return {
+        "candidates_sha256": candidates_sha256,
+        "game_totals_sha256": game_totals_sha256,
+        "team_totals_sha256": team_totals_sha256,
+        "schema_version": schema_version or verdicts.SCHEMA_VERSION,
+    }
+
+
+def build_manifest(artifacts: PassArtifacts) -> dict[str, Any]:
+    return {
+        "pass": artifacts.pass_,
+        "request_sha256": artifacts.request_sha256,
+        "schema_version": artifacts.schema_version,
+        "files": {
+            "verdicts.json": sha256_bytes(artifacts.verdicts_json),
+            "violations.json": sha256_bytes(artifacts.violations_json),
+            "report_fragment.md": sha256_bytes(artifacts.report_fragment),
+            "status_fragment.json": sha256_bytes(artifacts.status_fragment),
+        },
+    }
+
+
+def publication_id_for(artifacts: PassArtifacts) -> str:
+    canonical = json.dumps(build_manifest(artifacts), sort_keys=True).encode("utf-8")
+    return sha256_bytes(canonical)
+
+
+def recompute_publication_id(directory: Path) -> str:
+    """Rebuild publication_id from the four artifact files on disk."""
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    rebuilt = {
+        "pass": manifest["pass"],
+        "request_sha256": manifest["request_sha256"],
+        "schema_version": manifest["schema_version"],
+        "files": {
+            name: sha256_bytes((directory / name).read_bytes()) for name in PUBLICATION_FILES
+        },
+    }
+    return sha256_bytes(json.dumps(rebuilt, sort_keys=True).encode("utf-8"))
+
+
+def _fsync_path(path: Path) -> None:
+    fd = os.open(str(path), os.O_RDWR)
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _write_publication_tree(staging: Path, artifacts: PassArtifacts) -> None:
+    payload = {
+        "verdicts.json": artifacts.verdicts_json,
+        "violations.json": artifacts.violations_json,
+        "report_fragment.md": artifacts.report_fragment,
+        "status_fragment.json": artifacts.status_fragment,
+    }
+    for name, data in payload.items():
+        dest = staging / name
+        dest.write_bytes(data)
+        _fsync_path(dest)
+    manifest_bytes = json.dumps(build_manifest(artifacts), sort_keys=True, indent=2).encode("utf-8")
+    manifest_path = staging / "manifest.json"
+    manifest_path.write_bytes(manifest_bytes + b"\n")
+    _fsync_path(manifest_path)
+    _fsync_dir(staging)
+
+
+def _write_current_pointer(
+    parent: Path, request_sha256: str, publication_id: str, now: datetime
+) -> None:
+    payload = {
+        "request_sha256": request_sha256,
+        "publication_id": publication_id,
+        "published_at": now.isoformat(),
+    }
+    data = json.dumps(payload, sort_keys=True).encode("utf-8") + b"\n"
+    fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix="current.json.tmp-")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, parent / "current.json")
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def publish_pass(
+    pack_dir: Path,
+    artifacts: PassArtifacts,
+    *,
+    now: datetime | None = None,
+    pid: int | None = None,
+    hold_locks: bool = True,
+) -> PublishResult:
+    """Publish one pass as an immutable versioned directory + current.json swap.
+
+    The directory is assembled under ``<publication_id>.tmp-<pid>`` and made
+    visible with a single ``os.replace``. ``current.json`` is updated only
+    after that rename. A crash before the pointer swap leaves the previous
+    current version fully intact.
+    """
+    if hold_locks:
+        from outlier_scrapers.desk_snapshot import fingerprint_locks
+
+        with fingerprint_locks(pack_dir, operation=f"publish_{artifacts.pass_}", now=now):
+            return publish_pass(
+                pack_dir, artifacts, now=now, pid=pid, hold_locks=False
+            )
+    when = now or datetime.now().astimezone()
+    process_id = os.getpid() if pid is None else pid
+    pub_id = publication_id_for(artifacts)
+    parent = pack_dir / "verdicts" / artifacts.pass_
+    parent.mkdir(parents=True, exist_ok=True)
+    dest = parent / pub_id
+    wrote = False
+    if not dest.exists():
+        staging = parent / f"{pub_id}.tmp-{process_id}"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir()
+        try:
+            _write_publication_tree(staging, artifacts)
+            os.replace(staging, dest)
+            wrote = True
+        except Exception as exc:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            raise RunnerError(f"Failed to publish pass {artifacts.pass_}") from exc
+    _write_current_pointer(parent, artifacts.request_sha256, pub_id, when)
+    return PublishResult(
+        publication_id=pub_id,
+        request_sha256=artifacts.request_sha256,
+        path=dest,
+        wrote=wrote,
+    )
+
+
+def publish_verdict_pass(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    pass_: str,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    model: str,
+    now: datetime | None = None,
+) -> PublishResult:
+    """Parse a verdict envelope, gate it, and publish. Raises RunnerError on fail."""
+    from outlier_scrapers import pack_index, paths, verdicts
+    from outlier_scrapers.verdict_gate import validate_envelope
+
+    try:
+        parsed = parse_envelope(output_text, "verdict")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise RunnerError(f"Pass {pass_} output is not a valid verdict envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
+        raise RunnerError(f"Pass {pass_} output did not parse as a verdict envelope")
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    gate = validate_envelope(parsed, index, now or datetime.now().astimezone())
+    if gate.pass_fails:
+        raise RunnerError(
+            f"Pass {pass_} failed structured validation: " + ",".join(gate.fail_reasons)
+        )
+
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    status = {
+        "envelope_present": True,
+        "envelope_kind": "verdict",
+        "schema_version": parsed.envelope.schema_version,
+        "record_count": len(parsed.envelope.verdicts),
+        "bet_count": sum(1 for rec in parsed.envelope.verdicts if rec.verdict == "BET"),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    lines = [f"# Pass {pass_}", ""]
+    for rec in parsed.envelope.verdicts:
+        lines.append(
+            f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} ({rec.recommended_units}u)"
+        )
+    artifacts = PassArtifacts(
+        pass_=pass_,
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=model,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=write_violations(gate.violations),
+        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+    )
+    return publish_pass(pack_dir, artifacts, now=now)
+
+
+def load_current_publications(pack_dir: Path) -> dict[str, Any]:
+    """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
+    from outlier_scrapers.verdict_gate import UpstreamPublication
+
+    loaded: dict[str, Any] = {}
+    for pass_name in ("A", "D", "B", "C"):
+        pointer = pack_dir / "verdicts" / pass_name / "current.json"
+        if not pointer.exists():
+            continue
+        current = json.loads(pointer.read_text(encoding="utf-8"))
+        pub_id = str(current.get("publication_id") or "")
+        envelope_path = pack_dir / "verdicts" / pass_name / pub_id / "verdicts.json"
+        if not pub_id or not envelope_path.exists():
+            continue
+        data = json.loads(envelope_path.read_text(encoding="utf-8"))
+        key = "findings" if pass_name == "C" else "verdicts"
+        records = data.get(key) or []
+        record_ids = {str(row.get("record_id") or "") for row in records}
+        outcome_ids = {str(row.get("outcome_id") or "") for row in records}
+        stakes: dict[str, float] = {}
+        if pass_name != "C":
+            for row in records:
+                if str(row.get("verdict") or "") != "BET":
+                    continue
+                outcome_id = str(row.get("outcome_id") or "")
+                try:
+                    stakes[outcome_id] = float(row.get("recommended_units") or 0)
+                except (TypeError, ValueError):
+                    continue
+        loaded[pass_name] = UpstreamPublication(
+            pass_=pass_name,
+            publication_id=pub_id,
+            record_ids=frozenset(item for item in record_ids if item),
+            outcome_ids=frozenset(item for item in outcome_ids if item),
+            stakes=stakes,
+        )
+    return loaded
+
+
+def publish_reconciliation_pass(
+    pack_dir: Path,
+    output_text: str,
+    *,
+    request_sha256: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+    model: str,
+    now: datetime | None = None,
+) -> PublishResult:
+    """Parse a reconciliation envelope, gate it against current pubs, publish E."""
+    from outlier_scrapers import pack_index, paths, verdicts
+    from outlier_scrapers.verdict_gate import validate_envelope
+
+    try:
+        parsed = parse_envelope(output_text, "reconciliation")
+    except (verdicts.EnvelopeUnparseableError, verdicts.SchemaInvalidError) as exc:
+        raise RunnerError(f"Pass E output is not a valid reconciliation envelope: {exc}") from exc
+    if not isinstance(parsed.envelope, verdicts.ReconciliationEnvelope):
+        raise RunnerError("Pass E output did not parse as a reconciliation envelope")
+
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=paths.PROJECT_ROOT / "missing-portfolio-policy.json"
+    )
+    pubs = load_current_publications(pack_dir)
+    gate = validate_envelope(
+        parsed, index, now or datetime.now().astimezone(), current_publications=pubs
+    )
+    if gate.pass_fails:
+        raise RunnerError(
+            "Pass E failed structured validation: " + ",".join(gate.fail_reasons)
+        )
+
+    codes: dict[str, int] = {}
+    for item in gate.violations:
+        codes[item.code] = codes.get(item.code, 0) + 1
+    status = {
+        "envelope_present": True,
+        "envelope_kind": "reconciliation",
+        "schema_version": parsed.envelope.schema_version,
+        "record_count": len(parsed.envelope.reconciliations),
+        "bet_count": sum(1 for rec in parsed.envelope.reconciliations if rec.verdict == "BET"),
+        "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
+        "violation_codes": codes,
+        "mode": "shadow",
+        "repair_attempts": 0,
+        "structured_output_native": True,
+    }
+    lines = ["# Pass E", ""]
+    for rec in parsed.envelope.reconciliations:
+        lines.append(
+            f"- {rec.verdict} {rec.selection} {rec.line} {rec.price} ({rec.recommended_units}u)"
+        )
+    artifacts = PassArtifacts(
+        pass_="E",
+        request_sha256=request_sha256,
+        schema_version=verdicts.SCHEMA_VERSION,
+        verdicts_json=write_envelope(
+            parsed.envelope,
+            request_sha256=request_sha256,
+            model=model,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+        ),
+        violations_json=write_violations(gate.violations),
+        report_fragment=("\n".join(lines) + "\n").encode("utf-8"),
+        status_fragment=json.dumps(status, sort_keys=True).encode("utf-8"),
+    )
+    return publish_pass(pack_dir, artifacts, now=now)

@@ -363,6 +363,21 @@ def orchestrate_desk(
     if has_final and fpath:
         status["final_report"] = {"source": source, "file": str(fpath.name)}
 
+    try:
+        from outlier_scrapers import desk_snapshot
+
+        snapshot = desk_snapshot.maybe_advance_desk(pack_dir)
+        if snapshot is not None:
+            status["desk_snapshot"] = {
+                "synthesis_source": snapshot.get("synthesis_source"),
+                "publications": snapshot.get("publications"),
+            }
+            if snapshot.get("synthesis_source"):
+                status.setdefault("final_report", {})
+                status["final_report"]["source"] = snapshot["synthesis_source"]
+    except Exception as ex:
+        status["notes"].append(f"desk snapshot skipped: {ex}")
+
     if e_usable and required_usable:
         status["overall"] = "FULL"
         if not status["final_report"]:
@@ -399,10 +414,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=True,
         help="Disable local synthesis fallback (manual_betting_report.md + claude_e placeholder).",
     )
+    parser.add_argument(
+        "--break-stale-lock",
+        action="store_true",
+        help="Break packs/<date>/verdicts/.writer_lock only if the stale-lock rule allows.",
+    )
     args = parser.parse_args(argv)
 
     steps = [s.strip().upper() for s in args.steps.split(",") if s.strip()]
     pack_dir = paths.PROJECT_ROOT / "packs" / args.date
+
+    if args.break_stale_lock:
+        from outlier_scrapers import desk_snapshot
+
+        result = desk_snapshot.break_stale_lock(pack_dir)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        if result.get("broken") or result.get("reason") == "no_lock":
+            return 0
+        return 1
 
     if not (pack_dir / "candidates.csv").exists() and not (pack_dir / "briefing.md").exists():
         logger.warning("Pack for %s missing candidates.csv or briefing.md. Produce the pack first.", args.date)
