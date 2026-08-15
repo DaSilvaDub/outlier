@@ -2,15 +2,26 @@
 
 ## Last Commit SHA
 
-Pending PR #97 review-fix merge commit.
+`f38ea588660bd975c0f1bba1b01c16ae84e4a8f4` (PR #97 review fixes; this handoff-only commit follows it.)
 
 ## Files Touched
 
-- Resolving all actionable review feedback on PR #97.
-- Merging current `origin/master` while preserving structured-verdict invariants 9 and 10.
+- `outlier_scrapers/verdict_gate.py`, `verdict_policy.py`, `runner_common.py`,
+  `verdicts.py`: fail-closed flag parsing, canonical policy loading, authoritative
+  repair values, current-publication binding, injury-support metadata, and atomic
+  Pass E validation/publication.
+- `outlier_scrapers/c_research.py`, `reasoning.py`, `gemini_structured.py`:
+  prose-wrapped structured findings, production policy paths, and SDK-safe types.
+- Focused regression tests for all review repairs and Pass E integration gaps.
+- Merged `origin/master` at `c0a1e62dda35a529130bf44d7c61116924d4755b`
+  while preserving structured-verdict invariants 9 and 10.
 
 ## Next Steps
 
-- Complete focused and full offline verification.
-- Commit and push the repair to `claude/structured-ai-schema-validation-afd7a9`.
-- Refresh this handoff with the final feature commit SHA and hosted PR state.
+- Verification: `1032 passed`; Ruff clean; MyPy clean across 59 source files;
+  Pyright reported 0 errors and 0 warnings; `git diff --check` clean. Provider API
+  keys were cleared for the full suite and no live reasoning/provider calls ran.
+- Push to `claude/structured-ai-schema-validation-afd7a9`, refresh PR #97's stale
+  description, and verify hosted mergeability/checks.
+- Review threads remain unresolved until separately authorized; no replies or
+  resolutions were posted during this handoff.
