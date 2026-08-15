@@ -1,11 +1,38 @@
+import csv
+
 import pytest
 import anthropic
 
-from outlier_scrapers import claude_synthesis
+from outlier_scrapers import claude_synthesis, pack, pack_index, verdicts
 
 
 # Copied from tests/test_claude_reasoning.py to keep this test file self-contained
 # (repo style: no shared conftest for mocks across these runner tests)
+
+def _envelope_dict(pack_dir) -> dict:
+    """A schema-valid, gate-clean pass-E reconciliation envelope for this pack.
+
+    `reconciliations` is deliberately empty: these tests cover runner mechanics,
+    not reconciliation content (tests/test_pass_e_publish.py covers that against
+    real published upstream passes). The three pack hashes must match the live
+    pack or the gate rejects with pack_mismatch, so this is built at call time.
+    """
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=pack_dir / "no-such-portfolio-policy.json"
+    )
+    return {
+        "schema_version": verdicts.SCHEMA_VERSION,
+        "pass": "E",
+        "pack_date": pack_dir.name,
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        "upstream_publication_ids": {},
+        "reconciliations": [],
+        "slate_notes": [],
+        "needs": [],
+    }
+
 
 class MockTextBlock:
     type = "text"
@@ -14,9 +41,22 @@ class MockTextBlock:
         self.text = text
 
 
+class MockToolUseBlock:
+    """Mirrors what a forced `emit_reconciliations` tool call actually returns."""
+
+    type = "tool_use"
+    name = "emit_reconciliations"
+
+    def __init__(self, payload):
+        self.input = payload
+
+
 class MockMessage:
-    def __init__(self, text="mocked claude output", stop_reason="end_turn"):
-        self.content = [MockTextBlock(text)] if text else []
+    def __init__(self, text=None, stop_reason="end_turn", tool_input=None):
+        if tool_input is not None:
+            self.content = [MockToolUseBlock(tool_input)]
+        else:
+            self.content = [MockTextBlock(text)] if text else []
         self.stop_reason = stop_reason
         self.stop_details = None
 
@@ -36,29 +76,36 @@ class MockStream:
 
 
 class MockMessages:
-    def __init__(self):
+    def __init__(self, pack_dir=None):
         self.called = False
         self.kwargs = {}
-        self.message = MockMessage()
+        # None => emit a valid envelope at call time. Tests that want a
+        # specific (usually invalid) response assign `message` directly.
+        self.message = None
+        self._pack_dir = pack_dir
 
     def stream(self, **kwargs):
         self.called = True
         self.kwargs = kwargs
-        return MockStream(self.message)
+        message = self.message
+        if message is None:
+            message = MockMessage(tool_input=_envelope_dict(self._pack_dir))
+        return MockStream(message)
 
 
 class MockAnthropic:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, pack_dir=None, **kwargs):
         self.client_kwargs = kwargs
-        self.messages = MockMessages()
+        self.messages = MockMessages(pack_dir)
 
 
 @pytest.fixture
-def mock_anthropic(monkeypatch):
+def mock_anthropic(monkeypatch, synth_env):
+    _, _, pack_dir = synth_env
     clients = []
 
     def mock_init(*args, **kwargs):
-        client = MockAnthropic(*args, **kwargs)
+        client = MockAnthropic(*args, pack_dir=pack_dir, **kwargs)
         clients.append(client)
         return client
 
@@ -81,6 +128,27 @@ def synth_env(monkeypatch, tmp_path):
     (pack_dir / "chatgpt_a.md").write_text("A output", encoding="utf-8")
     (pack_dir / "gemini_b.md").write_text("B output", encoding="utf-8")
     (pack_dir / "claude_d.md").write_text("D output", encoding="utf-8")
+
+    # Pass E validates the candidates ledger for its own pack identity, so the
+    # upstream Markdown alone is no longer a complete pack for this runner.
+    with open(pack_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=pack.CANDIDATES_HEADER)
+        w.writeheader()
+        row = {k: "" for k in pack.CANDIDATES_HEADER}
+        row.update(
+            {
+                "sport": "MLB",
+                "event_id": "e1",
+                "market_id": "m1",
+                "selection": "test",
+                "team_name": "A",
+                "opp_name": "B",
+                "matchup": "A @ B",
+                "_event_starts_at": "2099-01-01T12:00:00Z",
+            }
+        )
+        w.writerow(row)
+
     return tmp_path, date_str, pack_dir
 
 

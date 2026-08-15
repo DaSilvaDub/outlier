@@ -3,7 +3,7 @@ import csv
 import pytest
 import anthropic
 
-from outlier_scrapers import pack, claude_reasoning
+from outlier_scrapers import pack, pack_index, claude_reasoning, verdicts
 
 
 @pytest.fixture
@@ -39,6 +39,30 @@ def claude_env(monkeypatch, tmp_path):
     return tmp_path, date_str, pack_dir
 
 
+def _envelope_dict(pack_dir) -> dict:
+    """A schema-valid, gate-clean pass-D envelope for the pack as it stands now.
+
+    `verdicts` is deliberately empty: these tests cover runner mechanics, not
+    verdict content (tests/test_pass_b_d_publish.py covers that against a real
+    indexed row). The three pack hashes must match the live pack or the gate
+    rejects with pack_mismatch, so this is built at call time.
+    """
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=pack_dir / "no-such-portfolio-policy.json"
+    )
+    return {
+        "schema_version": verdicts.SCHEMA_VERSION,
+        "pass": "D",
+        "pack_date": pack_dir.name,
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        "verdicts": [],
+        "slate_notes": [],
+        "needs": [],
+    }
+
+
 class MockTextBlock:
     type = "text"
 
@@ -46,9 +70,22 @@ class MockTextBlock:
         self.text = text
 
 
+class MockToolUseBlock:
+    """Mirrors what a forced `emit_verdicts` tool call actually returns."""
+
+    type = "tool_use"
+    name = "emit_verdicts"
+
+    def __init__(self, payload):
+        self.input = payload
+
+
 class MockMessage:
-    def __init__(self, text="mocked claude output", stop_reason="end_turn"):
-        self.content = [MockTextBlock(text)] if text else []
+    def __init__(self, text=None, stop_reason="end_turn", tool_input=None):
+        if tool_input is not None:
+            self.content = [MockToolUseBlock(tool_input)]
+        else:
+            self.content = [MockTextBlock(text)] if text else []
         self.stop_reason = stop_reason
         self.stop_details = None
 
@@ -68,29 +105,36 @@ class MockStream:
 
 
 class MockMessages:
-    def __init__(self):
+    def __init__(self, pack_dir=None):
         self.called = False
         self.kwargs = {}
-        self.message = MockMessage()
+        # None => emit a valid envelope at call time. Tests that want a
+        # specific (usually invalid) response assign `message` directly.
+        self.message = None
+        self._pack_dir = pack_dir
 
     def stream(self, **kwargs):
         self.called = True
         self.kwargs = kwargs
-        return MockStream(self.message)
+        message = self.message
+        if message is None:
+            message = MockMessage(tool_input=_envelope_dict(self._pack_dir))
+        return MockStream(message)
 
 
 class MockAnthropic:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, pack_dir=None, **kwargs):
         self.client_kwargs = kwargs
-        self.messages = MockMessages()
+        self.messages = MockMessages(pack_dir)
 
 
 @pytest.fixture
-def mock_anthropic(monkeypatch):
+def mock_anthropic(monkeypatch, claude_env):
+    _, _, pack_dir = claude_env
     clients = []
 
     def mock_init(*args, **kwargs):
-        client = MockAnthropic(*args, **kwargs)
+        client = MockAnthropic(*args, pack_dir=pack_dir, **kwargs)
         clients.append(client)
         return client
 
@@ -126,7 +170,9 @@ def test_success_writes_file_and_asserts_api(claude_env, mock_anthropic):
     text = out.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "request_sha256:" in text
-    assert "mocked claude output" in text
+    # Body is the model's raw structured output, not prose.
+    assert '"schema_version": "1.0"' in text
+    assert '"pass": "D"' in text
 
 
 def test_missing_key_on_cache_miss(monkeypatch, claude_env):
