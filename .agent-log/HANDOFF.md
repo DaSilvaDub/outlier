@@ -4,7 +4,7 @@
 
 Implementing `docs/plans/2026-08-12-structured-ai-verdicts.md` (revision 10 — 8 external
 review rounds, all resolved). The plan is long; read it, don't re-derive it. Steps 0-4 of
-its 15-step Build order are done and committed. Continue at **step 11**.
+its 15-step Build order are done and committed. Continue at **step 12**.
 
 ## Last Commit SHA
 
@@ -157,11 +157,31 @@ visible across worktrees/ents, not because the work is ready for review.
 - Pass E requests `emit_reconciliations` and publishes `verdicts/E`.
 - Tests: `tests/test_pass_e_publish.py` (4) plus existing gate tests (61 total).
 
-## Next: step 11 — no-E fallback
+## What's done (step 11)
 
-Quorum rule when E is missing: A+D+B BET -> min stake; any PASS/STAND_DOWN or
-missing B -> STAND_DOWN insufficient_quorum. Do not start step 12 (desk
-snapshot) until the fallback module exists.
+- `outlier_scrapers/verdict_report.py`: deterministic no-E fallback quorum
+  and A.md §14 renderer. Contributors must be exactly `{A, D, B}` or the
+  row is `STAND_DOWN` / `insufficient_quorum`. Full quorum with any
+  `PASS`/`STAND_DOWN` is `STAND_DOWN` / `non_unanimous`. Unanimous `BET`
+  uses `min()` stake. Result is labeled `synthesis_source: fallback_no_e`
+  and records the A/D/B `publication_id`s it actually read.
+- `render_report(..., mode="shadow")` raises `ShadowEnvelopeError`.
+  Table identity columns come from `PackIndex`, never the envelope.
+- `run_desk.produce_manual_betting_report` renders from A/D/B (or enforce-mode
+  E) when those current publications exist; otherwise keeps today's pack-quote
+  path. `orchestrate_desk` copies `fallback_no_e` into `final_report.source`
+  when that is what was written.
+- Tests: `tests/test_verdict_report.py` (12) covering the four-branch quorum,
+  index-over-envelope identity, shadow refusal, and the produce-manual hook.
+- Do not start step 12 (desk snapshot / `_desk_publication_ready`) until this
+  module exists — it now does.
+
+## Next: step 12 — desk snapshot
+
+Locking layer (`.writer_lock`), `_desk_publication_ready` (live fingerprint
++ E upstream-publication equality), `desk_snapshot.json` from E's pins plus
+E's own ID **or** this fallback's `publications` plus `"E": null`, then
+legacy projection + retention. Do not start step 13 until 12 exists.
 
 ## Session mechanics that will save you time
 
