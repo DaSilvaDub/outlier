@@ -1,9 +1,11 @@
 import csv
+import json
 
 import pytest
 import anthropic
 
 from outlier_scrapers import claude_synthesis, pack, pack_index, verdicts
+from outlier_scrapers import runner_common as rc
 
 
 # Copied from tests/test_claude_reasoning.py to keep this test file self-contained
@@ -139,12 +141,23 @@ def synth_env(monkeypatch, tmp_path):
             {
                 "sport": "MLB",
                 "event_id": "e1",
+                "_event_starts_at": "2099-01-01T12:00:00Z",
                 "market_id": "m1",
-                "selection": "test",
+                "outcome_id": "out1",
+                "market_type": "PLAYER_PROP",
+                "player_id": "p1",
+                "selection": "Player One Over 5.5",
+                "line": "5.5",
+                "price": "-110",
+                "book": "FD",
+                "board": "A",
+                "actionable": "true",
+                "market_label": "SO",
+                "max_units": "2.0",
+                "recommended_units_pre_news": "1.5",
                 "team_name": "A",
                 "opp_name": "B",
                 "matchup": "A @ B",
-                "_event_starts_at": "2099-01-01T12:00:00Z",
             }
         )
         w.writerow(row)
@@ -152,36 +165,169 @@ def synth_env(monkeypatch, tmp_path):
     return tmp_path, date_str, pack_dir
 
 
-def test_missing_required_input_fails(synth_env):
+def _upstream_envelope(index, pass_name: str, units: float) -> dict:
+    """One BET on the indexed row, as pass `pass_name` would have published it."""
+    row = next(iter(index.rows.values()))
+    kind = "findings" if pass_name == "C" else "verdicts"
+    record = {
+        "market_id": row.market_id,
+        "outcome_id": row.outcome_id,
+        "stream": row.stream,
+        "selection": row.data["selection"],
+        "line": row.data["line"],
+        "price": row.data["price"],
+    }
+    if pass_name == "C":
+        record.update(
+            {
+                "verdict": "CONFIRMS",
+                "claim": "Starter confirmed.",
+                "source_name": "Official",
+                "source_tier": 1,
+                "source_timestamp": "2026-06-27T12:00:00Z",
+                "evidence": [],
+            }
+        )
+    else:
+        record.update(
+            {
+                "book": row.data["book"],
+                "verdict": "BET",
+                "confidence": 0.7,
+                "recommended_units": units,
+                "evidence": [],
+                "contradictions": [],
+                "kill_triggers": [],
+                "rejection_reasons": [],
+            }
+        )
+    envelope = {
+        "schema_version": verdicts.SCHEMA_VERSION,
+        "pass": pass_name,
+        "pack_date": "2026-06-27",
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        kind: [record],
+    }
+    if pass_name == "C":
+        envelope["no_sourced_findings"] = False
+    else:
+        envelope["slate_notes"] = []
+        envelope["needs"] = []
+    return envelope
+
+
+def _publish_pass(pack_dir, pass_name: str, *, units: float = 1.0) -> dict:
+    """Publish one upstream pass and return its publication_id + first record_id."""
+    index = pack_index.build_pack_index(
+        pack_dir, policy_path=pack_dir / "no-such-portfolio-policy.json"
+    )
+    envelope_json = json.dumps(_upstream_envelope(index, pass_name, units))
+    request_sha256 = (pass_name * 64)[:64]
+
+    if pass_name != "C":
+        result = rc.publish_verdict_pass(
+            pack_dir,
+            envelope_json,
+            pass_=pass_name,
+            request_sha256=request_sha256,
+            candidates_sha256=index.candidates_sha256,
+            game_totals_sha256=index.game_totals_sha256,
+            team_totals_sha256=index.team_totals_sha256,
+            model="fake",
+        )
+    else:
+        # c_research does not publish yet (it still only writes chatgpt_c.md), so
+        # there is no publish_finding_pass to call. Build the publication directly
+        # to exercise E's optional-C branch; this is what C's publish will emit.
+        parsed = rc.parse_envelope(envelope_json, "finding")
+        artifacts = rc.PassArtifacts(
+            pass_="C",
+            request_sha256=request_sha256,
+            schema_version=verdicts.SCHEMA_VERSION,
+            verdicts_json=rc.write_envelope(
+                parsed.envelope,
+                request_sha256=request_sha256,
+                model="fake",
+                candidates_sha256=index.candidates_sha256,
+                game_totals_sha256=index.game_totals_sha256,
+                team_totals_sha256=index.team_totals_sha256,
+            ),
+            violations_json=rc.write_violations([]),
+            report_fragment=b"# Pass C\n",
+            status_fragment=b'{"envelope_kind":"finding"}',
+        )
+        result = rc.publish_pass(pack_dir, artifacts)
+
+    data = json.loads((result.path / "verdicts.json").read_text(encoding="utf-8"))
+    key = "findings" if pass_name == "C" else "verdicts"
+    return {
+        "publication_id": result.publication_id,
+        "record_id": data[key][0]["record_id"],
+    }
+
+
+def _publish_upstream(pack_dir, only=("A", "D", "B")) -> dict:
+    return {name: _publish_pass(pack_dir, name) for name in only}
+
+
+def test_missing_upstream_publication_fails(synth_env):
+    """E reconciles published envelopes; it cannot run against a partial desk."""
     _, date_str, pack_dir = synth_env
-    (pack_dir / "gemini_b.md").unlink()
+    _publish_upstream(pack_dir, only=("A", "D"))  # B never published
     assert claude_synthesis.main(["--date", date_str]) == 1
 
 
-def test_success_includes_all_inputs(synth_env, mock_anthropic):
+def test_missing_briefing_fails(synth_env):
     _, date_str, pack_dir = synth_env
+    _publish_upstream(pack_dir)
+    (pack_dir / "briefing.md").unlink()
+    assert claude_synthesis.main(["--date", date_str]) == 1
+
+
+def test_success_shows_upstream_envelopes_not_markdown(synth_env, mock_anthropic):
+    _, date_str, pack_dir = synth_env
+    pubs = _publish_upstream(pack_dir)
+    # Prose left on disk must NOT be what E is shown.
+    (pack_dir / "chatgpt_a.md").write_text("A PROSE OUTPUT", encoding="utf-8")
+
     assert claude_synthesis.main(["--date", date_str]) == 0
     content = mock_anthropic[0].messages.kwargs["messages"][0]["content"]
+
     assert "Prompt E body" in content
-    for token in ("A output", "B output", "D output", "briefing"):
-        assert token in content
+    assert "briefing" in content
+    assert "A PROSE OUTPUT" not in content
+    for pass_name, pub in pubs.items():
+        # E must see each publication_id and every citable record_id, or it
+        # cannot emit a citation the gate will accept.
+        assert f"UPSTREAM PASS {pass_name}" in content
+        assert pub["publication_id"] in content
+        assert pub["record_id"] in content
+
     out = pack_dir / "claude_e.md"
     assert out.exists()
     assert "request_sha256:" in out.read_text(encoding="utf-8")
 
 
-def test_optional_c_included_when_present(synth_env, mock_anthropic):
+def test_optional_c_included_when_published(synth_env, mock_anthropic):
     _, date_str, pack_dir = synth_env
-    (pack_dir / "chatgpt_c.md").write_text("C output", encoding="utf-8")
+    _publish_upstream(pack_dir)
+    c_pub = _publish_pass(pack_dir, "C")
     assert claude_synthesis.main(["--date", date_str]) == 0
     content = mock_anthropic[0].messages.kwargs["messages"][0]["content"]
-    assert "C output" in content
+    assert "UPSTREAM PASS C" in content
+    assert c_pub["publication_id"] in content
 
 
-def test_refresh_reruns_when_an_input_changes(synth_env, mock_anthropic):
+def test_refresh_reruns_when_an_upstream_publication_changes(synth_env, mock_anthropic):
     _, date_str, pack_dir = synth_env
+    _publish_upstream(pack_dir)
     assert claude_synthesis.main(["--date", date_str]) == 0
-    (pack_dir / "claude_d.md").write_text("D output CHANGED", encoding="utf-8")
+
+    # Republish D with a different stake -> new publication_id -> E must re-run.
+    _publish_pass(pack_dir, "D", units=0.5)
+
     assert claude_synthesis.run_claude_e(pack_dir, refresh_if_stale=True) == 0
     assert len(mock_anthropic) == 2
 

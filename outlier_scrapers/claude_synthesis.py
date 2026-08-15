@@ -28,14 +28,19 @@ MAX_TOKENS = 8192
 OUT_NAME = "claude_e.md"
 PROMPT_FILE = "E.md"
 
-REQUIRED_INPUTS = {
-    "briefing": "briefing.md",
-    "prompt_a": "chatgpt_a.md",
-    "prompt_b": "gemini_b.md",
-    "prompt_d": "claude_d.md",
-}
+# A/D/B are the verdict passes E reconciles; C is optional supporting research.
+# E is fed their *validated published envelopes*, never their Markdown: the
+# Markdown is prose that was never gate-checked, so synthesising from it lets an
+# upstream fabrication reach the final report even when the upstream pass itself
+# validated clean. The envelopes also carry the publication_id / record_id pairs
+# E must cite -- it cannot invent those.
+REQUIRED_UPSTREAM = ("A", "D", "B")
+OPTIONAL_UPSTREAM = ("C",)
+
+# briefing.md is narrative context only. No number or identity may be sourced
+# from it; those come from the pack index via the gate.
+REQUIRED_INPUTS = {"briefing": "briefing.md"}
 OPTIONAL_INPUTS = {
-    "prompt_c": "chatgpt_c.md",
     "game_totals": rc.GAME_TOTALS_NAME,
     "team_totals": rc.TEAM_TOTALS_NAME,
 }
@@ -53,10 +58,42 @@ def gather_inputs(pack_dir: Path) -> dict[str, str]:
     return collected
 
 
-def build_user_content(prompt_text: str, inputs: dict[str, str], extra: str = "") -> str:
+def gather_upstream(pack_dir: Path) -> dict[str, rc.PublishedEnvelope]:
+    """Return the current published envelope for each upstream pass.
+
+    A/D/B must all be published; E reconciles them and cannot run against a
+    partial desk. C is included when present.
+    """
+    documents = rc.load_current_publication_documents(pack_dir)
+    missing = [name for name in REQUIRED_UPSTREAM if name not in documents]
+    if missing:
+        raise rc.RunnerError(
+            "Pass E requires published verdict envelopes for "
+            f"{', '.join(REQUIRED_UPSTREAM)}; missing: {', '.join(missing)}. "
+            "Run those passes first."
+        )
+    selected = {name: documents[name] for name in REQUIRED_UPSTREAM}
+    for name in OPTIONAL_UPSTREAM:
+        if name in documents:
+            selected[name] = documents[name]
+    return selected
+
+
+def build_user_content(
+    prompt_text: str,
+    inputs: dict[str, str],
+    extra: str = "",
+    upstream: dict[str, rc.PublishedEnvelope] | None = None,
+) -> str:
     sections = [prompt_text]
     if extra:
         sections.append("\n\n===== PACK IDENTITY =====\n" + extra)
+    for name, published in (upstream or {}).items():
+        sections.append(
+            f"\n\n===== UPSTREAM PASS {name} "
+            f"(publication_id: {published.publication_id}) =====\n"
+            f"{published.envelope_json}"
+        )
     for label, text in inputs.items():
         sections.append(f"\n\n===== {label.upper()} =====\n{text}")
     return "".join(sections)
@@ -116,6 +153,7 @@ def run_claude_e(
                 return 0
 
         inputs = gather_inputs(pack_dir)
+        upstream = gather_upstream(pack_dir)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -128,6 +166,12 @@ def run_claude_e(
         )
 
         input_hashes = {label: rc.sha256_text(text) for label, text in inputs.items()}
+        # Upstream identity is the publication_id, not a hash of prose: a forced
+        # rerun can produce a different response under an unchanged request hash,
+        # and E must re-run when the publication it reconciles actually changes.
+        upstream_publication_ids = {
+            name: published.publication_id for name, published in upstream.items()
+        }
         request_sha256 = rc.compute_request_hash(
             {
                 "model": MODEL,
@@ -136,6 +180,7 @@ def run_claude_e(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "input_hashes": input_hashes,
+                "upstream_publication_ids": upstream_publication_ids,
                 **rc.structured_request_fields(
                     candidates_sha256=candidates_sha256,
                     game_totals_sha256=game_totals_sha256,
@@ -157,8 +202,13 @@ def run_claude_e(
             f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
             f"team_totals_sha256: {team_totals_sha256}\n"
+            "upstream_publication_ids: "
+            + json.dumps(upstream_publication_ids, sort_keys=True)
+            + "\n"
         )
-        user_content = build_user_content(prompt_text, inputs, extra=identity)
+        user_content = build_user_content(
+            prompt_text, inputs, extra=identity, upstream=upstream
+        )
         output_text = call_claude(user_content, pack.ROLE_BLOCK, client=client)
         rc.publish_reconciliation_pass(
             pack_dir,

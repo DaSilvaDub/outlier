@@ -726,6 +726,49 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
     return loaded
 
 
+@dataclass(frozen=True)
+class PublishedEnvelope:
+    """One pass's current published envelope, as the document itself."""
+
+    pass_: str
+    publication_id: str
+    envelope_json: str
+
+
+def load_current_publication_documents(pack_dir: Path) -> dict[str, PublishedEnvelope]:
+    """Read each pass's current published envelope as raw JSON text.
+
+    `load_current_publications` summarises publications into the id/stake sets
+    the gate checks E's `cites` against. This returns the document itself,
+    which is what pass E must actually be *shown*: without the envelope it
+    never sees a `publication_id` or any `record_id`, so it cannot emit a
+    citation the gate will accept.
+    """
+    documents: dict[str, PublishedEnvelope] = {}
+    for pass_name in ("A", "D", "B", "C"):
+        pointer = pack_dir / "verdicts" / pass_name / "current.json"
+        if not pointer.exists():
+            continue
+        try:
+            current = json.loads(pointer.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        pub_id = str(current.get("publication_id") or "")
+        if not pub_id:
+            continue
+        envelope_path = pack_dir / "verdicts" / pass_name / pub_id / "verdicts.json"
+        if not envelope_path.exists():
+            continue
+        try:
+            envelope_json = envelope_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        documents[pass_name] = PublishedEnvelope(
+            pass_=pass_name, publication_id=pub_id, envelope_json=envelope_json
+        )
+    return documents
+
+
 def publish_reconciliation_pass(
     pack_dir: Path,
     output_text: str,
