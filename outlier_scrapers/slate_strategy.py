@@ -86,10 +86,14 @@ def _sides_from_matchup(matchup: str) -> tuple[str, str]:
 
 
 def _slate_events_from_games(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
-    events_ctx = context.get("events") if isinstance(context.get("events"), dict) else {}
-    teams_ctx = context.get("teams") if isinstance(context.get("teams"), dict) else {}
-    records = payload.get("records") if isinstance(payload.get("records"), list) else []
+    raw_context = payload.get("context")
+    context: dict[str, Any] = raw_context if isinstance(raw_context, dict) else {}
+    raw_events = context.get("events")
+    events_ctx: dict[str, Any] = raw_events if isinstance(raw_events, dict) else {}
+    raw_teams = context.get("teams")
+    teams_ctx: dict[str, Any] = raw_teams if isinstance(raw_teams, dict) else {}
+    raw_records = payload.get("records")
+    records: list[Any] = raw_records if isinstance(raw_records, list) else []
 
     matchup_by_event: dict[str, tuple[str, str]] = {}
     for row in records:
@@ -105,7 +109,8 @@ def _slate_events_from_games(payload: dict[str, Any]) -> list[dict[str, Any]]:
     event_ids = [str(eid) for eid in events_ctx] if events_ctx else list(matchup_by_event)
     slate: list[dict[str, Any]] = []
     for event_id in event_ids:
-        info = events_ctx.get(event_id) if isinstance(events_ctx.get(event_id), dict) else {}
+        raw_info = events_ctx.get(event_id)
+        info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
         away, home = matchup_by_event.get(event_id, ("", ""))
         injuries: list[dict[str, Any]] = []
         for team_id in (info.get("away_team_id"), info.get("home_team_id")):
