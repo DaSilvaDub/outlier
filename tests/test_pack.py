@@ -9,6 +9,7 @@ from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _opportunity_key,
+    _apply_enforced_portfolio_units,
     _restore_published_pack,
     _swap_staged_pack,
     american_to_decimal,
@@ -649,7 +650,9 @@ def test_stale_line_edge_gate_withholds_units():
     assert row["_board"] == "flagged"
 
 
-# 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
+# 8c. The composite edge-suspect flag needs BOTH inputs. A single RLM flag does
+#      not add edge_suspect_stale_line, but still makes the row non-actionable
+#      and therefore leaves its unit recommendation blank.
 def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_units():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"])
     ev = [
@@ -666,6 +669,52 @@ def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_uni
     assert "edge_suspect_stale_line" not in row["data_quality_flags"]
     assert row["actionable"] == "false"
     assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_does_not_restore_units_to_non_actionable_row():
+    row = {
+        "actionable": "false",
+        "board": "A_FLAGGED",
+        "_board": "flagged",
+        "recommended_units_pre_news": "",
+    }
+
+    _apply_enforced_portfolio_units(row, 0.0)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_demotes_actionable_row_capped_to_zero():
+    row = {
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+        "recommended_units_pre_news": 1.0,
+    }
+
+    _apply_enforced_portfolio_units(row, 0.0)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["_board"] == "flagged"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_preserves_positive_units_for_actionable_board_a_row():
+    row = {
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+        "recommended_units_pre_news": 1.0,
+    }
+
+    _apply_enforced_portfolio_units(row, 0.5)
+
+    assert row["actionable"] == "true"
+    assert row["board"] == "A"
+    assert row["recommended_units_pre_news"] == 0.5
 
 
 # 8c2. A NaN/inf line must never crash build_row (found while adding the
@@ -1270,6 +1319,51 @@ def test_briefing_role_block():
     text = build_briefing(rows, "2026-06-24")
     assert "Use this pack ONLY" in text
     assert "first lock: n/a" in text
+
+
+# 17b. Total bases is recommendable (2026-08-12 market-policy ruling): the MLB
+#      whitelist permits TB and A.md Sec5.2 never named it among the
+#      never-recommend markets, so ROLE_BLOCK's variance taxonomy must not
+#      call it high variance. Guards against silently re-diverging from the
+#      ruling in docs/plans/2026-08-12-structured-ai-verdicts.md.
+def test_role_block_does_not_flag_total_bases_as_high_variance():
+    from outlier_scrapers.pack import ROLE_BLOCK
+
+    variance_line = next(line for line in ROLE_BLOCK if "High variance" in line)
+    assert "total bases" not in variance_line.lower()
+    for market in ("3PM", "hits allowed", "turnovers"):
+        assert market in variance_line
+
+
+def test_derived_outputs_never_name_verdicts_subtree():
+    from outlier_scrapers.pack import DERIVED_PACK_OUTPUTS, VERDICTS_SUBTREE
+
+    assert VERDICTS_SUBTREE == "verdicts"
+    assert VERDICTS_SUBTREE not in DERIVED_PACK_OUTPUTS
+    for name in DERIVED_PACK_OUTPUTS:
+        normalized = str(name).replace("\\", "/")
+        assert not normalized.startswith(f"{VERDICTS_SUBTREE}/")
+        assert normalized != VERDICTS_SUBTREE
+
+
+def test_rebuild_cleanup_leaves_verdicts_tree_intact(tmp_path):
+    from outlier_scrapers.pack import clear_derived_pack_outputs
+
+    pack_dir = tmp_path / "packs" / "2026-08-15"
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "chatgpt_a.md").write_text("stale A\n", encoding="utf-8")
+    (pack_dir / "manual_betting_report.md").write_text("stale report\n", encoding="utf-8")
+    verdicts = pack_dir / "verdicts" / "A" / "pub123"
+    verdicts.mkdir(parents=True)
+    (verdicts / "verdicts.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (pack_dir / "verdicts" / "desk_snapshot.json").write_text("{}\n", encoding="utf-8")
+
+    clear_derived_pack_outputs(pack_dir)
+
+    assert not (pack_dir / "chatgpt_a.md").exists()
+    assert not (pack_dir / "manual_betting_report.md").exists()
+    assert (verdicts / "verdicts.json").is_file()
+    assert (pack_dir / "verdicts" / "desk_snapshot.json").is_file()
 
 
 def test_briefing_deduplicates_totals_restatements_and_separates_flagged_ev():

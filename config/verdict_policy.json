@@ -1,0 +1,22 @@
+{
+  "mode": "shadow",
+  "repair_attempts": 1,
+  "reject_fail_ratio": 0.5,
+  "prohibited_variance_markets": [
+    "3PM",
+    "THREES",
+    "THREE_POINTERS_MADE",
+    "HA",
+    "HITS_ALLOWED",
+    "TO",
+    "TURNOVERS"
+  ],
+  "desk_prohibited_markets": [
+    {"market": "HR", "scope": "any"},
+    {"market": "WALKS_ALLOWED", "scope": "any"},
+    {"market": "HRR", "scope": "any"},
+    {"market": "BB", "scope": "PLAYER_PROP"}
+  ],
+  "enforce_mlb_whitelist": true,
+  "external_evidence_max_age_h": 24.0
+}

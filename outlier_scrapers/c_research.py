@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Sequence
 
 from dateutil import parser as date_parser
 
-from outlier_scrapers import gemini_research, pack, paths
+from outlier_scrapers import gemini_research, pack, pack_index, paths, verdicts
 from outlier_scrapers import runner_common as rc
+from outlier_scrapers.verdict_gate import VerdictPolicy, load_verdict_policy, validate_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ def _market_index(
     totals_bytes: bytes | None,
     team_totals_bytes: bytes | None = None,
 ) -> dict[str, dict[str, str]]:
+    """Legacy market_id map. Kept for callers/tests that still pass a dict."""
     text = raw_bytes.decode("utf-8-sig")
     rows = csv.DictReader(StringIO(text))
     index = {row["market_id"]: row for row in rows if row.get("market_id")}
@@ -67,31 +70,91 @@ def _market_index(
     return index
 
 
-def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pack_date_str: str) -> None:
-    """Reject output that is unstructured, changes an authoritative quote, or has out-of-bounds dates.
-    
-    Assumes the model never emits " | " inside a field value (this is prompt-enforced).
-    """
-    stripped = output_text.strip()
-    if stripped == NO_FINDINGS:
-        return
-    if not stripped:
-        raise rc.RunnerError("Received empty or whitespace-only response from API")
+def _dummy_hash() -> str:
+    return "0" * 64
 
-    # pack_date_str is the pack directory's own name (an internal,
-    # caller-controlled value), not part of the model's output -- an
-    # unexpected format here only disables the window check below
-    # (pack_date is None); source_timestamp is still validated for every
-    # line regardless. It is loop-invariant, so parse it once.
+
+def _index_from_candidate_map(
+    candidates: dict[str, dict[str, str]],
+    *,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+) -> pack_index.PackIndex:
+    from outlier_scrapers.portfolio import PortfolioPolicy
+
+    rows: dict[str, pack_index.IndexedRow] = {}
+    for key, data in candidates.items():
+        outcome_id = str(data.get("outcome_id") or key)
+        market_id = str(data.get("market_id") or key)
+        stream = str(data.get("stream") or "candidates")
+        row_data = dict(data)
+        row_data.setdefault("market_id", market_id)
+        row_data.setdefault("outcome_id", outcome_id)
+        if stream != "candidates":
+            row_data.setdefault("totals_id", key)
+        rows[outcome_id] = pack_index.IndexedRow(
+            stream=stream, market_id=market_id, outcome_id=outcome_id, data=row_data
+        )
+    return pack_index.PackIndex(
+        candidates_sha256=candidates_sha256,
+        game_totals_sha256=game_totals_sha256,
+        team_totals_sha256=team_totals_sha256,
+        rows=rows,
+        dropped={},
+        unindexed_totals=(),
+        players={},
+        injuries={},
+        locks={},
+        policy=PortfolioPolicy(),
+    )
+
+
+def _lookup_indexed_row(index: pack_index.PackIndex, market_id: str):
+    if market_id in index.rows:
+        return index.rows[market_id]
+    for row in index.rows.values():
+        if row.market_id == market_id or str(row.data.get("totals_id") or "") == market_id:
+            return row
+    return None
+
+
+def _finding_from_pipe_fields(
+    fields: dict[str, str], index: pack_index.PackIndex
+) -> dict[str, object]:
+    market_id = fields["market_id"]
+    row = _lookup_indexed_row(index, market_id)
+    outcome_id = fields.get("outcome_id") or (row.outcome_id if row else market_id)
+    stream = fields.get("stream") or (row.stream if row else "candidates")
     try:
-        pack_date = datetime.strptime(pack_date_str, "%Y-%m-%d").date()
-    except ValueError:
-        pack_date = None
+        tier = int(fields["source_tier"])
+    except ValueError as exc:
+        raise rc.RunnerError("Prompt C output line has an invalid source tier") from exc
+    return {
+        "market_id": market_id,
+        "outcome_id": outcome_id,
+        "stream": stream,
+        "selection": fields["selection"],
+        "line": fields["line"],
+        "price": fields["price"],
+        "verdict": fields["verdict"],
+        "claim": fields["claim"],
+        "source_name": fields["source_name"],
+        "source_tier": tier,
+        "source_timestamp": fields["source_timestamp"],
+        "evidence": [],
+    }
 
-    for line_number, line in enumerate(stripped.splitlines(), start=1):
+
+def _pipe_to_envelope(
+    output_text: str,
+    pack_date_str: str,
+    index: pack_index.PackIndex,
+) -> str:
+    findings = []
+    for line_number, line in enumerate(output_text.strip().splitlines(), start=1):
         if not line.startswith(RECORD_PREFIX):
             raise rc.RunnerError(f"Prompt C output line {line_number} is not a FINDING record")
-
         fields: dict[str, str] = {}
         for part in line.split(" | ")[1:]:
             if "=" not in part:
@@ -100,41 +163,130 @@ def validate_output(output_text: str, candidates: dict[str, dict[str, str]], pac
             if key in fields:
                 raise rc.RunnerError(f"Prompt C output line {line_number} repeats field {key}")
             fields[key] = value
-
-        if set(fields) != REQUIRED_FIELDS:
+        if not REQUIRED_FIELDS.issubset(fields):
             raise rc.RunnerError(f"Prompt C output line {line_number} has invalid fields")
-
-        market_id = fields["market_id"]
-        candidate = candidates.get(market_id)
-        if candidate is None:
-            raise rc.RunnerError(f"Prompt C output references unknown market_id {market_id}")
-        for field in ("selection", "line", "price"):
-            if fields[field] != candidate[field]:
-                raise rc.RunnerError(
-                    f"Prompt C output changed {field} for market_id {market_id}"
-                )
-        if fields["verdict"] not in {"CONFIRMS", "CONTRADICTS", "NEUTRAL"}:
-            raise rc.RunnerError(f"Prompt C output line {line_number} has an invalid verdict")
-        if fields["source_tier"] not in {"1", "2", "3"}:
-            raise rc.RunnerError(f"Prompt C output line {line_number} has an invalid source tier")
-        for field in ("claim", "source_name", "source_timestamp"):
-            if not fields[field].strip():
-                raise rc.RunnerError(f"Prompt C output line {line_number} has an empty {field}")
-        
         try:
-            ts = date_parser.parse(fields["source_timestamp"]).date()
-        except (ValueError, OverflowError, TypeError):
+            date_parser.parse(fields["source_timestamp"])
+        except (ValueError, OverflowError, TypeError) as exc:
             raise rc.RunnerError(
-                f"Prompt C output line {line_number} has unparseable timestamp: {fields['source_timestamp']}"
-            )
+                f"Prompt C output line {line_number} has unparseable timestamp: "
+                f"{fields['source_timestamp']}"
+            ) from exc
+        findings.append(_finding_from_pipe_fields(fields, index))
+    payload = {
+        "schema_version": verdicts.SCHEMA_VERSION,
+        "pass": "C",
+        "pack_date": pack_date_str,
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        "findings": findings,
+        "no_sourced_findings": not findings,
+    }
+    return json.dumps(payload)
 
-        if pack_date is not None and not (
-            pack_date - timedelta(days=2) <= ts <= pack_date + timedelta(days=1)
-        ):
+
+def _raise_for_gate(result) -> None:
+    if not result.violations:
+        return
+    for item in result.violations:
+        if item.severity != "reject":
+            continue
+        if item.code == "unknown_market":
+            raise rc.RunnerError(f"Prompt C output references unknown market_id {item.market_id}")
+        if item.code == "line_tampered":
+            raise rc.RunnerError(f"Prompt C output changed line for market_id {item.market_id}")
+        if item.code == "selection_tampered":
             raise rc.RunnerError(
-                f"Prompt C output line {line_number} timestamp '{fields['source_timestamp']}' "
-                f"is outside the valid window for pack date {pack_date_str}"
+                f"Prompt C output changed selection for market_id {item.market_id}"
             )
+        if item.code == "price_tampered":
+            raise rc.RunnerError(f"Prompt C output changed price for market_id {item.market_id}")
+        if item.code == "unparseable_timestamp":
+            raise rc.RunnerError(f"Prompt C output line has unparseable timestamp: {item.detail}")
+        raise rc.RunnerError(f"Prompt C output failed gate {item.code}: {item.detail}")
+    if result.pass_fails:
+        raise rc.RunnerError("Prompt C output failed structured validation")
+
+
+def _to_envelope_json(
+    output_text: str,
+    pack_date_str: str,
+    index: pack_index.PackIndex,
+) -> str | None:
+    """Normalize FINDING-pipe or JSON output to envelope JSON. None means NO_SOURCED_FINDINGS."""
+    stripped = output_text.strip()
+    if stripped == NO_FINDINGS:
+        return None
+
+    # Structured output is the primary contract.  The shared parser tolerates
+    # surrounding prose and Markdown fences, so probe it before treating the
+    # response as a legacy FINDING-pipe payload.
+    try:
+        rc.parse_envelope(stripped, "finding")
+    except verdicts.EnvelopeUnparseableError:
+        pass
+    except verdicts.SchemaInvalidError:
+        # Preserve the schema-specific error from validate_output instead of
+        # misreporting an extracted-but-invalid JSON object as malformed pipe.
+        return stripped
+    else:
+        return stripped
+    return _pipe_to_envelope(stripped, pack_date_str, index)
+
+
+def _empty_findings_envelope_json(pack_date_str: str, index: pack_index.PackIndex) -> str:
+    return json.dumps(
+        {
+            "schema_version": verdicts.SCHEMA_VERSION,
+            "pass": "C",
+            "pack_date": pack_date_str,
+            "candidates_sha256": index.candidates_sha256,
+            "game_totals_sha256": index.game_totals_sha256,
+            "team_totals_sha256": index.team_totals_sha256,
+            "findings": [],
+            "no_sourced_findings": True,
+        }
+    )
+
+
+def validate_output(
+    output_text: str,
+    candidates: dict[str, dict[str, str]] | pack_index.PackIndex,
+    pack_date_str: str,
+    *,
+    now: datetime | None = None,
+    policy: VerdictPolicy | None = None,
+) -> None:
+    """Reject output that is unstructured, changes an authoritative quote, or has out-of-bounds dates."""
+    stripped = output_text.strip()
+    if stripped == NO_FINDINGS:
+        return
+    if not stripped:
+        raise rc.RunnerError("Received empty or whitespace-only response from API")
+
+    if isinstance(candidates, pack_index.PackIndex):
+        index = candidates
+    else:
+        index = _index_from_candidate_map(
+            candidates,
+            candidates_sha256=_dummy_hash(),
+            game_totals_sha256=_dummy_hash(),
+            team_totals_sha256=_dummy_hash(),
+        )
+
+    raw = _to_envelope_json(output_text, pack_date_str, index)
+    assert raw is not None  # NO_FINDINGS already handled above
+
+    try:
+        parsed = rc.parse_envelope(raw, "finding")
+    except verdicts.EnvelopeUnparseableError as exc:
+        raise rc.RunnerError("Prompt C output is not a FINDING record or JSON envelope") from exc
+    except verdicts.SchemaInvalidError as exc:
+        raise rc.RunnerError(f"Prompt C output failed schema validation: {exc}") from exc
+
+    when = now or datetime.now().astimezone()
+    _raise_for_gate(validate_envelope(parsed, index, when, policy=policy))
 
 
 def run_c_research(
@@ -155,7 +307,10 @@ def run_c_research(
             pack_dir,
             allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
-        candidates = _market_index(candidates_bytes, totals_bytes, team_totals_bytes)
+        index = pack_index.build_pack_index(pack_dir)
+        verdict_policy = load_verdict_policy(
+            paths.PROJECT_ROOT / "config" / "verdict_policy.json"
+        )
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -170,6 +325,11 @@ def run_c_research(
                 "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
                 "team_totals_hash": team_totals_sha256,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -182,14 +342,32 @@ def run_c_research(
         research_input = rc.append_totals_block(
             "Pack briefing:\n"
             + briefing_text
-            + "\n\nAuthoritative candidates.csv:\n"
+            + "\n\n"
+            + f"pack_date: {pack_dir.name}\n"
+            + f"candidates_sha256: {candidates_sha256}\n"
+            + f"game_totals_sha256: {game_totals_sha256}\n"
+            + f"team_totals_sha256: {team_totals_sha256}\n"
+            + "\nAuthoritative candidates.csv:\n"
             + candidates_bytes.decode("utf-8-sig"),
             totals_bytes,
             team_totals_bytes,
         )
         logger.info("Calling Gemini (Prompt C injury/lineup research)...")
         output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, research_input, client=client)
-        validate_output(output_text, candidates, pack_dir.name)
+        validate_output(output_text, index, pack_dir.name, policy=verdict_policy)
+
+        envelope_json = _to_envelope_json(output_text, pack_dir.name, index)
+        if envelope_json is None:
+            envelope_json = _empty_findings_envelope_json(pack_dir.name, index)
+        rc.publish_finding_pass(
+            pack_dir,
+            envelope_json,
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"

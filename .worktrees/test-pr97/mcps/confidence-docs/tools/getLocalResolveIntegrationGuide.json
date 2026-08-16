@@ -1,0 +1,23 @@
+{
+  "name": "getLocalResolveIntegrationGuide",
+  "description": "Get complete integration guides with code examples and the documentation for local resolve (also called as local evaluation).",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "sdk": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "string",
+        "enum": [
+          "JAVA",
+          "GO",
+          "JS",
+          "RUST"
+        ],
+        "description": "the local resolve sdks are available in backend environment and for Go, Java, Js or Rust."
+      }
+    },
+    "required": [
+      "sdk"
+    ]
+  }
+}

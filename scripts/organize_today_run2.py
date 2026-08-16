@@ -393,6 +393,7 @@ def organize_today_additive(
     filter_opts = FilterOptions(
         drop_hr_under=True,
         drop_milestone_under=True,
+        drop_prohibited_markets=True,
         require_team_in_matchup=True,
         allow_matchups=allow,
     )

@@ -1041,3 +1041,102 @@ def test_card_success_status_uses_produced_payload_timestamp(
         (league_paths("MLB").reports / status_name).read_text(encoding="utf-8")
     )
     assert persisted["generated_at"] == produced_at
+
+
+def test_strategy_conflict_flags_board_a_with_canonical_pts(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    props = [
+        _prop("m1", "OVER", 8.5, -105, "o1", player="A. Wilson", market="PTS"),
+        _prop("m1", "UNDER", 8.5, -105, "o2", player="A. Wilson", market="PTS"),
+    ]
+    _write_latest(tmp_path / "data", "WNBA", "props", props)
+    _write_latest(
+        tmp_path / "data",
+        "WNBA",
+        "line_movement",
+        [_movement("m1", "OVER", 8.5)],
+        extra={"ev_records": [_ev("m1", "OVER", 1.5, "o1")]},
+    )
+    _write_latest(tmp_path / "data", "WNBA", "insights", [])
+    reports = tmp_path / "data" / "WNBA" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "slate_strategy_latest.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "event_id": "e1",
+                        "directions": [
+                            {
+                                "scope": "PLAYER",
+                                "player": "A'ja Wilson",
+                                "player_key": "AJAWILSON",
+                                "market_family": "PTS",
+                                "side": "UNDER",
+                                "confidence": "HIGH",
+                                "event_id": "e1",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_cards_payload("WNBA")
+    assert payload["coverage"]["board_a_cards"] == 1
+    assert payload["coverage"]["board_b_cards"] == 0
+    card = payload["board_a"][0]
+    assert card["board"] == "A"
+    assert card["headline_side"] == "OVER"
+    assert "strategy_conflict" in card["flags"]
+
+
+def test_strategy_conflict_is_scoped_to_event_id(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    props = [
+        _prop("m1", "OVER", 8.5, -105, "o1", player="A'ja Wilson", market="PTS"),
+        _prop("m1", "UNDER", 8.5, -105, "o2", player="A'ja Wilson", market="PTS"),
+    ]
+    _write_latest(tmp_path / "data", "WNBA", "props", props)
+    _write_latest(
+        tmp_path / "data",
+        "WNBA",
+        "line_movement",
+        [_movement("m1", "OVER", 8.5)],
+        extra={"ev_records": [_ev("m1", "OVER", 1.5, "o1")]},
+    )
+    _write_latest(tmp_path / "data", "WNBA", "insights", [])
+    reports = tmp_path / "data" / "WNBA" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "slate_strategy_latest.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "event_id": "other-game",
+                        "directions": [
+                            {
+                                "scope": "PLAYER",
+                                "player_key": "AJAWILSON",
+                                "market_family": "PTS",
+                                "side": "UNDER",
+                                "confidence": "HIGH",
+                                "event_id": "other-game",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_cards_payload("WNBA")
+    card = payload["board_a"][0]
+    assert "strategy_conflict" not in card["flags"]

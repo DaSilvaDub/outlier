@@ -1,0 +1,7 @@
+{
+  "name": "outlier",
+  "version": "1.0.0",
+  "description": "Local plugin for Outlier AI Research Desk agents (MLB/WNBA betting pipeline orchestration, bug checking, and data validation)",
+  "author": "dasil",
+  "agents": "agents"
+}

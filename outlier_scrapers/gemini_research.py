@@ -1,9 +1,7 @@
-"""Gemini Prompt B runner — wide-scan research pass (input: briefing.md).
+"""Gemini Prompt B runner — wide-scan research pass.
 
-Targets Gemini 3.1 Pro Preview via the google-genai SDK with Google Search
-grounding (Prompt B is web-allowed). This automates a single grounded pass; it
-is NOT the full Gemini Deep Research UI product (see plan caveats). Output is
-``gemini_b.md`` with the same hash-based idempotency as the other runners.
+Targets Gemini via the google-genai SDK with Google Search grounding.
+Output is gemini_b.md plus a versioned verdicts/B publication.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from pathlib import Path
 from typing import Sequence
 import time
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import GEMINI_MODEL
 from outlier_scrapers import runner_common as rc
@@ -31,9 +29,16 @@ OUT_NAME = "gemini_b.md"
 PROMPT_FILE = "B.md"
 
 
-def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, client=None) -> str:
+def call_gemini(
+    prompt_text: str,
+    role_block: list[str],
+    briefing_text: str,
+    client=None,
+    schema: dict | None = None,
+) -> str:
     from google import genai
-    from google.genai import types
+
+    from outlier_scrapers import gemini_structured
 
     if client is None:
         load_environment()
@@ -43,10 +48,10 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
         client = genai.Client(api_key=api_key)
 
     full_prompt = prompt_text + "\n\nBriefing:\n" + briefing_text
-    config = types.GenerateContentConfig(
-        system_instruction="\n".join(role_block),
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+    config, mode = gemini_structured.build_grounded_config(
+        role_block=role_block,
         max_output_tokens=MAX_TOKENS,
+        schema=schema,
     )
     max_retries = 10
     for attempt in range(max_retries):
@@ -58,7 +63,24 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
             if not text.strip():
                 raise rc.RunnerError("Received empty or whitespace-only response from API")
             return text
+        except rc.RunnerError:
+            raise
         except Exception as e:
+            if (
+                schema
+                and mode != "prompt_only"
+                and gemini_structured.looks_like_structured_config_rejection(e)
+            ):
+                logger.warning(
+                    "Grounded structured config rejected (%s); falling back to prompt-only JSON.",
+                    mode,
+                )
+                config, mode = gemini_structured.build_grounded_config(
+                    role_block=role_block,
+                    max_output_tokens=MAX_TOKENS,
+                    schema=None,
+                )
+                continue
             if "429" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
                     logger.warning(f"Gemini API rate limited, retrying in {2 ** attempt}s...")
@@ -67,7 +89,6 @@ def call_gemini(prompt_text: str, role_block: list[str], briefing_text: str, cli
             raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
 
     raise rc.RunnerError("Failed after maximum retries")
-
 
 
 def run_gemini_b(
@@ -87,6 +108,10 @@ def run_gemini_b(
             rc.load_all_totals(pack_dir)
         )
         briefing_sha256 = rc.sha256_text(briefing_text)
+        candidates_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
+        )
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -98,8 +123,14 @@ def run_gemini_b(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,
+                "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
                 "team_totals_hash": team_totals_sha256,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -112,9 +143,31 @@ def run_gemini_b(
 
         logger.info("Calling Gemini (Prompt B)...")
         briefing_input = rc.append_totals_block(
-            briefing_text, totals_bytes, team_totals_bytes
+            "pack_date: "
+            + pack_dir.name
+            + f"\ncandidates_sha256: {candidates_sha256}\n"
+            + f"game_totals_sha256: {game_totals_sha256}\n"
+            + f"team_totals_sha256: {team_totals_sha256}\n\n"
+            + briefing_text
+            + "\n\nAuthoritative candidates.csv:\n"
+            + candidates_bytes.decode("utf-8-sig"),
+            totals_bytes,
+            team_totals_bytes,
         )
-        output_text = call_gemini(prompt_text, pack.ROLE_BLOCK, briefing_input, client=client)
+        schema = rc.request_structured("verdict").schema
+        output_text = call_gemini(
+            prompt_text, pack.ROLE_BLOCK, briefing_input, client=client, schema=schema
+        )
+        rc.publish_verdict_pass(
+            pack_dir,
+            output_text,
+            pass_="B",
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"
@@ -122,6 +175,7 @@ def run_gemini_b(
             f"grounding: {GROUNDING}\n"
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"briefing_sha256: {briefing_sha256}\n"
+            f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
             f"team_totals_sha256: {team_totals_sha256}\n"
             f"request_sha256: {request_sha256}\n"

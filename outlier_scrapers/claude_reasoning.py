@@ -1,14 +1,13 @@
-"""Claude Prompt D runner — pack-only reasoning pass (input: candidates.csv).
+"""Claude Prompt D runner — pack-only verdict pass (input: candidates.csv).
 
-Mirrors ``reasoning.py`` (Prompt A) but targets Claude Opus 4.8 via the
-Anthropic SDK with adaptive thinking. Pack-only: no web tools. Output is
-``claude_d.md`` with hash-based idempotency so the daily job can re-invoke it
-without re-billing an unchanged request.
+Pack-only: no web tools. Output is claude_d.md plus a versioned verdicts/D
+publication.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -16,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import CLAUDE_MODEL
 from outlier_scrapers import runner_common as rc
@@ -50,16 +49,19 @@ def call_claude(
         raw_csv_bytes, totals_bytes, team_totals_bytes
     )
     full_prompt = prompt_text + "\n\nData:\n" + data_block
+    structured = rc.request_structured("verdict")
     try:
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system="\n".join(role_block),
             messages=[{"role": "user", "content": full_prompt}],
+            tools=[{"name": "emit_verdicts", "input_schema": structured.schema}],
+            tool_choice={"type": "tool", "name": "emit_verdicts"},
         ) as stream:
             message = stream.get_final_message()
     except anthropic.APIError as e:
-        error_body = e.response.text if hasattr(e, 'response') else str(e)
+        error_body = e.response.text if hasattr(e, "response") else str(e)
         raise rc.RunnerError(
             f"API call failed: type={type(e).__name__} "
             f"status={getattr(e, 'status_code', None)} request_id={getattr(e, 'request_id', None)} "
@@ -70,6 +72,9 @@ def call_claude(
 
     if getattr(message, "stop_reason", None) == "refusal":
         raise rc.RunnerError("Claude refused the request (stop_reason=refusal).")
+    for block in message.content:
+        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "emit_verdicts":
+            return json.dumps(getattr(block, "input", {}))
     text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
     if not text.strip():
         raise rc.RunnerError("Received empty or whitespace-only response from API")
@@ -109,6 +114,11 @@ def run_claude_d(
                 "candidates_hash": candidates_sha256,
                 "game_totals_hash": game_totals_sha256,
                 "team_totals_hash": team_totals_sha256,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -127,6 +137,16 @@ def run_claude_d(
             totals_bytes,
             team_totals_bytes,
             client=client,
+        )
+        rc.publish_verdict_pass(
+            pack_dir,
+            output_text,
+            pass_="D",
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
         )
 
         front_matter = (
@@ -152,7 +172,7 @@ def run_claude_d(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Claude Prompt D reasoning runner.")
+    parser = argparse.ArgumentParser(description="Claude Prompt D runner.")
     parser.add_argument("--date", default=datetime.now().astimezone().strftime("%Y-%m-%d"))
     parser.add_argument("--force", action="store_true", help="Force replace output.")
     args = parser.parse_args(argv)

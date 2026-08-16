@@ -1,14 +1,13 @@
-"""Claude Prompt E runner — synthesis pass (inputs: briefing + A/B/D outputs).
+"""Claude Prompt E runner — reconciliation pass.
 
-Combines the prior structured outputs into the final guide via Claude Opus 4.8.
-A (chatgpt_a.md), B (gemini_b.md), D (claude_d.md), and briefing.md are
-required; C (chatgpt_c.md, manual Deep Research) is included when present.
-Output is ``claude_e.md`` with hash-based idempotency over every input.
+Combines validated A/B/D (and optional C) publications into a reconciliation
+envelope. Output is claude_e.md plus verdicts/E/<publication_id>.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -16,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import paths, pack
+from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import CLAUDE_MODEL
 from outlier_scrapers import runner_common as rc
@@ -29,14 +28,19 @@ MAX_TOKENS = 8192
 OUT_NAME = "claude_e.md"
 PROMPT_FILE = "E.md"
 
-REQUIRED_INPUTS = {
-    "briefing": "briefing.md",
-    "prompt_a": "chatgpt_a.md",
-    "prompt_b": "gemini_b.md",
-    "prompt_d": "claude_d.md",
-}
+# A/D/B are the verdict passes E reconciles; C is optional supporting research.
+# E is fed their *validated published envelopes*, never their Markdown: the
+# Markdown is prose that was never gate-checked, so synthesising from it lets an
+# upstream fabrication reach the final report even when the upstream pass itself
+# validated clean. The envelopes also carry the publication_id / record_id pairs
+# E must cite -- it cannot invent those.
+REQUIRED_UPSTREAM = ("A", "D", "B")
+OPTIONAL_UPSTREAM = ("C",)
+
+# briefing.md is narrative context only. No number or identity may be sourced
+# from it; those come from the pack index via the gate.
+REQUIRED_INPUTS = {"briefing": "briefing.md"}
 OPTIONAL_INPUTS = {
-    "prompt_c": "chatgpt_c.md",
     "game_totals": rc.GAME_TOTALS_NAME,
     "team_totals": rc.TEAM_TOTALS_NAME,
 }
@@ -54,8 +58,42 @@ def gather_inputs(pack_dir: Path) -> dict[str, str]:
     return collected
 
 
-def build_user_content(prompt_text: str, inputs: dict[str, str]) -> str:
+def gather_upstream(pack_dir: Path) -> dict[str, rc.PublishedEnvelope]:
+    """Return the current published envelope for each upstream pass.
+
+    A/D/B must all be published; E reconciles them and cannot run against a
+    partial desk. C is included when present.
+    """
+    documents = rc.load_current_publication_documents(pack_dir)
+    missing = [name for name in REQUIRED_UPSTREAM if name not in documents]
+    if missing:
+        raise rc.RunnerError(
+            "Pass E requires published verdict envelopes for "
+            f"{', '.join(REQUIRED_UPSTREAM)}; missing: {', '.join(missing)}. "
+            "Run those passes first."
+        )
+    selected = {name: documents[name] for name in REQUIRED_UPSTREAM}
+    for name in OPTIONAL_UPSTREAM:
+        if name in documents:
+            selected[name] = documents[name]
+    return selected
+
+
+def build_user_content(
+    prompt_text: str,
+    inputs: dict[str, str],
+    extra: str = "",
+    upstream: dict[str, rc.PublishedEnvelope] | None = None,
+) -> str:
     sections = [prompt_text]
+    if extra:
+        sections.append("\n\n===== PACK IDENTITY =====\n" + extra)
+    for name, published in (upstream or {}).items():
+        sections.append(
+            f"\n\n===== UPSTREAM PASS {name} "
+            f"(publication_id: {published.publication_id}) =====\n"
+            f"{published.envelope_json}"
+        )
     for label, text in inputs.items():
         sections.append(f"\n\n===== {label.upper()} =====\n{text}")
     return "".join(sections)
@@ -69,12 +107,15 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
         client = anthropic.Anthropic(timeout=600.0, max_retries=1)
+    structured = rc.request_structured("reconciliation")
     try:
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system="\n".join(role_block),
             messages=[{"role": "user", "content": user_content}],
+            tools=[{"name": "emit_reconciliations", "input_schema": structured.schema}],
+            tool_choice={"type": "tool", "name": "emit_reconciliations"},
         ) as stream:
             message = stream.get_final_message()
     except anthropic.APIError as e:
@@ -87,6 +128,12 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
 
     if getattr(message, "stop_reason", None) == "refusal":
         raise rc.RunnerError("Claude refused the request (stop_reason=refusal).")
+    for block in message.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "emit_reconciliations"
+        ):
+            return json.dumps(getattr(block, "input", {}))
     text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
     if not text.strip():
         raise rc.RunnerError("Received empty or whitespace-only response from API")
@@ -106,11 +153,25 @@ def run_claude_e(
                 return 0
 
         inputs = gather_inputs(pack_dir)
+        upstream = gather_upstream(pack_dir)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
+        totals_bytes, game_totals_sha256, team_totals_bytes, team_totals_sha256 = (
+            rc.load_all_totals(pack_dir)
+        )
+        _candidates_bytes, candidates_sha256 = rc.validate_candidates(
+            pack_dir,
+            allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
+        )
 
         input_hashes = {label: rc.sha256_text(text) for label, text in inputs.items()}
+        # Upstream identity is the publication_id, not a hash of prose: a forced
+        # rerun can produce a different response under an unchanged request hash,
+        # and E must re-run when the publication it reconciles actually changes.
+        upstream_publication_ids = {
+            name: published.publication_id for name, published in upstream.items()
+        }
         request_sha256 = rc.compute_request_hash(
             {
                 "model": MODEL,
@@ -119,6 +180,12 @@ def run_claude_e(
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "input_hashes": input_hashes,
+                "upstream_publication_ids": upstream_publication_ids,
+                **rc.structured_request_fields(
+                    candidates_sha256=candidates_sha256,
+                    game_totals_sha256=game_totals_sha256,
+                    team_totals_sha256=team_totals_sha256,
+                ),
             }
         )
 
@@ -130,8 +197,28 @@ def run_claude_e(
             out_file.unlink()
 
         logger.info("Calling Claude (Prompt E synthesis)...")
-        user_content = build_user_content(prompt_text, inputs)
+        identity = (
+            f"pack_date: {pack_dir.name}\n"
+            f"candidates_sha256: {candidates_sha256}\n"
+            f"game_totals_sha256: {game_totals_sha256}\n"
+            f"team_totals_sha256: {team_totals_sha256}\n"
+            "upstream_publication_ids: "
+            + json.dumps(upstream_publication_ids, sort_keys=True)
+            + "\n"
+        )
+        user_content = build_user_content(
+            prompt_text, inputs, extra=identity, upstream=upstream
+        )
         output_text = call_claude(user_content, pack.ROLE_BLOCK, client=client)
+        rc.publish_reconciliation_pass(
+            pack_dir,
+            output_text,
+            request_sha256=request_sha256,
+            candidates_sha256=candidates_sha256,
+            game_totals_sha256=game_totals_sha256,
+            team_totals_sha256=team_totals_sha256,
+            model=MODEL,
+        )
 
         front_matter = (
             "---\n"

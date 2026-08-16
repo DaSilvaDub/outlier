@@ -18,6 +18,7 @@ from .paths import league_paths
 from .probable_pitchers import export_probable_pitchers
 from .props import export_props_for_league
 from .registry import supported_leagues
+from .slate_strategy import export_slate_strategy_for_league
 
 
 _PRODUCER_STATUS_FILES = {
@@ -28,6 +29,7 @@ _PRODUCER_STATUS_FILES = {
     "game_line_movement": "games_line_movement_status_latest.json",
     "cards": "cards_status_latest.json",
     "game_cards": "games_cards_status_latest.json",
+    "slate_strategy": "slate_strategy_status_latest.json",
 }
 
 
@@ -66,7 +68,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Run props, insights, line-movement, cards, games, game-line-movement, and game-cards",
+        help="Run props, insights, line-movement, cards, games, game-line-movement, game-cards, and slate-strategy",
     )
     parser.add_argument("--discover", action="store_true")
     parser.add_argument("--props", action="store_true")
@@ -82,6 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="game_line_movement",
     )
     parser.add_argument("--probable-pitchers", action="store_true", dest="probable_pitchers")
+    parser.add_argument("--slate-strategy", action="store_true", dest="slate_strategy")
     return parser.parse_args(argv)
 
 
@@ -96,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         args.game_line_movement = True
         args.cards = True
         args.game_cards = True
+        args.slate_strategy = True
 
     if (
         not args.discover
@@ -107,9 +111,10 @@ def main(argv: list[str] | None = None) -> int:
         and not args.games
         and not args.game_line_movement
         and not args.probable_pitchers
+        and not args.slate_strategy
     ):
         print(
-            "Nothing requested. Use --all, or explicit flags like --props, --line-movement, --cards, --game-cards, --games."
+            "Nothing requested. Use --all, or explicit flags like --props, --line-movement, --cards, --game-cards, --games, --slate-strategy."
         )
         return 2
 
@@ -265,6 +270,31 @@ def main(argv: list[str] | None = None) -> int:
                     _atomic_write_failure_status(league, "game_line_movement", exc)
                     exit_code = 1
                     game_line_movement_failed = True
+
+        if args.slate_strategy:
+            try:
+                status = export_slate_strategy_for_league(league)
+                event_count = len(status.get("events") or [])
+                if status.get("status") == "skipped":
+                    print(
+                        f"{league.upper()} slate strategy: skipped ({status.get('reason') or 'unsupported'})"
+                    )
+                elif status.get("status") == "error":
+                    print(
+                        f"{league.upper()} slate strategy: failed ({status.get('reason') or 'error'})"
+                    )
+                    _atomic_write_failure_status(
+                        league,
+                        "slate_strategy",
+                        RuntimeError(str(status.get("reason") or "error")),
+                    )
+                    exit_code = 1
+                else:
+                    print(f"{league.upper()} slate strategy: exported {event_count} events")
+            except Exception as exc:
+                print(f"{league.upper()} slate strategy: failed ({str(exc)[:200]})")
+                _atomic_write_failure_status(league, "slate_strategy", exc)
+                exit_code = 1
 
         if args.cards:
             # Cards rebuild standard boards here

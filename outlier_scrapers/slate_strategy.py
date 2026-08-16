@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from outlier_scrapers.form_source import iter_recent_finals, FinalEvent
+from outlier_scrapers.form_source import (
+    FinalEvent,
+    UnsupportedSport,
+    _token,
+    canon_team,
+    iter_recent_finals,
+)
 from outlier_scrapers.paths import league_paths
 
 logger = logging.getLogger(__name__)
@@ -33,6 +39,7 @@ class Direction:
     confidence: str
     reasons: list[str] | None = None
     injury_linked: bool = False
+    event_id: str = ""
 
 
 @dataclass
@@ -49,10 +56,107 @@ class EventStrategyOut:
     avoids: list[dict[str, Any]]
 
 
+def _injury_name(item: dict[str, Any]) -> str:
+    name = " ".join(
+        part for part in (item.get("firstName"), item.get("lastName")) if part
+    ).strip()
+    return name or str(item.get("player") or item.get("description") or "").strip()
+
+
+def _injury_status(item: dict[str, Any]) -> str:
+    raw = item.get("injury")
+    nested = raw if isinstance(raw, dict) else {}
+    status = nested.get("status")
+    if status in (None, ""):
+        status = item.get("status")
+    return str(status or "").strip().upper()
+
+
+def _is_out_status(status: str) -> bool:
+    token = status.strip().upper()
+    return token == "OUT" or token.startswith("OUT ") or token.startswith("OUTFOR")
+
+
+def _sides_from_matchup(matchup: str) -> tuple[str, str]:
+    text = str(matchup or "").strip()
+    if " @ " not in text:
+        return "", ""
+    away, home = text.split(" @ ", 1)
+    return away.strip(), home.strip()
+
+
+def _slate_events_from_games(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_context = payload.get("context")
+    context: dict[str, Any] = raw_context if isinstance(raw_context, dict) else {}
+    raw_events = context.get("events")
+    events_ctx: dict[str, Any] = raw_events if isinstance(raw_events, dict) else {}
+    raw_teams = context.get("teams")
+    teams_ctx: dict[str, Any] = raw_teams if isinstance(raw_teams, dict) else {}
+    raw_records = payload.get("records")
+    records: list[Any] = raw_records if isinstance(raw_records, list) else []
+
+    matchup_by_event: dict[str, tuple[str, str]] = {}
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        event_id = str(row.get("event_id") or "").strip()
+        if not event_id or event_id in matchup_by_event:
+            continue
+        away, home = _sides_from_matchup(str(row.get("matchup") or ""))
+        if away and home:
+            matchup_by_event[event_id] = (away, home)
+
+    event_ids = [str(eid) for eid in events_ctx] if events_ctx else list(matchup_by_event)
+    slate: list[dict[str, Any]] = []
+    for event_id in event_ids:
+        raw_info = events_ctx.get(event_id)
+        info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
+        away, home = matchup_by_event.get(event_id, ("", ""))
+        injuries: list[dict[str, Any]] = []
+        for team_id in (info.get("away_team_id"), info.get("home_team_id")):
+            team_info = teams_ctx.get(str(team_id)) if team_id else None
+            if not isinstance(team_info, dict):
+                continue
+            for item in team_info.get("injuries") or []:
+                if isinstance(item, dict):
+                    injuries.append(item)
+        if away and home:
+            slate.append(
+                {"event_id": event_id, "away": away, "home": home, "injuries": injuries}
+            )
+    return slate
+
+
+def _players_for_side(recent_games: list[FinalEvent], team: str) -> set[str]:
+    keys: set[str] = set()
+    for game in recent_games:
+        if not _team_is(game, team):
+            continue
+        sport = game.sport or "WNBA"
+        wanted = canon_team(sport, team)
+        for player_key, player_team in game.player_teams.items():
+            if wanted and canon_team(sport, player_team) == wanted:
+                keys.add(player_key)
+    return keys
+
+
+def _team_is(game: FinalEvent, team: str) -> str:
+    """Return 'away', 'home', or '' after alias normalization."""
+    sport = game.sport or "WNBA"
+    wanted = canon_team(sport, team)
+    if wanted and wanted == canon_team(sport, game.away):
+        return "away"
+    if wanted and wanted == canon_team(sport, game.home):
+        return "home"
+    if team in (game.away, game.home):
+        return "away" if game.away == team else "home"
+    return ""
+
+
 def window_team_form(recent_games: list[FinalEvent], team: str, limit: int = 5) -> dict[str, Any]:
     team_games = []
     for g in reversed(recent_games):
-        if team in (g.away, g.home):
+        if _team_is(g, team):
             team_games.append(g)
             if len(team_games) == limit:
                 break
@@ -65,7 +169,8 @@ def window_team_form(recent_games: list[FinalEvent], team: str, limit: int = 5) 
     wins = 0
     
     for g in team_games:
-        if g.away == team:
+        side = _team_is(g, team)
+        if side == "away":
             pts.append(g.away_score)
             opp_pts.append(g.home_score)
             if g.away_score > g.home_score:
@@ -133,7 +238,14 @@ def build_event_strategy(context: MatchupContext, injuries: list[dict[str, Any]]
         home=context.home,
         team_form={"away": away_form, "home": home_form},
         player_form=[],
-        injuries=[{"player": i.get("player"), "team": i.get("team"), "status": i.get("status")} for i in injuries],
+        injuries=[
+            {
+                "player": _injury_name(i),
+                "team": str(i.get("team") or i.get("teamId") or ""),
+                "status": _injury_status(i),
+            }
+            for i in injuries
+        ],
         trends=[],
         directions=[],
         avoids=[]
@@ -144,12 +256,36 @@ def build_event_strategy(context: MatchupContext, injuries: list[dict[str, Any]]
         if form.get("gp", 0) > 0:
             if form.get("opp_ppg", 0) >= 95:
                 out.trends.append({"id": "defense_collapse", "severity": "HIGH", "team": team, "text": f"{team} allowed {form['opp_ppg']:.1f} L5"})
-                out.directions.append(Direction("TEAM", "", "", opp_team, "PTS", "OVER", "HIGH", reasons=[f"{team} defense collapse"]))
+                out.directions.append(
+                    Direction(
+                        "TEAM",
+                        "",
+                        "",
+                        opp_team,
+                        "PTS",
+                        "OVER",
+                        "HIGH",
+                        reasons=[f"{team} defense collapse"],
+                        event_id=context.event_id,
+                    )
+                )
             
             if form.get("opp_ppg", 100) <= 82:
                 out.trends.append({"id": "defense_clamp", "severity": "MED", "team": team, "text": f"{team} clamp {form['opp_ppg']:.1f} L5"})
                 # Semantic Fix 4: Suppress PTS OVER for the team PLAYING AGAINST the clamping defense.
-                out.directions.append(Direction("TEAM", "", "", opp_team, "PTS", "UNDER", "MED", reasons=[f"Playing against {team} clamp defense"]))
+                out.directions.append(
+                    Direction(
+                        "TEAM",
+                        "",
+                        "",
+                        opp_team,
+                        "PTS",
+                        "UNDER",
+                        "MED",
+                        reasons=[f"Playing against {team} clamp defense"],
+                        event_id=context.event_id,
+                    )
+                )
     
     # Analyze only players who are relevant to this matchup (Fix Leakage 2)
     all_matchup_players = context.away_players | context.home_players
@@ -176,16 +312,55 @@ def build_event_strategy(context: MatchupContext, injuries: list[dict[str, Any]]
             
             if ceiling_flag:
                 out.trends.append({"id": "ceiling_game", "severity": "MED", "team": "", "text": f"{p_key} had a ceiling game"})
-                out.directions.append(Direction("PLAYER", "", p_key, "", "PTS", "OVER", "HIGH", reasons=["Ceiling game observed"]))
-            
+                out.directions.append(
+                    Direction(
+                        "PLAYER",
+                        p_key,
+                        p_key,
+                        "",
+                        "PTS",
+                        "OVER",
+                        "HIGH",
+                        reasons=["Ceiling game observed"],
+                        event_id=context.event_id,
+                    )
+                )
+
             # stable_playmaker
             if p_form["mean_ast"] >= 5.0 and p_form["std_ast"] <= 1.2 and p_form["gp"] >= 4:
-                out.directions.append(Direction("PLAYER", "", p_key, "", "AST", "OVER", "HIGH", reasons=["Stable playmaker"]))
-                
+                out.directions.append(
+                    Direction(
+                        "PLAYER",
+                        p_key,
+                        p_key,
+                        "",
+                        "AST",
+                        "OVER",
+                        "HIGH",
+                        reasons=["Stable playmaker"],
+                        event_id=context.event_id,
+                    )
+                )
+
+    out_keys = {
+        _token(row["player"])
+        for row in out.injuries
+        if _is_out_status(str(row.get("status") or ""))
+    }
+    if out_keys:
+        out.directions = [
+            d
+            for d in out.directions
+            if not (d.side == "OVER" and d.player_key and d.player_key in out_keys)
+        ]
     return out
 
 
 def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
+    token = league.strip().upper()
+    if token == "MLB":
+        return {"status": "skipped", "reason": "mlb_not_in_v1", "events": []}
+
     paths = league_paths(league)
     games_file = paths.games_normalized_latest()
     if not games_file.exists():
@@ -194,28 +369,27 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
     try:
         games_payload = json.loads(games_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        logger.error(f"Failed to parse {games_file}")
-        return {"status": "error", "events": []}
+        logger.error("Failed to parse %s", games_file)
+        return {"status": "error", "reason": "invalid_json", "events": []}
 
-    if not games_payload.get("events"):
+    has_contract = isinstance(games_payload.get("records"), list) or (
+        isinstance(games_payload.get("context"), dict)
+        and isinstance((games_payload.get("context") or {}).get("events"), dict)
+    )
+    if not has_contract:
+        return {"status": "error", "reason": "unrecognized_games_contract", "events": []}
+
+    matchups = _slate_events_from_games(games_payload)
+    if not matchups:
         return {"status": "empty", "events": []}
     
-    teams: set[str] = set()
-    matchups: list[dict[str, Any]] = []
-    for g in games_payload["events"]:
-        matchups.append({
-            "event_id": g["event_id"], 
-            "away": g["away_team"], 
-            "home": g["home_team"], 
-            "injuries": g.get("injuries", [])
-        })
-        teams.add(g["away_team"])
-        teams.add(g["home_team"])
-    
+    teams = {side for row in matchups for side in (row["away"], row["home"])}
     try:
-        recent_games = iter_recent_finals(league, teams, 10)
-    except Exception:
-        logger.exception("Failed to fetch recent finals")
+        recent_games = iter_recent_finals(token, teams, 10)
+    except UnsupportedSport as exc:
+        return {"status": "skipped", "reason": str(exc), "events": []}
+    except Exception as exc:
+        logger.exception("Failed to fetch recent finals: %s", exc)
         raise
     
     out_events: list[dict[str, Any]] = []
@@ -224,25 +398,14 @@ def export_slate_strategy_for_league(league: str) -> dict[str, Any]:
         away = m["away"]
         home = m["home"]
         event_id = m["event_id"]
-        
-        # Populate away/home players from recent games to ensure we evaluate the right participants
-        away_players: set[str] = set()
-        home_players: set[str] = set()
-        for g in recent_games:
-            if g.away == away or g.home == away:
-                away_players.update(g.players.keys())
-            if g.away == home or g.home == home:
-                home_players.update(g.players.keys())
-        
         ctx = MatchupContext(
-            event_id=event_id, 
-            away=away, 
-            home=home, 
+            event_id=event_id,
+            away=away,
+            home=home,
             recent_games=recent_games,
-            away_players=away_players,
-            home_players=home_players
+            away_players=_players_for_side(recent_games, away),
+            home_players=_players_for_side(recent_games, home),
         )
-        
         strategy = build_event_strategy(ctx, injuries=m["injuries"])
         
         out_events.append({

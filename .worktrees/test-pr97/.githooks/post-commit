@@ -1,0 +1,36 @@
+#!/bin/sh
+# Auto-log every commit to .agent-log/ so all agents can see what shipped.
+# Attribution comes from an "Agent: <name>" trailer in the commit message.
+
+repo_root=$(git rev-parse --show-toplevel)
+logdir="$repo_root/.agent-log"
+mkdir -p "$logdir"
+
+hash=$(git rev-parse --short HEAD)
+date=$(date +%Y-%m-%d)
+time=$(date +%H:%M:%S)
+branch=$(git rev-parse --abbrev-ref HEAD)
+subject=$(git log -1 --pretty=%s)
+author=$(git log -1 --pretty='%an')
+
+# Parse the "Agent:" trailer; fall back to "unknown".
+agent=$(git log -1 --pretty=%B | grep -i '^Agent:' | head -1 | sed 's/^[Aa]gent:[[:space:]]*//' | tr -d '\r')
+[ -z "$agent" ] && agent="unknown"
+
+files=$(git diff-tree --no-commit-id --name-only -r HEAD)
+
+outfile="$logdir/$date-$agent-$hash.md"
+
+{
+  echo "# Commit $hash — $date $time — $agent"
+  echo
+  echo "**Agent:** $agent"
+  echo "**Branch:** $branch"
+  echo "**Author:** $author"
+  echo "**Message:** $subject"
+  echo
+  echo "## Files changed"
+  echo "$files" | sed 's/^/- /'
+} > "$outfile"
+
+exit 0
