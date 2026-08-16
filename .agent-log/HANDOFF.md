@@ -1,6 +1,7 @@
 # Handoff
 
-- **Last Commit SHA**: pending `fix/pipeline-debug-20260816` (uncommitted until push)
+- **Last Commit SHA**: `3ffbd5d` on `fix/pipeline-debug-20260816`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/103
 - **Files Touched**:
   - `outlier_scrapers/games.py`
   - `outlier_scrapers/t30_reprice.py`
