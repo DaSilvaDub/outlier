@@ -476,6 +476,7 @@ def _freeze_t30_originals(
     games_norm_by_league: dict[str, Any] | None,
     props_norm_by_league: dict[str, Any] | None,
     totals_rows: Sequence[dict[str, Any]] = (),
+    target_date: str | None = None,
 ) -> None:
     """Freeze the first published recommendations and late-news baseline."""
 
@@ -514,6 +515,18 @@ def _freeze_t30_originals(
         }
         event_starts.update(build_event_starts(props_payload, games_payload))
         probable_pitchers_by_league[league] = load_probable_pitcher_lookup(league)
+
+    pack_date = target_date if target_date else out_dir.name
+    try:
+        datetime.strptime(pack_date, "%Y-%m-%d")
+    except ValueError:
+        pack_date = ""
+    if pack_date:
+        event_starts = {
+            event_id: start
+            for event_id, start in event_starts.items()
+            if _local_date(str(start) if start is not None else None) == pack_date
+        }
 
     def normalize_original(row: dict[str, Any]) -> dict[str, Any]:
         if row.get("total_kind") not in (None, ""):
@@ -2197,6 +2210,7 @@ def write_pack(
         games_norm_by_league=games_norm_by_league,
         props_norm_by_league=props_norm_by_league,
         totals_rows=[*totals_rows, *team_totals_rows],
+        target_date=pack_date,
     )
 
     selected_keys = {_opportunity_key(row) for row in rows}

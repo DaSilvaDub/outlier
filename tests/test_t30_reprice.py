@@ -293,6 +293,32 @@ def test_timing_gate_fails_closed_after_first_lock(tmp_path):
         )
 
 
+def test_first_lock_ignores_off_date_event_starts(tmp_path):
+    pack_dir = tmp_path / "2026-08-16"
+    pack_dir.mkdir()
+    first_lock = datetime(2026, 8, 16, 16, 15, tzinfo=timezone.utc)
+    rows = [_candidate(_event_starts_at=first_lock.isoformat())]
+    context = {
+        "event_starts": {
+            "leftover-2025": "2025-08-26T22:35:00+00:00",
+            "slate-first": first_lock.isoformat(),
+            "later-same-day": "2026-08-16T21:00:00+00:00",
+        }
+    }
+
+    should_run, reason, actual_lock, due = t30_reprice.should_run_t30(
+        pack_dir,
+        rows,
+        context,
+        now=first_lock - timedelta(hours=2),
+    )
+
+    assert not should_run
+    assert reason == "not_due"
+    assert actual_lock == first_lock
+    assert due == first_lock - timedelta(minutes=30)
+
+
 def test_freeze_originals_is_immutable_and_rejects_partial_pair(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
@@ -327,6 +353,34 @@ def test_freeze_originals_is_immutable_and_rejects_partial_pair(tmp_path, monkey
             games_norm_by_league={"MLB": {}},
             props_norm_by_league={"MLB": {}},
         )
+
+
+def test_freeze_originals_drops_off_date_event_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
+        lambda _league: {},
+    )
+    out_dir = tmp_path / "2026-08-16"
+    out_dir.mkdir()
+    games = {
+        "context": {
+            "events": {
+                "stale": {"starts_at": "2025-08-26T22:35:00+00:00"},
+                "evt-1": {"starts_at": "2026-08-16T16:15:00+00:00"},
+            }
+        }
+    }
+
+    pack._freeze_t30_originals(
+        out_dir,
+        [_candidate(_event_starts_at="2026-08-16T16:15:00+00:00")],
+        games_norm_by_league={"MLB": games},
+        props_norm_by_league={"MLB": {}},
+        target_date="2026-08-16",
+    )
+
+    context = json.loads((out_dir / "original_t30_context.json").read_text(encoding="utf-8"))
+    assert context["event_starts"] == {"evt-1": "2026-08-16T16:15:00+00:00"}
 
 
 def test_freeze_originals_includes_authoritative_actionable_totals(tmp_path, monkeypatch):

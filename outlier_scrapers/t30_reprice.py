@@ -117,21 +117,59 @@ def _load_originals(pack_dir: Path) -> tuple[list[dict[str, str]], dict[str, Any
     return rows, context
 
 
-def first_lock_at(rows: Sequence[dict[str, Any]], context: dict[str, Any]) -> datetime:
-    starts: list[datetime] = []
-    event_starts = context.get("event_starts")
-    if isinstance(event_starts, dict):
-        starts.extend(
-            parsed
-            for value in event_starts.values()
-            if (parsed := _parse_start(value)) is not None
-        )
+def _pack_date(pack_dir: Path | None) -> str | None:
+    if pack_dir is None:
+        return None
+    try:
+        datetime.strptime(pack_dir.name, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return pack_dir.name
+
+
+def _start_local_date(start: datetime) -> str:
+    return start.astimezone().strftime("%Y-%m-%d")
+
+
+def _parsed_starts(values: Sequence[Any]) -> list[datetime]:
+    return [parsed for value in values if (parsed := _parse_start(value)) is not None]
+
+
+def _slate_date(starts: Sequence[datetime], pack_date: str | None) -> str | None:
+    if pack_date:
+        return pack_date
     if not starts:
-        starts.extend(
-            parsed
-            for row in rows
-            if (parsed := _parse_start(row.get("_event_starts_at"))) is not None
-        )
+        return None
+    counts: dict[str, int] = {}
+    for start in starts:
+        day = _start_local_date(start)
+        counts[day] = counts.get(day, 0) + 1
+    return max(counts, key=lambda day: (counts[day], day))
+
+
+def first_lock_at(
+    rows: Sequence[dict[str, Any]],
+    context: dict[str, Any],
+    *,
+    pack_dir: Path | None = None,
+) -> datetime:
+    event_starts = context.get("event_starts")
+    context_starts = (
+        _parsed_starts(list(event_starts.values()))
+        if isinstance(event_starts, dict)
+        else []
+    )
+    row_starts = _parsed_starts([row.get("_event_starts_at") for row in rows])
+    slate_date = _slate_date(context_starts or row_starts, _pack_date(pack_dir))
+
+    def on_slate(start: datetime) -> bool:
+        return slate_date is None or _start_local_date(start) == slate_date
+
+    starts = [start for start in context_starts if on_slate(start)]
+    if not starts:
+        starts = [start for start in row_starts if on_slate(start)]
+    if not starts:
+        starts = row_starts or context_starts
     if not starts:
         raise T30Error("Cannot schedule T-30: original snapshot has no parseable first lock.")
     return min(starts)
@@ -150,7 +188,7 @@ def should_run_t30(
     now: datetime,
     force: bool = False,
 ) -> tuple[bool, str, datetime, datetime]:
-    first_lock = first_lock_at(rows, context)
+    first_lock = first_lock_at(rows, context, pack_dir=pack_dir)
     due = first_lock - timedelta(minutes=30)
     if not rows:
         return False, "no_recommendations", first_lock, due

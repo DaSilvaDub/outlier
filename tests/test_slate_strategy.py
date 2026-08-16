@@ -94,7 +94,17 @@ def test_export_logs_exception_with_traceback_on_recent_finals_failure(
 ):
     games_file = tmp_path / "games.json"
     games_file.write_text(
-        '{"events":[{"event_id":"e1","away_team":"AWAY","home_team":"HOME","injuries":[]}]}',
+        json.dumps(
+            {
+                "records": [{"event_id": "e1", "matchup": "AWAY @ HOME"}],
+                "context": {
+                    "events": {
+                        "e1": {"away_team_id": "a1", "home_team_id": "h1"}
+                    },
+                    "teams": {},
+                },
+            }
+        ),
         encoding="utf-8",
     )
 

@@ -23,6 +23,20 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _should_preserve_previous_latest(latest_path: Path, normalized: dict[str, Any]) -> bool:
+    if int(normalized.get("record_count") or 0) > 0:
+        return False
+    if not latest_path.exists():
+        return False
+    try:
+        previous = json.loads(latest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(previous, dict):
+        return False
+    return int(previous.get("record_count") or 0) > 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Outlier games data")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
@@ -68,6 +82,7 @@ def export_games_for_league(
     config = get_sport_config(league)
     paths = league_paths(config.league_id)
 
+    auto_advance = target_date is None and days == 1 and not include_final
     if target_date is None:
         target_date = datetime.now().astimezone().date()
 
@@ -77,6 +92,12 @@ def export_games_for_league(
         events = []
 
     target_events = [e for e in events if _is_event_in_window(e, target_date, days, include_final)]
+    if auto_advance and not target_events:
+        next_date = target_date + timedelta(days=1)
+        next_events = [e for e in events if _is_event_in_window(e, next_date, days, include_final)]
+        if next_events:
+            target_date = next_date
+            target_events = next_events
 
     events_payloads: list[dict[str, Any]] = []
     seen_team_ids: set[str] = set()
@@ -177,7 +198,9 @@ def export_games_for_league(
     )
 
     latest_path = paths.games_normalized_latest()
-    write_json(latest_path, normalized)
+    preserved_previous = _should_preserve_previous_latest(latest_path, normalized)
+    if not preserved_previous:
+        write_json(latest_path, normalized)
     write_json(paths.timestamped(paths.normalized, "games"), normalized)
 
     # Enrichment file for player cards
@@ -210,14 +233,16 @@ def export_games_for_league(
         "enrichment": enrichment_map,
     }
     enrichment_path = paths.games_enrichment_latest()
-    write_json(enrichment_path, enrichment_payload)
+    if not preserved_previous:
+        write_json(enrichment_path, enrichment_payload)
     write_json(paths.timestamped(paths.normalized, "games_enrichment"), enrichment_payload)
 
     # Status contract mirrors line_movement: ok / partial / error. An empty
     # markets result caused by fetch failures is the core-payload failure and is
-    # escalated to error; a genuinely empty slate (no errors) stays ok.
+    # escalated to error; a genuinely empty slate (no errors) stays ok unless it
+    # would clobber a healthy latest artifact.
     record_count = normalized["record_count"]
-    if markets_step_errors and record_count == 0:
+    if preserved_previous or (markets_step_errors and record_count == 0):
         status_value = "error"
     elif fetch_errors:
         status_value = "partial"
@@ -229,6 +254,8 @@ def export_games_for_league(
         "status": status_value,
         "generated_at": datetime.now().astimezone().isoformat(),
         "record_count": record_count,
+        "target_date": target_date.isoformat(),
+        "preserved_previous_latest": preserved_previous,
         "enrichment_count": len(enrichment_map),
         "target_event_count": len(target_events),
         "matchup_fetch_requested_count": matchup_fetch_requested_count,
