@@ -270,7 +270,7 @@ if ($SyncAllWorktrees) {
           # A stale worktree still gets materialized -- that is the d05eb21 fix. Warn first
           # if it has local changes to the paths about to be overwritten, so the loss is
           # never silent; committing them is what makes this branch preserved next run.
-          $wtDirty = git -C $wtPath status --porcelain -- outlier_scrapers tests/test_daily_job.py prompts/C.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
+          $wtDirty = git -C $wtPath status --porcelain -- outlier_scrapers tests/test_daily_job.py prompts/C.md sync-outlier.ps1 scripts/verify-sync.ps1 report-sync.ps1 SYNC.md docs/ENT-SYNC-GLOBAL-PROMPT.md 2>$null
           if ($wtDirty) {
             Write-Warn "  !! local changes in this stale worktree will be overwritten from origin/master:"
             foreach ($d in @($wtDirty)) { Write-Warn "     $d" }
