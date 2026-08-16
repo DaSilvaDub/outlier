@@ -1,0 +1,27 @@
+{
+  "name": "getFullSource",
+  "description": "Retrieve the full text content from a specific Confidence documentation source URL",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "string",
+        "description": "The source URL of the documentation page to retrieve"
+      },
+      "startChar": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "integer",
+        "description": "Starting character position for text extraction (default: 0)"
+      },
+      "maxChars": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "integer",
+        "description": "Maximum number of characters to return (default: 10000)"
+      }
+    },
+    "required": [
+      "source"
+    ]
+  }
+}

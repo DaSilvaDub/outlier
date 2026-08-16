@@ -1,0 +1,22 @@
+{
+  "props": [
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "wnba-event-1",
+        "marketId": "wnba-market-1",
+        "outcomeId": "wnba-outcome-1",
+        "marketLabel": "A'ja Wilson - Points",
+        "proposition": "POINTS",
+        "position": "UNDER",
+        "line": 24.5,
+        "teamId": "lva-id",
+        "bestOdds": -105,
+        "books": ["DRAFTKINGS"],
+        "bookOdds": {"DRAFTKINGS": {"odds": -105}}
+      },
+      "stats": {"l5": 0.8, "oppRank": 7}
+    }
+  ]
+}
+

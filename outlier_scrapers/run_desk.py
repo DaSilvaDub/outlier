@@ -188,7 +188,15 @@ def _load_candidates(pack_dir: Path) -> list[dict]:
 
 
 def produce_manual_betting_report(pack_dir: Path) -> Path:
-    """Minimal manual report per contract. Quotes pack lines exactly. C findings included if present."""
+    """Render from validated envelopes when A/D/B are published; else today's pack quote."""
+    from outlier_scrapers import verdict_report
+
+    rendered = verdict_report.try_render_from_envelopes(pack_dir)
+    if rendered is not None:
+        text, _source = rendered
+        rc.atomic_write(pack_dir, "manual_betting_report.md", "", text)
+        return pack_dir / "manual_betting_report.md"
+
     rows = _load_candidates(pack_dir)
     # Only quote provably-pregame candidates (same house rule as the model
     # prompts) so this fallback report can't surface a locked/started event.
@@ -339,9 +347,12 @@ def orchestrate_desk(
     has_final, source, fpath = _has_final_report(pack_dir)
     if not has_final and allow_local_synth:
         try:
+            from outlier_scrapers import verdict_report
+
             fpath = produce_manual_betting_report(pack_dir)
             has_final = True
-            source = "local_synthesis"
+            report_text = fpath.read_text(encoding="utf-8") if fpath else ""
+            source = verdict_report.read_synthesis_source(report_text) or "local_synthesis"
             status["notes"].append("produced manual_betting_report.md via local synthesis")
         except Exception as ex:
             status["notes"].append(f"manual report synthesis failed: {ex}")
@@ -362,6 +373,27 @@ def orchestrate_desk(
 
     if has_final and fpath:
         status["final_report"] = {"source": source, "file": str(fpath.name)}
+
+    try:
+        from outlier_scrapers import desk_snapshot, verdict_policy, verdict_store
+
+        snapshot = desk_snapshot.maybe_advance_desk(pack_dir)
+        if snapshot is not None:
+            status["desk_snapshot"] = {
+                "synthesis_source": snapshot.get("synthesis_source"),
+                "publications": snapshot.get("publications"),
+            }
+            if snapshot.get("synthesis_source"):
+                status.setdefault("final_report", {})
+                status["final_report"]["source"] = snapshot["synthesis_source"]
+        policy = verdict_policy.load_verdict_policy()
+        status["verdicts"] = {
+            "policy_mode": policy.mode,
+            "rejected_count": verdict_store.rejected_count_from_snapshot(pack_dir),
+            "synthesis_source": (snapshot or {}).get("synthesis_source"),
+        }
+    except Exception as ex:
+        status["notes"].append(f"desk snapshot skipped: {ex}")
 
     if e_usable and required_usable:
         status["overall"] = "FULL"
@@ -399,10 +431,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=True,
         help="Disable local synthesis fallback (manual_betting_report.md + claude_e placeholder).",
     )
+    parser.add_argument(
+        "--break-stale-lock",
+        action="store_true",
+        help="Break packs/<date>/verdicts/.writer_lock only if the stale-lock rule allows.",
+    )
     args = parser.parse_args(argv)
 
     steps = [s.strip().upper() for s in args.steps.split(",") if s.strip()]
     pack_dir = paths.PROJECT_ROOT / "packs" / args.date
+
+    if args.break_stale_lock:
+        from outlier_scrapers import desk_snapshot
+
+        result = desk_snapshot.break_stale_lock(pack_dir)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        if result.get("broken") or result.get("reason") == "no_lock":
+            return 0
+        return 1
 
     if not (pack_dir / "candidates.csv").exists() and not (pack_dir / "briefing.md").exists():
         logger.warning("Pack for %s missing candidates.csv or briefing.md. Produce the pack first.", args.date)

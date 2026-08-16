@@ -4,13 +4,16 @@ Joins normalized props + line-movement + EV + insights into one ranked,
 per-``market_id`` view and emits two boards:
 
 * **Board A - Verified EV**: cards backed by Outlier ``calculated_ev`` using the
-  ``AVERAGE`` devig method. Ranked on the real EV number.
+  ``AVERAGE`` devig method. Ranked on the real EV number. A HIGH strategy
+  conflict stays on Board A with a ``strategy_conflict`` flag so pack can map
+  it to ``A_FLAGGED``.
 * **Board B - Signal candidates**: every other card. Ranked on a descriptive
   composite (hit-rate, insight agreement, line-movement corroboration, ORF).
   A two-way ``proxy_market`` edge is attached when both sides price the same
   line, but it is never presented as Outlier EV.
 
-Inputs are the ``*_latest.json`` normalized files only. Output goes to
+Inputs are the ``*_latest.json`` normalized files plus optional
+``reports/slate_strategy_latest.json``. Output goes to
 ``data/<LEAGUE>/cards/`` as ``cards_latest.json`` + ``cards_latest.html`` plus a
 timestamped archive copy, mirroring the other scraper modules.
 
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from collections import defaultdict
 import sys
 from dataclasses import dataclass, field
@@ -33,7 +37,8 @@ from typing import Any
 from .cards_html import render_html
 from .normalizer import _to_float, _to_int, implied_probability, percent_number
 from .paths import league_paths
-from .registry import supported_leagues
+from .form_source import _token, canon_team
+from .registry import get_sport_config, normalize_market, supported_leagues
 from .utils import _summary_stat_for_team
 
 logger = logging.getLogger(__name__)
@@ -521,6 +526,7 @@ class Indexes:
     insights_by_market_side: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
     enrichment: dict[str, dict[str, Any]] = field(default_factory=dict)
     enrichment_loaded: bool = False
+    strategy_directions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_indexes(
@@ -843,7 +849,7 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         "sides": side_views,
         "fair": fair,
     }
-    _route_and_rank(card)
+    _route_and_rank(card, idx.strategy_directions)
     return card
 
 
@@ -1011,7 +1017,7 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         "sides": side_views,
         "fair": fair,
     }
-    _route_and_rank(card)
+    _route_and_rank(card, idx.strategy_directions)
     # Deferred import: mirrors the existing pack-module import pattern in
     # game_totals.py (avoids a module-load-order dependency between the
     # cards -> pack pipeline stages). Reuses pack's own signed-margin set so
@@ -1099,8 +1105,94 @@ def _slim_movement(mv: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _route_and_rank(card: dict[str, Any]) -> None:
-    """Attach board, headline side, rank value, bucket, and conflict flags."""
+def _card_market_family(card: dict[str, Any]) -> str | None:
+    raw = card.get("market") or card.get("market_raw")
+    league = str(card.get("league") or "WNBA")
+    try:
+        canonical = normalize_market(get_sport_config(league, allow_disabled=True), raw)
+    except ValueError:
+        canonical = None
+    if canonical:
+        return canonical
+    token = _token(raw)
+    return token or None
+
+
+def _player_tokens(name: Any) -> set[str]:
+    text = str(name or "").strip()
+    tokens = {_token(text)} if _token(text) else set()
+    parts = [part for part in re.split(r"[^A-Za-z]+", text) if part]
+    if len(parts) >= 2:
+        tokens.add(_token(parts[0][0] + parts[-1]))
+        tokens.add(_token(parts[-1]))
+    return {token for token in tokens if token}
+
+
+def _player_matches(card_player: Any, direction: dict[str, Any]) -> bool:
+    card_tokens = _player_tokens(card_player)
+    direction_key = str(direction.get("player_key") or _token(direction.get("player")) or "")
+    if not card_tokens or not direction_key:
+        return False
+    if direction_key in card_tokens:
+        return True
+    parts = [part for part in re.split(r"[^A-Za-z]+", str(card_player or "")) if part]
+    if len(parts) < 2:
+        return False
+    last = _token(parts[-1])
+    initial = _token(parts[0][:1])
+    return bool(
+        last
+        and initial
+        and direction_key.endswith(last)
+        and direction_key.startswith(initial)
+    )
+
+
+def _strategy_conflict(
+    card: dict[str, Any],
+    headline: str,
+    strategy_directions: list[dict[str, Any]] | None,
+) -> bool:
+    if not strategy_directions:
+        return False
+    family = _card_market_family(card)
+    if not family:
+        return False
+    opposite = "UNDER" if headline == "OVER" else "OVER"
+    card_event = str(card.get("event_id") or "")
+    card_team = canon_team(str(card.get("league") or "WNBA"), card.get("team"))
+    for direction in strategy_directions:
+        if direction.get("confidence") != "HIGH":
+            continue
+        if direction.get("side") != opposite:
+            continue
+        if direction.get("market_family") != family:
+            continue
+        direction_event = str(direction.get("event_id") or "")
+        if card_event and direction_event and card_event != direction_event:
+            continue
+        scope = direction.get("scope")
+        if scope == "PLAYER" and _player_matches(card.get("player"), direction):
+            return True
+        if scope == "TEAM":
+            direction_team = canon_team(
+                str(card.get("league") or "WNBA"), direction.get("team")
+            )
+            if card_team and direction_team and card_team == direction_team:
+                return True
+    return False
+
+
+def _route_and_rank(
+    card: dict[str, Any],
+    strategy_directions: list[dict[str, Any]] | None = None,
+) -> None:
+    """Attach board, headline side, rank value, bucket, and conflict flags.
+
+    HIGH opposite-side strategy hits stay on Board A with ``strategy_conflict``
+    so pack can emit ``A_FLAGGED``. Matching is scoped by event_id plus
+    player/team identity and canonical market codes (PTS/AST/REB/PRA).
+    """
     sides = card.get("sides", {})
     ev_sides = {
         s: v for s, v in sides.items()
@@ -1118,7 +1210,10 @@ def _route_and_rank(card: dict[str, Any]) -> None:
         card["rank_value"] = ev.get("best_ev_pct")
         card["rank_metric"] = "calculated_ev_pct"
         card["bucket"] = _bucket(ev.get("best_ev_pct"), EV_BUCKETS, "Pass")
-        card["flags"] = _board_a_flags(headline, sides[headline])
+        flags = _board_a_flags(headline, sides[headline])
+        if _strategy_conflict(card, headline, strategy_directions):
+            flags.append("strategy_conflict")
+        card["flags"] = flags
     else:
         if not sides:
             card["board"] = "B"
@@ -1196,6 +1291,14 @@ def build_cards_payload(league: str) -> dict[str, Any]:
     props_payload = load_latest(lg, "props")
     movement_payload = load_latest(lg, "line_movement")
     insights_payload = load_latest(lg, "insights")
+    strategy_path = paths.reports / "slate_strategy_latest.json"
+    strategy_payload: dict[str, Any] | None = None
+    if strategy_path.exists():
+        try:
+            loaded = json.loads(strategy_path.read_text(encoding="utf-8"))
+            strategy_payload = loaded if isinstance(loaded, dict) else None
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring unreadable slate strategy file %s: %s", strategy_path, exc)
 
     if not props_payload:
         raise FileNotFoundError(f"Missing props payload for {lg}")
@@ -1208,6 +1311,18 @@ def build_cards_payload(league: str) -> dict[str, Any]:
     insights = _records(insights_payload)
 
     idx = build_indexes(props, movement, ev_records, insights)
+    if strategy_payload:
+        for event in strategy_payload.get("events") or []:
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("event_id") or "")
+            for direction in event.get("directions") or []:
+                if not isinstance(direction, dict):
+                    continue
+                stamped = dict(direction)
+                if event_id and not stamped.get("event_id"):
+                    stamped["event_id"] = event_id
+                idx.strategy_directions.append(stamped)
 
     enrichment_payload = load_latest(lg, "games_enrichment")
     if enrichment_payload:
@@ -1262,7 +1377,7 @@ def build_cards_payload(league: str) -> dict[str, Any]:
             "card_id": "market_id",
             "group_key": "player_id+market+scope",
             "boards": {
-                "A": "Verified Outlier EV (method=AVERAGE), ranked by calculated_ev_pct",
+                "A": "Verified Outlier EV (method=AVERAGE), ranked by calculated_ev_pct; HIGH strategy conflicts stay A with strategy_conflict",
                 "B": "Signal candidates, ranked by descriptive composite; proxy_market edge is not EV",
             },
         },
@@ -1294,6 +1409,7 @@ def export_cards_for_league(league: str) -> dict[str, Any]:
     status = {
         "league": paths.league,
         "status": "ok",
+        "generated_at": payload["generated_at"],
         "missing_feeds": payload.get("missing_feeds", []),
         "cards_latest_json": str(latest_json),
         "cards_latest_html": str(latest_html),
@@ -1383,7 +1499,7 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
             "card_id": "market_id",
             "group_key": "player_id+market+scope",
             "boards": {
-                "A": "Verified Outlier EV (method=AVERAGE), ranked by calculated_ev_pct",
+                "A": "Verified Outlier EV (method=AVERAGE), ranked by calculated_ev_pct; HIGH strategy conflicts stay A with strategy_conflict",
                 "B": "Signal candidates, ranked by descriptive composite",
             },
         },
@@ -1410,6 +1526,7 @@ def export_game_cards_for_league(league: str) -> dict[str, Any]:
     status = {
         "league": paths.league,
         "status": "ok",
+        "generated_at": payload["generated_at"],
         "missing_feeds": payload.get("missing_feeds", []),
         "cards_latest_json": str(latest_json),
         "cards_latest_html": str(latest_html),

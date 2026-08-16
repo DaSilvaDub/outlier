@@ -138,6 +138,24 @@ Example Task Scheduler action:
 - **Add arguments**: `-m outlier_scrapers.daily_job --leagues MLB,WNBA`
 - **Start in**: `C:\Users\dasil\Dev\GitHub\outlier`
 
+### Automated T-30 reprice
+
+The initial pack publication freezes `original_recommendations.csv` and
+`original_t30_context.json`. Configure a second Task Scheduler trigger to repeat every five
+minutes during the pregame window with this action:
+
+```powershell
+python -m outlier_scrapers.daily_job --t30-reprice-only --leagues MLB,WNBA
+```
+
+The command uses the same `packs/.daily_job_lock` as the morning job. It exits without
+mutation before `first_lock - 30 minutes`, runs once inside the final 30-minute window, and
+then skips idempotently after completion. The pass refreshes games, props, injuries, probable
+starters, and both line-movement feeds; preserves the morning snapshot; and atomically
+publishes `t30_reprice.csv`, `t30_summary.json`, current candidates, and the linked feedback
+ledger transaction. Use `--t30-pack-dir packs/YYYY-MM-DD` for a non-current slate. The
+`--force-t30` option is for controlled recovery/testing only.
+
 ## Triage cards
 
 `cards` joins the latest normalized props, line movement, EV, and insights into

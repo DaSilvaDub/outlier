@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\.claude\\hooks\\block-reasoning.ps1"
+            ],
+            "timeout": 15,
+            "statusMessage": "Checking reasoning house rule..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\.claude\\hooks\\check-sync.ps1"
+            ],
+            "timeout": 60,
+            "statusMessage": "Verifying outlier sync state..."
+          }
+        ]
+      }
+    ]
+  }
+}

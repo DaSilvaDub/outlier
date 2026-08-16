@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import feed_health, paths, probability_blend
 from outlier_scrapers.game_totals import is_full_game_total
 from outlier_scrapers.registry import (
     classify_foreign_market,
@@ -457,6 +457,137 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _is_original_recommendation(row: dict[str, Any]) -> bool:
+    """Return whether a published candidate is an actionable morning recommendation."""
+
+    units = _to_float(row.get("recommended_units_pre_news"))
+    return (
+        str(row.get("board") or "A").upper() == "A"
+        and str(row.get("actionable") or "").lower() == "true"
+        and units is not None
+        and units > 0
+    )
+
+
+def _freeze_t30_originals(
+    out_dir: Path,
+    rows: list[dict[str, Any]],
+    *,
+    games_norm_by_league: dict[str, Any] | None,
+    props_norm_by_league: dict[str, Any] | None,
+    totals_rows: Sequence[dict[str, Any]] = (),
+) -> None:
+    """Freeze the first published recommendations and late-news baseline."""
+
+    recommendations_path = out_dir / "original_recommendations.csv"
+    context_path = out_dir / "original_t30_context.json"
+    existing = (recommendations_path.exists(), context_path.exists())
+    if existing == (True, True):
+        return
+    if existing != (False, False):
+        raise ValidationError(
+            "Incomplete T-30 original snapshot: original_recommendations.csv and "
+            "original_t30_context.json must either both exist or both be absent."
+        )
+
+    injuries_by_league: dict[str, dict[str, str]] = {}
+    lineups_by_league: dict[str, dict[str, Any]] = {}
+    event_starts: dict[str, str] = {}
+    probable_pitchers_by_league: dict[str, dict[str, dict[str, Any]]] = {}
+    league_tokens = set((games_norm_by_league or {}).keys()) | set(
+        (props_norm_by_league or {}).keys()
+    )
+    leagues = sorted(
+        str(league).strip().upper() for league in league_tokens if str(league).strip()
+    )
+    from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
+
+    for league in leagues:
+        games_payload = (games_norm_by_league or {}).get(league)
+        props_payload = (props_norm_by_league or {}).get(league)
+        injuries_by_league[league] = build_injuries(games_payload)
+        event_context = ((games_payload or {}).get("context") or {}).get("events") or {}
+        lineups_by_league[league] = {
+            str(event_id): event.get("lineups")
+            for event_id, event in event_context.items()
+            if isinstance(event, dict) and isinstance(event.get("lineups"), dict)
+        }
+        event_starts.update(build_event_starts(props_payload, games_payload))
+        probable_pitchers_by_league[league] = load_probable_pitcher_lookup(league)
+
+    def normalize_original(row: dict[str, Any]) -> dict[str, Any]:
+        if row.get("total_kind") not in (None, ""):
+            normalized: dict[str, Any] = {field: "" for field in CANDIDATES_HEADER}
+            total_side = str(row.get("best_side") or "").upper()
+            candidate_match = next(
+                (
+                    candidate
+                    for candidate in rows
+                    if str(candidate.get("sport") or "").upper()
+                    == str(row.get("sport") or "").upper()
+                    and str(candidate.get("event_id") or "") == str(row.get("event_id") or "")
+                    and str(candidate.get("market_id") or "")
+                    == str(row.get("market_id") or "")
+                    and _to_float(candidate.get("line")) == _to_float(row.get("line"))
+                    and total_side in str(candidate.get("selection") or "").upper()
+                ),
+                {},
+            )
+            normalized.update(candidate_match)
+            normalized.update(row)
+            # totals_id is a pack representation key, not the current provider
+            # outcome identity.  Prefer the source candidate's outcome; if it is
+            # absent, leave it blank so T-30 requires the exact normalized side.
+            normalized["outcome_id"] = candidate_match.get("outcome_id") or ""
+            normalized["market_type"] = (
+                "TEAM_PROP" if str(row.get("total_kind")).lower() == "team" else "GAMELINE"
+            )
+            normalized["board"] = "A"
+            normalized["model_prob"] = row.get("final_blended_prob") or row.get(
+                "market_consensus_prob"
+            )
+            normalized["model_prob_source"] = row.get("devig_source") or "totals_model"
+            normalized["data_quality_flags"] = row.get("quality_flags") or ""
+            normalized["_event_starts_at"] = event_starts.get(str(row.get("event_id")), "")
+            return normalized
+        return dict(row)
+
+    def recommendation_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+        numeric_line = _to_float(row.get("line"))
+        return (
+            str(row.get("sport") or "").upper(),
+            str(row.get("event_id") or ""),
+            str(row.get("market_id") or ""),
+            str(row.get("outcome_id") or ""),
+            "" if numeric_line is None else f"{numeric_line:.10g}",
+        )
+
+    # Specialized totals rows are authoritative for totals also represented in
+    # the candidate ledger, matching feedback._load_pack_rows semantics.
+    original_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for source_row in [*totals_rows, *rows]:
+        normalized = normalize_original(source_row)
+        if not _is_original_recommendation(normalized):
+            continue
+        key = recommendation_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        original_rows.append(normalized)
+    _write_csv(recommendations_path, CANDIDATES_HEADER, original_rows)
+
+    context = {
+        "schema_version": 1,
+        "captured_at": datetime.now().astimezone().isoformat(),
+        "event_starts": event_starts,
+        "injuries_by_league": injuries_by_league,
+        "lineups_by_league": lineups_by_league,
+        "probable_pitchers_by_league": probable_pitchers_by_league,
+    }
+    context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _home_away(matchup: Any, team: Any) -> str:
     """Resolve whether ``team`` is HOME or AWAY within an ``AWAY @ HOME`` matchup.
 
@@ -698,6 +829,8 @@ def build_row(
     injuries: dict[str, str],
     projections_by_outcome: dict[str, dict[str, Any]] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    stream: str = "props",
+    health_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     headline_side = card.get("headline_side")
     if headline_side is None:
@@ -948,6 +1081,15 @@ def build_row(
         dq_flags.append("team_enrichment_failed")
     if matchup and team and not row["home_away"]:
         dq_flags.append("HOME_AWAY_UNRESOLVED")
+    health_failures = feed_health.matching_failures(health_payload or {}, stream, row)
+    if health_failures:
+        dq_flags.append("SOURCE_INTEGRITY_FLAG")
+        for failure in health_failures:
+            feed = re.sub(r"[^a-z0-9_]+", "_", str(failure.get("feed") or "unknown").lower())
+            reason = re.sub(
+                r"[^a-z0-9_]+", "_", str(failure.get("reason") or "failed").lower()
+            ).strip("_")
+            dq_flags.append(f"source_health:{feed}:{reason or 'failed'}")
     event_starts_at = event_starts.get(str(event_id)) if event_id else None
     row["_event_starts_at"] = event_starts_at
     hours_to_game = probability_blend.hours_before_game(row.get("as_of"), event_starts_at)
@@ -1092,6 +1234,7 @@ def process_stream(
     injuries: dict[str, str],
     projections_payload: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    health_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -1126,6 +1269,8 @@ def process_stream(
             injuries,
             projections_by_outcome,
             blend_artifact,
+            stream,
+            health_payload,
         )
         if row is not None:
             row["_stream"] = stream
@@ -1285,7 +1430,7 @@ ROLE_BLOCK = [
     " the STATED signed side covers, not the probability of winning the game; a heavily"
     " favored team can correctly show a positive (cushion) line if that is the side priced.",
     "- Variance taxonomy to anchor evaluation:",
-    "   * High variance: 3PM, hits allowed, total bases, turnovers.",
+    "   * High variance: 3PM, hits allowed, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
     "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
     " legs. Do NOT size stacked same-event bets as independent — their outcomes"
@@ -1325,8 +1470,15 @@ ROLE_BLOCK = [
     "- Prefer Tier-1: official league/team injury reports, confirmed lineups, NWS weather.",
 ]
 
+# Versioned desk publications live under packs/<date>/verdicts/. That subtree
+# must never appear here: rebuild cleanup uses Path.unlink(), which raises on
+# a directory, and wiping the snapshot on every rebuild would discard the
+# coherence contract. Retention is desk_snapshot.prune_publications only.
+VERDICTS_SUBTREE = "verdicts"
+
 DERIVED_PACK_OUTPUTS = (
     "candidate_coverage.json",
+    "feed_health.json",
     "chatgpt_a.md",
     "gemini_b.md",
     "chatgpt_c.md",
@@ -1347,75 +1499,80 @@ DERIVED_PACK_OUTPUTS = (
     "ultimate_alt_parlays.csv",
 )
 
-FRESH_COVERAGE_WARN = 0.9
 
+def clear_derived_pack_outputs(out_dir: Path) -> None:
+    """Unlink derived files named in DERIVED_PACK_OUTPUTS.
 
-def _summarize_lm_status(report: dict[str, Any] | None, label: str) -> tuple[bool, str]:
-    if report is None:
-        return False, f"- {label}: NO STATUS (not run / missing report)"
-    status = report.get("status") or "unknown"
-    fetched = report.get("markets_fetched")
-    requested = report.get("markets_requested")
-    errors = report.get("fetch_error_count") or 0
-    age = report.get("props_age_hours")
-    gen_at = report.get("generated_at")
-    reasons: list[str] = []
-    if gen_at:
+    Never touches packs/<date>/verdicts/ (directory or any path under it).
+    Directory entries are skipped so a future accidental add of ``verdicts``
+    cannot crash rebuild with IsADirectoryError.
+    """
+    verdicts_root = (out_dir / VERDICTS_SUBTREE).resolve()
+    for name in DERIVED_PACK_OUTPUTS:
+        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(f"{VERDICTS_SUBTREE}/"):
+            continue
+        target = out_dir / name
         try:
-            dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00")).astimezone()
-            if (datetime.now().astimezone() - dt).total_seconds() > 6 * 3600:
-                reasons.append("stale (>6h old)")
-        except Exception:
-            pass
-    else:
-        reasons.append("stale (missing timestamp)")
-    if status != "ok":
-        reasons.append(f"status={status}")
-    if report.get("props_is_stale"):
-        age_txt = f"{round(age, 1)}h" if isinstance(age, (int, float)) else "?h"
-        reasons.append(f"props {age_txt} stale")
-    if errors:
-        error_ids = [str(m) for m in (report.get("error_market_ids") or []) if m]
-        if error_ids:
-            shown = ", ".join(error_ids[:8])
-            more = f" (+{len(error_ids) - 8} more)" if len(error_ids) > 8 else ""
-            reasons.append(f"{errors} fetch errors [missing markets: {shown}{more}]")
-        else:
-            reasons.append(f"{errors} fetch errors")
-    if (
-        isinstance(fetched, int)
-        and isinstance(requested, int)
-        and requested
-        and fetched / requested < FRESH_COVERAGE_WARN
-    ):
-        reasons.append(f"{fetched}/{requested} markets")
-    if not reasons:
-        cov = f" ({fetched}/{requested})" if requested else ""
-        return True, f"- {label}: OK{cov}"
-    return False, f"- {label}: CAVEAT — " + "; ".join(reasons)
+            resolved = target.resolve()
+        except OSError:
+            continue
+        if resolved == verdicts_root or verdicts_root in resolved.parents:
+            continue
+        if target.is_dir():
+            continue
+        target.unlink(missing_ok=True)
+
+FEED_STATUS_FIELDS = (
+    "props_status",
+    "games_status",
+    "insights_status",
+    "injuries_status",
+    "line_movement_status",
+    "game_line_movement_status",
+    "cards_status",
+)
 
 
-def build_freshness_section(leagues: Sequence[str]) -> list[str]:
+def build_freshness_section(
+    leagues: Sequence[str],
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
     lines = ["### Freshness / Coverage"]
-    all_ok = True
     for raw in leagues:
         lg = raw.strip().upper()
         if not lg:
             continue
-        reports = paths.league_paths(lg).reports
-        for stream, fname in (
-            ("games line-movement", "games_line_movement_status_latest.json"),
-            ("props line-movement", "line_movement_status_latest.json"),
-        ):
-            ok, line = _summarize_lm_status(load_json(reports / fname), f"{lg} {stream}")
-            all_ok = all_ok and ok
-            lines.append(line)
-    if not all_ok:
-        lines.append(
-            "Streams marked CAVEAT: their line-movement/signal are context-only (not authoritative). "
-            "Prefer EV sizing where available; soften conclusions that rely on movement/steam for those streams. "
-            "Current odds may still be fresh from the props/games fetch."
+        health = (feed_health_by_league or {}).get(lg)
+        if health is None:
+            health = feed_health.build_feed_health(lg, write=True)
+        safe, reasons = feed_health.validate_feed_health(health)
+        statuses = ", ".join(
+            f"{field.removesuffix('_status')}={health.get(field, 'missing')}"
+            for field in FEED_STATUS_FIELDS
         )
+        latest_age = health.get("latest_source_age")
+        oldest_age = health.get("oldest_source_age")
+        age_text = (
+            f"{latest_age:.2f}h..{oldest_age:.2f}h"
+            if isinstance(latest_age, (int, float)) and isinstance(oldest_age, (int, float))
+            else "unknown"
+        )
+        verdict = "OK" if safe else "UNSAFE"
+        lines.append(
+            f"- {lg}: {verdict}; coverage={float(health.get('coverage_pct') or 0.0):.2f}%; "
+            f"source_age={age_text}; {statuses}"
+        )
+        failed = health.get("failed_ids") or []
+        if failed:
+            shown = [
+                f"{item.get('feed')}:{item.get('stream')}:{item.get('id_type')}:{item.get('id')}"
+                for item in failed[:8]
+                if isinstance(item, dict)
+            ]
+            more = f" (+{len(failed) - len(shown)} more)" if len(failed) > len(shown) else ""
+            lines.append(f"  - failed_ids: {', '.join(shown)}{more}")
+        if reasons:
+            lines.append(f"  - gate: {'; '.join(reasons)}")
     return lines
 
 
@@ -1560,6 +1717,7 @@ def write_pack(
     props_norm_by_league: dict[str, Any] | None = None,
     target_date: str | None = None,
     coverage: dict[str, dict[str, int]] | None = None,
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
     opportunity_rows: list[dict[str, Any]] | None = None,
     projection_records: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -1634,8 +1792,7 @@ def write_pack(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pack_date = target_date or out_dir.name
-    for name in DERIVED_PACK_OUTPUTS:
-        (out_dir / name).unlink(missing_ok=True)
+    clear_derived_pack_outputs(out_dir)
     dossiers_dir = out_dir / "dossiers"
     if dossiers_dir.exists():
         for stale_dossier in dossiers_dir.glob("*.md"):
@@ -2034,6 +2191,14 @@ def write_pack(
         writer.writeheader()
         writer.writerows(rows)
 
+    _freeze_t30_originals(
+        out_dir,
+        rows,
+        games_norm_by_league=games_norm_by_league,
+        props_norm_by_league=props_norm_by_league,
+        totals_rows=[*totals_rows, *team_totals_rows],
+    )
+
     selected_keys = {_opportunity_key(row) for row in rows}
     opportunity_output: list[dict[str, Any]] = []
     for source_row in opportunity_rows if opportunity_rows is not None else rows:
@@ -2067,6 +2232,10 @@ def write_pack(
     if coverage is not None:
         (out_dir / "candidate_coverage.json").write_text(
             json.dumps(coverage, indent=2, sort_keys=True), encoding="utf-8"
+        )
+    if feed_health_by_league is not None:
+        (out_dir / "feed_health.json").write_text(
+            json.dumps(feed_health_by_league, indent=2, sort_keys=True), encoding="utf-8"
         )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -2150,6 +2319,20 @@ def write_pack(
     )
 
 
+def build_feed_health_by_league(leagues: Sequence[str]) -> dict[str, dict[str, Any]]:
+    health_by_league: dict[str, dict[str, Any]] = {}
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        health = feed_health.build_feed_health(league, write=True)
+        safe, reasons = feed_health.validate_feed_health(health)
+        if not safe:
+            raise RuntimeError(f"{league} feed health unsafe: {'; '.join(reasons)}")
+        health_by_league[league] = health
+    return health_by_league
+
+
 def build_pack_with_coverage(
     leagues: Sequence[str],
     requested_date: str | None,
@@ -2158,6 +2341,7 @@ def build_pack_with_coverage(
     *,
     opportunity_rows_out: list[dict[str, Any]] | None = None,
     blend_artifact: dict[str, Any] | None = None,
+    feed_health_by_league: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, dict[str, int]]]:
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
@@ -2166,6 +2350,12 @@ def build_pack_with_coverage(
         lg = raw_league.strip().upper()
         if not lg:
             continue
+        health_payload = (feed_health_by_league or {}).get(lg)
+        if health_payload is None:
+            health_payload = feed_health.build_feed_health(lg, write=True)
+        safe, reasons = feed_health.validate_feed_health(health_payload)
+        if not safe:
+            raise RuntimeError(f"{lg} feed health unsafe: {'; '.join(reasons)}")
         lp = paths.league_paths(lg)
         cards_dir = lp.root / "cards"
         norm = lp.normalized
@@ -2189,6 +2379,7 @@ def build_pack_with_coverage(
             injuries,
             projections_payload,
             blend_artifact,
+            health_payload,
         )
         games_rows = process_stream(
             games_cards,
@@ -2201,6 +2392,7 @@ def build_pack_with_coverage(
             injuries,
             projections_payload,
             blend_artifact,
+            health_payload,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
@@ -2355,9 +2547,13 @@ def main(argv: Sequence[str] | None = None) -> Path:
     )
     args = parser.parse_args(argv)
     leagues = args.leagues.split(",")
+    feed_health_by_league = build_feed_health_by_league(leagues)
     blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
     opportunity_rows: list[dict[str, Any]] = []
-    build_kwargs: dict[str, Any] = {"opportunity_rows_out": opportunity_rows}
+    build_kwargs: dict[str, Any] = {
+        "opportunity_rows_out": opportunity_rows,
+        "feed_health_by_league": feed_health_by_league,
+    }
     if blend_artifact is not None:
         build_kwargs["blend_artifact"] = blend_artifact
     final_rows, target_date, games_norm, coverage = build_pack_with_coverage(
@@ -2369,7 +2565,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     )
     props_norm_by_league = load_props_norm_by_league(leagues)
     projection_records = load_projection_records(leagues)
-    freshness = build_freshness_section(leagues)
+    freshness = build_freshness_section(leagues, feed_health_by_league)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:
         write_pack(
@@ -2380,6 +2576,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             props_norm_by_league=props_norm_by_league,
             target_date=target_date,
             coverage=coverage,
+            feed_health_by_league=feed_health_by_league,
             opportunity_rows=opportunity_rows,
             projection_records=projection_records,
         )
@@ -2390,6 +2587,12 @@ def main(argv: Sequence[str] | None = None) -> Path:
         out_dir.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
         if out_dir.exists():
+            recommendation_path = out_dir / "original_recommendations.csv"
+            context_path = out_dir / "original_t30_context.json"
+            if recommendation_path.exists() != context_path.exists():
+                raise ValidationError(
+                    "Incomplete published T-30 original snapshot: refusing to rebuild the pack."
+                )
             shutil.copytree(out_dir, staging_dir)
         conn = None
         backup_dir: Path | None = None
@@ -2403,6 +2606,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 props_norm_by_league=props_norm_by_league,
                 target_date=target_date,
                 coverage=coverage,
+                feed_health_by_league=feed_health_by_league,
                 opportunity_rows=opportunity_rows,
                 projection_records=projection_records,
             )

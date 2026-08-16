@@ -1,0 +1,1 @@
+../../plugins/outlier/agents/outlier-bug-checker-agent.md

@@ -1,0 +1,108 @@
+{
+  "market": {
+    "marketId": "5ac20281f2d687fa2c76f4098be53b4a932963de",
+    "eventId": "0cf750a308f4f61004607a108f378c10fbee1f1d",
+    "leagueId": "MLB",
+    "sport": "BASEBALL",
+    "marketType": "PLAYER_PROP",
+    "propType": "TOTAL",
+    "proposition": "HITS_RUNS_RBIS",
+    "periods": [
+      1,
+      2,
+      3
+    ],
+    "periodLabel": "1st 3I",
+    "includeOvertime": false,
+    "player": {
+      "playerId": "3351f5eea2f27f5b51c63ac604494fd5632d215f",
+      "teamId": "826b2ddfdcdc34cee332b8f5e7771ed38c59f61f",
+      "status": "A",
+      "fullName": "Aaron Judge",
+      "firstName": "Aaron",
+      "lastName": "Judge",
+      "preferredName": "Aaron",
+      "position": "RF",
+      "jerseyNumber": "99",
+      "extraProps": {
+        "throwHand": "R",
+        "batHand": "R"
+      }
+    },
+    "outcomes": [
+      {
+        "outcomeId": "0e5332224da88a2c69e615238ea751580eb3e069",
+        "position": "OVER",
+        "line": 1.5,
+        "odds": [
+          {
+            "american": "-102",
+            "decimal": 1.9764000000000002,
+            "fraction": {
+              "numerator": 83,
+              "denominator": 85
+            },
+            "book": "UNDERDOG",
+            "identifier": {
+              "bookEventId": "98145",
+              "bookMarketId": "077d5aff-c730-4c48-a360-ba9aab9a317d",
+              "bookOutcomeId": "58a50639-886d-4ca5-88f9-9d1c67fd1895",
+              "bookProps": {
+                "sportId": "MLB"
+              }
+            }
+          }
+        ],
+        "label": "Over",
+        "lineLabel": "1.5",
+        "books": [
+          "UNDERDOG"
+        ],
+        "primary": false,
+        "bookPrimary": false,
+        "stats": {
+          "playerSummaryStat": {
+            "h2h": 0.17,
+            "l5": 0.2,
+            "l10": 0.3,
+            "l20": 0.35,
+            "curSeason": 0.28,
+            "prevSeason": 0.3,
+            "l10Results": [
+              true,
+              true,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              true,
+              false
+            ]
+          }
+        }
+      }
+    ],
+    "isActive": true,
+    "books": [
+      "UNDERDOG"
+    ],
+    "label": "A. Judge - 1st 3 Innings Hits + Runs + RBIs",
+    "outcomeMap": [
+      [
+        "0e5332224da88a2c69e615238ea751580eb3e069"
+      ]
+    ],
+    "referenceOutcomeMap": [
+      [
+        "0e5332224da88a2c69e615238ea751580eb3e069"
+      ]
+    ],
+    "publicMoney": [],
+    "marketGroupId": "FIRST_THREE_INNINGS",
+    "marketGroupSortOrder": 1
+  },
+  "marketHistory": null,
+  "insights": []
+}

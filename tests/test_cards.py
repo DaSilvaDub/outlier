@@ -1001,3 +1001,142 @@ def test_ev_fallback_uses_current_line_not_arbitrary_side_ev(tmp_path, monkeypat
     assert side["line"] == 8.5
     assert side["ev"]["best_ev_pct"] == 1.0  # matched by current_line, not the 9.9 at 6.5
     assert side["ev"]["is_alt_line_fallback"] is False
+
+
+@pytest.mark.parametrize(
+    ("export_name", "builder_name", "status_name"),
+    [
+        ("export_cards_for_league", "build_cards_payload", "cards_status_latest.json"),
+        (
+            "export_game_cards_for_league",
+            "build_game_cards_payload",
+            "games_cards_status_latest.json",
+        ),
+    ],
+)
+def test_card_success_status_uses_produced_payload_timestamp(
+    tmp_path, monkeypatch, export_name, builder_name, status_name
+):
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.paths import league_paths
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    produced_at = "2026-08-11T05:15:00-04:00"
+    payload = {
+        "league": "MLB",
+        "generated_at": produced_at,
+        "missing_feeds": [],
+        "coverage": {"cards_total": 0, "board_a_cards": 0, "board_b_cards": 0},
+        "snapshot_skew": {"is_skewed": False},
+        "board_a": [],
+        "board_b": [],
+    }
+    monkeypatch.setattr(cards, builder_name, lambda league: payload)
+    monkeypatch.setattr(cards, "render_html", lambda produced: "<html></html>")
+
+    status = getattr(cards, export_name)("MLB")
+
+    assert status["generated_at"] == produced_at
+    persisted = json.loads(
+        (league_paths("MLB").reports / status_name).read_text(encoding="utf-8")
+    )
+    assert persisted["generated_at"] == produced_at
+
+
+def test_strategy_conflict_flags_board_a_with_canonical_pts(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    props = [
+        _prop("m1", "OVER", 8.5, -105, "o1", player="A. Wilson", market="PTS"),
+        _prop("m1", "UNDER", 8.5, -105, "o2", player="A. Wilson", market="PTS"),
+    ]
+    _write_latest(tmp_path / "data", "WNBA", "props", props)
+    _write_latest(
+        tmp_path / "data",
+        "WNBA",
+        "line_movement",
+        [_movement("m1", "OVER", 8.5)],
+        extra={"ev_records": [_ev("m1", "OVER", 1.5, "o1")]},
+    )
+    _write_latest(tmp_path / "data", "WNBA", "insights", [])
+    reports = tmp_path / "data" / "WNBA" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "slate_strategy_latest.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "event_id": "e1",
+                        "directions": [
+                            {
+                                "scope": "PLAYER",
+                                "player": "A'ja Wilson",
+                                "player_key": "AJAWILSON",
+                                "market_family": "PTS",
+                                "side": "UNDER",
+                                "confidence": "HIGH",
+                                "event_id": "e1",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_cards_payload("WNBA")
+    assert payload["coverage"]["board_a_cards"] == 1
+    assert payload["coverage"]["board_b_cards"] == 0
+    card = payload["board_a"][0]
+    assert card["board"] == "A"
+    assert card["headline_side"] == "OVER"
+    assert "strategy_conflict" in card["flags"]
+
+
+def test_strategy_conflict_is_scoped_to_event_id(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    props = [
+        _prop("m1", "OVER", 8.5, -105, "o1", player="A'ja Wilson", market="PTS"),
+        _prop("m1", "UNDER", 8.5, -105, "o2", player="A'ja Wilson", market="PTS"),
+    ]
+    _write_latest(tmp_path / "data", "WNBA", "props", props)
+    _write_latest(
+        tmp_path / "data",
+        "WNBA",
+        "line_movement",
+        [_movement("m1", "OVER", 8.5)],
+        extra={"ev_records": [_ev("m1", "OVER", 1.5, "o1")]},
+    )
+    _write_latest(tmp_path / "data", "WNBA", "insights", [])
+    reports = tmp_path / "data" / "WNBA" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "slate_strategy_latest.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "event_id": "other-game",
+                        "directions": [
+                            {
+                                "scope": "PLAYER",
+                                "player_key": "AJAWILSON",
+                                "market_family": "PTS",
+                                "side": "UNDER",
+                                "confidence": "HIGH",
+                                "event_id": "other-game",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_cards_payload("WNBA")
+    card = payload["board_a"][0]
+    assert "strategy_conflict" not in card["flags"]
