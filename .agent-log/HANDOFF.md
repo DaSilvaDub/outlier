@@ -1,6 +1,6 @@
 # Handoff
 
-- **Last Commit SHA**: pending reviewer follow-up on `fix/pipeline-debug-20260816`
+- **Last Commit SHA**: `cfb8903` on `fix/pipeline-debug-20260816`
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/103
 - **Files Touched**:
   - `outlier_scrapers/games.py`
