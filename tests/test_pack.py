@@ -9,6 +9,7 @@ from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _opportunity_key,
+    _apply_enforced_portfolio_units,
     _restore_published_pack,
     _swap_staged_pack,
     american_to_decimal,
@@ -649,7 +650,9 @@ def test_stale_line_edge_gate_withholds_units():
     assert row["_board"] == "flagged"
 
 
-# 8c. The gate needs BOTH flags; a single flag (only RLM) does not trip it.
+# 8c. The composite edge-suspect flag needs BOTH inputs. A single RLM flag does
+#      not add edge_suspect_stale_line, but still makes the row non-actionable
+#      and therefore leaves its unit recommendation blank.
 def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_units():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE", flags=["reverse_line_movement"])
     ev = [
@@ -666,6 +669,52 @@ def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_uni
     assert "edge_suspect_stale_line" not in row["data_quality_flags"]
     assert row["actionable"] == "false"
     assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_does_not_restore_units_to_non_actionable_row():
+    row = {
+        "actionable": "false",
+        "board": "A_FLAGGED",
+        "_board": "flagged",
+        "recommended_units_pre_news": "",
+    }
+
+    _apply_enforced_portfolio_units(row, 0.0)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_demotes_actionable_row_capped_to_zero():
+    row = {
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+        "recommended_units_pre_news": 1.0,
+    }
+
+    _apply_enforced_portfolio_units(row, 0.0)
+
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["_board"] == "flagged"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_enforce_allocation_preserves_positive_units_for_actionable_board_a_row():
+    row = {
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+        "recommended_units_pre_news": 1.0,
+    }
+
+    _apply_enforced_portfolio_units(row, 0.5)
+
+    assert row["actionable"] == "true"
+    assert row["board"] == "A"
+    assert row["recommended_units_pre_news"] == 0.5
 
 
 # 8c2. A NaN/inf line must never crash build_row (found while adding the

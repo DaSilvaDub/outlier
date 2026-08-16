@@ -211,6 +211,20 @@ def test_organize_replace_export_no_stale_leftovers(tmp_path: Path):
                 "matchup": "NYY @ PHI",
                 "sides": {"UNDER": _side("UNDER", 100.0, 100.0, 100.0)},
             },
+            {
+                "player": "HA",
+                "market_label": "HA - Hits Allowed",
+                "team": "NYY",
+                "matchup": "NYY @ PHI",
+                "sides": {"OVER": _side("OVER", 100.0, 100.0, 100.0)},
+            },
+            {
+                "player": "TB",
+                "market_label": "TB - Total Bases",
+                "team": "NYY",
+                "matchup": "NYY @ PHI",
+                "sides": {"OVER": _side("OVER", 100.0, 100.0, 100.0)},
+            },
         ],
     )
 
@@ -241,4 +255,6 @@ def test_organize_replace_export_no_stale_leftovers(tmp_path: Path):
     assert all("Home Runs" not in r["market_label"] or r["side"] != "UNDER" for r in hit_rows)
     # Without slate allowlist, On-slate doubles may keep; HR under must be gone
     assert not any(r["player"] == "HRU" for r in hit_rows)
+    assert not any(r["player"] == "HA" for r in hit_rows)
     assert any(r["player"] == "Only" for r in hit_rows)
+    assert any(r["player"] == "TB" for r in hit_rows)
