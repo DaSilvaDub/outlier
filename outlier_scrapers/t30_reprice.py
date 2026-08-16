@@ -169,8 +169,8 @@ def first_lock_at(
     if not starts:
         starts = [start for start in row_starts if on_slate(start)]
     if not starts:
-        starts = row_starts or context_starts
-    if not starts:
+        if slate_date:
+            raise T30Error(f"Cannot schedule T-30: no event starts on slate date {slate_date}.")
         raise T30Error("Cannot schedule T-30: original snapshot has no parseable first lock.")
     return min(starts)
 
@@ -209,20 +209,26 @@ def _stream_for_row(row: dict[str, Any]) -> str:
     return "props" if _text(row.get("market_type")).upper() == "PLAYER_PROP" else "games"
 
 
-def _refresh_leagues(leagues: Sequence[str], runner: RefreshRunner) -> dict[str, int]:
+def _refresh_leagues(
+    leagues: Sequence[str],
+    runner: RefreshRunner,
+    *,
+    pack_date: str | None = None,
+) -> dict[str, int]:
     results: dict[str, int] = {}
     for league in leagues:
-        results[league] = runner(
-            [
-                "--league",
-                league,
-                "--props",
-                "--games",
-                "--line-movement",
-                "--game-line-movement",
-                "--probable-pitchers",
-            ]
-        )
+        argv = [
+            "--league",
+            league,
+            "--props",
+            "--games",
+            "--line-movement",
+            "--game-line-movement",
+            "--probable-pitchers",
+        ]
+        if pack_date:
+            argv.extend(["--date", pack_date])
+        results[league] = runner(argv)
     return results
 
 
@@ -739,7 +745,9 @@ def run_t30_reprice(
     leagues = sorted({_text(row.get("sport")).upper() for row in originals if row.get("sport")})
     if not leagues:
         raise T30Error("Original recommendation snapshot contains no leagues.")
-    refresh_results = _refresh_leagues(leagues, refresh_runner)
+    refresh_results = _refresh_leagues(
+        leagues, refresh_runner, pack_date=_pack_date(pack_dir)
+    )
     states = {
         (league, stream): _load_stream_state(league, stream)
         for league in leagues

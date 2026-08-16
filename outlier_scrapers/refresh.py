@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -85,6 +85,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--probable-pitchers", action="store_true", dest="probable_pitchers")
     parser.add_argument("--slate-strategy", action="store_true", dest="slate_strategy")
+    parser.add_argument(
+        "--date",
+        help="Pin games scrape to YYYY-MM-DD and disable today-to-tomorrow auto-advance.",
+    )
     return parser.parse_args(argv)
 
 
@@ -150,6 +154,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"auth_required: {exc}")
             return 1
 
+    target_date: date | None = None
+    if args.date:
+        try:
+            target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Invalid date format: {args.date}. Use YYYY-MM-DD.")
+            return 2
+
     exit_code = 0
     for league in args.league:
         props_failed = False
@@ -185,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.games:
             try:
-                status = export_games_for_league(client, league)
+                status = export_games_for_league(client, league, target_date=target_date)
                 if status.get("status") == "error":
                     print(
                         f"{league.upper()} games: error "

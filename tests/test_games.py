@@ -817,7 +817,7 @@ def test_games_main_failure_replaces_old_ok_status(tmp_path, monkeypatch):
     assert status["generated_at"] != "2026-08-11T04:00:00-04:00"
 
 
-def test_games_export_advances_to_tomorrow_when_today_has_no_pregame(tmp_path, monkeypatch):
+def test_games_export_advances_to_tomorrow_when_today_slate_is_complete(tmp_path, monkeypatch):
     from datetime import datetime, timedelta
 
     from outlier_scrapers import paths as paths_mod
@@ -826,13 +826,64 @@ def test_games_export_advances_to_tomorrow_when_today_has_no_pregame(tmp_path, m
     monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
     today = datetime.now().astimezone().date()
     tomorrow = today + timedelta(days=1)
-    tomorrow_start = datetime.now().astimezone().replace(
-        hour=18, minute=0, second=0, microsecond=0
-    ) + timedelta(days=1)
+    today_start = datetime.now().astimezone().replace(
+        hour=13, minute=0, second=0, microsecond=0
+    )
+    tomorrow_start = today_start + timedelta(days=1)
 
     class NextSlateClient(FakeGamesClient):
         def fetch_schedule(self, league_id):
             self.target_date = tomorrow
+            finished = {
+                **_games_event(today_start.isoformat(), today),
+                "id": "today-done",
+                "eventId": "today-done",
+                "status": "final",
+            }
+            upcoming = {
+                **_games_event(tomorrow_start.isoformat(), tomorrow),
+                "id": "tomorrow-1",
+                "eventId": "tomorrow-1",
+            }
+            return {"events": [finished, upcoming]}
+
+    status = export_games_for_league(NextSlateClient(), "MLB")
+    assert status["status"] == "ok"
+    assert status["record_count"] >= 2
+    assert status["target_event_count"] == 1
+    assert status["target_date"] == tomorrow.isoformat()
+    assert status["preserved_previous_latest"] is False
+
+
+def test_games_export_does_not_advance_when_today_is_missing_from_schedule(
+    tmp_path, monkeypatch
+):
+    from datetime import datetime, timedelta
+
+    from outlier_scrapers import paths as paths_mod
+    from outlier_scrapers.games import export_games_for_league, write_json
+    from outlier_scrapers.paths import league_paths
+
+    monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
+    today = datetime.now().astimezone().date()
+    tomorrow = today + timedelta(days=1)
+    tomorrow_start = datetime.now().astimezone().replace(
+        hour=18, minute=0, second=0, microsecond=0
+    ) + timedelta(days=1)
+    latest = league_paths("MLB").normalized / "mlb_games_latest.json"
+    write_json(
+        latest,
+        {
+            "generated_at": "2026-08-16T12:00:00-04:00",
+            "league": "MLB",
+            "record_count": 12,
+            "records": [{"market_id": "keep-today"}],
+            "context": {"events": {"keep": {"starts_at": f"{today.isoformat()}T16:15:00-04:00"}}},
+        },
+    )
+
+    class OmittedTodayClient(FakeGamesClient):
+        def fetch_schedule(self, league_id):
             return {
                 "events": [
                     {
@@ -843,11 +894,13 @@ def test_games_export_advances_to_tomorrow_when_today_has_no_pregame(tmp_path, m
                 ]
             }
 
-    status = export_games_for_league(NextSlateClient(), "MLB")
+    status = export_games_for_league(OmittedTodayClient(), "MLB")
     assert status["status"] == "ok"
-    assert status["record_count"] >= 2
-    assert status["target_event_count"] == 1
-    assert status["target_date"] == tomorrow.isoformat()
+    assert status["record_count"] == 0
+    assert status["target_date"] == today.isoformat()
+    assert status["preserved_previous_latest"] is True
+    persisted = json.loads(latest.read_text(encoding="utf-8"))
+    assert persisted["records"][0]["market_id"] == "keep-today"
 
 
 def test_games_export_does_not_clobber_latest_with_empty_window(tmp_path, monkeypatch):
@@ -871,7 +924,7 @@ def test_games_export_does_not_clobber_latest_with_empty_window(tmp_path, monkey
             return {"events": []}
 
     status = export_games_for_league(EmptyScheduleClient(), "MLB")
-    assert status["status"] == "error"
+    assert status["status"] == "ok"
     assert status["record_count"] == 0
     assert status["preserved_previous_latest"] is True
     persisted = json.loads(latest.read_text(encoding="utf-8"))

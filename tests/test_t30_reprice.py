@@ -319,6 +319,18 @@ def test_first_lock_ignores_off_date_event_starts(tmp_path):
     assert due == first_lock - timedelta(minutes=30)
 
 
+def test_first_lock_fails_closed_when_only_off_date_starts_exist(tmp_path):
+    pack_dir = tmp_path / "2026-08-16"
+    pack_dir.mkdir()
+    with pytest.raises(t30_reprice.T30Error, match="no event starts on slate date"):
+        t30_reprice.should_run_t30(
+            pack_dir,
+            [_candidate(_event_starts_at="2025-08-26T22:35:00+00:00")],
+            {"event_starts": {"leftover-2025": "2025-08-26T22:35:00+00:00"}},
+            now=NOW,
+        )
+
+
 def test_freeze_originals_is_immutable_and_rejects_partial_pair(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
@@ -484,6 +496,8 @@ def test_run_publishes_pack_and_ledger_atomically_and_then_skips(tmp_path, monke
     assert result.completed
     assert result.status_counts == {"KEEP": 1}
     assert len(refresh_calls) == 1
+    assert "--date" in refresh_calls[0]
+    assert "2026-08-12" in refresh_calls[0]
     assert (pack_dir / "t30_reprice.csv").exists()
     assert (pack_dir / "t30_decisions.csv").exists()
     assert (pack_dir / "original_recommendations.csv").read_bytes() == original_bytes

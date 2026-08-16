@@ -50,25 +50,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _event_local_date(event: dict[str, Any]) -> date | None:
+    start_time_raw = event.get("scheduledTime")
+    if not start_time_raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(start_time_raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone().date()
+
+
 def _is_event_in_window(
     event: dict[str, Any], start_date: date, days: int, include_final: bool
 ) -> bool:
     status = str(event.get("status") or "").lower()
     if not include_final and status not in ("pregame", "scheduled"):
         return False
-
-    start_time_raw = event.get("scheduledTime")
-    if not start_time_raw:
+    event_date = _event_local_date(event)
+    if event_date is None:
         return False
+    end_date = start_date + timedelta(days=days - 1)
+    return start_date <= event_date <= end_date
 
-    try:
-        dt = datetime.fromisoformat(start_time_raw.replace("Z", "+00:00"))
-        dt_local = dt.astimezone()
-        event_date = dt_local.date()
-        end_date = start_date + timedelta(days=days - 1)
-        return start_date <= event_date <= end_date
-    except ValueError:
+
+def _today_slate_is_complete(events: list[dict[str, Any]], target_date: date) -> bool:
+    today_events = [event for event in events if _event_local_date(event) == target_date]
+    if not today_events:
         return False
+    return not any(_is_event_in_window(event, target_date, 1, False) for event in today_events)
 
 
 def export_games_for_league(
@@ -92,7 +104,7 @@ def export_games_for_league(
         events = []
 
     target_events = [e for e in events if _is_event_in_window(e, target_date, days, include_final)]
-    if auto_advance and not target_events:
+    if auto_advance and not target_events and _today_slate_is_complete(events, target_date):
         next_date = target_date + timedelta(days=1)
         next_events = [e for e in events if _is_event_in_window(e, next_date, days, include_final)]
         if next_events:
@@ -239,10 +251,10 @@ def export_games_for_league(
 
     # Status contract mirrors line_movement: ok / partial / error. An empty
     # markets result caused by fetch failures is the core-payload failure and is
-    # escalated to error; a genuinely empty slate (no errors) stays ok unless it
-    # would clobber a healthy latest artifact.
+    # escalated to error. A genuine empty window stays ok; write-protection is
+    # reported separately via preserved_previous_latest.
     record_count = normalized["record_count"]
-    if preserved_previous or (markets_step_errors and record_count == 0):
+    if markets_step_errors and record_count == 0:
         status_value = "error"
     elif fetch_errors:
         status_value = "partial"

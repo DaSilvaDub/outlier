@@ -129,7 +129,7 @@ def test_refresh_flags_games_error_and_skips_game_cards(tmp_path, monkeypatch, c
 
     monkeypatch.setattr(refresh_mod, "OutlierApiClient", FakeClient)
 
-    def games_error(client, league):
+    def games_error(client, league, **_kwargs):
         return {
             "status": "error",
             "record_count": 0,
