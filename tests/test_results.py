@@ -239,3 +239,66 @@ def test_mlb_official_boxscore_exposes_full_whitelist_stats():
     assert players["TESTHITTER"]["BATTING:2B"] == 1
     assert results._player_actual("Hits + Runs + RBIs", players["TESTHITTER"], "MLB") == 6
     assert players["TESTPITCHER"]["PITCHING:OUTS"] == 20
+
+
+def test_pdx_aliases_to_portland_for_event_match():
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="POR",
+        home="PHX",
+        away_score=88,
+        home_score=85,
+        players={},
+    )
+    assert results._event_match(event, "PDX @ PHX Spread AWAY +6.5")
+    assert results._grade_row(
+        {
+            "selection": "PDX @ PHX Run Line AWAY +6.5",
+            "line": "6.5",
+            "market_type": "GAMELINE",
+        },
+        event,
+    ) == (3, "W")
+
+
+def test_player_last_name_fallback_matches_unique_boxscore_name():
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="CHI",
+        home="SEA",
+        away_score=82,
+        home_score=80,
+        players={"KAMILLACARDOSO": {"REB": 12, "AST": 2}},
+    )
+    hits = results._player_event_candidates([event], "Kamilla Cardoso - Rebounds UNDER 8.5")
+    assert hits == [event]
+    hits = results._player_event_candidates([event], "K. Cardoso - Rebounds UNDER 8.5")
+    assert hits == [event]
+    assert results._player_boxscore_key(event, "K. Cardoso - Rebounds UNDER 8.5") == "KAMILLACARDOSO"
+    assert results._grade_row(
+        {
+            "selection": "K. Cardoso - Rebounds UNDER 8.5",
+            "line": "8.5",
+            "market_type": "REB",
+        },
+        event,
+    ) == (12, "L")
+
+
+def test_last_name_suffix_does_not_match_longer_name():
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="MLB",
+        event_date=NOW.date(),
+        away="NYY",
+        home="TOR",
+        away_score=4,
+        home_score=3,
+        players={"GOLDBERG": {"BATTING:H": 1}},
+    )
+    assert results._player_boxscore_key(event, "A. Berg - Hits OVER 0.5") is None
+    assert results._player_event_candidates([event], "A. Berg - Hits OVER 0.5") == []

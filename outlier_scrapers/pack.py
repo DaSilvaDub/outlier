@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from outlier_scrapers import feed_health, paths, probability_blend
+from outlier_scrapers import feed_health, paths, probability_blend, slate_quality
 from outlier_scrapers.game_totals import is_full_game_total
 from outlier_scrapers.registry import (
     classify_foreign_market,
@@ -294,16 +294,23 @@ def build_injuries(games_payload: dict | None) -> dict[str, str]:
         if not isinstance(info, dict):
             continue
         team_ids = [info.get("home_team_id"), info.get("away_team_id")]
+        code_by_tid = {
+            str(info.get("home_team_id") or ""): info.get("home"),
+            str(info.get("away_team_id") or ""): info.get("away"),
+        }
         flags: list[str] = []
         for tid in team_ids:
             inj = (teams.get(str(tid)) or {}).get("injuries") if tid else None
+            team_code = str(code_by_tid.get(str(tid or "")) or "").strip().upper()
             for item in inj or []:
                 if isinstance(item, dict):
                     formatted = _format_injury(item)
-                    if formatted:
-                        flags.append(formatted)
                 else:
-                    flags.append(str(item))
+                    formatted = str(item)
+                if formatted and team_code:
+                    formatted = f"{team_code}: {formatted}"
+                if formatted:
+                    flags.append(formatted)
         if flags:
             out[str(eid)] = " | ".join(flags)
     return out
@@ -1123,13 +1130,23 @@ def build_row(
     # sharply on prices we can't trust. The RLM/thin flags alone were already
     # ignored downstream (2026-07-11 Bonner O10.5 shipped 3.0u with both set), so
     # withhold the stake recommendation itself. edge_pct stays visible.
+    injury_view = slate_quality.classify_injuries(
+        str(row.get("injury_flags") or ""), row.get("team")
+    )
+    if slate_quality.usage_up_under(row, injury_view):
+        dq_flags.append("usage_up_under")
+    line_with_side = slate_quality.signed_line_moved_with_side(row)
+    if line_with_side:
+        dq_flags = [flag for flag in dq_flags if flag != "reverse_line_movement"]
     if (
         row.get("recommended_units_pre_news") not in ("", None)
         and "reverse_line_movement" in dq_flags
         and "thin_liquidity" in dq_flags
+        and not line_with_side
     ):
         dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
+    slate_quality.apply_local_devig_unit_cap(row)
     edge_pct_val = _to_float(row.get("edge_pct"))
     if edge_pct_val is not None and edge_pct_val <= 0.035 and "thin_liquidity" in dq_flags:
         dq_flags.append("edge_suspect_thin_liquidity")
@@ -1203,10 +1220,19 @@ def build_row(
         if value is not None and value > 50.0:
             signal_flags.append(flag)
     if movement_corroboration is not None:
-        if movement_corroboration > 0:
+        if movement_corroboration > 0 or line_with_side:
             signal_flags.append("movement_support")
-        elif movement_corroboration < 0:
+        elif movement_corroboration < 0 and not line_with_side:
             signal_flags.append("movement_against")
+    if line_with_side:
+        signal_flags.append("line_moved_with_side")
+    if injury_view.own_star_out:
+        signal_flags.append("own_star_out")
+    if injury_view.opponent_star_out:
+        signal_flags.append("opponent_star_out")
+        market_upper = str(row.get("market_type") or "").upper()
+        if market_upper in slate_quality.GAMELINE_TYPES:
+            row["research_leverage"] = "HIGH"
     if signal.get("insight_conflict"):
         signal_flags.append("insight_conflict")
     # Public-money flags live only on signal_flags — never card.flags /
@@ -1317,8 +1343,10 @@ def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> l
     board_b = [r for r in rows if r.get("_board") == "board_b"]
     flagged = [r for r in rows if r.get("_board") == "flagged"]
 
-    def _key(r: dict[str, Any]) -> tuple[float, str]:
-        return (-(r.get("_rank_value") or 0.0), str(r.get("market_id") or ""))
+    def _key(r: dict[str, Any]) -> tuple[float, float, str]:
+        if r.get("_board") in {"board_a", "flagged"}:
+            return slate_quality.playable_prop_sort_key(r)
+        return (0.0, -(r.get("_rank_value") or 0.0), str(r.get("market_id") or ""))
 
     def bucket_key(r: dict[str, Any]) -> tuple[str, str]:
         return (str(r.get("sport") or ""), str(r.get("_stream") or "props"))
@@ -1415,6 +1443,7 @@ def build_dossier(rows: list[dict[str, Any]], sport: str) -> str:
         lines.append(
             f"- {r.get('market_type')}: {r.get('selection')}{ctx} @ {r.get('line')} ({r.get('price')})"
         )
+    lines += slate_quality.dossier_injury_section(rows)
     return "\n".join(lines)
 
 
@@ -1445,6 +1474,15 @@ ROLE_BLOCK = [
     "- Variance taxonomy to anchor evaluation:",
     "   * High variance: 3PM, hits allowed, turnovers.",
     "   * Moderate variance: strikeouts, assists, points.",
+    "- Rank remaining player props by edge_pct / EV, never by raw model_prob."
+    " Negative-edge high-prob 3s are juice, not plays.",
+    "- usage_up_under: an UNDER player prop on a card whose own team has a"
+    " confirmed Out/OFS is not Board A. Season-mean unders with usage up are a fade.",
+    "- line_moved_with_side / +CLV: if the live number moved further toward the"
+    " pack side (e.g. CHI -1.5 → -2.5), that is not a stale-line kill. Play the"
+    " pack number if it is still bookable; size down only if forced onto the new number.",
+    "- opponent_star_out on a gameline is the primary cover signal. own_star_out"
+    " is secondary and must not veto a still-plus EV side.",
     "- CORRELATION: rows sharing the same event_id (same matchup) are same-game"
     " legs. Do NOT size stacked same-event bets as independent — their outcomes"
     " are correlated (e.g. two props in one game, or a team side plus that game's"
@@ -1635,6 +1673,26 @@ def build_briefing(
                 f"({r.get('price')}) edge={r.get('edge_pct')} units={r.get('recommended_units_pre_news')} "
                 f"| {_matchup_display(r)}"
             )
+    playable_props = sorted(
+        [
+            r
+            for r in rows
+            if r.get("_board") == "board_a"
+            and slate_quality.is_player_prop(r)
+            and (str(r.get("sport") or ""), str(r.get("market_id"))) not in derived_market_ids
+        ],
+        key=slate_quality.playable_prop_sort_key,
+    )
+    lines += ["", "### Playable props by edge"]
+    if playable_props:
+        for r in playable_props:
+            lines.append(
+                f"- [{r.get('sport')}] {r.get('market_id')}: {r.get('selection')} "
+                f"@ {r.get('line')} ({r.get('price')}) edge={r.get('edge_pct')} "
+                f"prob={r.get('model_prob')} units={r.get('recommended_units_pre_news')}"
+            )
+    else:
+        lines.append("- none")
     lines += ["", "### Top signal cards"]
     for r in rows:
         if (

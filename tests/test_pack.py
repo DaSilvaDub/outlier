@@ -2557,6 +2557,197 @@ def test_swap_staged_pack_immediate_rollback_on_other_error(tmp_path):
         assert mock_replace.call_count == 3
 
 
+def test_usage_up_under_demotes_own_star_out_player_under():
+    card = _ctx_card(
+        "CHI",
+        "SEA",
+        "CHI @ SEA",
+        headline_side="UNDER",
+        player="Kamilla Cardoso",
+        market="REB",
+        market_raw="Rebounds",
+        market_label="Kamilla Cardoso - Rebounds",
+        sides={
+            "UNDER": {
+                "outcome_id": "o1",
+                "line": 8.5,
+                "best_odds": 104,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 2.04,
+                    "best_ev_pct": 0.023,
+                    "kelly_pct": 0.01,
+                    "ev_source": "LOCAL",
+                },
+            }
+        },
+    )
+    ev = [
+        {
+            "market_id": "c1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 104,
+            "book_decimal_odds": 2.04,
+        }
+    ]
+    row = make_row(
+        card,
+        ev,
+        sport="WNBA",
+        injuries={
+            "ev1": "CHI: Skylar Diggins (Out; Knee) | SEA: Natisha Hiedeman (Out; Shoulder)"
+        },
+    )
+    assert row is not None
+    assert "usage_up_under" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert "own_star_out" in row["signal_flags"]
+    assert "opponent_star_out" in row["signal_flags"]
+
+
+def test_usage_up_under_still_flags_when_projection_is_well_below_line():
+    card = _ctx_card(
+        "CHI",
+        "SEA",
+        "CHI @ SEA",
+        headline_side="UNDER",
+        player="Kamilla Cardoso",
+        market="REB",
+        market_raw="Rebounds",
+        market_label="Kamilla Cardoso - Rebounds",
+        sides={
+            "UNDER": {
+                "outcome_id": "o1",
+                "line": 8.5,
+                "best_odds": 104,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 2.04,
+                    "best_ev_pct": 0.023,
+                    "kelly_pct": 0.01,
+                    "ev_source": "LOCAL",
+                },
+            }
+        },
+    )
+    ev = [
+        {
+            "market_id": "c1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 104,
+            "book_decimal_odds": 2.04,
+        }
+    ]
+    row = make_row(
+        card,
+        ev,
+        sport="WNBA",
+        injuries={"ev1": "CHI: Skylar Diggins (Out; Knee)"},
+        projections={"o1": {"mean": 7.5}},
+    )
+    assert row is not None
+    assert "usage_up_under" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+
+
+def test_over_line_steam_keeps_stale_gate():
+    card = ev_card(
+        side="OVER",
+        line=8.5,
+        market="REB",
+        market_type="REB",
+        market_raw="Rebounds",
+        player="Kamilla Cardoso",
+        flags=["reverse_line_movement", "thin_liquidity"],
+    )
+    card["sides"]["OVER"]["movement"] = {"open_line": 8.5, "current_line": 9.5}
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": -110,
+            "book_decimal_odds": 1.91,
+        }
+    ]
+    row = make_row(card, ev, sport="WNBA")
+    assert row is not None
+    assert "reverse_line_movement" in row["data_quality_flags"]
+    assert "edge_suspect_stale_line" in row["data_quality_flags"]
+    assert "line_moved_with_side" not in row["signal_flags"]
+
+
+def test_favorite_steam_is_clv_not_stale_kill():
+    card = _spread_card("AWAY", -1.5, team="CHI", matchup="CHI @ SEA")
+    card["flags"] = ["reverse_line_movement", "thin_liquidity"]
+    card["sides"]["AWAY"]["movement"] = {"open_line": -1.5, "current_line": -2.5}
+    ev = [
+        {
+            "market_id": "rl1",
+            "outcome_id": "oAWAY",
+            "book": "NV",
+            "book_odds": -108,
+            "book_decimal_odds": 1.9259,
+        }
+    ]
+    row = make_row(card, ev, sport="WNBA")
+    assert row is not None
+    assert "edge_suspect_stale_line" not in row["data_quality_flags"]
+    assert "reverse_line_movement" not in row["data_quality_flags"]
+    assert "line_moved_with_side" in row["signal_flags"]
+
+
+def test_briefing_lists_playable_props_by_edge_not_model_prob():
+    low_edge = {
+        "_board": "board_a",
+        "sport": "WNBA",
+        "market_id": "reb",
+        "market_type": "REB",
+        "selection": "Kamilla Cardoso - Rebounds UNDER 8.5",
+        "line": 8.5,
+        "price": 104,
+        "edge_pct": 0.023,
+        "model_prob": 0.50,
+        "recommended_units_pre_news": 0.5,
+        "event_id": "e1",
+        "matchup": "CHI @ SEA",
+        "team_name": "Chicago Sky",
+        "opp_name": "Seattle Storm",
+        "home_away": "AWAY",
+        "_event_starts_at": "2026-08-16T21:00:00+00:00",
+    }
+    high_edge = {
+        **low_edge,
+        "market_id": "ast",
+        "market_type": "AST",
+        "selection": "Other Player - Assists OVER 5.5",
+        "edge_pct": 0.10,
+        "model_prob": 0.48,
+        "recommended_units_pre_news": 1.0,
+    }
+    briefing = build_briefing([low_edge, high_edge], "2026-08-16")
+    assert "### Playable props by edge" in briefing
+    first = briefing.split("### Playable props by edge", 1)[1]
+    assert first.find("ast") < first.find("reb")
+
+
+def test_dossier_includes_injury_usage_section():
+    card = _ctx_card("CHI", "SEA", "CHI @ SEA", market="REB", market_raw="Rebounds")
+    row = make_row(
+        card,
+        [],
+        sport="WNBA",
+        injuries={"ev1": "CHI: Skylar Diggins (Out; Knee)"},
+    )
+    dossier = build_dossier([row], "WNBA")
+    assert "### Injury / usage" in dossier
+    assert "Own-team outs" in dossier
+
+
 def test_restore_published_pack_with_transient_lock(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()

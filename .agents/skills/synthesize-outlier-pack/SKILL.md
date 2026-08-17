@@ -45,8 +45,9 @@ Treat the `ROLE_BLOCK` text found in `briefing.md` as your primary system prompt
 **Selection Rules:**
 - **Trust the Pack:** Prefer the data in the pack over any internal knowledge.
 - **Line Matching:** For every candidate you analyze, you must quote the exact `market_id`, `selection`, `line`, and `price` directly from the CSV. Never paraphrase the line/price.
-- **Stale Lines:** Downgrade props on stale lines (use the freshness section in the briefing).
-- **Injury/Usage:** Weight injury and usage changes higher than older data. If a card has no supporting freshness or injury context in the briefing, downgrade it.
+- **Stale Lines:** Downgrade only when the live number moved *against* the pack side. A move *toward* the pack side (CHI -1.5 → -2.5) is +CLV: play the pack number if it is still bookable; do not stand down as stale.
+- **Injury/Usage:** Opponent star-out is the primary cover signal on sides. Own-star Out is secondary and must not veto a still-plus EV side. An UNDER player prop on a card whose own team has a confirmed Out is usage-up — fade it, do not Board-A it.
+- **Prop ranking:** Rank remaining player props by `edge_pct` / EV, never by raw `model_prob`.
 - **Artifact Detection:** Explicitly filter out >90% EV edges. Cross-reference these with the slate context; if unexplainable by breaking news, treat them as stale lines/artifacts and move them to the stand-down section.
 - **Pack-only rule:** Missing context goes under `NEEDS`; do not fill gaps from memory or silently change lines or prices.
 

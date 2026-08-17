@@ -611,6 +611,8 @@ def normalize_games(
                 # lineups) because MLB matchups ship empty lineups.
                 "home_team_id": event_info.get("home_team_id"),
                 "away_team_id": event_info.get("away_team_id"),
+                "home": event_info.get("home"),
+                "away": event_info.get("away"),
             }
 
         insights = event_data.get("insights")

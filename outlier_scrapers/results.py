@@ -43,14 +43,19 @@ EASTERN = ZoneInfo("America/New_York")
 TEAM_ALIASES = {
     "ARI": "AZ",
     "CHW": "CWS",
+    "CWS": "CWS",
     "GSV": "GS",
     "KCR": "KC",
     "LAS": "LA",
     "LVA": "LV",
+    "PDX": "POR",
+    "POR": "POR",
     "SDP": "SD",
     "SFG": "SF",
     "TBR": "TB",
+    "WAS": "WAS",
     "WSH": "WAS",
+    "WSN": "WAS",
 }
 
 
@@ -324,6 +329,35 @@ def _mlb_events(
     return events
 
 
+def _player_boxscore_key(event: FinalEvent, selection: str) -> str | None:
+    """Resolve one boxscore player key for a selection, or None if ambiguous."""
+    raw_name = selection.split(" - ", 1)[0].strip()
+    parts = raw_name.split()
+    full = _token(raw_name)
+    if full and full in event.players:
+        return full
+    if len(parts) < 2:
+        return None
+    first = _token(parts[0])
+    last = _token(parts[-1])
+    if not first or len(last) < 4:
+        return None
+    matches = [
+        name for name in event.players if name.endswith(last) and name.startswith(first)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _player_event_candidates(events: Sequence[FinalEvent], selection: str) -> list[FinalEvent]:
+    """Match a player-prop selection to exactly one completed event when possible.
+
+    Exact normalized full-name hits win. If none, a unique first-initial /
+    first-name + last-name key on a single event is accepted. Ambiguous
+    collisions stay unmatched.
+    """
+    return [event for event in events if _player_boxscore_key(event, selection)]
+
+
 def _event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"\b([A-Za-z0-9]+)\s+@\s+([A-Za-z0-9]+)\b", selection)
     return bool(
@@ -435,7 +469,8 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     if player_match and (
         market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"}
     ):
-        stats = event.players.get(_token(player_match.group(1)))
+        player_key = _player_boxscore_key(event, selection) or _token(player_match.group(1))
+        stats = event.players.get(player_key)
         if not stats:
             return None
         actual = _player_actual(player_match.group(2), stats, event.sport)
@@ -467,7 +502,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     if total:
         actual = event.away_score + event.home_score
         return actual, _side_result(actual, line, total.group(1).upper())
-    spread = re.search(r"\bSpread\s+(HOME|AWAY)\b", selection, re.IGNORECASE)
+    spread = re.search(r"\b(?:Spread|Run Line)\s+(HOME|AWAY)\b", selection, re.IGNORECASE)
     if spread:
         selected_score, other_score = (
             (event.home_score, event.away_score)
@@ -606,8 +641,7 @@ def collect_settlement_rows(
             else:
                 candidates = [event for event in events if _event_match(event, selection)]
             if " - " in selection:
-                player_name = _token(selection.split(" - ", 1)[0])
-                candidates = [event for event in events if player_name in event.players]
+                candidates = _player_event_candidates(events, selection)
             if len(candidates) != 1:
                 summary["unmatched_event_count"] += 1
                 continue
