@@ -219,6 +219,43 @@ def _board_rows() -> list[dict]:
     return build_alt_team_total_board(_games_norm(records), league="WNBA", now=NOW)
 
 
+def test_mlb_parlays_are_cross_game_only():
+    records = [
+        _tt_record(
+            4.5,
+            team="Yankees",
+            proposition="RUNS",
+            matchup="Red Sox @ Yankees",
+            stats=_l10_stats(10),
+            books=[{"book": "dk", "odds": -450}],
+        ),
+        _tt_record(
+            5.5,
+            team="Red Sox",
+            market_id="m2",
+            proposition="RUNS",
+            matchup="Red Sox @ Yankees",
+            stats=_l10_stats(10, side="awaySummaryStat"),
+            books=[{"book": "dk", "odds": -400}],
+        ),
+        _tt_record(
+            4.5,
+            team="Dodgers",
+            market_id="m3",
+            event_id="E2",
+            proposition="RUNS",
+            matchup="Giants @ Dodgers",
+            stats=_l10_stats(10, side="awaySummaryStat"),
+            books=[{"book": "dk", "odds": -500}],
+        ),
+    ]
+    rows = build_alt_team_total_board(_games_norm(records), league="MLB", now=NOW)
+    parlays = build_alt_team_total_parlays(rows)
+    assert parlays
+    assert all(p["is_sgp"] == "false" for p in parlays)
+    assert all("E1,E2" in p["event_ids"] or "E2,E1" in p["event_ids"] for p in parlays)
+
+
 def test_parlays_two_leg_combinations_and_sgp_flag():
     rows = _board_rows()
     parlays = build_alt_team_total_parlays(rows)

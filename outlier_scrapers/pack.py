@@ -1490,9 +1490,11 @@ ROLE_BLOCK = [
     " each leg's recommended_units_pre_news at face value.",
     "",
     "HOUSE RULES (all passes):",
-    "- MLB player props (strict whitelist): SO, H, TB, OUTS, 2B, HRR, ER, BB only."
-    " Doubles (2B) are UNDER-only. Team props: H, SO, BB, R, TOTAL only."
-    " Game lines (ML/spread/total) are preserved.",
+    "- MLB player props (strict whitelist): pitcher strikeouts (SO) only."
+    " Team props: R and TOTAL (team run totals) only."
+    " Game lines (ML/spread/total) are preserved in the feed."
+    " MLB alt player parlays are SO OVER across different games."
+    " MLB alt totals parlays are OVER game/team run totals across different games.",
     "- HR markets are excluded from this desk entirely."
     " If one appears in the pack, treat it as a data error and stand it down.",
     f"- Plus-money longshots priced +{LONGSHOT_AMERICAN_PRICE} or longer (e.g. a Hits Over at +181)"
@@ -1543,6 +1545,7 @@ DERIVED_PACK_OUTPUTS = (
     "projections.jsonl",
     "portfolio_risk.json",
     "mlb_alt_bankroll_props.csv",
+    "mlb_alt_bankroll_parlays.csv",
     "wnba_alt_bankroll_props.csv",
     "mlb_alt_spreads.csv",
     "wnba_alt_spreads.csv",
@@ -1943,8 +1946,10 @@ def write_pack(
         format_alt_team_totals_md,
     )
     from outlier_scrapers.alt_bankroll_props import (
+        ALT_BANKROLL_PARLAYS_HEADER,
         ALT_BANKROLL_PROPS_HEADER,
         build_alt_bankroll_board,
+        build_alt_bankroll_parlays,
     )
     from outlier_scrapers.alt_spreads import ALT_SPREADS_HEADER, build_alt_spreads_board
     from outlier_scrapers.alt_player_props import (
@@ -1967,12 +1972,14 @@ def write_pack(
     alt_spread_rows: list[dict[str, Any]] = []
     alt_total_rows: list[dict[str, Any]] = []
     bankroll_rows_by_league: dict[str, list[dict[str, Any]]] = {}
+    bankroll_parlays_by_league: dict[str, list[dict[str, Any]]] = {}
     for lg, payload in (games_norm_by_league or {}).items():
         league_tt_rows = build_alt_team_total_board(payload, league=lg, target_date=pack_date)
         alt_tt_rows.extend(league_tt_rows)
         alt_tt_parlays.extend(build_alt_team_total_parlays(league_tt_rows))
         bankroll_rows = build_alt_bankroll_board(payload, league=lg, target_date=pack_date)
         bankroll_rows_by_league[lg] = bankroll_rows
+        bankroll_parlays_by_league[lg] = build_alt_bankroll_parlays(bankroll_rows)
         alt_spread_rows.extend(build_alt_spreads_board(payload, league=lg, target_date=pack_date))
         alt_total_rows.extend(
             row
@@ -2359,6 +2366,11 @@ def write_pack(
             out_dir / f"{lg.lower()}_alt_bankroll_props.csv",
             ALT_BANKROLL_PROPS_HEADER,
             bankroll_rows,
+        )
+        _write_csv(
+            out_dir / f"{lg.lower()}_alt_bankroll_parlays.csv",
+            ALT_BANKROLL_PARLAYS_HEADER,
+            bankroll_parlays_by_league.get(lg) or [],
         )
 
     for lg in games_norm_by_league or {}:

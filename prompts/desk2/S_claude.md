@@ -893,7 +893,7 @@ Before answering, verify every item below.
 * No 3PM recommendation (non-MLB high-variance).
 * No turnovers recommendation (non-MLB high-variance).
 * No HR recommendation (pack hard-ban).
-* MLB player props outside strict whitelist (SO, H, TB, OUTS, 2B UNDER-only, HRR, ER, BB) are not recommended.
+* MLB player props outside the strict whitelist (pitcher SO only) are not recommended.
 * MLB team props outside H / SO / BB / R / TOTAL are not recommended.
 * No prohibited +150-or-longer longshot.
 

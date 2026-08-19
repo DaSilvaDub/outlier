@@ -1,10 +1,12 @@
 """Alt bankroll props L10 board (WNBA + MLB).
 
-Lists full-game GAMELINE (Moneyline, Spread, Game Total) and eligible TEAM_PROP
-lines that the team has cleared at least 75% of the time over its last 5 games
-and at least 75% of the time over its last 10 games. Only prices from Hard
-Rock, Fanatics, Midnite, DraftKings, or Novig, from -1000 through -110, are
-included. Consumes the normalized games feed; no API calls.
+WNBA: full-game GAMELINE (Moneyline, Spread, Game Total) and TEAM_PROP lines
+that cleared at least 75% over L5 and L10.
+
+MLB: high-probability OVER game totals and team run totals only. Moneyline,
+spread, and non-run team props are excluded from this board. Only prices from
+Hard Rock, Fanatics, Midnite, DraftKings, or Novig, from -1000 through -110,
+are included. Consumes the normalized games feed; no API calls.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import argparse
 import json
 import sys
 from datetime import datetime
+from itertools import combinations
 from typing import Any
 
 from outlier_scrapers.game_totals import (
@@ -22,12 +25,14 @@ from outlier_scrapers.game_totals import (
 )
 from outlier_scrapers.utils import (
     _american_to_decimal,
+    _decimal_to_american,
     _local_date,
     _summary_stat_for_team,
     drop_locked_events,
 )
 from outlier_scrapers.normalizer import (
     ALLOWED_MLB_TEAM_PROPS,
+    MLB_ALT_TEAM_OVER_MARKETS,
     implied_probability,
     percent_number,
 )
@@ -84,19 +89,31 @@ ALT_BANKROLL_PROPS_HEADER = [
 
 
 def is_alt_bankroll_record(rec: dict[str, Any], *, league: str) -> bool:
-    """Full-game supported GAMELINE or league-eligible TEAM_PROP record."""
+    """Full-game supported GAMELINE or league-eligible TEAM_PROP record.
+
+    MLB is OVER game-total / team-run-total only. WNBA keeps the broader
+    moneyline + spread + total + team-prop board.
+    """
     if not is_full_game_total(rec):
         return False
     mt = str(rec.get("market_type") or "").upper()
     proposition = str(rec.get("proposition") or rec.get("market") or "").upper()
+    token = league.strip().upper()
+    position = str(rec.get("position") or rec.get("side") or "").upper()
+    if token == "MLB":
+        if position != "OVER":
+            return False
+        if mt == "GAMELINE":
+            return proposition == "TOTAL"
+        if mt != "TEAM_PROP":
+            return False
+        market = str(rec.get("market") or proposition).strip().upper()
+        return market in ALLOWED_MLB_TEAM_PROPS and market in MLB_ALT_TEAM_OVER_MARKETS
     if mt == "GAMELINE":
         return proposition in ALLOWED_GAMELINES
     if mt != "TEAM_PROP":
         return False
-    if league.strip().upper() != "MLB":
-        return True
-    market = str(rec.get("market") or "").strip().upper()
-    return market in ALLOWED_MLB_TEAM_PROPS
+    return True
 
 
 def _window(
@@ -329,6 +346,103 @@ def build_alt_bankroll_board(
 
     rows.sort(key=lambda r: (r["event_id"], str(r["team"]).lower(), str(r["proposition"])))
     return rows
+
+
+ALT_BANKROLL_PARLAYS_HEADER = [
+    "league",
+    "event_starts_at",
+    "type",
+    "leg_1_label",
+    "leg_1_position",
+    "leg_1_line",
+    "leg_1_odds",
+    "leg_2_label",
+    "leg_2_position",
+    "leg_2_line",
+    "leg_2_odds",
+    "parlay_odds",
+]
+
+
+def _bankroll_leg_label(row: dict[str, Any]) -> str:
+    team = str(row.get("team") or "").strip()
+    matchup = str(row.get("matchup") or "").strip()
+    proposition = str(row.get("proposition") or row.get("market") or "").strip().upper()
+    market_type = str(row.get("market_type") or "").strip().upper()
+    if market_type == "GAMELINE" and proposition == "TOTAL":
+        return f"{matchup or team} GAME TOTAL"
+    return f"{team or matchup} {proposition or 'TEAM TOTAL'}"
+
+
+def build_alt_bankroll_parlays(board: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Cross-game 2-leg OVER parlays from high-probability MLB totals.
+
+    One qualifying OVER per event (highest L10, then longest favorite).
+    WNBA rows are ignored — this parlay surface is the MLB alt-over totals
+    product only.
+    """
+    by_event: dict[str, dict[str, Any]] = {}
+    for row in board:
+        if str(row.get("league") or "").upper() != "MLB":
+            continue
+        if str(row.get("position") or "").upper() != "OVER":
+            continue
+        if row.get("decimal_price") in (None, ""):
+            continue
+        event_id = str(row.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        current = by_event.get(event_id)
+        if current is None:
+            by_event[event_id] = row
+            continue
+        if float(row["l10_pct"]) > float(current["l10_pct"]) or (
+            float(row["l10_pct"]) == float(current["l10_pct"])
+            and float(row["best_price"]) > float(current["best_price"])
+        ):
+            by_event[event_id] = row
+
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in by_event.values():
+        day = _local_date(row.get("event_starts_at"))
+        if day is None:
+            continue
+        by_day.setdefault(day, []).append(row)
+
+    parlays: list[dict[str, Any]] = []
+    for day, day_rows in by_day.items():
+        for leg1, leg2 in combinations(day_rows, 2):
+            if leg1.get("event_id") == leg2.get("event_id"):
+                continue
+            dec1 = _american_to_decimal(leg1.get("best_price"))
+            dec2 = _american_to_decimal(leg2.get("best_price"))
+            if dec1 is None or dec2 is None:
+                continue
+            parlay_decimal = dec1 * dec2
+            parlays.append(
+                {
+                    "league": "MLB",
+                    "event_starts_at": day,
+                    "type": "Cross-Game",
+                    "leg_1_label": _bankroll_leg_label(leg1),
+                    "leg_1_position": leg1["position"],
+                    "leg_1_line": leg1["line"],
+                    "leg_1_odds": leg1["best_price"],
+                    "leg_2_label": _bankroll_leg_label(leg2),
+                    "leg_2_position": leg2["position"],
+                    "leg_2_line": leg2["line"],
+                    "leg_2_odds": leg2["best_price"],
+                    "parlay_odds": _decimal_to_american(parlay_decimal),
+                    "_sort_decimal": parlay_decimal,
+                    "_l10_avg": (float(leg1["l10_pct"]) + float(leg2["l10_pct"])) / 2.0,
+                }
+            )
+
+    parlays.sort(key=lambda row: (row["_l10_avg"], -row["_sort_decimal"]), reverse=True)
+    for row in parlays:
+        row.pop("_sort_decimal", None)
+        row.pop("_l10_avg", None)
+    return parlays
 
 
 def export_alt_bankroll_props_for_league(

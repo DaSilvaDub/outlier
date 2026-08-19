@@ -12,7 +12,7 @@ def _prop(
     *,
     league: str = "MLB",
     player: str = "Player One",
-    market: str = "H",
+    market: str = "SO",
     position: str = "OVER",
     odds: int = -600,
     book: str = "Hard Rock",
@@ -157,15 +157,19 @@ def test_player_board_accepts_full_inclusive_odds_window():
     }
 
 
-def test_player_board_enforces_mlb_doubles_under_and_wnba_targets():
+def test_player_board_enforces_mlb_pitcher_k_over_and_wnba_targets():
     mlb_rows = _board(
         [
+            _prop(player="K Over", market="SO", position="OVER"),
+            _prop(player="K Under", market="SO", position="UNDER"),
+            _prop(player="Hits", market="H", position="OVER"),
             _prop(player="Under", market="2B", position="UNDER"),
-            _prop(player="Over", market="2B", position="OVER"),
             _prop(player="RBI", market="RBI"),
         ]
     )
-    assert [(row["player"], row["position"]) for row in mlb_rows] == [("Under", "UNDER")]
+    assert [(row["player"], row["market"], row["position"]) for row in mlb_rows] == [
+        ("K Over", "SO", "OVER")
+    ]
 
     wnba_rows = _board(
         [
@@ -178,7 +182,24 @@ def test_player_board_enforces_mlb_doubles_under_and_wnba_targets():
 
 
 def test_player_parlays_use_player_name_when_player_id_is_missing():
-    rows = _board([_prop(player="One"), _prop(player="Two", market="SO")])
+    rows = _board(
+        [
+            _prop(player="One", event_id="e1"),
+            _prop(player="Two", event_id="e2"),
+        ]
+    )
     parlays = build_alt_player_props_parlays(rows)
     assert len(parlays) == 1
+    assert parlays[0]["type"] == "Cross-Game"
     assert {parlays[0]["leg_1_player"], parlays[0]["leg_2_player"]} == {"One", "Two"}
+
+
+def test_mlb_alt_k_parlays_reject_same_game_legs():
+    rows = _board(
+        [
+            _prop(player="One", event_id="e1"),
+            _prop(player="Two", event_id="e1"),
+        ]
+    )
+    assert len(rows) == 2
+    assert build_alt_player_props_parlays(rows) == []

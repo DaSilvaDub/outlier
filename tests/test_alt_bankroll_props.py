@@ -3,15 +3,18 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 
-from outlier_scrapers.alt_bankroll_props import build_alt_bankroll_board
+from outlier_scrapers.alt_bankroll_props import (
+    build_alt_bankroll_board,
+    build_alt_bankroll_parlays,
+)
 from outlier_scrapers.pack import write_pack
 
 
 def _game(
     *,
     market_type: str = "GAMELINE",
-    proposition: str = "MONEYLINE",
-    market: str = "MONEYLINE",
+    proposition: str = "TOTAL",
+    market: str = "TOTAL",
     odds: int = -600,
     book: str = "Hard Rock",
     l5: float = 1.0,
@@ -29,7 +32,7 @@ def _game(
         "market_type": market_type,
         "proposition": proposition,
         "market": market,
-        "position": "HOME" if proposition == "MONEYLINE" else "OVER",
+        "position": "HOME" if proposition in {"MONEYLINE", "SPREAD"} else "OVER",
         "line": 0.0 if proposition == "MONEYLINE" else 4.5,
         "scope": scope,
         "period_label": period_label,
@@ -37,7 +40,10 @@ def _game(
         "team": "HOME",
         "matchup": "AWAY @ HOME",
         "books": [{"book": book, "odds": odds}],
-        "stats": {"homeSummaryStat": {"l5": l5, "l10": l10}},
+        "stats": {
+            "homeSummaryStat": {"l5": l5, "l10": l10},
+            "awaySummaryStat": {"l5": l5, "l10": l10},
+        },
     }
 
 
@@ -101,10 +107,16 @@ def test_bankroll_board_still_excludes_hardrock_r_as_a_distinct_book():
 
 
 def test_bankroll_board_enforces_scope_whitelist_book_odds_and_hit_rates():
+    under = _game(event_id="under", proposition="TOTAL", market="TOTAL")
+    under["position"] = "UNDER"
     rows = _board(
         [
             _game(),
+            _game(event_id="moneyline", proposition="MONEYLINE", market="MONEYLINE"),
+            _game(event_id="spread", proposition="SPREAD", market="SPREAD"),
             _game(event_id="team", market_type="TEAM_PROP", proposition="RUNS", market="R"),
+            _game(event_id="team-hits", market_type="TEAM_PROP", proposition="HITS", market="H"),
+            under,
             _game(event_id="partial", scope="first_inning", period_label="1I"),
             _game(event_id="bad-market", market_type="TEAM_PROP", proposition="RBI", market="RBI"),
             _game(event_id="bad-price", odds=-105),
@@ -210,7 +222,7 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         "player": "Player One",
         "team": "HOME",
         "matchup": "AWAY @ HOME",
-        "market": "H",
+        "market": "SO",
         "position": "OVER",
         "line": 0.5,
         "books": [{"book": "Hard Rock", "odds": -600}],
@@ -239,3 +251,20 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         player_rows = list(csv.DictReader(handle))
     assert [row["event_id"] for row in bankroll_rows] == ["e1"]
     assert [row["player"] for row in player_rows] == ["Player One"]
+    assert (out_dir / "mlb_alt_bankroll_parlays.csv").exists()
+
+
+def test_mlb_bankroll_parlays_are_cross_game_overs():
+    rows = _board(
+        [
+            _game(event_id="e1"),
+            _game(event_id="e2"),
+            _game(event_id="e1-same"),
+        ]
+    )
+    # Force the third row onto e1 so same-game pairing is available and must be dropped.
+    rows[-1]["event_id"] = "e1"
+    parlays = build_alt_bankroll_parlays(rows)
+    assert parlays
+    assert all(p["type"] == "Cross-Game" for p in parlays)
+    assert all(p["leg_1_position"] == "OVER" and p["leg_2_position"] == "OVER" for p in parlays)

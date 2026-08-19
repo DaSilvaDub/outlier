@@ -117,9 +117,10 @@ def test_mlb_doubleheader_dedupe_keeps_same_player_line_in_different_events():
         load_fixture("mlb_schedule.json"),
         get_sport_config("MLB"),
     )
-    # Only the "Hits" prop is kept (2 events = 2 rows originally, but one was Mystery, so only 1 is kept)
+    # Only the pitcher-strikeout prop is kept (mystery barrel is dropped).
     assert len(rows) == 1
     assert rows[0]["event_id"] == "mlb-event-1"
+    assert rows[0]["market"] == "SO"
 
 
 def test_missing_market_id_is_dropped_if_not_in_whitelist():
@@ -151,8 +152,8 @@ def test_unknown_team_yields_none_team_but_preserves_team_raw():
                     "teamId": "1",
                     "position": "OVER",
                     "line": 1.5,
-                    "marketLabel": "Some Guy - Hits",
-                    "proposition": "HITS",
+                    "marketLabel": "Some Guy - Strikeouts",
+                    "proposition": "STRIKEOUTS",
                     "marketId": "m-x",
                     "bestOdds": -110,
                     "books": [],
@@ -217,8 +218,8 @@ def test_unicode_minus_odds_parse_to_int_best_odds():
     schedule = {"events": [{"eventId": "evt-u", "away": {"alias": "NYY", "teamId": "1"},
         "home": {"alias": "BOS", "teamId": "2"}}]}
     props = {"props": [{"outcome": {"eventId": "evt-u", "outcomeId": "outcome-u", "teamId": "1",
-        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Hits",
-        "proposition": "HITS", "marketId": "m-u",
+        "position": "OVER", "line": 1.5, "marketLabel": "Guy - Strikeouts",
+        "proposition": "STRIKEOUTS", "marketId": "m-u",
         "bestOdds": "−120", "books": [], "bookOdds": {}}, "stats": {}}]}
     rows = normalize_player_props(props, schedule, get_sport_config("MLB"))
     assert rows[0]["best_odds"] == -120
@@ -257,7 +258,7 @@ def _mlb_prop(
     label,
     *,
     event_id="e1",
-    proposition="HITS",
+    proposition="STRIKEOUTS",
     line=1.5,
     position="OVER",
 ):
@@ -284,21 +285,21 @@ def _mlb_prop(
 def test_full_game_maps_and_scoped_variant_dropped():
     payload = {
         "props": [
-            _mlb_prop("m1", "Aaron Judge - Hits"),
-            _mlb_prop("m2", "Aaron Judge - 1st Inning Hits"),
+            _mlb_prop("m1", "Aaron Judge - Strikeouts"),
+            _mlb_prop("m2", "Aaron Judge - 1st Inning Strikeouts"),
         ]
     }
     # MLB whitelist drops the 1st inning prop because its canonical market maps to None
     rows = normalize_player_props(payload, _mlb_one_event_schedule(), get_sport_config("MLB"))
     assert len(rows) == 1
     assert rows[0]["sport_context"]["scope"] == "full_game"
-    assert rows[0]["market"] == "H"
+    assert rows[0]["market"] == "SO"
 
 
 def test_teamid_fallback_fills_team_when_event_not_in_schedule():
     # Prop references an event that is not in the schedule index, but its
     # teamId/oppTeamId appear elsewhere in the schedule.
-    payload = {"props": [_mlb_prop("mz", "Some Guy - Hits", event_id="e9", line=0.5)]}
+    payload = {"props": [_mlb_prop("mz", "Some Guy - Strikeouts", event_id="e9", line=0.5)]}
     rows = normalize_player_props(payload, _mlb_one_event_schedule(), get_sport_config("MLB"))
     assert len(rows) == 1
     row = rows[0]
@@ -344,6 +345,13 @@ def test_player_prop_without_stable_outcome_id_is_dropped():
         ("BATTERS_FACED", "Batters Faced"),
         ("PITCHES_THROWN", "Pitches Thrown"),
         ("TOTAL_BASES", "Total Bases"),  # raw token does not alias; live feed uses BASES
+        ("HITS", "Hits"),
+        ("BASES", "Total Bases"),
+        ("OUTS", "Outs"),
+        ("HITSRUNSRBIS", "Hits + Runs + RBIs"),
+        ("EARNED_RUNS", "Earned Runs"),
+        ("WALKS", "Walks"),
+        ("DOUBLES", "Doubles"),
     ],
 )
 def test_non_whitelisted_mlb_markets_are_excluded_during_generation(
@@ -361,13 +369,8 @@ def test_non_whitelisted_mlb_markets_are_excluded_during_generation(
 @pytest.mark.parametrize(
     ("proposition", "label", "expected_market"),
     [
-        ("HITS", "Hits", "H"),
         ("STRIKEOUTS", "Strikeouts", "SO"),
-        ("BASES", "Total Bases", "TB"),
-        ("OUTS", "Outs", "OUTS"),
-        ("HITSRUNSRBIS", "Hits + Runs + RBIs", "HRR"),
-        ("EARNED_RUNS", "Earned Runs", "ER"),
-        ("WALKS", "Walks", "BB"),
+        ("PITCHER_STRIKEOUTS", "Strikeouts", "SO"),
     ],
 )
 def test_whitelisted_mlb_player_props_are_kept(proposition, label, expected_market):
@@ -381,7 +384,7 @@ def test_whitelisted_mlb_player_props_are_kept(proposition, label, expected_mark
     assert rows[0]["market"] == expected_market
 
 
-def test_doubles_are_under_only():
+def test_doubles_are_dropped_not_under_only():
     over = _mlb_prop(
         "m-2b-o", "Aaron Judge - Doubles", proposition="DOUBLES", position="OVER"
     )
@@ -393,7 +396,5 @@ def test_doubles_are_under_only():
         {"props": [over, under]}, _mlb_one_event_schedule(), get_sport_config("MLB")
     )
 
-    assert len(rows) == 1
-    assert rows[0]["market"] == "2B"
-    assert rows[0]["side"] == "UNDER"
+    assert rows == []
 

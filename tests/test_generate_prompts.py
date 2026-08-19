@@ -53,11 +53,8 @@ def test_generate_for_dir_preserves_totals_name_and_writes_bankroll_prompts(tmp_
     assert not list(desk1.glob("2_Master_Totals_MLB_*.txt"))
     assert alt_total.exists()
     assert alt_player.exists()
-    assert alt_spread.exists()
+    assert not alt_spread.exists()
     assert "### Bankroll Alt Props Data (MLB)" in alt_total.read_text(encoding="utf-8")
-    spread_text = alt_spread.read_text(encoding="utf-8")
-    assert "### Alternate Spreads Data (MLB)" in spread_text
-    assert "HOME +3.5,+3.5" in spread_text
     assert not (out_dir / "prompts" / "Desk2_Manual").exists()
 
 
@@ -170,7 +167,7 @@ def test_master_cards_prompt_splits_mlb_wnba_and_both(tmp_path):
         [
             MASTER_CARD_HEADER,
             _master_card_row("MLB", "SO", "", "-150"),
-            _master_card_row("MLB", "TB", "", "-200"),
+            _master_card_row("MLB", "SO", "", "-120"),
             _master_card_row("WNBA", "PTS", "", "-120"),
             _master_card_row("WNBA", "GAMELINE", "Moneyline", "-210"),
             "",
@@ -193,7 +190,8 @@ def test_master_cards_prompt_splits_mlb_wnba_and_both(tmp_path):
     wnba = (desk1 / "1_Master_Cards_WNBA_pack_2099-12-31.txt").read_text(encoding="utf-8")
     both = (desk1 / "1_Master_Cards_Both_pack_2099-12-31.txt").read_text(encoding="utf-8")
 
-    assert "MLB,A,3.0,SO" in mlb and "MLB,A,3.0,TB" in mlb
+    assert "MLB,A,3.0,SO" in mlb
+    assert "TB" not in mlb.split("### 2+ Unit Candidates Data")[1]
     assert "WNBA" not in mlb.split("### 2+ Unit Candidates Data")[1]
     assert "WNBA,A,3.0,PTS" in wnba and "Moneyline" in wnba
     assert "MLB" not in wnba.split("### 2+ Unit Candidates Data")[1]
@@ -233,7 +231,7 @@ def test_filter_master_card_candidates_market_whitelist_and_odds_window():
         [
             MASTER_CARD_HEADER,
             _master_card_row("MLB", "SO", "", "-150"),  # eligible
-            _master_card_row("MLB", "TB", "", "-200"),  # eligible
+            _master_card_row("MLB", "TB", "", "-200"),  # no longer on MLB whitelist
             _master_card_row("MLB", "H", "", "-150"),  # not on MLB whitelist
             _master_card_row("MLB", "SO", "", "-300"),  # too far favorite (< -250)
             _master_card_row("MLB", "SO", "", "150"),  # +150-or-longer rejected
@@ -247,7 +245,6 @@ def test_filter_master_card_candidates_market_whitelist_and_odds_window():
 
     assert [(r["market_type"], r["price"]) for r in rows] == [
         ("SO", "-150"),
-        ("TB", "-200"),
     ]
 
 
@@ -259,7 +256,7 @@ def test_filter_master_card_candidates_matches_player_prop_catchall_and_label_va
     candidates = "\n".join(
         [
             MASTER_CARD_HEADER,
-            _master_card_row("MLB", "PLAYER_PROP", "Riley Greene - Bases", "145"),  # TB fallback
+            _master_card_row("MLB", "PLAYER_PROP", "Riley Greene - Bases", "145"),  # TB dropped
             _master_card_row(
                 "MLB", "PLAYER_PROP", "Framber Valdez - Strikeouts", "-120"
             ),  # SO fallback
@@ -284,7 +281,6 @@ def test_filter_master_card_candidates_matches_player_prop_catchall_and_label_va
     )
 
     assert [r["market_label"] for r in mlb] == [
-        "Riley Greene - Bases",
         "Framber Valdez - Strikeouts",
         "Run Line",
     ]
@@ -337,11 +333,9 @@ def test_generate_for_dir_removes_spreads_from_alt_total_and_uses_fallback_lane(
 
     desk1 = out_dir / "prompts" / "Desk1_Automated"
     alt_total = (desk1 / "3_Master_Alt_Total_MLB_pack_2099-12-31.txt").read_text(encoding="utf-8")
-    alt_spread = (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").read_text(encoding="utf-8")
     assert ",TOTAL,OVER,total-market," in alt_total
     assert ",SPREAD," not in alt_total
-    assert "signed_line,selection" in alt_spread
-    assert "+3.5,HOME +3.5" in alt_spread
+    assert not (desk1 / "5_Master_Alt_Spread_MLB_pack_2099-12-31.txt").exists()
 
 
 def test_build_fallback_spreads_drops_rows_without_unambiguous_identity():

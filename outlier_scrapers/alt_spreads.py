@@ -91,7 +91,13 @@ def build_alt_spreads_board(
     now: datetime | None = None,
     target_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return strict, spread-only rows from the shared alt-bankroll board."""
+    """Return strict, spread-only rows from the shared alt-bankroll board.
+
+    MLB alt spreads are retired: the baseball product is pitcher Ks plus
+    over game/team totals. WNBA still uses this board.
+    """
+    if str(league or "").strip().upper() == "MLB":
+        return []
     bankroll_rows = build_alt_bankroll_board(
         games_norm,
         league=league,

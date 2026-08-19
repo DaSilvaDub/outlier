@@ -19,15 +19,18 @@ logger = logging.getLogger(__name__)
 
 # Strict MLB player-prop whitelist (full-game only). House rule source of truth —
 # keep in lockstep with scripts/sync_agent_docs.py COMMON_INVARIANTS_BLOCK §1.
-ALLOWED_MLB_PLAYER_PROPS = frozenset({
-    "SO", "TB", "OUTS", "2B", "HRR", "ER", "BB", "H"
-})
+# Pitcher strikeouts only. Batter Ks normalize to BSO and stay excluded.
+ALLOWED_MLB_PLAYER_PROPS = frozenset({"SO"})
 
 # Strict MLB team-prop whitelist (full-game only). GAMELINE moneyline/spread/total
 # are not TEAM_PROP and are never gated by this set. House rule §2.
-ALLOWED_MLB_TEAM_PROPS = frozenset({
-    "H", "SO", "BB", "R", "TOTAL"
-})
+# Team run totals only (canonical R / TOTAL). Hits, team Ks, and walks drop.
+ALLOWED_MLB_TEAM_PROPS = frozenset({"R", "TOTAL"})
+
+# Alt-board side policy. Standard SO/total rows may still be either side;
+# MLB alt parlays are high-probability OVER legs from different games.
+MLB_ALT_PLAYER_OVER_MARKETS = frozenset({"SO"})
+MLB_ALT_TEAM_OVER_MARKETS = frozenset({"R", "TOTAL"})
 
 
 def _market_token(value: Any) -> str:
@@ -419,11 +422,10 @@ def normalize_player_props(
         else:
             market = None
 
-        # House rule §1 + §3: strict whitelist; Doubles (2B) are UNDER-only.
+        # House rule §1: pitcher strikeouts (SO) only. Every other player prop
+        # is dropped at generation, including former whitelist members.
         if config.league_id == "MLB":
             if market not in ALLOWED_MLB_PLAYER_PROPS:
-                continue
-            if market == "2B" and side == "OVER":
                 continue
         books = _books_from_outcome(outcome)
 

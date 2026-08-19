@@ -323,6 +323,8 @@ def build_alt_team_total_parlays(
             naive_prob *= float(leg["l10_pct"]) / 100.0
         event_ids = [str(leg["event_id"]) for leg in combo]
         is_sgp = len(set(event_ids)) < len(event_ids)
+        if is_sgp and str(combo[0].get("league") or "").upper() == "MLB":
+            continue
         american = _decimal_to_american(combined_decimal)
         flags = ["SGP_CORRELATED_LEGS"] if is_sgp else []
         parlays.append(

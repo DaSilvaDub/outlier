@@ -167,14 +167,14 @@ MASTER_CARD_SPREAD_TOKENS = {
 }
 
 # Specific market_type codes the pack sometimes assigns directly.
-MASTER_CARD_MLB_MARKET_TYPES = frozenset({"SO", "TB"})
+MASTER_CARD_MLB_MARKET_TYPES = frozenset({"SO"})
 MASTER_CARD_WNBA_MARKET_TYPES = frozenset({"PTS", "AST", "REB", "PA", "PR", "RA", "PRA"})
 
 # Fallback for rows the pack tags with the generic PLAYER_PROP catch-all
 # instead of a specific code: match on the "Player Name - <Prop>" label
 # suffix. TEAM_PROP is intentionally excluded — team Points/Steals labels
 # are a different market than the player props in the Master Card whitelist.
-MASTER_CARD_MLB_PROP_LABEL_SUFFIXES = frozenset({"BASES", "STRIKEOUTS"})
+MASTER_CARD_MLB_PROP_LABEL_SUFFIXES = frozenset({"STRIKEOUTS"})
 MASTER_CARD_WNBA_PROP_LABEL_SUFFIXES = frozenset(
     {
         "POINTS",
@@ -358,6 +358,7 @@ def generate_for_dir(
     bankroll_data: tuple[str, str],
     no_clean: bool,
     spreads_data: tuple[str | None, str | None] | None = None,
+    bankroll_parlays_data: tuple[str, str] | None = None,
     ultimate_alt_data: tuple[str, str] | None = None,
     include_sequential_prompts: bool = False,
 ) -> None:
@@ -445,6 +446,7 @@ def generate_for_dir(
             alt_props_data,
             bankroll_data,
             spreads_data,
+            bankroll_parlays_data=bankroll_parlays_data,
         )
     desk2_count = 0
     if include_sequential_prompts:
@@ -464,6 +466,7 @@ def _write_legacy_alt_prompts(
     alt_props_data: tuple[str, str],
     bankroll_data: tuple[str, str],
     spreads_data: tuple[str | None, str | None] | None,
+    bankroll_parlays_data: tuple[str, str] | None = None,
 ) -> None:
     # "Alt Total" and "Alt Player Prop" are both bankroll-style plays (low
     # variance, high probability) — the market type differs (game/team total
@@ -481,8 +484,17 @@ def _write_legacy_alt_prompts(
     mlb_bankroll_all, wnba_bankroll_all = bankroll_data
     mlb_bankroll = filter_bankroll_spreads(mlb_bankroll_all, keep_spreads=False)
     wnba_bankroll = filter_bankroll_spreads(wnba_bankroll_all, keep_spreads=False)
+    mlb_parlays, _wnba_parlays = bankroll_parlays_data or ("", "")
     if csv_has_data_rows(mlb_bankroll):
-        full_mlb_bankroll = f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
+        full_mlb_bankroll = (
+            f"{bankroll_template}\n\n### Pack Data\n{briefing}\n\n"
+            f"### Bankroll Alt Props Data (MLB)\n```csv\n{mlb_bankroll}\n```\n"
+        )
+        if csv_has_data_rows(mlb_parlays):
+            full_mlb_bankroll += (
+                "\n### MLB Cross-Game Alt Over Totals Parlays\n"
+                f"```csv\n{mlb_parlays}\n```\n"
+            )
         safe_write_text(
             desk1_dir / f"3_Master_Alt_Total_MLB_pack_{date_str}.txt", full_mlb_bankroll
         )
@@ -507,6 +519,8 @@ def _write_legacy_alt_prompts(
         provided_wnba if provided_wnba is not None else build_fallback_spreads(wnba_bankroll_all)
     )
     for league, spread_csv in (("MLB", mlb_spreads), ("WNBA", wnba_spreads)):
+        if league == "MLB":
+            continue
         if not csv_has_data_rows(spread_csv):
             continue
         full_spread_prompt = (
@@ -649,6 +663,11 @@ def main() -> None:
     mlb_bankroll = mlb_bp_path.read_text(encoding="utf-8") if mlb_bp_path.exists() else ""
     wnba_bankroll = wnba_bp_path.read_text(encoding="utf-8") if wnba_bp_path.exists() else ""
     bankroll_data = (mlb_bankroll, wnba_bankroll)
+    mlb_bp_parlays_path = latest_pack / "mlb_alt_bankroll_parlays.csv"
+    mlb_bankroll_parlays = (
+        mlb_bp_parlays_path.read_text(encoding="utf-8") if mlb_bp_parlays_path.exists() else ""
+    )
+    bankroll_parlays_data = (mlb_bankroll_parlays, "")
 
     # Read dedicated alternate spreads. The mixed bankroll CSVs remain intact
     # for compatibility; these files provide the explicit spread-only product.
@@ -684,6 +703,7 @@ def main() -> None:
             bankroll_data,
             args.no_clean,
             spreads_data=spreads_data,
+            bankroll_parlays_data=bankroll_parlays_data,
             ultimate_alt_data=ultimate_alt_data,
             include_sequential_prompts=args.include_sequential_prompts,
         )

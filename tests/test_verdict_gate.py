@@ -603,8 +603,14 @@ def test_high_variance_market_3pm(tmp_path):
     only_code(result, "high_variance_market")
 
 
-def test_tb_is_not_high_variance(tmp_path):
+def test_tb_is_now_generation_prohibited(tmp_path):
     index = build_index(tmp_path, candidates=[candidate_row(market_label="TB")])
+    result = gate(parse_verdict(index), index)
+    only_code(result, "prohibited_market")
+
+
+def test_pitcher_so_is_not_high_variance(tmp_path):
+    index = build_index(tmp_path, candidates=[candidate_row(market_label="SO")])
     result = gate(parse_verdict(index), index)
     assert "high_variance_market" not in codes(result)
     assert result.violations == ()
@@ -631,10 +637,19 @@ def test_prohibited_market_player_bb(tmp_path):
     only_code(result, "prohibited_market")
 
 
-def test_team_bb_is_not_prohibited(tmp_path):
+def test_team_bb_is_generation_prohibited(tmp_path):
     index = build_index(
         tmp_path,
         candidates=[candidate_row(market_label="BB", market_type="TEAM_PROP", player_id="")],
+    )
+    result = gate(parse_verdict(index), index)
+    only_code(result, "prohibited_market")
+
+
+def test_team_runs_are_not_prohibited(tmp_path):
+    index = build_index(
+        tmp_path,
+        candidates=[candidate_row(market_label="R", market_type="TEAM_PROP", player_id="")],
     )
     result = gate(parse_verdict(index), index)
     assert "prohibited_market" not in codes(result)
@@ -654,7 +669,7 @@ def test_longshot_price_plus_149_passes(tmp_path):
     assert result.violations == ()
 
 
-def test_side_restricted_2b_over(tmp_path):
+def test_side_restricted_2b_over_is_now_generation_prohibited(tmp_path):
     index = build_index(
         tmp_path,
         candidates=[candidate_row(market_label="2B", selection="Player One Over 1.5", line="1.5")],
@@ -663,10 +678,10 @@ def test_side_restricted_2b_over(tmp_path):
         parse_verdict(index, selection="Player One Over 1.5", line="1.5"),
         index,
     )
-    only_code(result, "side_restricted")
+    only_code(result, "prohibited_market")
 
 
-def test_2b_under_is_not_side_restricted(tmp_path):
+def test_2b_under_is_generation_prohibited(tmp_path):
     index = build_index(
         tmp_path,
         candidates=[candidate_row(market_label="2B", selection="Player One Under 1.5", line="1.5")],
@@ -675,8 +690,7 @@ def test_2b_under_is_not_side_restricted(tmp_path):
         parse_verdict(index, selection="Player One Under 1.5", line="1.5"),
         index,
     )
-    assert "side_restricted" not in codes(result)
-    assert result.violations == ()
+    only_code(result, "prohibited_market")
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ NOW = datetime.fromisoformat("2099-12-31T10:00:00+00:00")
 
 def _spread(
     *,
-    league: str = "MLB",
+    league: str = "WNBA",
     event_id: str = "e1",
     position: str = "HOME",
     team: str = "HOME",
@@ -48,7 +48,7 @@ def _spread(
     }
 
 
-def _board(records: list[dict], league: str = "MLB") -> list[dict]:
+def _board(records: list[dict], league: str = "WNBA") -> list[dict]:
     return build_alt_spreads_board(
         {"generated_at": "2099-12-31T12:00:00Z", "records": records},
         league=league,
@@ -167,10 +167,16 @@ def test_write_pack_emits_spread_only_csvs_without_changing_mixed_bankroll(tmp_p
     with (out_dir / "mlb_alt_bankroll_props.csv").open(newline="", encoding="utf-8") as handle:
         mixed_rows = list(csv.DictReader(handle))
 
-    assert [(row["league"], row["selection"]) for row in mlb_rows] == [
-        ("MLB", "HOME +3.5")
-    ]
+    assert mlb_rows == []
     assert [(row["league"], row["selection"]) for row in wnba_rows] == [
         ("WNBA", "AWAY -2.5")
     ]
-    assert {row["proposition"] for row in mixed_rows} == {"MONEYLINE", "SPREAD"}
+    assert mixed_rows == []
+
+
+def test_mlb_alt_spreads_board_is_retired():
+    rows = _board(
+        [_spread(league="MLB", event_id="mlb-spread")],
+        league="MLB",
+    )
+    assert rows == []

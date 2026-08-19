@@ -14,7 +14,7 @@ from itertools import combinations
 from typing import Any
 
 from outlier_scrapers.game_totals import FULL_GAME_SCOPES
-from outlier_scrapers.normalizer import ALLOWED_MLB_PLAYER_PROPS, percent_number
+from outlier_scrapers.normalizer import MLB_ALT_PLAYER_OVER_MARKETS, percent_number
 from outlier_scrapers.utils import (
     _american_to_decimal,
     _local_date,
@@ -132,9 +132,9 @@ def _event_started(rec: dict[str, Any], now: datetime) -> bool:
 def _is_allowed_side(league: str, market: str, position: str) -> bool:
     if league == "WNBA":
         return market in WNBA_TARGET_MARKETS and position == "OVER"
-    if league != "MLB" or market not in ALLOWED_MLB_PLAYER_PROPS:
-        return False
-    return position == ("UNDER" if market == "2B" else "OVER")
+    if league == "MLB":
+        return market in MLB_ALT_PLAYER_OVER_MARKETS and position == "OVER"
+    return False
 
 
 def build_alt_player_props_board(
@@ -244,7 +244,11 @@ def _decimal_to_american(decimal: float) -> str:
 
 
 def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build two-leg, distinct-player parlays from strict board rows."""
+    """Build two-leg, distinct-player parlays from strict board rows.
+
+    MLB alt K parlays must be cross-game: same-event (SGP) combinations are
+    dropped so correlated outing-length risk cannot stack.
+    """
     by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in board:
         day = _local_date(row.get("event_starts_at"))
@@ -259,6 +263,9 @@ def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str
             key2 = leg2.get("player_id") or str(leg2.get("player") or "").casefold()
             if not key1 or key1 == key2 or leg1.get("league") != leg2.get("league"):
                 continue
+            same_event = leg1.get("event_id") == leg2.get("event_id")
+            if same_event and str(leg1.get("league") or "").upper() == "MLB":
+                continue
             dec1 = _american_to_decimal(leg1.get("best_odds"))
             dec2 = _american_to_decimal(leg2.get("best_odds"))
             if dec1 is None or dec2 is None:
@@ -268,7 +275,7 @@ def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str
                 {
                     "league": leg1["league"],
                     "event_starts_at": day,
-                    "type": "SGP" if leg1["event_id"] == leg2["event_id"] else "Cross-Game",
+                    "type": "SGP" if same_event else "Cross-Game",
                     "leg_1_player": leg1["player"],
                     "leg_1_market": leg1["market"],
                     "leg_1_position": leg1["position"],
@@ -300,6 +307,7 @@ def format_alt_player_props_md(
         "",
         "Full-game Hard Rock/Fanatics/Midnite/DraftKings/Novig lines from -1000 to -110 with L5>=75% and L10>=75%.",
         "Limited to the highest-probability four diverse props per game.",
+        "MLB: pitcher strikeout OVER only; parlays are cross-game (different events).",
         "",
     ]
     if not rows:

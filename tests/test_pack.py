@@ -1835,7 +1835,7 @@ def test_briefing_house_rules():
     text = build_briefing([], "2026-06-24")
     assert "HOUSE RULES" in text
     assert "strict whitelist" in text
-    assert "2B" in text and "UNDER-only" in text
+    assert "pitcher strikeouts (SO) only" in text
     assert "HR markets are excluded" in text
     assert "+150" in text and "longshot" in text.lower()
 

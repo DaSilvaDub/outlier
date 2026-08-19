@@ -51,7 +51,7 @@ Review the provided alternate player props and parlays data.
 ### Phase 2 — Opportunity & Role Verification
 Investigate whether the high coverage rate is supported by underlying opportunity:
 * **Basketball (WNBA/NBA)**: Minutes, usage rate, starting role.
-* **Baseball (MLB)**: Batting order position, plate appearances.
+* **Baseball (MLB)**: Pitcher strikeout OVER only. Confirm expected outing length / batters faced, not batting-order props. Parlay legs must come from different games.
 
 ### Phase 3 — Opponent Matchup & Defense
 Evaluate the upcoming opponent specifically for this prop:

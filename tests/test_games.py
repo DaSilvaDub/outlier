@@ -186,9 +186,9 @@ def test_mlb_non_whitelisted_team_prop_dropped_gameline_preserved():
             "eventId": "e1",
             "markets": [
                 {
-                    "marketId": "m-team-points",
+                    "marketId": "m-team-hits",
                     "marketType": "TEAM_PROP",
-                    "proposition": "POINTS",
+                    "proposition": "HITS",
                     "teamId": "h1",
                     "outcomes": [
                         {"id": "o-tp", "position": "OVER", "line": 4.5},
@@ -219,7 +219,7 @@ def test_mlb_non_whitelisted_team_prop_dropped_gameline_preserved():
         config=config, schedule_payload=schedule, events_payloads=events_payloads, source_url="api"
     )
     records = res["records"]
-    assert not any(r.get("market_id") == "m-team-points" for r in records)
+    assert not any(r.get("market_id") == "m-team-hits" for r in records)
     assert any(r.get("market_id") == "m-ml" for r in records)
     assert any(r.get("market_id") == "m-total" for r in records)
 
