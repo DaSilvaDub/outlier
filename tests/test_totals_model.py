@@ -12,7 +12,6 @@ import pytest
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.totals_model import (
     BASE_INDEPENDENT_WEIGHT,
-    SOURCE_BLEND,
     SOURCE_DEVIG,
     backfill_totals_probabilities,
     blend_over_probability,
@@ -247,10 +246,12 @@ def test_backfill_fills_over_total_row_with_blend():
     out = backfill_totals_probabilities(rows, _norm_by_league(_two_sided(stats=_l10_stats(8, 6))))
     row = out[0]
     assert row["model_prob"] != ""
-    assert row["model_prob_source"] == SOURCE_BLEND
+    assert row["model_prob_source"] == SOURCE_DEVIG
     assert row["market_consensus_prob"] != ""
-    assert row["independent_model_prob"] == pytest.approx(0.7)
+    assert row["independent_model_prob"] == ""
+    assert row["recency_hit_prob"] == pytest.approx(0.7)
     assert row["final_blended_prob"] == row["model_prob"]
+    assert row["model_prob"] == row["market_consensus_prob"]
     assert row["edge_pct"] != ""
     assert row["implied_prob"] != ""
     sizing = compute_sizing(
@@ -387,8 +388,9 @@ def test_write_pack_backfills_over_total_opportunities(tmp_path):
     assert len(rows) == 1
     out = rows[0]
     assert out["edge_pct"] != ""
-    assert out["model_prob_source"] == SOURCE_BLEND
-    assert out["independent_model_prob"] != ""
+    assert out["model_prob_source"] == SOURCE_DEVIG
+    assert out["independent_model_prob"] == ""
+    assert out["recency_hit_prob"] != ""
 
 
 def test_backfill_flags_totals_model_divergence():

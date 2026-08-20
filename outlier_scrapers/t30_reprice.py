@@ -206,7 +206,9 @@ def should_run_t30(
 
 
 def _stream_for_row(row: dict[str, Any]) -> str:
-    return "props" if _text(row.get("market_type")).upper() == "PLAYER_PROP" else "games"
+    from outlier_scrapers.slate_quality import is_player_prop
+
+    return "props" if is_player_prop(row) else "games"
 
 
 def _refresh_leagues(
@@ -511,17 +513,15 @@ def reprice_row(
         row["time_before_game"] = probability_blend.time_before_game_bucket(hours)
     row["odds_range"] = probability_blend.odds_range(row.get("price"))
     pack.apply_learned_probability_blend(row, blend_artifact)
-    final_probability = _float(row.get("final_blended_prob")) or market_probability
     max_units = _float(row.get("max_units")) or 3.0
     sizing = compute_sizing(
         decimal_price=decimal_price,
-        model_prob=final_probability,
+        model_prob=market_probability,
         push_prob=push_prob,
         max_units=max_units,
         min_edge=T30_MIN_EDGE,
     )
-    row["model_prob"] = final_probability
-    row["final_blended_prob"] = final_probability
+    row["model_prob"] = market_probability
     row["implied_prob"] = sizing.implied_prob
     row["edge_pct"] = sizing.edge_pct
     row["kelly_025_units"] = sizing.kelly_025_units
@@ -534,9 +534,15 @@ def reprice_row(
     capped_units = min(original_units, new_units)
     if capped_units <= 0:
         return _kill(row, "KILL_PRICE_MOVED", repriced_at, "no stake remains after repricing")
-    status = "REDUCE" if capped_units < original_units - 1e-9 else "KEEP"
     row["recommended_units_pre_news"] = capped_units
-    row["actionable"] = "true"
+    from outlier_scrapers.slate_quality import apply_predictor_gates
+
+    apply_predictor_gates(row)
+    units_after = _float(row.get("recommended_units_pre_news"))
+    if str(row.get("actionable") or "").lower() != "true" or units_after is None or units_after <= 0:
+        return _kill(row, "KILL_PRICE_MOVED", repriced_at, "predictor gates rejected restake")
+    status = "REDUCE" if units_after < original_units - 1e-9 else "KEEP"
+    row["recommended_units_pre_news"] = units_after
     row["board"] = "A"
     row["t30_status"] = status
     row["t30_repriced_at"] = repriced_at

@@ -25,6 +25,21 @@ def test_detect_scope_period_label_abbreviations():
     assert detect_scope("7-9I") == "partial_period"
 
 
+def test_normalize_player_props_writes_player_id_and_canonical_market_type():
+    payload = load_fixture("mlb_player_props.json")
+    payload["props"][0]["outcome"]["playerId"] = "judge-id"
+    payload["props"][0]["outcome"]["player"] = {"id": "judge-id", "name": "Aaron Judge"}
+    rows = normalize_player_props(
+        payload,
+        load_fixture("mlb_schedule.json"),
+        get_sport_config("MLB"),
+    )
+    so_rows = [row for row in rows if row.get("market") == "SO"]
+    assert so_rows
+    assert so_rows[0]["player_id"] == "judge-id"
+    assert so_rows[0]["market_type"] == "SO"
+
+
 def test_first_inning_game_props_are_not_dropped_by_normalizer():
     rows = normalize_games(
         config=get_sport_config("MLB"),

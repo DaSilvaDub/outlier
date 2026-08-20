@@ -126,6 +126,20 @@ def parse_player_name(outcome: dict[str, Any]) -> str:
     return str(outcome.get("playerName") or outcome.get("name") or "").strip()
 
 
+def parse_player_id(outcome: dict[str, Any]) -> str | None:
+    player_payload = outcome.get("player")
+    if isinstance(player_payload, dict):
+        token = str(
+            player_payload.get("id")
+            or player_payload.get("playerId")
+            or player_payload.get("player_id")
+            or ""
+        ).strip()
+        return token or None
+    token = str(outcome.get("playerId") or outcome.get("player_id") or "").strip()
+    return token or None
+
+
 # Order matters: check the more specific "1st 3 innings" before "1st".
 # Include Outlier periodLabel abbreviations (1H, 6I, F5, 1st 7I, 7-9I, …).
 _SCOPE_CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -444,6 +458,8 @@ def normalize_player_props(
             "outcome_id": outcome_id,
             "player": player_raw,
             "player_raw": player_raw,
+            "player_id": parse_player_id(outcome),
+            "market_type": market or "PLAYER_PROP",
             "team": team,
             "team_raw": team_raw,
             "opponent": opponent,

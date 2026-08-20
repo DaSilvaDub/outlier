@@ -346,14 +346,14 @@ def game_stats_side_flag(rec: dict[str, Any], side: str) -> str | None:
     return flag
 
 
-def movement_corroboration(side: str, mv: dict[str, Any] | None) -> float:
+def movement_corroboration(side: str, mv: dict[str, Any] | None) -> float | None:
     """-1..1: positive when the market is moving toward ``side``.
 
     For an OVER, a falling line and a shortening price both help; mirror for
-    UNDER. Unknown deltas contribute nothing.
+    UNDER. Unknown deltas contribute nothing. ``None`` means no movement feed.
     """
     if not mv:
-        return 0.0
+        return None
     signals: list[float] = []
     line_delta = _to_float(mv.get("line_delta_from_open"))
     if line_delta:
@@ -368,7 +368,7 @@ def movement_corroboration(side: str, mv: dict[str, Any] | None) -> float:
     return round(sum(signals) / len(signals), 3)
 
 
-def insight_component(side: str, insights: list[dict[str, Any]]) -> tuple[float, bool]:
+def insight_component(side: str, insights: list[dict[str, Any]]) -> tuple[float | None, bool]:
     """Return (0-100 score, conflict?) from side-specific insights.
 
     Agreeing insights (same side) blend relevancy and hit-rate upward from the
@@ -378,13 +378,19 @@ def insight_component(side: str, insights: list[dict[str, Any]]) -> tuple[float,
     oppose = [i for i in insights if i.get("side") and i.get("side") != side]
     conflict = any((_to_int(i.get("relevancy")) or 0) >= 70 for i in oppose)
     if not agree:
-        return (40.0 if conflict else 50.0), conflict
+        return (40.0 if conflict else None), conflict
     parts: list[float] = []
     for i in agree:
-        relevancy = _to_int(i.get("relevancy")) or 0
         hit = i.get("hit_rate_pct")
-        hit = float(hit) if isinstance(hit, (int, float)) else 50.0
-        parts.append(0.5 * min(relevancy, 100) + 0.5 * hit)
+        if isinstance(hit, bool) or not isinstance(hit, (int, float)):
+            continue
+        hit_value = float(hit)
+        if not 0.0 <= hit_value <= 100.0:
+            continue
+        relevancy = _to_int(i.get("relevancy")) or 0
+        parts.append(0.5 * min(relevancy, 100) + 0.5 * hit_value)
+    if not parts:
+        return (40.0 if conflict else None), conflict
     score = sum(parts) / len(parts)
     if conflict:
         score = 0.5 * score + 0.5 * 40.0
@@ -462,39 +468,41 @@ def signal_score(
     ``SIGNAL_WEIGHTS`` (four-way) so no-PM scores match pre-feature behavior.
     """
     hit = recency_hit_pct(side_data)
-    hit_component = hit if hit is not None else 50.0
+    hit_component = hit
     orf = side_data.get("orf_score")
-    orf_component = (float(orf) * 100.0) if isinstance(orf, (int, float)) else 50.0
+    orf_component = (float(orf) * 100.0) if isinstance(orf, (int, float)) else None
     insight_score, conflict = insight_component(side, insights)
     corro = movement_corroboration(side, mv)
-    movement_component = 50.0 + 25.0 * corro
+    movement_component = 50.0 + 25.0 * corro if corro is not None else None
 
     pm_info = public_money_divergence(side_data.get("public_money"))
     divergence_pct = pm_info["divergence_pct"] if pm_info else None
     pm_component = public_money_component_from_divergence(divergence_pct)
 
+    parts: dict[str, float | None] = {
+        "hit": hit_component,
+        "orf": None if orf_component is None else min(orf_component, 100.0),
+        "insight": insight_score,
+        "movement": movement_component,
+    }
     if pm_component is not None:
         weights = SIGNAL_WEIGHTS_WITH_PM
-        composite = (
-            weights["hit"] * hit_component
-            + weights["orf"] * min(orf_component, 100.0)
-            + weights["insight"] * insight_score
-            + weights["movement"] * movement_component
-            + weights["public_money"] * pm_component
-        )
+        parts["public_money"] = pm_component
     else:
         weights = SIGNAL_WEIGHTS
-        composite = (
-            weights["hit"] * hit_component
-            + weights["orf"] * min(orf_component, 100.0)
-            + weights["insight"] * insight_score
-            + weights["movement"] * movement_component
-        )
+    present = {key: value for key, value in parts.items() if value is not None and key in weights}
+    weight_total = sum(weights[key] for key in present)
+    composite = (
+        sum(weights[key] * present[key] for key in present) / weight_total
+        if weight_total
+        else 50.0
+    )
 
     return {
         "composite": round(min(max(composite, 0.0), 100.0), 3),
         "hit_pct": hit,
-        "orf_component": round(orf_component, 3),
+        "hit_component": hit_component,
+        "orf_component": None if orf_component is None else round(orf_component, 3),
         "insight_component": insight_score,
         "movement_corroboration": corro,
         "insight_conflict": conflict,
@@ -1236,7 +1244,8 @@ def _route_and_rank(
 def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
     flags: list[str] = []
     ev = view.get("ev") or {}
-    if movement_corroboration(side, _expand_movement(view)) < 0:
+    corro = movement_corroboration(side, _expand_movement(view))
+    if corro is not None and corro < 0:
         flags.append("reverse_line_movement")
     if view.get("signal", {}).get("insight_conflict"):
         flags.append("insight_conflict")
@@ -1261,7 +1270,8 @@ def _board_b_flags(side: str, view: dict[str, Any]) -> list[str]:
     flags: list[str] = []
     if view.get("signal", {}).get("insight_conflict"):
         flags.append("insight_conflict")
-    if movement_corroboration(side, _expand_movement(view)) < 0:
+    corro = movement_corroboration(side, _expand_movement(view))
+    if corro is not None and corro < 0:
         flags.append("reverse_line_movement")
     proxy = view.get("proxy_market_edge")
     if proxy and isinstance(proxy.get("edge_pct"), (int, float)) and proxy["edge_pct"] > 0:

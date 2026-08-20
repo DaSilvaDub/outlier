@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 
 @dataclass(frozen=True)
@@ -227,6 +227,103 @@ def mlb_total_bases_distribution(
                 next_aggregate[current + value] = next_aggregate.get(current + value, 0.0) + current_probability * probability
         aggregate = next_aggregate
     return _bounded_distribution(aggregate)
+
+
+STARTER_PROJECTED_BF = 22.0
+LEAGUE_STRIKEOUT_RATE = 0.225
+LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
+
+
+def independent_projection_eligible(projection: Mapping[str, object] | None) -> bool:
+    """League-average SO stubs are audit-only and must not fill independent_model_prob."""
+
+    if not isinstance(projection, Mapping):
+        return False
+    digest = str(projection.get("feature_snapshot_hash") or "")
+    return digest != LEAGUE_AVG_SO_HASH
+
+
+def _normalize_person_name(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+_SELECTION_NAME_RE = re.compile(
+    r"^(.*?)\s+(?:OVER|UNDER)\b",
+    re.IGNORECASE,
+)
+_TRAILING_MARKET_RE = re.compile(
+    r"\s+(?:SO|STRIKEOUTS?|K|PTS|REB|AST|PRA|PR|PA|RA)$",
+    re.IGNORECASE,
+)
+
+
+def _player_name_from_row(row: Mapping[str, object]) -> str:
+    player = str(row.get("player") or "").strip()
+    if player:
+        return player
+    selection = str(row.get("selection") or "")
+    if " - " in selection:
+        return selection.split(" - ", 1)[0].strip()
+    match = _SELECTION_NAME_RE.match(selection)
+    if not match:
+        return ""
+    return _TRAILING_MARKET_RE.sub("", match.group(1).strip()).strip()
+
+
+def mlb_so_projection_record(
+    row: Mapping[str, object], probable_by_team: Mapping[str, Mapping[str, object]] | None
+) -> dict[str, object] | None:
+    """Build an independent starter-SO projection from probable pitchers.
+
+    Confirmed starters only. Relievers/openers and unconfirmed names stay blank
+    so a league-average guess cannot masquerade as an independent edge.
+    The betting line is never used as a feature.
+    """
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market_type") or row.get("market") or row.get("proposition") or "").upper()
+    if sport != "MLB":
+        return None
+    if market not in {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"} and "STRIKEOUT" not in market:
+        selection = str(row.get("selection") or "").upper()
+        if "STRIKEOUT" not in selection:
+            return None
+    player = _normalize_person_name(_player_name_from_row(row))
+    if not player or not probable_by_team:
+        return None
+    listed = None
+    for info in probable_by_team.values():
+        if not isinstance(info, Mapping):
+            continue
+        if _normalize_person_name(info.get("pitcher")) == player:
+            listed = info
+            break
+    if listed is None or not listed.get("confirmed"):
+        return None
+    line = row.get("line")
+    side = str(row.get("headline_side") or row.get("position") or "").upper()
+    if "OVER" in str(row.get("selection") or "").upper():
+        side = "OVER"
+    elif "UNDER" in str(row.get("selection") or "").upper():
+        side = "UNDER"
+    if side not in {"OVER", "UNDER"} or line in (None, ""):
+        return None
+    try:
+        line_value = float(str(line).replace("+", ""))
+    except (TypeError, ValueError):
+        return None
+    distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
+    record = distribution.to_record(line=line_value, side=side)
+    return {
+        "status": "eligible",
+        "sport": "MLB",
+        "row_id": row.get("outcome_id"),
+        "event_id": row.get("event_id"),
+        "market_id": row.get("market_id"),
+        "line": line_value,
+        "side": side,
+        "feature_snapshot_hash": LEAGUE_AVG_SO_HASH,
+        "distribution": record,
+    }
 
 
 def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:

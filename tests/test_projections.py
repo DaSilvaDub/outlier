@@ -5,6 +5,7 @@ import pytest
 from outlier_scrapers.projections import (
     mlb_first_inning_run_distribution,
     mlb_hits_allowed_distribution,
+    mlb_so_projection_record,
     mlb_strikeout_distribution,
     mlb_total_bases_distribution,
     negative_binomial_distribution,
@@ -64,6 +65,29 @@ def test_projection_cli_contract():
     assert args.command == "project"
     assert args.sport == "MLB"
     assert args.date == "2026-07-14"
+
+
+def test_mlb_so_projection_only_emits_for_confirmed_starters():
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "selection": "Jackson Jobe - Strikeouts OVER 4.5",
+        "player": "Jackson Jobe",
+        "event_id": "g1",
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "line": 4.5,
+        "headline_side": "OVER",
+    }
+    confirmed = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    record = mlb_so_projection_record(row, confirmed)
+    assert record is not None
+    assert record["distribution"]["win_prob"] > 0
+    assert record["distribution"]["side"] == "OVER"
+    assert mlb_so_projection_record(row, {"DET": {"pitcher": "Jackson Jobe", "confirmed": False}}) is None
+    assert mlb_so_projection_record(row, {"DET": {"pitcher": "Tarik Skubal", "confirmed": True}}) is None
+    reliever = {**row, "player": "Robert Stock", "selection": "Robert Stock - Strikeouts OVER 3.5"}
+    assert mlb_so_projection_record(reliever, confirmed) is None
 
 
 def test_project_rows_returns_auditable_probability_partition():

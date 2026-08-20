@@ -91,6 +91,24 @@ def test_public_money_component_and_flags():
     assert public_money_signal_flags(None) == []
 
 
+def test_insight_without_hit_rate_does_not_mint_support():
+    score, conflict = cards.insight_component(
+        "OVER",
+        [{"side": "OVER", "relevancy": 90, "text": "vague lean"}],
+    )
+    assert conflict is False
+    assert score is None
+
+
+def test_insight_with_hit_rate_still_scores():
+    score, conflict = cards.insight_component(
+        "OVER",
+        [{"side": "OVER", "relevancy": 90, "hit_rate_pct": 80.0}],
+    )
+    assert conflict is False
+    assert score == pytest.approx(85.0)
+
+
 def test_signal_score_legacy_equivalence_without_public_money():
     """No-PM path must match the pre-feature four-way composite."""
     base = {
@@ -102,12 +120,13 @@ def test_signal_score_legacy_equivalence_without_public_money():
     }
     scored = signal_score("OVER", base, {"line_delta_from_open": -1.0}, [])
     hit = recency_hit_pct(base)
-    hit_c = hit if hit is not None else 50.0
     orf_c = 60.0
     insight_c, _ = cards.insight_component("OVER", [])
+    assert insight_c is None
     movement_c = 50.0 + 25.0 * 1.0  # corro = 1.0 for falling line on OVER
-    expected = 0.40 * hit_c + 0.20 * orf_c + 0.20 * insight_c + 0.20 * movement_c
+    expected = (0.40 * hit + 0.20 * orf_c + 0.20 * movement_c) / 0.80
     assert scored["composite"] == round(min(max(expected, 0.0), 100.0), 3)
+    assert scored["hit_component"] == hit
     assert scored["public_money_component"] == ""
     assert scored["public_money_divergence_pct"] == ""
 
@@ -643,7 +662,7 @@ def test_movement_corroboration_direction():
     against = movement_corroboration("OVER", {"line_delta_from_open": 1.0, "odds_delta_from_open": 20})
     assert toward == 1.0
     assert against == -1.0
-    assert movement_corroboration("OVER", None) == 0.0
+    assert movement_corroboration("OVER", None) is None
 
 
 def test_snapshot_skew_flags_large_gap():

@@ -45,6 +45,8 @@ def _candidate(**overrides):
             "edge_pct": "0.05",
             "board": "A",
             "actionable": "true",
+            "signal_flags": "insight_support",
+            "model_prob_source": "outlier_devig",
         }
     )
     row.update(overrides)
@@ -117,11 +119,39 @@ def test_reprice_emits_keep_and_never_increases_exposure():
     assert result["board"] == "A"
 
 
+def test_reprice_sizes_on_market_not_blend_and_kills_dead_edge():
+    artifact = {
+        "schema_version": 1,
+        "status": "active",
+        "generated_at": "2026-07-19T00:00:00+00:00",
+        "model_version": "blend-test",
+        "prior_strength": 30,
+        "global": {"market_weight": 0.1, "n": 100},
+        "dimensions": {},
+    }
+    candidate = _candidate(
+        independent_model_prob="0.80",
+        market_consensus_prob="0.52",
+        model_prob="0.52",
+    )
+    result = t30_reprice.reprice_row(
+        candidate,
+        state=_state(_record(devig_decimal=1.91, book_decimal_odds=1.91, book_odds=-110)),
+        original_context=_context(),
+        current_context=_context(),
+        blend_artifact=artifact,
+        now=NOW,
+    )
+    assert result["model_prob"] == pytest.approx(1.0 / 1.91)
+    assert result["t30_status"] == "KILL_PRICE_MOVED"
+    assert result["actionable"] == "false"
+
+
 def test_reprice_emits_reduce_for_smaller_positive_size():
     result = _reprice(candidate=_candidate(recommended_units_pre_news="3"))
 
     assert result["t30_status"] == "REDUCE"
-    assert result["recommended_units_pre_news"] == 1.5
+    assert result["recommended_units_pre_news"] == 1.0
     assert result["actionable"] == "true"
 
 

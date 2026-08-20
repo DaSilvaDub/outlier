@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 _OUT_STATUS = re.compile(
-    r"\b(?:out(?:\s+for\s+season)?|ofs|inactive|\d+-day\s+il|il)\b",
+    r"\b(?:out(?:\s+for\s+season)?|ofs|inactive)\b",
     re.IGNORECASE,
 )
 _INJURY_CHUNK = re.compile(
@@ -22,6 +22,10 @@ _PLAYER_PROP_SIDES = re.compile(r"\b(OVER|UNDER)\b", re.IGNORECASE)
 _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
+MARKET_DEVIG_UNIT_CAP = 1.0
+MARKET_DEVIG_SOURCES = frozenset({"local_devig", "outlier_devig"})
+PREDICTIVE_SIGNAL_FLAGS = frozenset({"insight_support", "movement_support", "orf_support"})
+PHANTOM_EDGE_THRESHOLD = 0.10
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
 PLAYER_PROP_HINTS = {
     "REB",
@@ -42,6 +46,9 @@ PLAYER_PROP_HINTS = {
     "BB",
     "HRR",
     "PLAYER_PROP",
+    "K",
+    "STRIKEOUTS",
+    "PITCHER_STRIKEOUTS",
 }
 
 
@@ -122,6 +129,8 @@ def is_player_prop(row: dict[str, Any]) -> bool:
         return True
     if market in GAMELINE_TYPES or market == "TEAM_PROP":
         return False
+    if row.get("player_id"):
+        return True
     return " - " in str(row.get("selection") or "")
 
 
@@ -174,17 +183,88 @@ def signed_line_moved_with_side(row: dict[str, Any]) -> bool:
 
 
 def apply_local_devig_unit_cap(row: dict[str, Any]) -> None:
-    """Kelly oversizes local-devig Board A plays (PLAY ROI < flat). Cap at 1u."""
+    """Kelly oversizes market-devig Board A plays (PLAY ROI < flat). Cap at 1u."""
+    apply_market_devig_unit_cap(row)
+
+
+def _append_sizing_flag(row: dict[str, Any], flag: str) -> None:
+    existing = str(row.get("sizing_flags") or "")
+    parts = [part for part in existing.split(";") if part]
+    if flag not in parts:
+        parts.append(flag)
+    row["sizing_flags"] = ";".join(parts)
+
+
+def apply_market_devig_unit_cap(row: dict[str, Any]) -> None:
+    """Cap Outlier/local AVERAGE-devig Kelly at 1u.
+
+    Naked market EV is not an independent forecast. Historical PLAY ROI is
+    worse than flat 1u on the same cards.
+    """
     source = str(row.get("model_prob_source") or "").lower()
-    if source != "local_devig":
+    if source not in MARKET_DEVIG_SOURCES:
         return
     units = _to_float(row.get("recommended_units_pre_news"))
-    if units is None or units <= LOCAL_DEVIG_UNIT_CAP:
+    if units is None or units <= MARKET_DEVIG_UNIT_CAP:
         return
-    row["recommended_units_pre_news"] = LOCAL_DEVIG_UNIT_CAP
-    existing = str(row.get("sizing_flags") or "")
-    if "local_devig_unit_cap" not in existing:
-        row["sizing_flags"] = f"{existing};local_devig_unit_cap".strip(";")
+    row["recommended_units_pre_news"] = MARKET_DEVIG_UNIT_CAP
+    _append_sizing_flag(row, "market_devig_unit_cap")
+    if source == "local_devig":
+        _append_sizing_flag(row, "local_devig_unit_cap")
+
+
+def _signal_flag_set(row: dict[str, Any]) -> set[str]:
+    return {
+        part.strip()
+        for part in str(row.get("signal_flags") or "").split(";")
+        if part.strip()
+    }
+
+
+def has_predictive_signal(row: dict[str, Any]) -> bool:
+    """True when insight, movement, or ORF corroborates the side.
+
+    Recency hit rate and IL laundry-list star-out flags do not count. Any
+    ``movement_against`` vetoes the rest.
+    """
+    flags = _signal_flag_set(row)
+    if "movement_against" in flags:
+        return False
+    return bool(flags & PREDICTIVE_SIGNAL_FLAGS)
+
+
+def apply_predictor_gates(row: dict[str, Any]) -> None:
+    """Turn Board A from a market-EV sizer into a signal-gated, capped play.
+
+    Does not invent an independent probability. It only refuses to treat
+    de-vig leftover as a 3-unit forecast.
+    """
+    apply_market_devig_unit_cap(row)
+    if is_player_prop(row) and not has_predictive_signal(row):
+        row["recommended_units_pre_news"] = ""
+        _append_sizing_flag(row, "missing_predictive_signal")
+    independent = _to_float(row.get("independent_model_prob"))
+    edge = _to_float(row.get("edge_pct"))
+    if independent is None and edge is not None and edge >= PHANTOM_EDGE_THRESHOLD:
+        _append_sizing_flag(row, "edge_suspect_no_independent_model")
+        units = _to_float(row.get("recommended_units_pre_news"))
+        if units is not None and units > MARKET_DEVIG_UNIT_CAP:
+            row["recommended_units_pre_news"] = MARKET_DEVIG_UNIT_CAP
+            _append_sizing_flag(row, "market_devig_unit_cap")
+
+    units = _to_float(row.get("recommended_units_pre_news"))
+    edge = _to_float(row.get("edge_pct"))
+    missing_signal = "missing_predictive_signal" in str(row.get("sizing_flags") or "")
+    is_actionable = (
+        units is not None
+        and units > 0
+        and edge is not None
+        and edge > 0
+        and not missing_signal
+    )
+    row["actionable"] = "true" if is_actionable else "false"
+    if not is_actionable:
+        row["recommended_units_pre_news"] = ""
 
 
 def playable_prop_sort_key(row: dict[str, Any]) -> tuple[float, float, str]:

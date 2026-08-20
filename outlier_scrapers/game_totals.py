@@ -120,6 +120,7 @@ GAME_TOTALS_HEADER = [
     "projected_under_prob",
     "market_consensus_prob",
     "independent_model_prob",
+    "recency_hit_prob",
     "final_blended_prob",
     "fair_total",
     "edge_pct",
@@ -692,8 +693,8 @@ def build_totals(
         )
 
         best_side, best_price, edge_pct = (
-            pick_best_side(blended_over, over_price, under_price)
-            if blended_over is not None
+            pick_best_side(p_over_headline, over_price, under_price)
+            if p_over_headline is not None
             else ("OVER", over_price, None)
         )
         cand_side = str(cand.get("headline_side") or cand.get("best_side") or "").strip().upper()
@@ -701,6 +702,12 @@ def build_totals(
             flags.append("SIDE_RESOLUTION_CONFLICT")
             flags.append("SOURCE_INTEGRITY_FLAG")
         best_book = under_book if best_side == "UNDER" else over_book
+        try:
+            longshot_price = float(str(best_price).replace("+", ""))
+        except (TypeError, ValueError):
+            longshot_price = None
+        if longshot_price is not None and longshot_price >= 150:
+            flags.append("LONGSHOT_PRICE")
 
         if fair_total is not None:
             if best_side == "UNDER" and fair_total > headline_line + FAIR_TOTAL_DIRECTION_TOLERANCE:
@@ -720,25 +727,19 @@ def build_totals(
             if best_side == "OVER"
             else (1.0 - p_over_headline if p_over_headline is not None else None)
         )
-        p_side_conditional = (
-            blended_over
-            if best_side == "OVER"
-            else (1.0 - blended_over if blended_over is not None else None)
-        )
-        p_side_independent = None
+        recency_hit_prob = None
         if used_l10 and l10_over is not None:
-            p_side_independent = (
+            recency_hit_prob = (
                 float(l10_over["pct"]) if best_side == "OVER" else 1.0 - float(l10_over["pct"])
             )
-        model_win_prob = p_side_conditional
+        model_win_prob = p_side_market
         consensus_win_prob = p_side_market
-        independent_win_prob = p_side_independent
-
-        if _totals_models_diverge(p_side_independent, p_side_market):
+        independent_win_prob = None
+        if _totals_models_diverge(recency_hit_prob, p_side_market):
             flags.append("totals_model_divergence")
 
-        if independent_win_prob is not None and (
-            independent_win_prob >= 0.98 or independent_win_prob <= 0.02
+        if recency_hit_prob is not None and (
+            recency_hit_prob >= 0.98 or recency_hit_prob <= 0.02
         ):
             flags.append("MODEL_SATURATED")
             flags.append("SOURCE_INTEGRITY_FLAG")
@@ -760,12 +761,12 @@ def build_totals(
                 push_prob = round(derived, 4)
                 no_push = 1.0 - float(push_prob)
                 model_win_prob = (
-                    p_side_conditional * no_push if p_side_conditional is not None else None
+                    p_side_market * no_push if p_side_market is not None else None
                 )
                 consensus_win_prob = p_side_market * no_push if p_side_market is not None else None
-                independent_win_prob = (
-                    p_side_independent * no_push if p_side_independent is not None else None
-                )
+                if recency_hit_prob is not None:
+                    recency_hit_prob = recency_hit_prob * no_push
+                independent_win_prob = None
                 if decimal_price is not None and model_win_prob is not None:
                     sizing = compute_sizing(
                         decimal_price=decimal_price,
@@ -873,6 +874,9 @@ def build_totals(
                 else "",
                 "independent_model_prob": round(independent_win_prob, 4)
                 if independent_win_prob is not None
+                else "",
+                "recency_hit_prob": round(recency_hit_prob, 4)
+                if recency_hit_prob is not None
                 else "",
                 "final_blended_prob": round(model_win_prob, 4)
                 if model_win_prob is not None

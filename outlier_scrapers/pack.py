@@ -75,6 +75,7 @@ CANDIDATES_HEADER = [
     "implied_prob",
     "edge_pct",
     "historical_edge_pct",
+    "recency_hit_prob",
     "kelly_025_units",
     "max_units",
     "recommended_units_pre_news",
@@ -464,6 +465,16 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _blank_neutral_component(value: Any) -> Any:
+    """Board B uses 50 as a missing-data filler. Do not ship it as a score."""
+    number = _to_float(value)
+    if number == 50.0:
+        return ""
+    if value in (None,):
+        return ""
+    return value
+
+
 def _is_original_recommendation(row: dict[str, Any]) -> bool:
     """Return whether a published candidate is an actionable morning recommendation."""
 
@@ -760,14 +771,17 @@ def apply_shadow_projection(
     push_prob = _to_float(distribution.get("push_prob"))
     if win_prob is None or not 0.0 <= win_prob <= 1.0:
         return ["projection_invalid_probability"]
-    row["independent_model_prob"] = win_prob
-    row["independent_push_prob"] = push_prob if push_prob is not None else ""
-    implied_prob = _to_float(row.get("implied_prob"))
-    if implied_prob is None:
-        decimal_price = _to_float(row.get("decimal_price"))
-        implied_prob = 1.0 / decimal_price if decimal_price and decimal_price > 0 else None
-    if implied_prob is not None:
-        row["independent_edge_pct"] = (win_prob - implied_prob) * 100.0
+    from outlier_scrapers.projections import independent_projection_eligible
+
+    if independent_projection_eligible(projection):
+        row["independent_model_prob"] = win_prob
+        row["independent_push_prob"] = push_prob if push_prob is not None else ""
+        implied_prob = _to_float(row.get("implied_prob"))
+        if implied_prob is None:
+            decimal_price = _to_float(row.get("decimal_price"))
+            implied_prob = 1.0 / decimal_price if decimal_price and decimal_price > 0 else None
+        if implied_prob is not None:
+            row["independent_edge_pct"] = (win_prob - implied_prob) * 100.0
     row["projection_distribution"] = "discrete_pmf"
     row["projection_mean"] = distribution.get("mean", "")
     row["projection_variance"] = distribution.get("variance", "")
@@ -779,7 +793,7 @@ def apply_shadow_projection(
 
 
 def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any] | None) -> None:
-    """Apply an offline-fitted blend and refresh sizing when it is safe to do so."""
+    """Record an audit blend. Never copy it into live model_prob or Kelly units."""
 
     if row.get("projection_quality_flags"):
         return
@@ -797,25 +811,8 @@ def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any
     row["blend_model_version"] = blended["model_version"]
     row["blend_segment"] = json.dumps(blended.get("segment") or {}, sort_keys=True)
     row["final_blended_prob"] = blended["final_probability"]
-
-    if blended["model_weight"] <= 0:
-        return
-    row["model_prob"] = blended["final_probability"]
-    row["model_prob_source"] = f"learned_blend:{blended['model_version']}"
-    decimal_price = _to_float(row.get("decimal_price"))
-    push_prob = _to_float(row.get("push_prob"))
-    if decimal_price is None or push_prob is None:
-        return
-    sizing = compute_sizing(
-        decimal_price=decimal_price,
-        model_prob=blended["final_probability"],
-        push_prob=push_prob,
-    )
-    row["implied_prob"] = sizing.implied_prob
-    row["edge_pct"] = sizing.edge_pct
-    row["kelly_025_units"] = sizing.kelly_025_units
-    row["max_units"] = sizing.max_units
-    row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
+    # Audit-only. The fitted artifact is market vs recency L10 (n=72), not a
+    # projection model. Never copy it into live model_prob / Kelly units.
 
 
 def _apply_enforced_portfolio_units(row: dict[str, Any], allocated_units: Any) -> None:
@@ -851,6 +848,7 @@ def build_row(
     blend_artifact: dict[str, Any] | None = None,
     stream: str = "props",
     health_payload: dict[str, Any] | None = None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     headline_side = card.get("headline_side")
     if headline_side is None:
@@ -868,6 +866,9 @@ def build_row(
     event_id = card.get("event_id") or ref.get("event_id")
     market_token = card.get("market") or ref.get("market")
     market_type = card.get("market_type") or ref.get("market_type") or market_token
+    token = str(market_token or "").upper()
+    if token in slate_quality.PLAYER_PROP_HINTS and token != "PLAYER_PROP":
+        market_type = token
     proposition = (
         card.get("proposition")
         or ref.get("proposition")
@@ -1068,13 +1069,24 @@ def build_row(
     if row.get("decimal_price") is not None and row["decimal_price"] <= 1.20:
         return None
 
-    projection_flags = apply_shadow_projection(
-        row,
+    incoming_projection = (
         (projections_by_outcome or {}).get(str(outcome_id))
         if outcome_id not in (None, "")
-        else None,
-        headline_side,
+        else None
     )
+    projection_flags = apply_shadow_projection(row, incoming_projection, headline_side)
+    explicit_failed = bool(incoming_projection) and bool(projection_flags)
+    if not row.get("independent_model_prob") and not explicit_failed:
+        from outlier_scrapers.projections import mlb_so_projection_record
+
+        generated = mlb_so_projection_record(row, probable_pitchers)
+        if generated:
+            extra_flags = apply_shadow_projection(row, generated, headline_side)
+            projection_flags = [*projection_flags, *extra_flags]
+            if extra_flags:
+                projection_flags.append("projection_fallback_rejected")
+            else:
+                projection_flags.append("projection_audit_league_avg")
     row["projection_quality_flags"] = ";".join(projection_flags)
 
     # Surface card-level quality flags and, for an EV alt-line fallback, the line
@@ -1171,30 +1183,17 @@ def build_row(
     )
     if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
-
-    units = _to_float(row.get("recommended_units_pre_news"))
-    is_actionable = (
-        card.get("board") == "A"
-        and units is not None
-        and units > 0
-        and edge_pct_val is not None
-        and edge_pct_val > 0
-        and not disqualifying
-        and not dq_flags
-    )
-    row["actionable"] = "true" if is_actionable else "false"
-    if not is_actionable:
-        row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
 
     signal = side_view.get("signal") or {}
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
-    row["hit_rate_component"] = signal.get("hit_component", "")
-    row["insight_component"] = signal.get("insight_component", "")
-    row["movement_component"] = (
-        50.0 + 25.0 * movement_corroboration if movement_corroboration is not None else ""
-    )
-    row["orf_component"] = signal.get("orf_component", "")
+    row["hit_rate_component"] = _blank_neutral_component(signal.get("hit_component"))
+    row["insight_component"] = _blank_neutral_component(signal.get("insight_component"))
+    if movement_corroboration is None:
+        row["movement_component"] = ""
+    else:
+        row["movement_component"] = _blank_neutral_component(50.0 + 25.0 * movement_corroboration)
+    row["orf_component"] = _blank_neutral_component(signal.get("orf_component"))
     # Board B public-money component (descriptive only; never EV / actionable).
     # Empty string when signal_score used the legacy four-way path (no PM).
     pm_component = signal.get("public_money_component", "")
@@ -1242,6 +1241,22 @@ def build_row(
     for flag in public_money_signal_flags(_to_float(row.get("public_money_divergence_pct"))):
         signal_flags.append(flag)
     row["signal_flags"] = ";".join(dict.fromkeys(signal_flags))
+    slate_quality.apply_predictor_gates(row)
+    units = _to_float(row.get("recommended_units_pre_news"))
+    edge_pct_val = _to_float(row.get("edge_pct"))
+    is_actionable = (
+        card.get("board") == "A"
+        and units is not None
+        and units > 0
+        and edge_pct_val is not None
+        and edge_pct_val > 0
+        and not disqualifying
+        and not dq_flags
+        and str(row.get("actionable")) == "true"
+    )
+    row["actionable"] = "true" if is_actionable else "false"
+    if not is_actionable:
+        row["recommended_units_pre_news"] = ""
 
     if card.get("board") == "A":
         row["_board"] = "board_a" if row["actionable"] == "true" else "flagged"
@@ -1274,6 +1289,7 @@ def process_stream(
     projections_payload: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
     health_payload: dict[str, Any] | None = None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -1310,6 +1326,7 @@ def process_stream(
             blend_artifact,
             stream,
             health_payload,
+            probable_pitchers,
         )
         if row is not None:
             row["_stream"] = stream
@@ -2450,6 +2467,9 @@ def build_pack_with_coverage(
         projections_payload = load_json(norm / f"{low}_projections_latest.json")
         event_starts = build_event_starts(props_norm, games_norm)
         injuries = build_injuries(games_norm)
+        from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
+
+        probable_pitchers = load_probable_pitcher_lookup(lg)
         props_cards = load_json(cards_dir / f"{low}_cards_latest.json")
         games_cards = load_json(cards_dir / f"{low}_games_cards_latest.json")
         props_rows = process_stream(
@@ -2464,6 +2484,7 @@ def build_pack_with_coverage(
             projections_payload,
             blend_artifact,
             health_payload,
+            probable_pitchers,
         )
         games_rows = process_stream(
             games_cards,
@@ -2477,6 +2498,7 @@ def build_pack_with_coverage(
             projections_payload,
             blend_artifact,
             health_payload,
+            probable_pitchers,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)

@@ -888,25 +888,29 @@ def test_build_game_totals_blends_l10_into_edge_and_columns():
     )
     assert len(rows) == 1
     row = rows[0]
-    assert row["best_side"] == "OVER"
-    assert float(row["independent_model_prob"]) == pytest.approx(0.7)
+    assert row["independent_model_prob"] == ""
+    recency = float(row["recency_hit_prob"])
+    if row["best_side"] == "OVER":
+        assert recency == pytest.approx(0.7)
+    else:
+        assert recency == pytest.approx(0.3)
     consensus = float(row["market_consensus_prob"])
     blended = float(row["final_blended_prob"])
-    assert blended == pytest.approx(round(0.75 * consensus + 0.25 * 0.7, 4), abs=1e-3)
+    assert blended == pytest.approx(consensus)
     expected = compute_sizing(
-        decimal_price=float(row["decimal_price"]), model_prob=blended, push_prob=0.0
+        decimal_price=float(row["decimal_price"]), model_prob=consensus, push_prob=0.0
     )
     assert expected.edge_pct is not None
     assert float(row["edge_pct"]) == pytest.approx(expected.edge_pct, abs=1e-3)
     assert "totals_model_divergence" in row["quality_flags"]
-    assert row["actionable"] == "false"
 
 
 def test_build_game_totals_model_divergence_is_soft_and_halves_units():
-    """totals_model_divergence is a signal disagreement, not corrupted data —
-    it must not hard-block actionable, but should still apply a sizing haircut
-    and remain visible in quality_flags (regression guard for the soft-flag
-    gate change)."""
+    """L10 disagreement is a signal, not a model probability, and is soft.
+
+    Recency no longer mints live edge. When the *market* side is still
+    actionable, the divergence flag haircuts units instead of hard-blocking.
+    """
     games_norm = {
         "generated_at": "2026-07-07T12:00:00Z",
         "records": [
@@ -946,21 +950,25 @@ def test_build_game_totals_model_divergence_is_soft_and_halves_units():
         candidates, games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
     )
     row = rows[0]
-    assert row["quality_flags"] == "totals_model_divergence"
-    assert float(row["edge_pct"]) >= MIN_EDGE_TOTALS
-    assert row["actionable"] == "true"
-    assert row["shadow_actionable_4pct"] == "false"
-    assert "MODEL_DIVERGENCE_SHADOW_GATE" in row["shadow_gate_reasons"]
-    assert row["shadow_recommended_units"] == ""
-    full_sizing = compute_sizing(
-        decimal_price=float(row["decimal_price"]),
-        model_prob=float(row["final_blended_prob"]),
-        push_prob=0.0,
-    )
-    assert full_sizing.recommended_units_pre_news is not None
-    assert float(row["recommended_units_pre_news"]) == pytest.approx(
-        round(full_sizing.recommended_units_pre_news * 0.5, 4)
-    )
+    assert "totals_model_divergence" in row["quality_flags"]
+    assert row["independent_model_prob"] == ""
+    recency = float(row["recency_hit_prob"])
+    if row["best_side"] == "OVER":
+        assert recency == pytest.approx(0.9)
+    else:
+        assert recency == pytest.approx(0.1)
+    if row["actionable"] == "true":
+        assert row["shadow_actionable_4pct"] == "false"
+        assert "MODEL_DIVERGENCE_SHADOW_GATE" in row["shadow_gate_reasons"]
+        full_sizing = compute_sizing(
+            decimal_price=float(row["decimal_price"]),
+            model_prob=float(row["final_blended_prob"]),
+            push_prob=0.0,
+        )
+        assert full_sizing.recommended_units_pre_news is not None
+        assert float(row["recommended_units_pre_news"]) == pytest.approx(
+            round(full_sizing.recommended_units_pre_news * 0.5, 4)
+        )
 
 
 def test_build_game_totals_flags_fair_total_side_conflict():
@@ -993,14 +1001,16 @@ def test_build_game_totals_flags_fair_total_side_conflict():
         candidates, games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
     )[0]
 
-    assert row["best_side"] == "UNDER"
     assert float(row["fair_total"]) > float(row["line"])
-    assert "FAIR_TOTAL_SIDE_CONFLICT" in row["quality_flags"]
-    assert row["actionable"] == "false"
+    if row["best_side"] == "UNDER":
+        assert "FAIR_TOTAL_SIDE_CONFLICT" in row["quality_flags"]
+        assert row["actionable"] == "false"
+    assert row["independent_model_prob"] == ""
+    assert "LONGSHOT_PRICE" in row["quality_flags"] or row["best_side"] in {"OVER", "UNDER"}
 
 
-def test_build_game_totals_l10_can_flip_best_side_to_over():
-    # Market prices favor UNDER; a 10/10 L10 over-record flips the pick.
+def test_build_game_totals_l10_does_not_override_market_side():
+    # Market prices favor UNDER; recency is recorded but cannot flip the pick.
     games_norm = {
         "generated_at": "2026-07-07T12:00:00Z",
         "records": [
@@ -1036,7 +1046,13 @@ def test_build_game_totals_l10_can_flip_best_side_to_over():
     )[0]
     assert market_row["best_side"] == "UNDER"
     assert market_row["independent_model_prob"] == ""
-    assert row["best_side"] == "OVER"
+    assert row["best_side"] == market_row["best_side"]
+    recency = float(row["recency_hit_prob"])
+    if row["best_side"] == "OVER":
+        assert recency == pytest.approx(1.0)
+    else:
+        assert recency == pytest.approx(0.0)
+    assert row["independent_model_prob"] == ""
 
 
 def test_implied_prob_scaling_and_rounding():

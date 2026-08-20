@@ -88,6 +88,7 @@ def make_row(
     odds_ts="ODDS_TS",
     stream="props",
     health_payload=None,
+    probable_pitchers=None,
 ):
     return build_row(
         card,
@@ -103,6 +104,7 @@ def make_row(
         blend_artifact,
         stream,
         health_payload,
+        probable_pitchers,
     )
 
 
@@ -174,6 +176,56 @@ def test_header_canonical_with_flags():
 
 
 # 2. EV happy path: book_decimal_odds present, no-push -> fully sized.
+def test_player_prop_without_signal_is_not_actionable():
+    card = ev_card(market_type="PLAYER_PROP", market="SO", player="Robert Stock")
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["market_type"] == "SO"
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
+    assert "missing_predictive_signal" in row["sizing_flags"]
+
+
+def test_player_prop_with_insight_stays_capped():
+    card = ev_card(
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Matthew Liberatore",
+        team="STL",
+        opponent="CIN",
+        matchup="STL @ CIN",
+    )
+    card["sides"]["OVER"]["signal"] = {
+        "insight_component": 85.0,
+        "movement_corroboration": 0.0,
+        "orf_component": None,
+        "hit_pct": None,
+    }
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    row = make_row(card, ev)
+    assert row["actionable"] == "true"
+    assert row["recommended_units_pre_news"] == 1.0
+    assert "insight_support" in row["signal_flags"]
+
+
 def test_ev_row_sized():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
     ev = [
@@ -421,12 +473,87 @@ def test_active_learned_blend_updates_final_probability_and_sizing():
 
     expected = 0.7 * 0.5 + 0.3 * 0.62
     assert row["final_blended_prob"] == pytest.approx(expected)
-    assert row["model_prob"] == pytest.approx(expected)
+    assert row["model_prob"] == pytest.approx(0.5)
     assert row["blend_market_weight"] == pytest.approx(0.7)
     assert row["blend_model_weight"] == pytest.approx(0.3)
     assert row["blend_weight_source"] == "learned:global"
-    assert row["model_prob_source"] == "learned_blend:blend-test"
-    assert row["edge_pct"] != pytest.approx((0.5 - 1 / 2.1) * 100)
+    assert row["model_prob_source"] == "outlier_devig"
+    assert row["edge_pct"] == pytest.approx(0.5 * 1.1 - 0.5)
+
+
+def test_league_average_so_projection_is_audit_only(monkeypatch):
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    card["sides"]["OVER"]["signal"] = {
+        "insight_component": 85.0,
+        "movement_corroboration": 1.0,
+        "hit_pct": None,
+        "orf_component": None,
+    }
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    row = make_row(card, ev, probable_pitchers=probable)
+    assert row["independent_model_prob"] == ""
+    assert row["projection_model_version"]
+    assert row["projection_mean"] != ""
+    assert "projection_audit_league_avg" in row["projection_quality_flags"]
+
+
+def test_failed_explicit_projection_is_not_replaced_by_league_average():
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+        }
+    ]
+    projection = {
+        "status": "eligible",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "line": 6.5,
+        "side": "OVER",
+        "distribution": {"win_prob": 0.62, "push_prob": 0.0, "line": 6.5, "side": "OVER"},
+    }
+    row = make_row(
+        card,
+        ev,
+        projections={"o1": projection},
+        probable_pitchers={"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
+    )
+    assert row["independent_model_prob"] == ""
+    assert "projection_line_mismatch" in row["projection_quality_flags"]
+    assert "projection_audit_league_avg" not in row["projection_quality_flags"]
 
 
 def test_shadow_projection_mismatch_fails_closed_without_touching_consensus():

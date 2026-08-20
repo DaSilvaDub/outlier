@@ -96,7 +96,8 @@ def test_local_devig_unit_cap_shrinks_only_local_devig():
         "sizing_flags": "",
     }
     apply_local_devig_unit_cap(outlier)
-    assert outlier["recommended_units_pre_news"] == 2.0
+    assert outlier["recommended_units_pre_news"] == LOCAL_DEVIG_UNIT_CAP
+    assert "market_devig_unit_cap" in outlier["sizing_flags"]
 
 
 def test_playable_prop_sort_key_orders_by_edge_not_raw_prob():

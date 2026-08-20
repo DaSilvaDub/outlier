@@ -186,9 +186,9 @@ def backfill_totals_probabilities(
         if p_over is None:
             continue
 
-        blended_over, used_l10 = blend_over_probability(p_over, entry.get("l10_over"))
+        l10_over = entry.get("l10_over")
+        used_l10 = bool(isinstance(l10_over, dict) and l10_over.get("pct") is not None)
         p_side_market = p_over if side == "OVER" else 1.0 - p_over
-        p_side_blend = blended_over if side == "OVER" else 1.0 - blended_over
 
         push_prob = _to_float(row.get("push_prob"))
         if push_prob is None:
@@ -200,18 +200,18 @@ def backfill_totals_probabilities(
         # to unconditional win probability before sizing (same math as the
         # totals boards' push path).
         no_push_factor = 1.0 - push_prob if push_prob is not None else 1.0
-        model_prob = p_side_blend * no_push_factor
         consensus = p_side_market * no_push_factor
+        model_prob = consensus
 
         row["model_prob"] = model_prob
         row["market_consensus_prob"] = consensus
         row["final_blended_prob"] = model_prob
-        row["model_prob_source"] = SOURCE_BLEND if used_l10 else SOURCE_DEVIG
+        row["model_prob_source"] = SOURCE_DEVIG
         extra_flags = [FLAG_MODEL]
         if used_l10:
-            l10 = entry["l10_over"]
-            l10_side = l10["pct"] if side == "OVER" else 1.0 - l10["pct"]
-            row["independent_model_prob"] = l10_side * no_push_factor
+            l10_side = l10_over["pct"] if side == "OVER" else 1.0 - l10_over["pct"]
+            row["recency_hit_prob"] = l10_side * no_push_factor
+            row["independent_model_prob"] = ""
             if abs(p_side_market - l10_side) >= TOTALS_MODEL_DIVERGENCE_THRESHOLD:
                 extra_flags.append("totals_model_divergence")
 
