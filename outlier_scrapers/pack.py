@@ -1081,12 +1081,22 @@ def build_row(
 
         generated = mlb_so_projection_record(row, probable_pitchers)
         if generated:
+            from outlier_scrapers.projections import (
+                GAMELOG_SO_HASH,
+                LEAGUE_AVG_SO_HASH,
+                independent_projection_eligible,
+            )
+
             extra_flags = apply_shadow_projection(row, generated, headline_side)
             projection_flags = [*projection_flags, *extra_flags]
             if extra_flags:
                 projection_flags.append("projection_fallback_rejected")
             else:
-                projection_flags.append("projection_audit_league_avg")
+                digest = str(generated.get("feature_snapshot_hash") or "")
+                if digest == LEAGUE_AVG_SO_HASH or not independent_projection_eligible(generated):
+                    projection_flags.append("projection_audit_league_avg")
+                elif digest == GAMELOG_SO_HASH:
+                    projection_flags.append("projection_independent_gamelog_so")
     row["projection_quality_flags"] = ";".join(projection_flags)
 
     # Surface card-level quality flags and, for an EV alt-line fallback, the line

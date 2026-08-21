@@ -516,6 +516,52 @@ def test_league_average_so_projection_is_audit_only(monkeypatch):
     assert "projection_audit_league_avg" in row["projection_quality_flags"]
 
 
+def test_gamelog_so_projection_sets_independent_model_prob():
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    card["sides"]["OVER"]["signal"] = {
+        "insight_component": 85.0,
+        "movement_corroboration": 1.0,
+        "hit_pct": None,
+        "orf_component": None,
+    }
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    probable = {
+        "DET": {
+            "pitcher": "Jackson Jobe",
+            "confirmed": True,
+            "pitcher_id": 683242,
+            "projected_bf": 22.5,
+            "strikeout_rate": 0.27,
+            "feature_source": "mlb_stats_gamelog",
+            "starts": 5,
+        }
+    }
+    row = make_row(card, ev, probable_pitchers=probable)
+    assert row["independent_model_prob"] != ""
+    assert float(row["independent_model_prob"]) > 0
+    assert "projection_independent_gamelog_so" in row["projection_quality_flags"]
+    assert "projection_audit_league_avg" not in row["projection_quality_flags"]
+    assert row["projection_feature_hash"] == "so-starter-gamelog-v1"
+
+
 def test_failed_explicit_projection_is_not_replaced_by_league_average():
     card = ev_card(
         line=5.5,

@@ -46,12 +46,18 @@ def fetch_probable_pitchers_raw(target_date: date) -> dict[str, Any]:
     return _fetch_json(url)
 
 
-def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool]:
+def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, int | None]:
     pitcher = side_payload.get("probablePitcher")
     if not isinstance(pitcher, dict):
-        return None, False
+        return None, False, None
     name = str(pitcher.get("fullName") or "").strip()
-    return (name or None), bool(name)
+    raw_id = pitcher.get("id")
+    pitcher_id: int | None
+    try:
+        pitcher_id = int(raw_id) if raw_id not in (None, "") else None
+    except (TypeError, ValueError):
+        pitcher_id = None
+    return (name or None), bool(name), pitcher_id
 
 
 def normalize_probable_pitchers(
@@ -84,8 +90,8 @@ def normalize_probable_pitchers(
         away_team = normalize_team(config, away_team_raw) or ""
         home_team = normalize_team(config, home_team_raw) or ""
 
-        away_pitcher, away_confirmed = _pitcher_from_side(away)
-        home_pitcher, home_confirmed = _pitcher_from_side(home)
+        away_pitcher, away_confirmed, away_pitcher_id = _pitcher_from_side(away)
+        home_pitcher, home_confirmed, home_pitcher_id = _pitcher_from_side(home)
 
         games.append(
             {
@@ -94,10 +100,12 @@ def normalize_probable_pitchers(
                 "away_team": away_team,
                 "away_team_raw": away_team_raw,
                 "away_pitcher": away_pitcher,
+                "away_pitcher_id": away_pitcher_id,
                 "away_pitcher_confirmed": away_confirmed,
                 "home_team": home_team,
                 "home_team_raw": home_team_raw,
                 "home_pitcher": home_pitcher,
+                "home_pitcher_id": home_pitcher_id,
                 "home_pitcher_confirmed": home_confirmed,
             }
         )
@@ -105,6 +113,7 @@ def normalize_probable_pitchers(
         if away_team:
             by_team[away_team] = {
                 "pitcher": away_pitcher,
+                "pitcher_id": away_pitcher_id,
                 "confirmed": away_confirmed,
                 "opponent": home_team,
                 "home_away": "AWAY",
@@ -114,6 +123,7 @@ def normalize_probable_pitchers(
         if home_team:
             by_team[home_team] = {
                 "pitcher": home_pitcher,
+                "pitcher_id": home_pitcher_id,
                 "confirmed": home_confirmed,
                 "opponent": away_team,
                 "home_away": "HOME",
@@ -137,7 +147,10 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def export_probable_pitchers(
-    league: str = "MLB", *, target_date: date | None = None
+    league: str = "MLB",
+    *,
+    target_date: date | None = None,
+    fetch_json: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch, normalize, and write probable-pitcher data for one league."""
     if league.strip().upper() != "MLB":
@@ -169,6 +182,14 @@ def export_probable_pitchers(
     )
 
     normalized = normalize_probable_pitchers(raw_payload, league=league)
+    from .projections import enrich_probable_with_so_features
+
+    enriched_by_team = enrich_probable_with_so_features(
+        normalized.get("by_team") or {},
+        season=target_date.year,
+        fetch_json=fetch_json,
+    )
+    normalized = {**normalized, "by_team": enriched_by_team}
     write_json(paths_for_league.probable_pitchers_latest(), normalized)
     write_json(
         paths_for_league.timestamped(paths_for_league.normalized, "probable_pitchers"),

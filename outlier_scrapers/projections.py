@@ -1,21 +1,24 @@
 """Deterministic, provider-independent projection primitives.
 
-The first implementation slice deliberately contains no network adapters.  It
-provides the distribution and probability contracts that adapters and sport
-feature builders can consume without pulling training-only dependencies into
-the inference path.
+Core distribution contracts stay local and training-free. Optional MLB Stats API
+adapters attach starter game-log BF/K features for SO projections; league-average
+stubs remain audit-only and must not fill independent_model_prob.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.error import HTTPError, URLError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,11 @@ def mlb_total_bases_distribution(
 STARTER_PROJECTED_BF = 22.0
 LEAGUE_STRIKEOUT_RATE = 0.225
 LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
+GAMELOG_SO_HASH = "so-starter-gamelog-v1"
+MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"
+DEFAULT_SO_MIN_STARTS = 3
+DEFAULT_SO_MAX_STARTS = 8
+DEFAULT_SO_MIN_TOTAL_BF = 45
 
 
 def independent_projection_eligible(projection: Mapping[str, object] | None) -> bool:
@@ -241,7 +249,7 @@ def independent_projection_eligible(projection: Mapping[str, object] | None) -> 
     if not isinstance(projection, Mapping):
         return False
     digest = str(projection.get("feature_snapshot_hash") or "")
-    return digest != LEAGUE_AVG_SO_HASH
+    return digest != LEAGUE_AVG_SO_HASH and digest != ""
 
 
 def _normalize_person_name(value: Any) -> str:
@@ -271,13 +279,147 @@ def _player_name_from_row(row: Mapping[str, object]) -> str:
     return _TRAILING_MARKET_RE.sub("", match.group(1).strip()).strip()
 
 
+def _float_stat(value: Any) -> float | None:
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
+def compute_starter_so_features_from_logs(
+    splits: Iterable[Mapping[str, object]],
+    *,
+    min_starts: int = DEFAULT_SO_MIN_STARTS,
+    max_starts: int = DEFAULT_SO_MAX_STARTS,
+    min_total_bf: int = DEFAULT_SO_MIN_TOTAL_BF,
+) -> dict[str, object] | None:
+    """Derive starter BF / K-rate from MLB Stats API pitching game logs.
+
+    Uses only gamesStarted appearances. Newest splits first when dates exist.
+    Returns None when the sample is too thin — callers must fail closed.
+    """
+    starts: list[tuple[str, float, float]] = []
+    for split in splits:
+        if not isinstance(split, Mapping):
+            continue
+        stat = split.get("stat")
+        if not isinstance(stat, Mapping):
+            continue
+        if int(_float_stat(stat.get("gamesStarted")) or 0) < 1:
+            continue
+        bf = _float_stat(stat.get("battersFaced"))
+        so = _float_stat(stat.get("strikeOuts"))
+        if bf is None or so is None or bf <= 0 or so < 0 or so > bf:
+            continue
+        starts.append((str(split.get("date") or ""), bf, so))
+    starts.sort(key=lambda item: item[0], reverse=True)
+    kept = starts[: max(0, max_starts)]
+    if len(kept) < min_starts:
+        return None
+    total_bf = sum(item[1] for item in kept)
+    total_k = sum(item[2] for item in kept)
+    if total_bf < min_total_bf:
+        return None
+    return {
+        "projected_bf": total_bf / len(kept),
+        "strikeout_rate": total_k / total_bf,
+        "starts": len(kept),
+        "total_bf": total_bf,
+        "total_k": total_k,
+        "feature_source": "mlb_stats_gamelog",
+    }
+
+
+def fetch_pitcher_pitching_game_logs(
+    pitcher_id: int | str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> list[dict[str, object]]:
+    """Fetch one pitcher's pitching gameLog splits for ``season``."""
+    from urllib.request import Request, urlopen
+
+    person_id = str(pitcher_id).strip()
+    if not person_id.isdigit():
+        return []
+    url = (
+        f"{MLB_STATS_API_BASE}/people/{person_id}/stats"
+        f"?stats=gameLog&group=pitching&season={int(season)}"
+    )
+    if fetch_json is None:
+
+        def fetch_json(request_url: str) -> dict[str, object]:
+            request = Request(
+                request_url,
+                headers={"User-Agent": "outlier-projections/1.0", "Accept": "application/json"},
+            )
+            with urlopen(request, timeout=30) as response:  # noqa: S310
+                payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("pitcher stats payload must be an object")
+            return payload
+
+    payload = fetch_json(url)
+    stats = payload.get("stats")
+    if not isinstance(stats, list) or not stats:
+        return []
+    splits = stats[0].get("splits") if isinstance(stats[0], Mapping) else None
+    if not isinstance(splits, list):
+        return []
+    return [split for split in splits if isinstance(split, Mapping)]
+
+
+def enrich_probable_with_so_features(
+    by_team: Mapping[str, Mapping[str, object]],
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+    min_starts: int = DEFAULT_SO_MIN_STARTS,
+    max_starts: int = DEFAULT_SO_MAX_STARTS,
+    min_total_bf: int = DEFAULT_SO_MIN_TOTAL_BF,
+) -> dict[str, dict[str, object]]:
+    """Attach starter SO features onto a probable-pitcher by_team lookup."""
+    enriched: dict[str, dict[str, object]] = {}
+    cache: dict[str, dict[str, object] | None] = {}
+    for team, info in by_team.items():
+        row = dict(info) if isinstance(info, Mapping) else {}
+        pitcher_id = str(row.get("pitcher_id") or "").strip()
+        if row.get("confirmed") and pitcher_id:
+            if pitcher_id not in cache:
+                try:
+                    logs = fetch_pitcher_pitching_game_logs(
+                        pitcher_id, season=season, fetch_json=fetch_json
+                    )
+                    cache[pitcher_id] = compute_starter_so_features_from_logs(
+                        logs,
+                        min_starts=min_starts,
+                        max_starts=max_starts,
+                        min_total_bf=min_total_bf,
+                    )
+                except (HTTPError, URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "SO gamelog features failed for pitcher_id=%s season=%s: %s",
+                        pitcher_id,
+                        season,
+                        exc,
+                    )
+                    cache[pitcher_id] = None
+            features = cache[pitcher_id]
+            if features:
+                row.update(features)
+        enriched[str(team)] = row
+    return enriched
+
+
 def mlb_so_projection_record(
     row: Mapping[str, object], probable_by_team: Mapping[str, Mapping[str, object]] | None
 ) -> dict[str, object] | None:
-    """Build an independent starter-SO projection from probable pitchers.
+    """Build a starter-SO projection from probable pitchers.
 
-    Confirmed starters only. Relievers/openers and unconfirmed names stay blank
-    so a league-average guess cannot masquerade as an independent edge.
+    Confirmed starters with pitcher-specific BF/K features emit an
+    independent-eligible hash. Confirmed starters without features fall back to
+    the league-average audit stub. Relievers/openers stay blank.
     The betting line is never used as a feature.
     """
     sport = str(row.get("sport") or row.get("league") or "").upper()
@@ -312,7 +454,22 @@ def mlb_so_projection_record(
         line_value = float(str(line).replace("+", ""))
     except (TypeError, ValueError):
         return None
-    distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
+
+    projected_bf = _float_stat(listed.get("projected_bf"))
+    strikeout_rate = _float_stat(listed.get("strikeout_rate"))
+    feature_source = str(listed.get("feature_source") or "")
+    if (
+        feature_source == "mlb_stats_gamelog"
+        and projected_bf is not None
+        and strikeout_rate is not None
+        and projected_bf > 0
+        and 0.0 < strikeout_rate < 1.0
+    ):
+        distribution = mlb_strikeout_distribution(projected_bf, strikeout_rate)
+        feature_hash = GAMELOG_SO_HASH
+    else:
+        distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
+        feature_hash = LEAGUE_AVG_SO_HASH
     record = distribution.to_record(line=line_value, side=side)
     return {
         "status": "eligible",
@@ -322,7 +479,7 @@ def mlb_so_projection_record(
         "market_id": row.get("market_id"),
         "line": line_value,
         "side": side,
-        "feature_snapshot_hash": LEAGUE_AVG_SO_HASH,
+        "feature_snapshot_hash": feature_hash,
         "distribution": record,
     }
 
