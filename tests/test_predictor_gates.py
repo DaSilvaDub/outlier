@@ -177,9 +177,14 @@ def test_predictor_gates_leave_signaled_gameline_actionable():
 
 
 def test_league_average_so_hash_is_not_independent_eligible():
-    from outlier_scrapers.projections import LEAGUE_AVG_SO_HASH, independent_projection_eligible
+    from outlier_scrapers.projections import (
+        LEAGUE_AVG_SO_HASH,
+        WNBA_MINUTES_HASH,
+        independent_projection_eligible,
+    )
 
     assert independent_projection_eligible({"feature_snapshot_hash": LEAGUE_AVG_SO_HASH}) is False
+    assert independent_projection_eligible({"feature_snapshot_hash": WNBA_MINUTES_HASH}) is False
     assert independent_projection_eligible({"feature_snapshot_hash": "features-123"}) is True
     assert independent_projection_eligible({}) is True
     assert independent_projection_eligible({"feature_snapshot_hash": ""}) is True

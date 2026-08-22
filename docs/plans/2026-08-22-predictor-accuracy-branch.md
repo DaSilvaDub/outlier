@@ -24,14 +24,15 @@ This worktree is for development/tests only until explicitly merged.
 3. **CLV join fallbacks** in `results._latest_local_close` (any-book, then market_id+selection)
 4. **SO offline eval harness** `python -m outlier_scrapers.so_eval` (Brier vs market; no portfolio enable)
 5. **Richer SO context hooks** (`opponent_k_rate`, `park_k_factor` optional blends)
-6. **WNBA minutes/PPM scaffold** (`compute_wnba_minutes_features`, `wnba_points_projection_record`) — shadow-ready, not wired into pack yet
-7. **Pack UNSAFE refusal** — already present on master (`build_feed_health_by_league` raises); documented, no change needed
+6. **Opponent K% fetcher** — `fetch_team_batter_k_rate` via MLB Stats API team hitting SO/PA; attached in `enrich_probable_with_so_features`
+7. **Park K factor** — curated `HOME_PARK_K_FACTORS` by home team; applied from pitcher's venue (`home_away`)
+8. **WNBA minutes/PPM scaffold wired into pack** — ESPN search + gamelog → audit-only projection (`projection_audit_wnba_minutes`); hash is **not** independent-eligible
+9. **Pack UNSAFE refusal** — already present on master (`build_feed_health_by_league` raises); documented, no change needed
 
 ## Still open before merge
 
-- Wire opponent/park enrichers to real Statcast/park feeds
-- Wire WNBA minutes into pack/probable path
-- Run `so_eval` once enough gamelog-settled rows exist; only then consider raising SO cap / dropping signal gate for strong models
+- Refresh park factors from live Savant CSV when a stable endpoint is available
+- Run `so_eval` once enough gamelog-settled rows exist; only then consider merging live independent SO sizing
 - Keep `config/portfolio_risk.json` in shadow until post-whitelist recalibration
 - Full projection layer (hits allowed, totals, NRFI, channel C) remains plan-level
 
