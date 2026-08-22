@@ -1,6 +1,7 @@
 # Handoff Summary — 2026-08-22 — Grok (SO restaking / promotion gate)
 
-**Branch:** `feat/predictor-accuracy-upgrades`  
+**Branch:** `feat/predictor-accuracy-upgrades` (`d17fc80`)  
+**PR:** https://github.com/DaSilvaDub/outlier/pull/105  
 **Worktree:** `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`  
 **Master:** leave live pipeline alone; promotion still OFF.
 
