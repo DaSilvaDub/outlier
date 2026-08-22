@@ -3,7 +3,7 @@
 **Agent:** Grok  
 **Time:** 2026-08-22 (session continued from predictor assessment → SO gamelog → accuracy branch)  
 **Canonical master HEAD:** `a464dbb` (pipeline-safe; do not mix feature work here)  
-**Active feature branch HEAD:** `783cd36` on `feat/predictor-accuracy-upgrades`  
+**Active feature branch HEAD:** `c4ea11f` on `feat/predictor-accuracy-upgrades`  
 **Feature worktree:** `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`  
 **PR:** https://github.com/DaSilvaDub/outlier/pull/104
 
@@ -14,7 +14,7 @@
 | Tree | Branch | SHA | Notes |
 |---|---|---|---|
 | `C:\Users\dasil\Dev\GitHub\outlier` | `master` | `a464dbb` | Live pipeline checkout. Keep clean for `daily_job`. |
-| Feature worktree | `feat/predictor-accuracy-upgrades` | `783cd36` | Accuracy upgrades. **Do not run daily_job here.** |
+| Feature worktree | `feat/predictor-accuracy-upgrades` | `c4ea11f` | Accuracy upgrades. **Do not run daily_job here.** |
 | Master SO foundation (already merged) | `master` ancestry | `1be5bc1`, `41358bb` | Gamelog SO + empty-hash eligibility fix |
 
 Sync attestation when this handoff was written:
@@ -36,7 +36,7 @@ Live proof on pack `2026-08-21`: 7/7 SO candidates had gamelog independent probs
 
 ---
 
-## What landed on feature branch `783cd36` / `ab9c14a` (NOT merged)
+## What landed on feature branch `c4ea11f` (NOT merged)
 
 Worktree: `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`
 
@@ -44,10 +44,14 @@ Worktree: `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrad
 - `outlier_scrapers/slate_quality.py` — `promote_independent_so_sizing` (gamelog → live Kelly, 2u cap, requires predictive signal)
 - `outlier_scrapers/line_movement.py` — `STALE_PROPS_MAX_AGE_HOURS` 12→**6** (align feed_health)
 - `outlier_scrapers/results.py` — `_latest_local_close` fallbacks (any book → market_id+selection)
-- `outlier_scrapers/projections.py` — `apply_so_context_adjustments`, WNBA minutes/PPM scaffold
-- `outlier_scrapers/so_eval.py` — **new** offline Brier eval vs market
-- `tests/test_predictor_gates.py`, `tests/test_so_eval_and_context.py`
+- `outlier_scrapers/projections.py` — opponent K% fetcher, park factors, WNBA ESPN minutes/PPM, audit-only hashes
+- `outlier_scrapers/pack.py` — WNBA PTS audit projection wire (`projection_audit_wnba_minutes`)
+- `outlier_scrapers/so_eval.py` — offline Brier eval vs market
+- `tests/test_predictor_gates.py`, `tests/test_so_eval_and_context.py`, `tests/test_context_fetchers.py`
 - `docs/plans/2026-08-22-predictor-accuracy-branch.md`
+
+### Latest commit on branch
+`c4ea11f feat(predictor): opponent K%/park fetchers + WNBA pack audit wire`
 
 ### Tests
 ```powershell
@@ -91,11 +95,10 @@ git worktree add C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-
 1. **Do not merge** `feat/predictor-accuracy-upgrades` until `so_eval` shows gamelog independent ≤ market Brier with `gamelog_rows > 0` (or user explicitly overrides).
 2. After more daily packs settle (post-`1be5bc1`), re-run:
    `python -m outlier_scrapers.so_eval` from the feature worktree (point `--db` at `C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3`).
-3. Wire real **opponent_k_rate / park_k_factor** enrichers (hooks exist; feeds not built).
-4. Wire **WNBA minutes/PPM** into pack path (`wnba_points_projection_record` is scaffold-only).
-5. Keep `config/portfolio_risk.json` **shadow**; do not `fit-blend` on old H/HRR/BB universe.
-6. PR already open: https://github.com/DaSilvaDub/outlier/pull/104 — do **not** merge until so_eval gate clears.
-7. Live pipeline stays on **master** only: `C:\Users\dasil\Dev\GitHub\outlier`.
+3. Optional: refresh `HOME_PARK_K_FACTORS` from a stable Savant CSV when available (currently curated static table).
+4. Keep `config/portfolio_risk.json` **shadow**; do not `fit-blend` on old H/HRR/BB universe.
+5. PR already open: https://github.com/DaSilvaDub/outlier/pull/104 — do **not** merge until so_eval gate clears.
+6. Live pipeline stays on **master** only: `C:\Users\dasil\Dev\GitHub\outlier`.
 
 ### House rules
 - Never run paid desk/reasoning unless user asks this turn.
