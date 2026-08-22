@@ -121,6 +121,26 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
 
 
+def test_capture_pack_persists_projection_feature_hash(tmp_path):
+    selected = _candidate()
+    selected["independent_model_prob"] = 0.62
+    selected["projection_feature_hash"] = "so-starter-gamelog-v2"
+    selected["projection_quality_flags"] = "projection_independent_gamelog_so"
+    pack_dir = _pack(tmp_path, [selected])
+    db_path = tmp_path / "calibration" / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT independent_model_prob, projection_feature_hash, projection_quality_flags "
+            "FROM market_snapshots WHERE market_id = 'm1'"
+        ).fetchone()
+        assert row["independent_model_prob"] == pytest.approx(0.62)
+        assert row["projection_feature_hash"] == "so-starter-gamelog-v2"
+        assert row["projection_quality_flags"] == "projection_independent_gamelog_so"
+
+
 def test_capture_pack_includes_qualified_and_rejected_ultimate_alt_rows(tmp_path):
     pack_dir = _pack(tmp_path, [])
     qualified = {field: "" for field in ULTIMATE_ALT_HEADER}

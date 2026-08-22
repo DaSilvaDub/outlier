@@ -98,6 +98,93 @@ def test_predictor_gates_keep_signaled_player_prop_but_cap_devig_units():
     assert "edge_suspect_no_independent_model" in row["sizing_flags"]
 
 
+def test_predictor_gates_promote_gamelog_independent_so_sizing(monkeypatch):
+    import outlier_scrapers.slate_quality as sq
+
+    monkeypatch.setattr(sq, "ENABLE_INDEPENDENT_SO_SIZING", True)
+
+    row = {
+        "market_type": "SO",
+        "selection": "Cam Schlittler - Strikeouts OVER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 1.0,
+        "edge_pct": 0.05,
+        "decimal_price": 2.1,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.78,
+        "independent_push_prob": 0.0,
+        "projection_feature_hash": sq.GAMELOG_FEATURE_HASH,
+        "signal_flags": "insight_support;movement_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    apply_predictor_gates(row)
+    assert row["model_prob_source"] == sq.INDEPENDENT_SO_SOURCE
+    assert row["model_prob"] == 0.78
+    assert float(row["edge_pct"]) > 0.05
+    assert 0 < float(row["recommended_units_pre_news"]) <= sq.INDEPENDENT_SO_UNIT_CAP
+    assert "independent_gamelog_so_sizing" in row["sizing_flags"]
+    assert row["actionable"] == "true"
+
+
+def test_predictor_gates_skip_independent_so_sizing_when_disabled():
+    from outlier_scrapers.slate_quality import (
+        ENABLE_INDEPENDENT_SO_SIZING,
+        GAMELOG_FEATURE_HASH,
+        MARKET_DEVIG_UNIT_CAP,
+    )
+
+    assert ENABLE_INDEPENDENT_SO_SIZING is False
+    row = {
+        "market_type": "SO",
+        "selection": "Cam Schlittler - Strikeouts OVER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 3.0,
+        "edge_pct": 0.05,
+        "decimal_price": 2.1,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.78,
+        "projection_feature_hash": GAMELOG_FEATURE_HASH,
+        "signal_flags": "insight_support;movement_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    apply_predictor_gates(row)
+    assert row["model_prob_source"] == "outlier_devig"
+    assert row["recommended_units_pre_news"] == MARKET_DEVIG_UNIT_CAP
+    assert "independent_gamelog_so_sizing" not in row["sizing_flags"]
+
+
+def test_predictor_gates_do_not_promote_independent_without_signal():
+    from outlier_scrapers.slate_quality import GAMELOG_FEATURE_HASH
+
+    row = {
+        "market_type": "SO",
+        "selection": "Sean Burke - Strikeouts UNDER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 1.0,
+        "edge_pct": 0.08,
+        "decimal_price": 1.91,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.70,
+        "projection_feature_hash": GAMELOG_FEATURE_HASH,
+        "signal_flags": "hit_rate_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    apply_predictor_gates(row)
+    assert row["model_prob_source"] == "outlier_devig"
+    assert row["recommended_units_pre_news"] == ""
+    assert row["actionable"] == "false"
+    assert "missing_predictive_signal" in row["sizing_flags"]
+
+
 def test_predictor_gates_leave_signaled_gameline_actionable():
     row = {
         "market_type": "GAMELINE",
@@ -118,9 +205,14 @@ def test_predictor_gates_leave_signaled_gameline_actionable():
 
 
 def test_league_average_so_hash_is_not_independent_eligible():
-    from outlier_scrapers.projections import LEAGUE_AVG_SO_HASH, independent_projection_eligible
+    from outlier_scrapers.projections import (
+        LEAGUE_AVG_SO_HASH,
+        WNBA_MINUTES_HASH,
+        independent_projection_eligible,
+    )
 
     assert independent_projection_eligible({"feature_snapshot_hash": LEAGUE_AVG_SO_HASH}) is False
+    assert independent_projection_eligible({"feature_snapshot_hash": WNBA_MINUTES_HASH}) is False
     assert independent_projection_eligible({"feature_snapshot_hash": "features-123"}) is True
     assert independent_projection_eligible({}) is True
     assert independent_projection_eligible({"feature_snapshot_hash": ""}) is True

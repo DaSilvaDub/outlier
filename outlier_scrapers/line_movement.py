@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 SIDES = ("OVER", "UNDER")
 DEFAULT_WORKERS = 4
-STALE_PROPS_MAX_AGE_HOURS = 12.0
+# Align with feed_health.MAX_SOURCE_AGE_HOURS (6h). The prior 12h window let LM
+# stay "fresh" while feed-health already marked the same slate unsafe/stale.
+STALE_PROPS_MAX_AGE_HOURS = 6.0
 DEFAULT_RETRY_403_COOLDOWN_SECONDS = 15.0
 DEFAULT_RETRY_403_WORKERS = 1
 DEFAULT_RETRY_403_MAX_ROUNDS = 3

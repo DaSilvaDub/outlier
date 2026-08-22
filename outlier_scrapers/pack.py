@@ -1077,26 +1077,41 @@ def build_row(
     projection_flags = apply_shadow_projection(row, incoming_projection, headline_side)
     explicit_failed = bool(incoming_projection) and bool(projection_flags)
     if not row.get("independent_model_prob") and not explicit_failed:
-        from outlier_scrapers.projections import mlb_so_projection_record
+        from outlier_scrapers.projections import (
+            GAMELOG_SO_HASH,
+            LEAGUE_AVG_SO_HASH,
+            WNBA_MINUTES_HASH,
+            get_wnba_points_features,
+            independent_projection_eligible,
+            mlb_so_projection_record,
+            wnba_points_projection_record,
+        )
 
         generated = mlb_so_projection_record(row, probable_pitchers)
+        if generated is None and str(row.get("sport") or "").upper() == "WNBA":
+            player_name = str(row.get("player") or "").strip()
+            if player_name:
+                season = datetime.now().astimezone().year
+                as_of = str(row.get("as_of") or "")
+                if len(as_of) >= 4 and as_of[:4].isdigit():
+                    season = int(as_of[:4])
+                features = get_wnba_points_features(player_name, season=season)
+                generated = wnba_points_projection_record(row, features=features)
         if generated:
-            from outlier_scrapers.projections import (
-                GAMELOG_SO_HASH,
-                LEAGUE_AVG_SO_HASH,
-                independent_projection_eligible,
-            )
-
             extra_flags = apply_shadow_projection(row, generated, headline_side)
             projection_flags = [*projection_flags, *extra_flags]
             if extra_flags:
                 projection_flags.append("projection_fallback_rejected")
             else:
                 digest = str(generated.get("feature_snapshot_hash") or "")
-                if digest == LEAGUE_AVG_SO_HASH or not independent_projection_eligible(generated):
+                if digest == LEAGUE_AVG_SO_HASH:
                     projection_flags.append("projection_audit_league_avg")
-                elif digest == GAMELOG_SO_HASH:
+                elif digest == GAMELOG_SO_HASH and independent_projection_eligible(generated):
                     projection_flags.append("projection_independent_gamelog_so")
+                elif digest == WNBA_MINUTES_HASH:
+                    projection_flags.append("projection_audit_wnba_minutes")
+                elif not independent_projection_eligible(generated):
+                    projection_flags.append("projection_audit_only")
     row["projection_quality_flags"] = ";".join(projection_flags)
 
     # Surface card-level quality flags and, for an EV alt-line fallback, the line

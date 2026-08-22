@@ -236,25 +236,120 @@ def mlb_total_bases_distribution(
 STARTER_PROJECTED_BF = 22.0
 LEAGUE_STRIKEOUT_RATE = 0.225
 LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
-GAMELOG_SO_HASH = "so-starter-gamelog-v1"
+GAMELOG_SO_HASH = "so-starter-gamelog-v2"  # v2 = EB shrink + thin-sample soften
+WNBA_MINUTES_HASH = "wnba-minutes-ppm-v1"
+AUDIT_ONLY_PROJECTION_HASHES = frozenset({LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH})
 MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"
+ESPN_SEARCH_URL = "https://site.web.api.espn.com/apis/common/v3/search"
+ESPN_WNBA_GAMELOG_URL = (
+    "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/athletes"
+)
 DEFAULT_SO_MIN_STARTS = 3
 DEFAULT_SO_MAX_STARTS = 8
 DEFAULT_SO_MIN_TOTAL_BF = 45
+# Empirical-Bayes prior strength for thin recent-start samples. Diagnosis of
+# settled gamelog SO (n=7) showed 7/7 independents more extreme than market and
+# mean K sometimes absurd (e.g. 8.25 vs a 5.5 line) because raw L3-L8 averages
+# were used without shrinkage or extra uncertainty.
+SO_RATE_PRIOR_BF = 90.0  # ~4 league-average starts of PA/BF strength
+SO_BF_PRIOR_STARTS = 4.0
+SO_BASE_WORKLOAD_DISPERSION = 12.0
+SO_THIN_START_DISPERSION_STEP = 5.0
+
+# statsapi.mlb.com teamId keyed by Outlier canonical abbreviations (2026).
+MLB_TEAM_STATS_IDS: dict[str, int] = {
+    "ATH": 133,
+    "ATL": 144,
+    "AZ": 109,
+    "BAL": 110,
+    "BOS": 111,
+    "CHC": 112,
+    "CIN": 113,
+    "CLE": 114,
+    "COL": 115,
+    "CWS": 145,
+    "DET": 116,
+    "HOU": 117,
+    "KC": 118,
+    "LAA": 108,
+    "LAD": 119,
+    "MIA": 146,
+    "MIL": 158,
+    "MIN": 142,
+    "NYM": 121,
+    "NYY": 147,
+    "PHI": 143,
+    "PIT": 134,
+    "SD": 135,
+    "SEA": 136,
+    "SF": 137,
+    "STL": 138,
+    "TB": 139,
+    "TEX": 140,
+    "TOR": 141,
+    "WSH": 120,
+}
+# Curated home-park SO multipliers (1.0 = league average). Source: Statcast-style
+# SO park factors compressed to multipliers; missing teams default to 1.0.
+HOME_PARK_K_FACTORS: dict[str, float] = {
+    "ATH": 1.00,
+    "ATL": 1.02,
+    "AZ": 0.99,
+    "BAL": 1.01,
+    "BOS": 0.98,
+    "CHC": 1.01,
+    "CIN": 1.03,
+    "CLE": 1.02,
+    "COL": 0.93,
+    "CWS": 1.01,
+    "DET": 1.02,
+    "HOU": 1.01,
+    "KC": 0.99,
+    "LAA": 1.00,
+    "LAD": 1.01,
+    "MIA": 1.03,
+    "MIL": 1.02,
+    "MIN": 1.01,
+    "NYM": 1.02,
+    "NYY": 1.01,
+    "PHI": 1.02,
+    "PIT": 1.00,
+    "SD": 1.05,
+    "SEA": 1.03,
+    "SF": 1.04,
+    "STL": 0.99,
+    "TB": 1.01,
+    "TEX": 1.00,
+    "TOR": 1.00,
+    "WSH": 1.01,
+}
 
 
 def independent_projection_eligible(projection: Mapping[str, object] | None) -> bool:
-    """League-average SO stubs are audit-only and must not fill independent_model_prob.
+    """Audit-only digests must not fill independent_model_prob.
 
-    Other projection artifacts (including those without a feature hash) remain
-    eligible when they carry a real distribution. Only the explicit league-avg
-    SO digest is blocked.
+    League-avg SO stubs and the WNBA minutes scaffold stay shadow/audit until
+    calibrated. Other projection artifacts remain eligible.
     """
 
     if not isinstance(projection, Mapping):
         return False
     digest = str(projection.get("feature_snapshot_hash") or "")
-    return digest != LEAGUE_AVG_SO_HASH
+    return digest not in AUDIT_ONLY_PROJECTION_HASHES
+
+
+def _default_stats_fetch_json(request_url: str) -> dict[str, object]:
+    from urllib.request import Request, urlopen
+
+    request = Request(
+        request_url,
+        headers={"User-Agent": "outlier-projections/1.0", "Accept": "application/json"},
+    )
+    with urlopen(request, timeout=30) as response:  # noqa: S310
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("stats payload must be an object")
+    return payload
 
 
 def _normalize_person_name(value: Any) -> str:
@@ -343,8 +438,6 @@ def fetch_pitcher_pitching_game_logs(
     fetch_json: Any | None = None,
 ) -> list[dict[str, object]]:
     """Fetch one pitcher's pitching gameLog splits for ``season``."""
-    from urllib.request import Request, urlopen
-
     person_id = str(pitcher_id).strip()
     if not person_id.isdigit():
         return []
@@ -352,20 +445,8 @@ def fetch_pitcher_pitching_game_logs(
         f"{MLB_STATS_API_BASE}/people/{person_id}/stats"
         f"?stats=gameLog&group=pitching&season={int(season)}"
     )
-    if fetch_json is None:
-
-        def fetch_json(request_url: str) -> dict[str, object]:
-            request = Request(
-                request_url,
-                headers={"User-Agent": "outlier-projections/1.0", "Accept": "application/json"},
-            )
-            with urlopen(request, timeout=30) as response:  # noqa: S310
-                payload = json.loads(response.read().decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("pitcher stats payload must be an object")
-            return payload
-
-    payload = fetch_json(url)
+    loader = fetch_json or _default_stats_fetch_json
+    payload = loader(url)
     stats = payload.get("stats")
     if not isinstance(stats, list) or not stats:
         return []
@@ -373,6 +454,55 @@ def fetch_pitcher_pitching_game_logs(
     if not isinstance(splits, list):
         return []
     return [split for split in splits if isinstance(split, Mapping)]
+
+
+def fetch_team_batter_k_rate(
+    team_code: str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> float | None:
+    """Season batter K rate (SO/PA) for one MLB team abbreviation."""
+    team_id = MLB_TEAM_STATS_IDS.get(str(team_code or "").strip().upper())
+    if team_id is None:
+        return None
+    url = (
+        f"{MLB_STATS_API_BASE}/teams/{team_id}/stats"
+        f"?stats=season&group=hitting&season={int(season)}"
+    )
+    loader = fetch_json or _default_stats_fetch_json
+    payload = loader(url)
+    stats = payload.get("stats")
+    if not isinstance(stats, list) or not stats:
+        return None
+    splits = stats[0].get("splits") if isinstance(stats[0], Mapping) else None
+    if not isinstance(splits, list) or not splits:
+        return None
+    stat = splits[0].get("stat") if isinstance(splits[0], Mapping) else None
+    if not isinstance(stat, Mapping):
+        return None
+    strikeouts = _float_stat(stat.get("strikeOuts"))
+    plate_appearances = _float_stat(stat.get("plateAppearances"))
+    if (
+        strikeouts is None
+        or plate_appearances is None
+        or plate_appearances <= 0
+        or strikeouts < 0
+        or strikeouts > plate_appearances
+    ):
+        return None
+    return strikeouts / plate_appearances
+
+
+def park_k_factor_for_venue_team(team_code: str | None) -> float | None:
+    """Return curated home-park SO multiplier for a team abbreviation."""
+    code = str(team_code or "").strip().upper()
+    if not code:
+        return None
+    factor = HOME_PARK_K_FACTORS.get(code)
+    if factor is None:
+        return 1.0
+    return factor
 
 
 def enrich_probable_with_so_features(
@@ -384,9 +514,10 @@ def enrich_probable_with_so_features(
     max_starts: int = DEFAULT_SO_MAX_STARTS,
     min_total_bf: int = DEFAULT_SO_MIN_TOTAL_BF,
 ) -> dict[str, dict[str, object]]:
-    """Attach starter SO features onto a probable-pitcher by_team lookup."""
+    """Attach starter SO + opponent/park context onto a probable-pitcher lookup."""
     enriched: dict[str, dict[str, object]] = {}
     cache: dict[str, dict[str, object] | None] = {}
+    opponent_cache: dict[str, float | None] = {}
     for team, info in by_team.items():
         row = dict(info) if isinstance(info, Mapping) else {}
         pitcher_id = str(row.get("pitcher_id") or "").strip()
@@ -413,6 +544,40 @@ def enrich_probable_with_so_features(
             features = cache[pitcher_id]
             if features:
                 row.update(features)
+
+            opponent = str(row.get("opponent") or "").strip().upper()
+            if opponent:
+                if opponent not in opponent_cache:
+                    try:
+                        opponent_cache[opponent] = fetch_team_batter_k_rate(
+                            opponent, season=season, fetch_json=fetch_json
+                        )
+                    except (
+                        HTTPError,
+                        URLError,
+                        TimeoutError,
+                        ValueError,
+                        OSError,
+                        json.JSONDecodeError,
+                    ) as exc:
+                        logger.warning(
+                            "Opponent K%% fetch failed for team=%s season=%s: %s",
+                            opponent,
+                            season,
+                            exc,
+                        )
+                        opponent_cache[opponent] = None
+                if opponent_cache[opponent] is not None:
+                    row["opponent_k_rate"] = opponent_cache[opponent]
+                    row["opponent_k_source"] = "mlb_stats_team_hitting"
+
+            home_away = str(row.get("home_away") or "").strip().upper()
+            venue_team = str(team).strip().upper() if home_away == "HOME" else opponent
+            park_factor = park_k_factor_for_venue_team(venue_team)
+            if park_factor is not None:
+                row["park_k_factor"] = park_factor
+                row["park_k_source"] = "curated_home_park_so"
+                row["park_team"] = venue_team
         enriched[str(team)] = row
     return enriched
 
@@ -470,12 +635,37 @@ def mlb_so_projection_record(
         and projected_bf > 0
         and 0.0 < strikeout_rate < 1.0
     ):
-        distribution = mlb_strikeout_distribution(projected_bf, strikeout_rate)
+        starts = int(_float_stat(listed.get("starts")) or 0)
+        total_bf = _float_stat(listed.get("total_bf"))
+        total_k = _float_stat(listed.get("total_k"))
+        shrunk = shrink_starter_so_features(
+            projected_bf,
+            strikeout_rate,
+            starts=starts,
+            total_bf=total_bf,
+            total_k=total_k,
+        )
+        adjusted_bf, adjusted_rate = apply_so_context_adjustments(
+            float(shrunk["projected_bf"]),
+            float(shrunk["strikeout_rate"]),
+            opponent_k_rate=_float_stat(listed.get("opponent_k_rate")),
+            park_k_factor=_float_stat(listed.get("park_k_factor")),
+        )
+        distribution = mlb_strikeout_distribution(
+            adjusted_bf,
+            adjusted_rate,
+            workload_dispersion=float(shrunk["workload_dispersion"]),
+        )
         feature_hash = GAMELOG_SO_HASH
+        record = distribution.to_record(line=line_value, side=side)
+        record = soften_so_win_probability(
+            record,
+            reliability=float(shrunk["reliability"]),
+        )
     else:
         distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
         feature_hash = LEAGUE_AVG_SO_HASH
-    record = distribution.to_record(line=line_value, side=side)
+        record = distribution.to_record(line=line_value, side=side)
     return {
         "status": "eligible",
         "sport": "MLB",
@@ -485,6 +675,300 @@ def mlb_so_projection_record(
         "line": line_value,
         "side": side,
         "feature_snapshot_hash": feature_hash,
+        "distribution": record,
+    }
+
+
+def shrink_starter_so_features(
+    projected_bf: float,
+    strikeout_rate: float,
+    *,
+    starts: int = 0,
+    total_bf: float | None = None,
+    total_k: float | None = None,
+) -> dict[str, float]:
+    """Empirical-Bayes shrink recent-start BF/K toward league priors.
+
+    Thin samples produced overconfident independent probs (settled gamelog
+    diagnosis: 7/7 more extreme than market). Shrinkage + wider dispersion
+    flattens those tails without using the betting line as a feature.
+    """
+    starts = max(0, int(starts))
+    observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
+    if total_k is not None and total_k >= 0 and observed_bf > 0:
+        rate_numer = float(total_k) + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
+        rate_denom = float(observed_bf) + SO_RATE_PRIOR_BF
+    else:
+        rate_numer = strikeout_rate * observed_bf + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
+        rate_denom = observed_bf + SO_RATE_PRIOR_BF
+    shrunk_rate = min(0.45, max(0.08, rate_numer / rate_denom))
+    shrunk_bf = (
+        starts * projected_bf + SO_BF_PRIOR_STARTS * STARTER_PROJECTED_BF
+    ) / (starts + SO_BF_PRIOR_STARTS)
+    shrunk_bf = max(1.0, shrunk_bf)
+    dispersion = SO_BASE_WORKLOAD_DISPERSION + SO_THIN_START_DISPERSION_STEP * max(
+        0, DEFAULT_SO_MAX_STARTS - max(starts, 1)
+    )
+    reliability = observed_bf / (observed_bf + SO_RATE_PRIOR_BF)
+    return {
+        "projected_bf": shrunk_bf,
+        "strikeout_rate": shrunk_rate,
+        "workload_dispersion": dispersion,
+        "reliability": min(1.0, max(0.0, reliability)),
+    }
+
+
+def soften_so_win_probability(
+    record: Mapping[str, object],
+    *,
+    reliability: float,
+) -> dict[str, object]:
+    """Pull thin-sample win probs toward 0.5 while preserving the partition."""
+    payload = dict(record)
+    win = _float_stat(payload.get("win_prob"))
+    push = _float_stat(payload.get("push_prob")) or 0.0
+    loss = _float_stat(payload.get("loss_prob"))
+    if win is None:
+        return payload
+    if loss is None:
+        loss = max(0.0, 1.0 - win - push)
+    weight = min(1.0, max(0.0, reliability))
+    # Keep push mass; shrink only the decisive win/loss split toward a coin flip.
+    decisive = max(0.0, 1.0 - push)
+    shrunk_win = weight * win + (1.0 - weight) * (0.5 * decisive)
+    shrunk_loss = max(0.0, decisive - shrunk_win)
+    payload["win_prob"] = shrunk_win
+    payload["loss_prob"] = shrunk_loss
+    payload["push_prob"] = push
+    return payload
+
+
+def apply_so_context_adjustments(
+    projected_bf: float,
+    strikeout_rate: float,
+    *,
+    opponent_k_rate: float | None = None,
+    park_k_factor: float | None = None,
+) -> tuple[float, float]:
+    """Blend optional opponent/park context into starter SO features.
+
+    Missing context leaves the gamelog rate unchanged (fail open on enrichment,
+    fail closed on thin gamelog samples upstream).
+    """
+    rate = strikeout_rate
+    if opponent_k_rate is not None and 0.0 < opponent_k_rate < 1.0:
+        rate = 0.7 * rate + 0.3 * opponent_k_rate
+    if park_k_factor is not None and 0.5 <= park_k_factor <= 1.5:
+        rate *= park_k_factor
+    rate = min(0.45, max(0.08, rate))
+    bf = max(1.0, projected_bf)
+    return bf, rate
+
+
+def compute_wnba_minutes_features(
+    recent_minutes: Iterable[float],
+    *,
+    min_games: int = 3,
+    max_games: int = 10,
+    recent_points: Iterable[float] | None = None,
+) -> dict[str, object] | None:
+    """Derive a bounded minutes + points-per-minute projection from recent games.
+
+    Fail closed on thin samples. Used by the WNBA audit scaffold; does not
+    auto-promote into live Kelly until calibrated.
+    """
+    minutes_values = [
+        float(value) for value in recent_minutes if _float_stat(value) is not None
+    ]
+    minutes_values = [value for value in minutes_values if 0.0 <= value <= 48.0]
+    if len(minutes_values) < min_games:
+        return None
+    kept_minutes = minutes_values[: max(0, max_games)]
+    mean_minutes = sum(kept_minutes) / len(kept_minutes)
+    features: dict[str, object] = {
+        "projected_minutes": mean_minutes,
+        "games": len(kept_minutes),
+        "feature_source": "wnba_minutes_recent",
+    }
+    if recent_points is not None:
+        points_values = [
+            float(value) for value in recent_points if _float_stat(value) is not None
+        ]
+        points_values = [value for value in points_values if value >= 0]
+        kept_points = points_values[: len(kept_minutes)]
+        if len(kept_points) == len(kept_minutes) and sum(kept_minutes) > 0:
+            features["points_per_minute"] = sum(kept_points) / sum(kept_minutes)
+            features["feature_source"] = "wnba_espn_gamelog"
+    return features
+
+
+def resolve_wnba_athlete_id(
+    player_name: str,
+    *,
+    fetch_json: Any | None = None,
+) -> str | None:
+    """Resolve a WNBA player display name to an ESPN athlete id."""
+    from urllib.parse import quote
+
+    name = str(player_name or "").strip()
+    if not name:
+        return None
+    url = f"{ESPN_SEARCH_URL}?region=us&lang=en&query={quote(name)}&limit=8&type=player"
+    loader = fetch_json or _default_stats_fetch_json
+    payload = loader(url)
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return None
+    target = _normalize_person_name(name)
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("league") or "").casefold() != "wnba":
+            continue
+        if str(item.get("type") or "").casefold() != "player":
+            continue
+        display = _normalize_person_name(item.get("displayName"))
+        if display == target or target in display or display in target:
+            athlete_id = str(item.get("id") or "").strip()
+            if athlete_id.isdigit():
+                return athlete_id
+    return None
+
+
+def fetch_wnba_athlete_gamelog_stats(
+    athlete_id: str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> tuple[list[float], list[float]]:
+    """Return (minutes, points) lists newest-first from ESPN gamelog."""
+    person_id = str(athlete_id).strip()
+    if not person_id.isdigit():
+        return [], []
+    url = f"{ESPN_WNBA_GAMELOG_URL}/{person_id}/gamelog?season={int(season)}"
+    loader = fetch_json or _default_stats_fetch_json
+    payload = loader(url)
+    names = payload.get("names")
+    if not isinstance(names, list):
+        return [], []
+    try:
+        minutes_idx = names.index("minutes")
+        points_idx = names.index("points")
+    except ValueError:
+        return [], []
+    minutes: list[float] = []
+    points: list[float] = []
+    season_types = payload.get("seasonTypes")
+    if not isinstance(season_types, list):
+        return [], []
+    for season_type in season_types:
+        if not isinstance(season_type, Mapping):
+            continue
+        categories = season_type.get("categories")
+        if not isinstance(categories, list):
+            continue
+        for category in categories:
+            if not isinstance(category, Mapping):
+                continue
+            events = category.get("events")
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if not isinstance(event, Mapping):
+                    continue
+                stats = event.get("stats")
+                if not isinstance(stats, list):
+                    continue
+                if max(minutes_idx, points_idx) >= len(stats):
+                    continue
+                minute_value = _float_stat(stats[minutes_idx])
+                point_value = _float_stat(stats[points_idx])
+                if minute_value is None or point_value is None:
+                    continue
+                minutes.append(minute_value)
+                points.append(point_value)
+    return minutes, points
+
+
+_WNBA_FEATURE_CACHE: dict[str, dict[str, object] | None] = {}
+
+
+def get_wnba_points_features(
+    player_name: str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+    cache: dict[str, dict[str, object] | None] | None = None,
+) -> dict[str, object] | None:
+    """Fetch/cache WNBA minutes+PPM features for one player. Fail closed."""
+    key = f"{season}:{_normalize_person_name(player_name)}"
+    store = cache if cache is not None else _WNBA_FEATURE_CACHE
+    if key in store:
+        return store[key]
+    try:
+        athlete_id = resolve_wnba_athlete_id(player_name, fetch_json=fetch_json)
+        if not athlete_id:
+            store[key] = None
+            return None
+        minutes, points = fetch_wnba_athlete_gamelog_stats(
+            athlete_id, season=season, fetch_json=fetch_json
+        )
+        features = compute_wnba_minutes_features(minutes, recent_points=points)
+        store[key] = features
+        return features
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("WNBA minutes features failed for %s: %s", player_name, exc)
+        store[key] = None
+        return None
+
+
+def wnba_points_projection_record(
+    row: Mapping[str, object],
+    *,
+    features: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Shadow-only WNBA points scaffold from minutes * usage rate.
+
+    Returns None unless features are complete. Never writes league averages.
+    Audit-only hash: does not fill independent_model_prob.
+    """
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market_type") or row.get("market") or row.get("proposition") or "").upper()
+    if sport != "WNBA":
+        return None
+    if market not in {"PTS", "POINTS"} and "POINT" not in str(row.get("selection") or "").upper():
+        return None
+    if not isinstance(features, Mapping):
+        return None
+    minutes = _float_stat(features.get("projected_minutes"))
+    usage_rate = _float_stat(features.get("points_per_minute"))
+    if minutes is None or usage_rate is None or minutes <= 0 or usage_rate <= 0:
+        return None
+    line = row.get("line")
+    side = str(row.get("headline_side") or row.get("position") or "").upper()
+    if "OVER" in str(row.get("selection") or "").upper():
+        side = "OVER"
+    elif "UNDER" in str(row.get("selection") or "").upper():
+        side = "UNDER"
+    if side not in {"OVER", "UNDER"} or line in (None, ""):
+        return None
+    try:
+        line_value = float(str(line).replace("+", ""))
+    except (TypeError, ValueError):
+        return None
+    mean_points = minutes * usage_rate
+    # Poisson-like discrete approximation via NB2 with light overdispersion.
+    distribution = negative_binomial_distribution(mean_points, dispersion=8.0)
+    record = distribution.to_record(line=line_value, side=side)
+    return {
+        "status": "eligible",
+        "sport": "WNBA",
+        "row_id": row.get("outcome_id"),
+        "event_id": row.get("event_id"),
+        "market_id": row.get("market_id"),
+        "line": line_value,
+        "side": side,
+        "feature_snapshot_hash": WNBA_MINUTES_HASH,
         "distribution": record,
     }
 
