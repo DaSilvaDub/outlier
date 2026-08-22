@@ -122,6 +122,8 @@ def test_league_average_so_hash_is_not_independent_eligible():
 
     assert independent_projection_eligible({"feature_snapshot_hash": LEAGUE_AVG_SO_HASH}) is False
     assert independent_projection_eligible({"feature_snapshot_hash": "features-123"}) is True
+    assert independent_projection_eligible({}) is True
+    assert independent_projection_eligible({"feature_snapshot_hash": ""}) is True
 
 
 def test_t30_routes_canonical_so_market_to_props_stream():

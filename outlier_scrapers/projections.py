@@ -244,12 +244,17 @@ DEFAULT_SO_MIN_TOTAL_BF = 45
 
 
 def independent_projection_eligible(projection: Mapping[str, object] | None) -> bool:
-    """League-average SO stubs are audit-only and must not fill independent_model_prob."""
+    """League-average SO stubs are audit-only and must not fill independent_model_prob.
+
+    Other projection artifacts (including those without a feature hash) remain
+    eligible when they carry a real distribution. Only the explicit league-avg
+    SO digest is blocked.
+    """
 
     if not isinstance(projection, Mapping):
         return False
     digest = str(projection.get("feature_snapshot_hash") or "")
-    return digest != LEAGUE_AVG_SO_HASH and digest != ""
+    return digest != LEAGUE_AVG_SO_HASH
 
 
 def _normalize_person_name(value: Any) -> str:
