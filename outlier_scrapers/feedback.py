@@ -75,6 +75,8 @@ MARKET_SNAPSHOT_FIELDS = [
     "insight_component",
     "movement_component",
     "orf_component",
+    "projection_feature_hash",
+    "projection_quality_flags",
     "pack_path",
     "policy_fingerprint",
     "portfolio_mode",
@@ -175,6 +177,8 @@ MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
     "insight_component": "REAL",
     "movement_component": "REAL",
     "orf_component": "REAL",
+    "projection_feature_hash": "TEXT",
+    "projection_quality_flags": "TEXT",
     "pack_path": "TEXT",
     "policy_fingerprint": "TEXT",
     "portfolio_mode": "TEXT",
@@ -272,6 +276,8 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "insight_component": "ALTER TABLE market_snapshots ADD COLUMN insight_component REAL",
         "movement_component": "ALTER TABLE market_snapshots ADD COLUMN movement_component REAL",
         "orf_component": "ALTER TABLE market_snapshots ADD COLUMN orf_component REAL",
+        "projection_feature_hash": "ALTER TABLE market_snapshots ADD COLUMN projection_feature_hash TEXT",
+        "projection_quality_flags": "ALTER TABLE market_snapshots ADD COLUMN projection_quality_flags TEXT",
         "pack_path": "ALTER TABLE market_snapshots ADD COLUMN pack_path TEXT",
         "policy_fingerprint": "ALTER TABLE market_snapshots ADD COLUMN policy_fingerprint TEXT",
         "portfolio_mode": "ALTER TABLE market_snapshots ADD COLUMN portfolio_mode TEXT",
@@ -580,6 +586,8 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 insight_component REAL,
                 movement_component REAL,
                 orf_component REAL,
+                projection_feature_hash TEXT,
+                projection_quality_flags TEXT,
                 pack_path TEXT,
                 policy_fingerprint TEXT,
                 portfolio_mode TEXT,
@@ -1114,6 +1122,8 @@ def _snapshot_from_pack_row(
         "insight_component": insight,
         "movement_component": movement,
         "orf_component": orf,
+        "projection_feature_hash": _text(row.get("projection_feature_hash")),
+        "projection_quality_flags": _text(row.get("projection_quality_flags")),
         "pack_path": str((recorded_pack_path or pack_dir).resolve()),
         "policy_fingerprint": _text(row.get("_policy_fingerprint")),
         "portfolio_mode": _text(row.get("_portfolio_mode"))
@@ -1229,13 +1239,14 @@ def capture_pack(
                     data_quality_tier, event_starts_at, hours_before_game, odds_range,
                     time_before_game, market_type, model_prob_source, decimal_price,
                     implied_prob, board, selected, signal_flags, hit_rate_component,
-                    insight_component, movement_component, orf_component, pack_path,
+                    insight_component, movement_component, orf_component,
+                    projection_feature_hash, projection_quality_flags, pack_path,
                     policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
                     created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
@@ -1276,7 +1287,9 @@ def capture_pack(
                     hit_rate_component = excluded.hit_rate_component,
                     insight_component = excluded.insight_component,
                     movement_component = excluded.movement_component,
-                    orf_component = excluded.orf_component
+                    orf_component = excluded.orf_component,
+                    projection_feature_hash = excluded.projection_feature_hash,
+                    projection_quality_flags = excluded.projection_quality_flags
                 WHERE NOT EXISTS (
                     SELECT 1 FROM decisions
                     WHERE decisions.snapshot_id = market_snapshots.snapshot_id
