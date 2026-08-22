@@ -3,9 +3,9 @@
 **Agent:** Grok  
 **Time:** 2026-08-22 (session continued from predictor assessment → SO gamelog → accuracy branch)  
 **Canonical master HEAD:** `a464dbb` (pipeline-safe; do not mix feature work here)  
-**Active feature branch HEAD:** `ab9c14a` on `feat/predictor-accuracy-upgrades`  
+**Active feature branch HEAD:** `783cd36` on `feat/predictor-accuracy-upgrades`  
 **Feature worktree:** `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`  
-**PR:** https://github.com/DaSilvaDub/outlier/compare/master...feat/predictor-accuracy-upgrades (open if not already)
+**PR:** https://github.com/DaSilvaDub/outlier/pull/104
 
 ---
 
@@ -14,7 +14,7 @@
 | Tree | Branch | SHA | Notes |
 |---|---|---|---|
 | `C:\Users\dasil\Dev\GitHub\outlier` | `master` | `a464dbb` | Live pipeline checkout. Keep clean for `daily_job`. |
-| Feature worktree | `feat/predictor-accuracy-upgrades` | `ab9c14a` | Accuracy upgrades. **Do not run daily_job here.** |
+| Feature worktree | `feat/predictor-accuracy-upgrades` | `783cd36` | Accuracy upgrades. **Do not run daily_job here.** |
 | Master SO foundation (already merged) | `master` ancestry | `1be5bc1`, `41358bb` | Gamelog SO + empty-hash eligibility fix |
 
 Sync attestation when this handoff was written:
@@ -36,7 +36,7 @@ Live proof on pack `2026-08-21`: 7/7 SO candidates had gamelog independent probs
 
 ---
 
-## What landed on feature branch `ab9c14a` (NOT merged)
+## What landed on feature branch `783cd36` / `ab9c14a` (NOT merged)
 
 Worktree: `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`
 
@@ -94,7 +94,7 @@ git worktree add C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-
 3. Wire real **opponent_k_rate / park_k_factor** enrichers (hooks exist; feeds not built).
 4. Wire **WNBA minutes/PPM** into pack path (`wnba_points_projection_record` is scaffold-only).
 5. Keep `config/portfolio_risk.json` **shadow**; do not `fit-blend` on old H/HRR/BB universe.
-6. Open/update PR: `gh pr create --base master --head feat/predictor-accuracy-upgrades` if missing.
+6. PR already open: https://github.com/DaSilvaDub/outlier/pull/104 — do **not** merge until so_eval gate clears.
 7. Live pipeline stays on **master** only: `C:\Users\dasil\Dev\GitHub\outlier`.
 
 ### House rules
