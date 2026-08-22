@@ -31,7 +31,8 @@ GAMELOG_FEATURE_HASH = "so-starter-gamelog-v2"
 PREDICTIVE_SIGNAL_FLAGS = frozenset({"insight_support", "movement_support", "orf_support"})
 PHANTOM_EDGE_THRESHOLD = 0.10
 # Live Kelly from gamelog independents stays off until so_eval prefers independent.
-# Opt in with OUTLIER_PROMOTE_INDEPENDENT_SO=1 after calibration clears.
+# Force: OUTLIER_PROMOTE_INDEPENDENT_SO=1
+# Auto (ledger gate): OUTLIER_AUTO_PROMOTE_INDEPENDENT_SO=1 + config/so_promotion.json
 ENABLE_INDEPENDENT_SO_SIZING = os.environ.get(
     "OUTLIER_PROMOTE_INDEPENDENT_SO", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -245,20 +246,28 @@ def has_predictive_signal(row: dict[str, Any]) -> bool:
 def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     """Size from gamelog-eligible independent SO probs instead of market de-vig.
 
-    Disabled by default (``ENABLE_INDEPENDENT_SO_SIZING`` / env
-    ``OUTLIER_PROMOTE_INDEPENDENT_SO``). Requires a real independent
-    probability, GAMELOG feature hash, and (for player props) a predictive
+    Disabled by default. Enable via ``OUTLIER_PROMOTE_INDEPENDENT_SO=1`` (force)
+    or auto mode that clears ``so_promotion`` ledger criteria. Kelly uses a
+    market-tempered blend of the independent win prob (not raw overconfident
+    tails). Requires GAMELOG v2 feature hash and (for player props) a predictive
     signal. Returns True when sizing was rewritten.
     """
     from outlier_scrapers.sizing import compute_sizing
+    from outlier_scrapers.so_promotion import (
+        independent_so_sizing_enabled,
+        load_so_promotion_config,
+    )
+    from outlier_scrapers.so_sizing_blend import temper_independent_prob
 
-    if not ENABLE_INDEPENDENT_SO_SIZING:
+    if not (ENABLE_INDEPENDENT_SO_SIZING or independent_so_sizing_enabled()):
         return False
     independent = _to_float(row.get("independent_model_prob"))
     digest = str(row.get("projection_feature_hash") or "")
     decimal_price = _to_float(row.get("decimal_price"))
+    market = _to_float(row.get("market_consensus_prob"))
     if (
         independent is None
+        or market is None
         or digest != GAMELOG_FEATURE_HASH
         or decimal_price is None
         or decimal_price <= 1.0
@@ -267,19 +276,26 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     if is_player_prop(row) and not has_predictive_signal(row):
         return False
 
+    cfg = load_so_promotion_config()
+    unit_cap = float(cfg.get("max_units") or INDEPENDENT_SO_UNIT_CAP)
+    temper_weight = float(cfg.get("temper_independent_weight") or 0.55)
+    sizing_prob = temper_independent_prob(
+        independent, market, independent_weight=temper_weight
+    )
+
     push_prob = _to_float(row.get("independent_push_prob"))
     if push_prob is None:
         push_prob = _to_float(row.get("push_prob")) or 0.0
     sizing = compute_sizing(
         decimal_price=decimal_price,
-        model_prob=independent,
+        model_prob=sizing_prob,
         push_prob=push_prob,
-        max_units=INDEPENDENT_SO_UNIT_CAP,
+        max_units=unit_cap,
     )
     if sizing.recommended_units_pre_news is None:
         return False
 
-    row["model_prob"] = independent
+    row["model_prob"] = sizing_prob
     row["model_prob_source"] = INDEPENDENT_SO_SOURCE
     row["implied_prob"] = sizing.implied_prob
     row["edge_pct"] = sizing.edge_pct
@@ -287,11 +303,12 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     row["max_units"] = sizing.max_units
     row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
     _append_sizing_flag(row, "independent_gamelog_so_sizing")
+    _append_sizing_flag(row, "independent_so_market_tempered")
     if (
         sizing.recommended_units_pre_news is not None
-        and sizing.recommended_units_pre_news > INDEPENDENT_SO_UNIT_CAP
+        and sizing.recommended_units_pre_news > unit_cap
     ):
-        row["recommended_units_pre_news"] = INDEPENDENT_SO_UNIT_CAP
+        row["recommended_units_pre_news"] = unit_cap
         _append_sizing_flag(row, "independent_so_unit_cap")
     return True
 

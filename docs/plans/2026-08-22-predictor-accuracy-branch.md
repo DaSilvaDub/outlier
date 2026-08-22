@@ -29,10 +29,19 @@ This worktree is for development/tests only until explicitly merged.
 8. **WNBA minutes/PPM scaffold wired into pack** — ESPN search + gamelog → audit-only projection (`projection_audit_wnba_minutes`); hash is **not** independent-eligible
 9. **Pack UNSAFE refusal** — already present on master (`build_feed_health_by_league` raises); documented, no change needed
 
+## Restaking / promotion hardening (this slice)
+
+- `config/so_promotion.json` — thresholds (`min_settled_gamelog=20`, require v2, prefer independent/tempered)
+- `outlier_scrapers/so_promotion.py` — force env, auto env, temper blend, readiness gate
+- Promote path Kelly uses **market-tempered** independent prob (`0.55·indep + 0.45·market`) and flags `independent_so_market_tempered`
+- `so_eval --include-tempered` / `--promotion-gate` reports soft/tempered Brier + readiness
+- **Still OFF live**: offline replay on 7 settled v1 gamelog rows → market 0.282, tempered 0.297 (`prefer_tempered=false`); `gamelog_v2_rows=0`
+
 ## Still open before merge
 
+- Accumulate settled **v2** gamelog rows; re-run `so_eval --promotion-gate`
+- Only flip `OUTLIER_PROMOTE_INDEPENDENT_SO=1` (or `auto_promote`) when readiness.ready
 - Refresh park factors from live Savant CSV when a stable endpoint is available
-- Run `so_eval` once enough gamelog-settled rows exist; only then consider merging live independent SO sizing
 - Keep `config/portfolio_risk.json` in shadow until post-whitelist recalibration
 - Full projection layer (hits allowed, totals, NRFI, channel C) remains plan-level
 
@@ -40,6 +49,7 @@ This worktree is for development/tests only until explicitly merged.
 
 ```powershell
 Set-Location C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades
-python -m pytest tests/test_predictor_gates.py tests/test_so_eval_and_context.py tests/test_pitcher_so_features.py -q --tb=line
-python -m outlier_scrapers.so_eval
+python -m pytest tests/test_predictor_gates.py tests/test_so_promotion.py tests/test_so_eval_and_context.py tests/test_pitcher_so_features.py -q --tb=line
+python -m outlier_scrapers.so_eval --require-gamelog-hash --include-tempered
+python -m outlier_scrapers.so_eval --promotion-gate
 ```
