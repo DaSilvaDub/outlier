@@ -16,7 +16,8 @@ from typing import Any
 from outlier_scrapers.paths import PROJECT_ROOT
 
 DEFAULT_DB = PROJECT_ROOT / "calibration" / "feedback.sqlite3"
-GAMELOG_HASH = "so-starter-gamelog-v1"
+GAMELOG_HASH = "so-starter-gamelog-v2"
+GAMELOG_HASHES = frozenset({"so-starter-gamelog-v1", "so-starter-gamelog-v2"})
 
 
 def _float(value: Any) -> float | None:
@@ -119,8 +120,10 @@ def evaluate_so_probs(
         if market is None or independent is None or result == "PUSH":
             continue
         digest = str(row["projection_feature_hash"] or "")
-        if require_gamelog_hash and digest != GAMELOG_HASH:
+        if require_gamelog_hash and digest not in GAMELOG_HASHES:
             continue
+        # Prefer reporting latest-hash count separately in aggregates below.
+
         outcome = 1.0 if result == "W" else 0.0
         paired.append(
             {
@@ -159,7 +162,8 @@ def evaluate_so_probs(
         "market_hit_rate": round(market_hits / n, 4),
         "independent_hit_rate": round(independent_hits / n, 4),
         "prefer_independent": independent_brier < market_brier,
-        "gamelog_rows": sum(1 for item in paired if item["feature_hash"] == GAMELOG_HASH),
+        "gamelog_rows": sum(1 for item in paired if item["feature_hash"] in GAMELOG_HASHES),
+        "gamelog_v2_rows": sum(1 for item in paired if item["feature_hash"] == GAMELOG_HASH),
     }
 
 

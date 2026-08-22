@@ -559,7 +559,7 @@ def test_gamelog_so_projection_sets_independent_model_prob():
     assert float(row["independent_model_prob"]) > 0
     assert "projection_independent_gamelog_so" in row["projection_quality_flags"]
     assert "projection_audit_league_avg" not in row["projection_quality_flags"]
-    assert row["projection_feature_hash"] == "so-starter-gamelog-v1"
+    assert row["projection_feature_hash"] == "so-starter-gamelog-v2"
 
 
 def test_failed_explicit_projection_is_not_replaced_by_league_average():

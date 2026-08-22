@@ -236,7 +236,7 @@ def mlb_total_bases_distribution(
 STARTER_PROJECTED_BF = 22.0
 LEAGUE_STRIKEOUT_RATE = 0.225
 LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
-GAMELOG_SO_HASH = "so-starter-gamelog-v1"
+GAMELOG_SO_HASH = "so-starter-gamelog-v2"  # v2 = EB shrink + thin-sample soften
 WNBA_MINUTES_HASH = "wnba-minutes-ppm-v1"
 AUDIT_ONLY_PROJECTION_HASHES = frozenset({LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH})
 MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"
@@ -247,6 +247,14 @@ ESPN_WNBA_GAMELOG_URL = (
 DEFAULT_SO_MIN_STARTS = 3
 DEFAULT_SO_MAX_STARTS = 8
 DEFAULT_SO_MIN_TOTAL_BF = 45
+# Empirical-Bayes prior strength for thin recent-start samples. Diagnosis of
+# settled gamelog SO (n=7) showed 7/7 independents more extreme than market and
+# mean K sometimes absurd (e.g. 8.25 vs a 5.5 line) because raw L3-L8 averages
+# were used without shrinkage or extra uncertainty.
+SO_RATE_PRIOR_BF = 90.0  # ~4 league-average starts of PA/BF strength
+SO_BF_PRIOR_STARTS = 4.0
+SO_BASE_WORKLOAD_DISPERSION = 12.0
+SO_THIN_START_DISPERSION_STEP = 5.0
 
 # statsapi.mlb.com teamId keyed by Outlier canonical abbreviations (2026).
 MLB_TEAM_STATS_IDS: dict[str, int] = {
@@ -627,18 +635,37 @@ def mlb_so_projection_record(
         and projected_bf > 0
         and 0.0 < strikeout_rate < 1.0
     ):
-        adjusted_bf, adjusted_rate = apply_so_context_adjustments(
+        starts = int(_float_stat(listed.get("starts")) or 0)
+        total_bf = _float_stat(listed.get("total_bf"))
+        total_k = _float_stat(listed.get("total_k"))
+        shrunk = shrink_starter_so_features(
             projected_bf,
             strikeout_rate,
+            starts=starts,
+            total_bf=total_bf,
+            total_k=total_k,
+        )
+        adjusted_bf, adjusted_rate = apply_so_context_adjustments(
+            float(shrunk["projected_bf"]),
+            float(shrunk["strikeout_rate"]),
             opponent_k_rate=_float_stat(listed.get("opponent_k_rate")),
             park_k_factor=_float_stat(listed.get("park_k_factor")),
         )
-        distribution = mlb_strikeout_distribution(adjusted_bf, adjusted_rate)
+        distribution = mlb_strikeout_distribution(
+            adjusted_bf,
+            adjusted_rate,
+            workload_dispersion=float(shrunk["workload_dispersion"]),
+        )
         feature_hash = GAMELOG_SO_HASH
+        record = distribution.to_record(line=line_value, side=side)
+        record = soften_so_win_probability(
+            record,
+            reliability=float(shrunk["reliability"]),
+        )
     else:
         distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
         feature_hash = LEAGUE_AVG_SO_HASH
-    record = distribution.to_record(line=line_value, side=side)
+        record = distribution.to_record(line=line_value, side=side)
     return {
         "status": "eligible",
         "sport": "MLB",
@@ -650,6 +677,70 @@ def mlb_so_projection_record(
         "feature_snapshot_hash": feature_hash,
         "distribution": record,
     }
+
+
+def shrink_starter_so_features(
+    projected_bf: float,
+    strikeout_rate: float,
+    *,
+    starts: int = 0,
+    total_bf: float | None = None,
+    total_k: float | None = None,
+) -> dict[str, float]:
+    """Empirical-Bayes shrink recent-start BF/K toward league priors.
+
+    Thin samples produced overconfident independent probs (settled gamelog
+    diagnosis: 7/7 more extreme than market). Shrinkage + wider dispersion
+    flattens those tails without using the betting line as a feature.
+    """
+    starts = max(0, int(starts))
+    observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
+    if total_k is not None and total_k >= 0 and observed_bf > 0:
+        rate_numer = float(total_k) + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
+        rate_denom = float(observed_bf) + SO_RATE_PRIOR_BF
+    else:
+        rate_numer = strikeout_rate * observed_bf + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
+        rate_denom = observed_bf + SO_RATE_PRIOR_BF
+    shrunk_rate = min(0.45, max(0.08, rate_numer / rate_denom))
+    shrunk_bf = (
+        starts * projected_bf + SO_BF_PRIOR_STARTS * STARTER_PROJECTED_BF
+    ) / (starts + SO_BF_PRIOR_STARTS)
+    shrunk_bf = max(1.0, shrunk_bf)
+    dispersion = SO_BASE_WORKLOAD_DISPERSION + SO_THIN_START_DISPERSION_STEP * max(
+        0, DEFAULT_SO_MAX_STARTS - max(starts, 1)
+    )
+    reliability = observed_bf / (observed_bf + SO_RATE_PRIOR_BF)
+    return {
+        "projected_bf": shrunk_bf,
+        "strikeout_rate": shrunk_rate,
+        "workload_dispersion": dispersion,
+        "reliability": min(1.0, max(0.0, reliability)),
+    }
+
+
+def soften_so_win_probability(
+    record: Mapping[str, object],
+    *,
+    reliability: float,
+) -> dict[str, object]:
+    """Pull thin-sample win probs toward 0.5 while preserving the partition."""
+    payload = dict(record)
+    win = _float_stat(payload.get("win_prob"))
+    push = _float_stat(payload.get("push_prob")) or 0.0
+    loss = _float_stat(payload.get("loss_prob"))
+    if win is None:
+        return payload
+    if loss is None:
+        loss = max(0.0, 1.0 - win - push)
+    weight = min(1.0, max(0.0, reliability))
+    # Keep push mass; shrink only the decisive win/loss split toward a coin flip.
+    decisive = max(0.0, 1.0 - push)
+    shrunk_win = weight * win + (1.0 - weight) * (0.5 * decisive)
+    shrunk_loss = max(0.0, decisive - shrunk_win)
+    payload["win_prob"] = shrunk_win
+    payload["loss_prob"] = shrunk_loss
+    payload["push_prob"] = push
+    return payload
 
 
 def apply_so_context_adjustments(

@@ -124,7 +124,7 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
 def test_capture_pack_persists_projection_feature_hash(tmp_path):
     selected = _candidate()
     selected["independent_model_prob"] = 0.62
-    selected["projection_feature_hash"] = "so-starter-gamelog-v1"
+    selected["projection_feature_hash"] = "so-starter-gamelog-v2"
     selected["projection_quality_flags"] = "projection_independent_gamelog_so"
     pack_dir = _pack(tmp_path, [selected])
     db_path = tmp_path / "calibration" / "feedback.sqlite3"
@@ -137,7 +137,7 @@ def test_capture_pack_persists_projection_feature_hash(tmp_path):
             "FROM market_snapshots WHERE market_id = 'm1'"
         ).fetchone()
         assert row["independent_model_prob"] == pytest.approx(0.62)
-        assert row["projection_feature_hash"] == "so-starter-gamelog-v1"
+        assert row["projection_feature_hash"] == "so-starter-gamelog-v2"
         assert row["projection_quality_flags"] == "projection_independent_gamelog_so"
 
 

@@ -18,7 +18,7 @@ This worktree is for development/tests only until explicitly merged.
 ## Landed on this branch
 
 1. **Promote gamelog SO into live sizing** (`slate_quality.promote_independent_so_sizing`)
-   - Requires `projection_feature_hash == so-starter-gamelog-v1`, independent prob, predictive signal
+   - Requires `projection_feature_hash == so-starter-gamelog-v2`, independent prob, predictive signal
    - Caps at 2u; sets `model_prob_source=independent_gamelog_so`
 2. **Align LM stale window to 6h** (matches `feed_health.MAX_SOURCE_AGE_HOURS`)
 3. **CLV join fallbacks** in `results._latest_local_close` (any-book, then market_id+selection)
