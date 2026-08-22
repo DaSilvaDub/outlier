@@ -6,6 +6,7 @@ These helpers keep pack ranking, injury usage, and CLV rules out of the
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,11 @@ INDEPENDENT_SO_SOURCE = "independent_gamelog_so"
 GAMELOG_FEATURE_HASH = "so-starter-gamelog-v2"
 PREDICTIVE_SIGNAL_FLAGS = frozenset({"insight_support", "movement_support", "orf_support"})
 PHANTOM_EDGE_THRESHOLD = 0.10
+# Live Kelly from gamelog independents stays off until so_eval prefers independent.
+# Opt in with OUTLIER_PROMOTE_INDEPENDENT_SO=1 after calibration clears.
+ENABLE_INDEPENDENT_SO_SIZING = os.environ.get(
+    "OUTLIER_PROMOTE_INDEPENDENT_SO", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
 PLAYER_PROP_HINTS = {
     "REB",
@@ -239,11 +245,15 @@ def has_predictive_signal(row: dict[str, Any]) -> bool:
 def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     """Size from gamelog-eligible independent SO probs instead of market de-vig.
 
-    Requires a real independent probability, GAMELOG feature hash, and (for
-    player props) a predictive signal. Returns True when sizing was rewritten.
+    Disabled by default (``ENABLE_INDEPENDENT_SO_SIZING`` / env
+    ``OUTLIER_PROMOTE_INDEPENDENT_SO``). Requires a real independent
+    probability, GAMELOG feature hash, and (for player props) a predictive
+    signal. Returns True when sizing was rewritten.
     """
     from outlier_scrapers.sizing import compute_sizing
 
+    if not ENABLE_INDEPENDENT_SO_SIZING:
+        return False
     independent = _to_float(row.get("independent_model_prob"))
     digest = str(row.get("projection_feature_hash") or "")
     decimal_price = _to_float(row.get("decimal_price"))
@@ -289,8 +299,8 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
 def apply_predictor_gates(row: dict[str, Any]) -> None:
     """Turn Board A from a market-EV sizer into a signal-gated, capped play.
 
-    Prefers gamelog-backed independent SO sizing when available. Otherwise
-    refuses to treat de-vig leftover as a 3-unit forecast.
+    Optionally prefers gamelog-backed independent SO sizing when explicitly
+    enabled. Otherwise refuses to treat de-vig leftover as a 3-unit forecast.
     """
     promoted = promote_independent_so_sizing(row)
     if not promoted:
