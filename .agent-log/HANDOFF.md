@@ -1,72 +1,56 @@
-# Handoff Summary — 2026-08-22 — Grok (predictor accuracy)
+# Handoff Summary — 2026-08-22 — Grok (SO gamelog calibration dig)
 
 **Agent:** Grok  
-**Canonical master HEAD:** `ed76e08` (live pipeline; keep clean)  
-**Feature branch HEAD:** `dc80c29` on `feat/predictor-accuracy-upgrades`  
-**Feature worktree:** `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`  
+**Master:** `4b685af` (live pipeline)  
+**Feature branch:** `dab83c8` on `feat/predictor-accuracy-upgrades`  
+**Worktree:** `C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades`  
 **PR:** https://github.com/DaSilvaDub/outlier/pull/104  
-
-Sync when written: `REPORT STATUS: OK` / `RUN-NONCE: ae149bf96f9e49b4` / `head=ed76e08`
 
 ---
 
-## Do this first (next agent)
+## Diagnosis (why the 7 rows were bad)
 
-1. **Do NOT merge PR #104.** Fresh `so_eval --require-gamelog-hash` after hash backfill:
-   - `n=7`, market Brier **0.282**, independent Brier **0.403**, `prefer_independent=false`
-   - Gamelog SO model is **worse than market** on current settled sample — sizing promotion must stay off master.
-2. Keep running live packs on **master only** so more SO settlements accumulate.
-3. Re-run eval after more days:
+Settled `so-starter-gamelog-v1` rows: **n=7**
+
+| Finding | Evidence |
+|---|---|
+| Systematic overconfidence | **7/7** independent probs more extreme than market |
+| Hit rates | market 2/7, independent **1/7** |
+| Brier | market 0.282 vs independent **0.403** |
+| Root cause | Thin recent-start means too extreme (e.g. Schlittler mean K **≈8.25** on a 5.5 line; actual 4) + dispersion too tight |
+
+Not mainly side-disagreement (only Yamamoto disagreed with market direction). Damage is **being too sure when wrong**.
+
+Full write-up: feature-branch `docs/plans/2026-08-22-so-gamelog-calibration-diagnosis.md`  
+Repro: `python scripts/diagnose_so_gamelog_calibration.py`
+
+---
+
+## Fix landed on feature branch (`dab83c8`) — not merged
+
+Gamelog path now:
+1. **Empirical-Bayes shrink** BF/K toward league priors
+2. **Wider workload dispersion** when starts are thin
+3. **Soften win_prob toward 0.5** by sample reliability
+4. Hash bumped to **`so-starter-gamelog-v2`** (so old v1 settled rows stay distinguishable)
+
+Replay example: Schlittler-like 0.782 → **0.541** (no longer more extreme than market ~0.59).
+
+Tests: **35 passed** including `tests/test_so_shrinkage.py`.
+
+---
+
+## Merge gate (unchanged policy)
+
+**Do not merge PR #104** until settled **v2** sample shows independent ≤ market Brier (or user overrides).
+
+Next eval after new packs under v2 (needs master to run code — so either wait for merge of *projection-only* shrink without Kelly promotion, or continue shadow measurement after a targeted master cherry-pick of shrinkage without `promote_independent_so_sizing`).
+
+### Practical options for next agent
+1. **Preferred:** Cherry-pick / split PR so master gets **v2 shrinkage only** (audit independent probs improve) while **live Kelly promotion stays off**.
+2. Keep collecting settlements; re-run:
    ```powershell
    Set-Location C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades
    python -m outlier_scrapers.so_eval --db C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3 --require-gamelog-hash
    ```
-
----
-
-## What just landed on the feature branch (`dc80c29`)
-
-**Critical measurement fix:** feedback ledger now stores `projection_feature_hash` + `projection_quality_flags`.
-
-Without this, `gamelog_rows` stayed 0 forever even though packs already had hashes.
-
-Also added `scripts/backfill_projection_hashes.py` — already run against live DB for packs `2026-08-21` and `2026-08-22` (`updated: 13`).
-
-### Prior feature-branch work (still unmerged)
-- Promote gamelog SO into live Kelly (2u, signal-gated) — **blocked by eval**
-- LM stale window 12h → 6h
-- CLV close-join fallbacks
-- Opponent K% (MLB Stats API SO/PA) + curated park SO factors
-- WNBA minutes/PPM ESPN → pack **audit-only** (`projection_audit_wnba_minutes`)
-- `so_eval` harness
-
-### Tests
-```powershell
-Set-Location C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades
-python -m pytest tests/test_feedback.py::test_capture_pack_persists_projection_feature_hash tests/test_predictor_gates.py tests/test_so_eval_and_context.py tests/test_context_fetchers.py tests/test_pitcher_so_features.py -q --tb=line
-# 33 passed recently
-```
-
----
-
-## Master already has (do not redo)
-`c8ca8c9` predictor gates, `1be5bc1` gamelog SO, `41358bb` empty-hash eligibility fix.
-
-Live packs `2026-08-21`/`22` already write gamelog hashes into `candidates.csv`.
-
----
-
-## Recommended next engineering (if not waiting)
-1. Diagnose **why** gamelog SO Brier is poor (n=7): overconfident probs? thin samples? side errors?
-2. Consider shadow-only mode for independent SO sizing until eval flips (or gate `promote_independent_so_sizing` behind env/config flag default off).
-3. Optional: land **feedback hash persistence only** on master early (safe measurement infra) so future packs auto-record digests without waiting for full PR.
-4. Keep portfolio calibration shadow; no `fit-blend` on old universe.
-
-## Resume path
-```powershell
-& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"
-# read this file
-Set-Location C:\Users\dasil\Dev\GitHub\outlier-worktrees\predictor-accuracy-upgrades
-git pull
-git log -5 --oneline
-```
+3. Live pipeline remains `C:\Users\dasil\Dev\GitHub\outlier` on `master`.
