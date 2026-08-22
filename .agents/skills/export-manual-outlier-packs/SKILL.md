@@ -18,13 +18,13 @@ Execute the pipeline in data-only mode to generate the briefing and candidates d
 > [!NOTE]
 > This pipeline typically takes around **20 minutes** to complete, largely due to the MLB line-movement scraper. Set a long timer (e.g., 300-600 seconds) and do not kill the process if it appears stuck on line-movement.
 
-### 2. Generate Prompt Documents
-Run the provided helper script to automatically clean the target directories and generate the regular master prompt files:
-`python .agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`
+### 2. Generate Prompt Documents & Organize Export Folders
+Run the `organize_today_run2.py` script to generate prompts AND organize them into the `generic_prompts`, `totals_prompts`, and other output folders on the Desktop and G Drive:
+`python scripts/organize_today_run2.py`
 
-By default this writes to both `C:\Users\dasil\OneDrive\Desktop\today\prompts` and `G:\My Drive\today\prompts` (pass `--out-dir` one or more times to override).
+This will automatically invoke `generate_prompts.py` and replace the latest export buckets for today's slate.
 
-The ordered Q → R → W → X → S sequence is excluded by default. Generate it only when the user explicitly asks for it by adding `--include-sequential-prompts`. The same opt-in flag is available on `python scripts/organize_today_run2.py` and controls both generation and the `desk2_prompts` export bucket.
+The ordered Q → R → W → X → S sequence is excluded by default. Generate it only when the user explicitly asks for it by adding `--include-sequential-prompts` to the `organize_today_run2.py` command, which will generate them and populate the `desk2_prompts` export bucket.
 
 The script structures the output into two pipelines:
 - `Desk1_Automated/`: five specialized master prompt lanes (HitRate prompts are intentionally not generated — dropped pending a redesign):
