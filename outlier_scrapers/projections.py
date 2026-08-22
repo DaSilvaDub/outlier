@@ -470,7 +470,13 @@ def mlb_so_projection_record(
         and projected_bf > 0
         and 0.0 < strikeout_rate < 1.0
     ):
-        distribution = mlb_strikeout_distribution(projected_bf, strikeout_rate)
+        adjusted_bf, adjusted_rate = apply_so_context_adjustments(
+            projected_bf,
+            strikeout_rate,
+            opponent_k_rate=_float_stat(listed.get("opponent_k_rate")),
+            park_k_factor=_float_stat(listed.get("park_k_factor")),
+        )
+        distribution = mlb_strikeout_distribution(adjusted_bf, adjusted_rate)
         feature_hash = GAMELOG_SO_HASH
     else:
         distribution = mlb_strikeout_distribution(STARTER_PROJECTED_BF, LEAGUE_STRIKEOUT_RATE)
@@ -485,6 +491,102 @@ def mlb_so_projection_record(
         "line": line_value,
         "side": side,
         "feature_snapshot_hash": feature_hash,
+        "distribution": record,
+    }
+
+
+def apply_so_context_adjustments(
+    projected_bf: float,
+    strikeout_rate: float,
+    *,
+    opponent_k_rate: float | None = None,
+    park_k_factor: float | None = None,
+) -> tuple[float, float]:
+    """Blend optional opponent/park context into starter SO features.
+
+    Missing context leaves the gamelog rate unchanged (fail open on enrichment,
+    fail closed on thin gamelog samples upstream).
+    """
+    rate = strikeout_rate
+    if opponent_k_rate is not None and 0.0 < opponent_k_rate < 1.0:
+        rate = 0.7 * rate + 0.3 * opponent_k_rate
+    if park_k_factor is not None and 0.5 <= park_k_factor <= 1.5:
+        rate *= park_k_factor
+    rate = min(0.45, max(0.08, rate))
+    bf = max(1.0, projected_bf)
+    return bf, rate
+
+
+def compute_wnba_minutes_features(
+    recent_minutes: Iterable[float],
+    *,
+    min_games: int = 3,
+    max_games: int = 10,
+) -> dict[str, object] | None:
+    """Derive a bounded minutes projection from recent games.
+
+    Fail closed on thin samples. Used by the WNBA independent scaffold; does not
+    auto-promote into live Kelly until calibrated.
+    """
+    values = [float(value) for value in recent_minutes if _float_stat(value) is not None]
+    values = [value for value in values if 0.0 <= value <= 48.0]
+    if len(values) < min_games:
+        return None
+    kept = values[: max(0, max_games)]
+    mean_minutes = sum(kept) / len(kept)
+    return {
+        "projected_minutes": mean_minutes,
+        "games": len(kept),
+        "feature_source": "wnba_minutes_recent",
+    }
+
+
+def wnba_points_projection_record(
+    row: Mapping[str, object],
+    *,
+    features: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Shadow-only WNBA points scaffold from minutes * usage rate.
+
+    Returns None unless features are complete. Never writes league averages.
+    """
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market_type") or row.get("market") or row.get("proposition") or "").upper()
+    if sport != "WNBA":
+        return None
+    if market not in {"PTS", "POINTS"} and "POINT" not in str(row.get("selection") or "").upper():
+        return None
+    if not isinstance(features, Mapping):
+        return None
+    minutes = _float_stat(features.get("projected_minutes"))
+    usage_rate = _float_stat(features.get("points_per_minute"))
+    if minutes is None or usage_rate is None or minutes <= 0 or usage_rate <= 0:
+        return None
+    line = row.get("line")
+    side = str(row.get("headline_side") or row.get("position") or "").upper()
+    if "OVER" in str(row.get("selection") or "").upper():
+        side = "OVER"
+    elif "UNDER" in str(row.get("selection") or "").upper():
+        side = "UNDER"
+    if side not in {"OVER", "UNDER"} or line in (None, ""):
+        return None
+    try:
+        line_value = float(str(line).replace("+", ""))
+    except (TypeError, ValueError):
+        return None
+    mean_points = minutes * usage_rate
+    # Poisson-like discrete approximation via NB2 with light overdispersion.
+    distribution = negative_binomial_distribution(mean_points, dispersion=8.0)
+    record = distribution.to_record(line=line_value, side=side)
+    return {
+        "status": "eligible",
+        "sport": "WNBA",
+        "row_id": row.get("outcome_id"),
+        "event_id": row.get("event_id"),
+        "market_id": row.get("market_id"),
+        "line": line_value,
+        "side": side,
+        "feature_snapshot_hash": "wnba-minutes-ppm-v1",
         "distribution": record,
     }
 

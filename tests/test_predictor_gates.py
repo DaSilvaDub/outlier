@@ -98,6 +98,65 @@ def test_predictor_gates_keep_signaled_player_prop_but_cap_devig_units():
     assert "edge_suspect_no_independent_model" in row["sizing_flags"]
 
 
+def test_predictor_gates_promote_gamelog_independent_so_sizing():
+    from outlier_scrapers.slate_quality import (
+        GAMELOG_FEATURE_HASH,
+        INDEPENDENT_SO_SOURCE,
+        INDEPENDENT_SO_UNIT_CAP,
+    )
+
+    row = {
+        "market_type": "SO",
+        "selection": "Cam Schlittler - Strikeouts OVER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 1.0,
+        "edge_pct": 0.05,
+        "decimal_price": 2.1,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.78,
+        "independent_push_prob": 0.0,
+        "projection_feature_hash": GAMELOG_FEATURE_HASH,
+        "signal_flags": "insight_support;movement_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    apply_predictor_gates(row)
+    assert row["model_prob_source"] == INDEPENDENT_SO_SOURCE
+    assert row["model_prob"] == 0.78
+    assert float(row["edge_pct"]) > 0.05
+    assert 0 < float(row["recommended_units_pre_news"]) <= INDEPENDENT_SO_UNIT_CAP
+    assert "independent_gamelog_so_sizing" in row["sizing_flags"]
+    assert row["actionable"] == "true"
+
+
+def test_predictor_gates_do_not_promote_independent_without_signal():
+    from outlier_scrapers.slate_quality import GAMELOG_FEATURE_HASH
+
+    row = {
+        "market_type": "SO",
+        "selection": "Sean Burke - Strikeouts UNDER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 1.0,
+        "edge_pct": 0.08,
+        "decimal_price": 1.91,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.70,
+        "projection_feature_hash": GAMELOG_FEATURE_HASH,
+        "signal_flags": "hit_rate_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    apply_predictor_gates(row)
+    assert row["model_prob_source"] == "outlier_devig"
+    assert row["recommended_units_pre_news"] == ""
+    assert row["actionable"] == "false"
+    assert "missing_predictive_signal" in row["sizing_flags"]
+
+
 def test_predictor_gates_leave_signaled_gameline_actionable():
     row = {
         "market_type": "GAMELINE",

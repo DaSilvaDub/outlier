@@ -560,6 +560,14 @@ def _pending_rows(
 
 
 def _latest_local_close(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[Any, Any]:
+    """Best available pre-start snapshot for CLV.
+
+    Prefer same book + outcome_id. Fall back to any book on the same
+    event/outcome, then market_id+selection when outcome_id joins miss.
+    """
+    event_id = row["event_id"]
+    outcome_id = row["outcome_id"]
+    book = row["book"]
     close = conn.execute(
         """
         SELECT line, price FROM market_snapshots
@@ -567,9 +575,38 @@ def _latest_local_close(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[Any
           AND captured_at <= event_starts_at
         ORDER BY captured_at DESC LIMIT 1
         """,
-        (row["event_id"], row["outcome_id"], row["book"]),
+        (event_id, outcome_id, book),
     ).fetchone()
-    return (close["line"], close["price"]) if close else (None, None)
+    if close:
+        return close["line"], close["price"]
+
+    close = conn.execute(
+        """
+        SELECT line, price FROM market_snapshots
+        WHERE event_id = ? AND outcome_id = ?
+          AND captured_at <= event_starts_at
+        ORDER BY captured_at DESC LIMIT 1
+        """,
+        (event_id, outcome_id),
+    ).fetchone()
+    if close:
+        return close["line"], close["price"]
+
+    market_id = row["market_id"] if "market_id" in row.keys() else None
+    selection = row["selection"] if "selection" in row.keys() else None
+    if market_id and selection:
+        close = conn.execute(
+            """
+            SELECT line, price FROM market_snapshots
+            WHERE event_id = ? AND market_id = ? AND selection = ?
+              AND captured_at <= event_starts_at
+            ORDER BY captured_at DESC LIMIT 1
+            """,
+            (event_id, market_id, selection),
+        ).fetchone()
+        if close:
+            return close["line"], close["price"]
+    return None, None
 
 
 def collect_settlement_rows(

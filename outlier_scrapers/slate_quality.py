@@ -23,7 +23,10 @@ _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
+INDEPENDENT_SO_UNIT_CAP = 2.0
 MARKET_DEVIG_SOURCES = frozenset({"local_devig", "outlier_devig"})
+INDEPENDENT_SO_SOURCE = "independent_gamelog_so"
+GAMELOG_FEATURE_HASH = "so-starter-gamelog-v1"
 PREDICTIVE_SIGNAL_FLAGS = frozenset({"insight_support", "movement_support", "orf_support"})
 PHANTOM_EDGE_THRESHOLD = 0.10
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
@@ -233,19 +236,76 @@ def has_predictive_signal(row: dict[str, Any]) -> bool:
     return bool(flags & PREDICTIVE_SIGNAL_FLAGS)
 
 
+def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
+    """Size from gamelog-eligible independent SO probs instead of market de-vig.
+
+    Requires a real independent probability, GAMELOG feature hash, and (for
+    player props) a predictive signal. Returns True when sizing was rewritten.
+    """
+    from outlier_scrapers.sizing import compute_sizing
+
+    independent = _to_float(row.get("independent_model_prob"))
+    digest = str(row.get("projection_feature_hash") or "")
+    decimal_price = _to_float(row.get("decimal_price"))
+    if (
+        independent is None
+        or digest != GAMELOG_FEATURE_HASH
+        or decimal_price is None
+        or decimal_price <= 1.0
+    ):
+        return False
+    if is_player_prop(row) and not has_predictive_signal(row):
+        return False
+
+    push_prob = _to_float(row.get("independent_push_prob"))
+    if push_prob is None:
+        push_prob = _to_float(row.get("push_prob")) or 0.0
+    sizing = compute_sizing(
+        decimal_price=decimal_price,
+        model_prob=independent,
+        push_prob=push_prob,
+        max_units=INDEPENDENT_SO_UNIT_CAP,
+    )
+    if sizing.recommended_units_pre_news is None:
+        return False
+
+    row["model_prob"] = independent
+    row["model_prob_source"] = INDEPENDENT_SO_SOURCE
+    row["implied_prob"] = sizing.implied_prob
+    row["edge_pct"] = sizing.edge_pct
+    row["kelly_025_units"] = sizing.kelly_025_units
+    row["max_units"] = sizing.max_units
+    row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
+    _append_sizing_flag(row, "independent_gamelog_so_sizing")
+    if (
+        sizing.recommended_units_pre_news is not None
+        and sizing.recommended_units_pre_news > INDEPENDENT_SO_UNIT_CAP
+    ):
+        row["recommended_units_pre_news"] = INDEPENDENT_SO_UNIT_CAP
+        _append_sizing_flag(row, "independent_so_unit_cap")
+    return True
+
+
 def apply_predictor_gates(row: dict[str, Any]) -> None:
     """Turn Board A from a market-EV sizer into a signal-gated, capped play.
 
-    Does not invent an independent probability. It only refuses to treat
-    de-vig leftover as a 3-unit forecast.
+    Prefers gamelog-backed independent SO sizing when available. Otherwise
+    refuses to treat de-vig leftover as a 3-unit forecast.
     """
-    apply_market_devig_unit_cap(row)
+    promoted = promote_independent_so_sizing(row)
+    if not promoted:
+        apply_market_devig_unit_cap(row)
     if is_player_prop(row) and not has_predictive_signal(row):
         row["recommended_units_pre_news"] = ""
         _append_sizing_flag(row, "missing_predictive_signal")
     independent = _to_float(row.get("independent_model_prob"))
     edge = _to_float(row.get("edge_pct"))
-    if independent is None and edge is not None and edge >= PHANTOM_EDGE_THRESHOLD:
+    if (
+        not promoted
+        and independent is None
+        and edge is not None
+        and edge >= PHANTOM_EDGE_THRESHOLD
+    ):
         _append_sizing_flag(row, "edge_suspect_no_independent_model")
         units = _to_float(row.get("recommended_units_pre_news"))
         if units is not None and units > MARKET_DEVIG_UNIT_CAP:
