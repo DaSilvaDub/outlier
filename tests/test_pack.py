@@ -1614,9 +1614,7 @@ def test_slate_index_includes_totals_only_events():
             "actionable": "false",
         }
     ]
-    text = build_briefing(
-        rows, "2026-08-08", totals_rows=game_totals, team_totals_rows=team_totals
-    )
+    text = build_briefing(rows, "2026-08-08", totals_rows=game_totals, team_totals_rows=team_totals)
     # Isolate the Slate index block itself (not the Game/Team totals tables
     # that follow it and separately repeat "SEA"/"E2"/"E3") so these
     # assertions actually verify the index formatting, not just that the
@@ -2768,9 +2766,7 @@ def test_usage_up_under_demotes_own_star_out_player_under():
         card,
         ev,
         sport="WNBA",
-        injuries={
-            "ev1": "CHI: Skylar Diggins (Out; Knee) | SEA: Natisha Hiedeman (Out; Shoulder)"
-        },
+        injuries={"ev1": "CHI: Skylar Diggins (Out; Knee) | SEA: Natisha Hiedeman (Out; Shoulder)"},
     )
     assert row is not None
     assert "usage_up_under" in row["data_quality_flags"]
@@ -2944,6 +2940,7 @@ def test_restore_published_pack_with_transient_lock(tmp_path):
         assert mock_sleep.call_count == 2
 
 
+@pytest.mark.uses_enforce_mode
 def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()

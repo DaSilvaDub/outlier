@@ -192,8 +192,9 @@ def median_prob(values: list[float]) -> float | None:
 
 # Weight given to a full 10-game L10 sample when blending with the market
 # consensus; ten games is a high-variance signal, so the market stays dominant.
-BASE_INDEPENDENT_WEIGHT = 0.25
+BASE_INDEPENDENT_WEIGHT = 0.25  # legacy; retained for reference
 _FULL_SAMPLE_GAMES = 10.0
+EB_PRIOR_STRENGTH = 20.0  # alpha in p_hat = (k + alpha * p_mkt) / (n + alpha)
 
 
 def _l10_over_for_record(rec: dict[str, Any]) -> dict[str, Any] | None:
@@ -244,18 +245,25 @@ def _l10_over_for_record(rec: dict[str, Any]) -> dict[str, Any] | None:
 def blend_over_probability(
     p_over_market: float, l10_over: dict[str, Any] | None
 ) -> tuple[float, bool]:
-    """Blend market devig with the L10 signal, weighted by sample size.
+    """Empirical-Bayes shrinkage of L10 toward market-implied probability.
 
-    Returns (blended p_over, whether the L10 signal was used). A missing or
+    p_hat = (k + alpha * p_mkt) / (n + alpha)
+
+    Returns (shrunk p_over, whether the L10 signal was used). A missing or
     empty L10 signal returns the market probability unchanged.
     """
     if not l10_over or l10_over.get("pct") is None:
         return p_over_market, False
     total = _to_float(l10_over.get("total"))
-    sample = min(total, _FULL_SAMPLE_GAMES) / _FULL_SAMPLE_GAMES if total else 1.0
-    weight = BASE_INDEPENDENT_WEIGHT * sample
-    blended = (1.0 - weight) * p_over_market + weight * float(l10_over["pct"])
-    return blended, True
+    n = total if total and total > 0 else _FULL_SAMPLE_GAMES
+    hits = _to_float(l10_over.get("hits"))
+    if hits is not None:
+        k = hits
+    else:
+        k = float(l10_over["pct"]) * n
+    alpha = EB_PRIOR_STRENGTH
+    shrunk = (k + alpha * p_over_market) / (n + alpha)
+    return shrunk, True
 
 
 def period_identity(rec: dict[str, Any]) -> str:
@@ -732,15 +740,18 @@ def build_totals(
             recency_hit_prob = (
                 float(l10_over["pct"]) if best_side == "OVER" else 1.0 - float(l10_over["pct"])
             )
-        model_win_prob = p_side_market
+        # Use EB-shrunk probability for Kelly when L10 data is available;
+        # fall back to pure market consensus otherwise.
+        if blended_over is not None and used_l10:
+            model_win_prob = blended_over if best_side == "OVER" else (1.0 - blended_over)
+        else:
+            model_win_prob = p_side_market
         consensus_win_prob = p_side_market
         independent_win_prob = None
         if _totals_models_diverge(recency_hit_prob, p_side_market):
             flags.append("totals_model_divergence")
 
-        if recency_hit_prob is not None and (
-            recency_hit_prob >= 0.98 or recency_hit_prob <= 0.02
-        ):
+        if recency_hit_prob is not None and (recency_hit_prob >= 0.98 or recency_hit_prob <= 0.02):
             flags.append("MODEL_SATURATED")
             flags.append("SOURCE_INTEGRITY_FLAG")
         decimal_price = _american_to_decimal(best_price)
@@ -760,9 +771,7 @@ def build_totals(
             if derived is not None:
                 push_prob = round(derived, 4)
                 no_push = 1.0 - float(push_prob)
-                model_win_prob = (
-                    p_side_market * no_push if p_side_market is not None else None
-                )
+                model_win_prob = p_side_market * no_push if p_side_market is not None else None
                 consensus_win_prob = p_side_market * no_push if p_side_market is not None else None
                 if recency_hit_prob is not None:
                     recency_hit_prob = recency_hit_prob * no_push

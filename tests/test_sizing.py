@@ -1,5 +1,10 @@
 import pytest
-from outlier_scrapers.sizing import compute_sizing, compute_full_kelly, compute_historical_edge
+from outlier_scrapers.sizing import (
+    compute_sizing,
+    compute_full_kelly,
+    compute_historical_edge,
+    shrink_probability,
+)
 
 
 def test_no_push_even_money():
@@ -44,8 +49,8 @@ def test_edge_gate():
 
 
 def test_cap_binds():
-    # large edge case -> max_units
-    sizing = compute_sizing(decimal_price=2.0, model_prob=0.90, max_units=3.0)
+    # large edge case -> max_units (disable max_edge to isolate the cap test)
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.90, max_units=3.0, max_edge=1.0)
     assert sizing.recommended_units_pre_news == 3.0
 
 
@@ -123,8 +128,55 @@ def test_historical_edge_out_of_range_hit_is_none():
     assert compute_historical_edge(1.20, 2.0) is None
     assert compute_historical_edge(-0.05, 2.0) is None
 
+
 def test_historical_edge_non_finite_inputs_are_none():
     for bad in (float("nan"), float("inf"), float("-inf")):
         assert compute_historical_edge(bad, 2.0) is None
         assert compute_historical_edge(0.60, bad) is None
         assert compute_historical_edge(0.60, 2.0, push_prob=bad) is None
+
+
+# --- shrink_probability tests ---
+
+
+def test_shrink_probability_known_value():
+    # 7 hits in 10 trials, market says 50%: (7 + 20*0.5)/(10 + 20) = 17/30
+    result = shrink_probability(k=7.0, n=10.0, p_mkt=0.5, alpha=20.0)
+    assert result == pytest.approx(17.0 / 30.0, abs=1e-9)
+
+
+def test_shrink_probability_toward_market():
+    # With alpha >> n the result should be very close to p_mkt
+    result = shrink_probability(k=10.0, n=10.0, p_mkt=0.4, alpha=1000.0)
+    assert result == pytest.approx(0.4, abs=0.01)
+
+
+def test_shrink_probability_degenerate_returns_none():
+    assert shrink_probability(k=-1.0, n=10.0, p_mkt=0.5) is None
+    assert shrink_probability(k=5.0, n=10.0, p_mkt=1.5) is None
+    assert shrink_probability(k=5.0, n=10.0, p_mkt=-0.1) is None
+    assert shrink_probability(k=float("nan"), n=10.0, p_mkt=0.5) is None
+
+
+# --- max_edge cap tests ---
+
+
+def test_max_edge_gates_units():
+    # model_prob=0.70 at even money: edge = 0.70*1 - 0.30 = 0.40 > 0.10
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.70, max_edge=0.10)
+    assert sizing.edge_pct == pytest.approx(0.40, abs=1e-9)
+    assert sizing.recommended_units_pre_news == 0.0
+
+
+def test_max_edge_at_boundary_is_allowed():
+    # edge_pct == max_edge exactly should NOT be gated (> not >=)
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.55, max_edge=0.10)
+    assert sizing.edge_pct == pytest.approx(0.10, abs=1e-9)
+    assert sizing.recommended_units_pre_news > 0
+
+
+def test_max_edge_below_boundary_passes():
+    # edge_pct=0.06 < 0.10 -> should get normal units
+    sizing = compute_sizing(decimal_price=2.0, model_prob=0.53, max_edge=0.10)
+    assert sizing.edge_pct == pytest.approx(0.06, abs=1e-9)
+    assert sizing.recommended_units_pre_news > 0

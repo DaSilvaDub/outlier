@@ -5,6 +5,7 @@ market-consensus devig from the two-sided ladder, an independent recent-games
 (L10) probability, and a sample-weighted blend written back onto candidate /
 opportunity rows.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,6 +18,7 @@ from outlier_scrapers.totals_model import (
     blend_over_probability,
     build_totals_prob_index,
 )
+from outlier_scrapers.game_totals import EB_PRIOR_STRENGTH
 
 
 def _rec(
@@ -73,6 +75,7 @@ def _game_norm(records: list[dict]) -> dict:
 # index construction
 # ---------------------------------------------------------------------------
 
+
 def test_index_builds_per_line_p_over():
     norm = _game_norm(
         [
@@ -119,13 +122,23 @@ def test_index_team_kind_uses_single_side_blob():
     norm = _game_norm(
         [
             _rec(
-                "t1", 4.5, "OVER", _books(-110),
-                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+                "t1",
+                4.5,
+                "OVER",
+                _books(-110),
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="LAD",
                 stats=_l10_stats(4),
             ),
             _rec(
-                "t1", 4.5, "UNDER", _books(-110),
-                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+                "t1",
+                4.5,
+                "UNDER",
+                _books(-110),
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="LAD",
             ),
         ]
     )
@@ -137,12 +150,22 @@ def test_index_team_kind_uses_single_side_blob():
 def test_index_team_kind_respects_league_propositions():
     # RUNS is a team-total proposition for MLB but not for WNBA.
     rec_over = _rec(
-        "t1", 4.5, "OVER", _books(-110),
-        market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+        "t1",
+        4.5,
+        "OVER",
+        _books(-110),
+        market_type="TEAM_PROP",
+        proposition="RUNS",
+        team="LAD",
     )
     rec_under = _rec(
-        "t1", 4.5, "UNDER", _books(-110),
-        market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+        "t1",
+        4.5,
+        "UNDER",
+        _books(-110),
+        market_type="TEAM_PROP",
+        proposition="RUNS",
+        team="LAD",
     )
     norm = _game_norm([rec_over, rec_under])
     assert "t1" in build_totals_prob_index(norm, league="MLB")
@@ -180,18 +203,20 @@ def test_index_derives_push_prob_for_integer_lines():
 # blending
 # ---------------------------------------------------------------------------
 
-def test_blend_full_sample_uses_base_weight():
+
+def test_blend_full_sample_uses_eb_shrinkage():
+    # EB: p_hat = (k + alpha * p_mkt) / (n + alpha) = (10 + 20*0.5) / (10 + 20) = 20/30
     blended, used = blend_over_probability(0.5, {"hits": 10, "total": 10, "pct": 1.0})
     assert used is True
-    assert blended == pytest.approx(
-        (1 - BASE_INDEPENDENT_WEIGHT) * 0.5 + BASE_INDEPENDENT_WEIGHT * 1.0
-    )
+    alpha = EB_PRIOR_STRENGTH
+    assert blended == pytest.approx((10 + alpha * 0.5) / (10 + alpha))
 
 
-def test_blend_short_sample_shrinks_weight():
+def test_blend_short_sample_shrinks_toward_market():
+    # EB: p_hat = (5 + 20*0.5) / (5 + 20) = 15/25 = 0.6
     blended, _used = blend_over_probability(0.5, {"hits": 5, "total": 5, "pct": 1.0})
-    w = BASE_INDEPENDENT_WEIGHT * 0.5
-    assert blended == pytest.approx((1 - w) * 0.5 + w * 1.0)
+    alpha = EB_PRIOR_STRENGTH
+    assert blended == pytest.approx((5 + alpha * 0.5) / (5 + alpha))
 
 
 def test_blend_without_l10_returns_market_prob():
@@ -203,6 +228,7 @@ def test_blend_without_l10_returns_market_prob():
 # ---------------------------------------------------------------------------
 # row backfill
 # ---------------------------------------------------------------------------
+
 
 def _opportunity_row(**overrides) -> dict:
     row = {
@@ -234,7 +260,9 @@ def _norm_by_league(records: list[dict]) -> dict:
     return {"MLB": _game_norm(records)}
 
 
-def _two_sided(market_id: str = "m1", line: float = 8.5, *, stats: dict | None = None) -> list[dict]:
+def _two_sided(
+    market_id: str = "m1", line: float = 8.5, *, stats: dict | None = None
+) -> list[dict]:
     return [
         _rec(market_id, line, "OVER", _books(-120), stats=stats),
         _rec(market_id, line, "UNDER", _books(100)),
@@ -289,11 +317,13 @@ def test_backfill_preserves_existing_model_prob():
 
 def test_backfill_ignores_unindexed_and_non_total_rows():
     three_way = _opportunity_row(
-        market_id="tw1", market_label="Total Three Way",
+        market_id="tw1",
+        market_label="Total Three Way",
         selection="AAA @ BBB Total Three Way UNDER 9",
     )
     player = _opportunity_row(
-        market_id="p1", market_type="PLAYER_PROP",
+        market_id="p1",
+        market_type="PLAYER_PROP",
         selection="Some Player - Hits OVER 1.5",
     )
     out = backfill_totals_probabilities([three_way, player], _norm_by_league(_two_sided()))
@@ -317,7 +347,9 @@ def test_backfill_integer_line_uses_derived_push_prob():
         _rec("m3", 8.5, "UNDER", _books(-130)),
     ]
     row = _opportunity_row(
-        market_id="m3", line=8.0, push_prob="",
+        market_id="m3",
+        line=8.0,
+        push_prob="",
         selection="AAA @ BBB Total OVER 8.0",
     )
     out = backfill_totals_probabilities([row], _norm_by_league(records))
@@ -333,7 +365,9 @@ def test_backfill_integer_line_without_brackets_sets_flag_only():
         _rec("m3", 8.0, "UNDER", _books(-110)),
     ]
     row = _opportunity_row(
-        market_id="m3", line=8.0, push_prob="",
+        market_id="m3",
+        line=8.0,
+        push_prob="",
         selection="AAA @ BBB Total OVER 8.0",
     )
     out = backfill_totals_probabilities([row], _norm_by_league(records))
@@ -371,6 +405,7 @@ def test_backfill_does_not_mutate_inputs():
 # write_pack integration
 # ---------------------------------------------------------------------------
 
+
 def test_write_pack_backfills_over_total_opportunities(tmp_path):
     import csv
 
@@ -399,4 +434,3 @@ def test_backfill_flags_totals_model_divergence():
     row = _opportunity_row(selection="OVER 8.5")
     out = backfill_totals_probabilities([row], norm)
     assert "totals_model_divergence" in out[0]["sizing_flags"]
-

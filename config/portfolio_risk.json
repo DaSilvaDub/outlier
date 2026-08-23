@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "policy_version": "1.0",
-  "mode": "shadow",
+  "mode": "enforce",
   "streams_in_scope": [
     "candidates",
     "game_totals",
@@ -20,7 +20,7 @@
   "non_authoritative_book_policy": "flag_and_report_only",
   "shadow_multipliers_neutral": true,
   "calibration": {
-    "enabled": false,
+    "enabled": true,
     "source_probability_column": "final_blended_prob",
     "min_samples": 30,
     "prior_strength": 30.0,
@@ -32,7 +32,7 @@
     "method": "wilson_one_sided"
   },
   "drawdown": {
-    "enabled": false,
+    "enabled": true,
     "state_path": "calibration/drawdown_state.json",
     "tiers": [
       {"name": "neutral", "max_drawdown_pct": 0.05, "multiplier": 1.0},

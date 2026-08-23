@@ -54,3 +54,9 @@ scratch/
 .claude/*.local.md
 
 .tmp.driveupload/
+
+# auto-added 2026-08-23 : local calibration DB artifacts (exceed GitHub 100MB limit)
+calibration/*.db
+calibration/*.sqlite3*
+calibration/.fuse_hidden*
+today_settlements.csv/

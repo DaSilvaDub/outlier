@@ -71,6 +71,8 @@ def _player(**overrides):
         "line": 0.5,
         "best_book": "Fanatics",
         "best_odds": -110,
+        "decimal_price": 1.9091,
+        "implied_prob": 0.52381,
         "l5_pct": 100,
         "l10_pct": 100,
         "season_pct": 90,

@@ -896,9 +896,14 @@ def test_build_game_totals_blends_l10_into_edge_and_columns():
         assert recency == pytest.approx(0.3)
     consensus = float(row["market_consensus_prob"])
     blended = float(row["final_blended_prob"])
-    assert blended == pytest.approx(consensus)
+    # EB shrinkage moves blended away from consensus toward recency.
+    assert blended != pytest.approx(consensus, abs=1e-3)
+    # Shrinkage should lie between consensus and recency.
+    lo, hi = sorted([consensus, recency])
+    assert lo <= blended + 1e-6 and blended <= hi + 1e-6
+    # Sizing uses the EB-shrunk probability.
     expected = compute_sizing(
-        decimal_price=float(row["decimal_price"]), model_prob=consensus, push_prob=0.0
+        decimal_price=float(row["decimal_price"]), model_prob=blended, push_prob=0.0
     )
     assert expected.edge_pct is not None
     assert float(row["edge_pct"]) == pytest.approx(expected.edge_pct, abs=1e-3)

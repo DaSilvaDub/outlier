@@ -15,6 +15,32 @@ class Sizing:
     recommended_units_pre_news: float | None
 
 
+def shrink_probability(
+    k: float,
+    n: float,
+    p_mkt: float,
+    alpha: float = 20.0,
+) -> float | None:
+    """Empirical-Bayes shrinkage toward market-implied probability.
+
+    p_hat = (k + alpha * p_mkt) / (n + alpha)
+
+    Parameters
+    ----------
+    k     : observed hits (successes) in the recency window.
+    n     : total trials in the recency window.
+    p_mkt : market-implied probability (the prior mean).
+    alpha : prior strength (pseudo-count); 15-25 is typical.
+
+    Returns None when inputs are degenerate.
+    """
+    if n + alpha <= 0 or not isfinite(p_mkt) or p_mkt < 0 or p_mkt > 1:
+        return None
+    if not isfinite(k) or not isfinite(n) or k < 0 or n < 0:
+        return None
+    return (k + alpha * p_mkt) / (n + alpha)
+
+
 def compute_full_kelly(b: float, p_win: float, p_lose: float) -> float:
     if b <= 0 or (p_win + p_lose) <= 0:
         return 0.0
@@ -36,6 +62,7 @@ def compute_sizing(
     unit_bankroll: float = 100.0,
     max_units: float = 3.0,
     min_edge: float = 0.02,
+    max_edge: float = 0.10,
 ) -> Sizing:
     if decimal_price <= 1.0:
         implied_prob = 1.0 / decimal_price if decimal_price > 0 else 0.0
@@ -88,7 +115,8 @@ def compute_sizing(
 
     kelly_025_units = _round_to_half(kelly_fraction * full_kelly * unit_bankroll)
 
-    if full_kelly <= 0 or edge_pct < min_edge:
+    # Tolerance avoids floating-point noise at the boundary (e.g. 0.10 + 9e-17).
+    if full_kelly <= 0 or edge_pct < min_edge or edge_pct > max_edge + 1e-9:
         recommended_units_pre_news = 0.0
     else:
         recommended_units_pre_news = min(kelly_025_units, max_units)

@@ -20,7 +20,7 @@ MIN_PLAYER_SEASON_PCT = 70.0
 MIN_EDGE_PCT = 1.5
 MIN_LEG_EV_PCT = 1.5
 MIN_PARLAY_EV_PCT = 3.0
-PRIOR_STRENGTH = 4.0
+PRIOR_STRENGTH = 20.0
 WILSON_Z = 1.2815515655446004  # one-sided 90% lower confidence bound
 SHADOW_UNITS = 0.5
 MAX_SHORTLIST = 8
@@ -121,7 +121,12 @@ def _estimate_probability(row: dict[str, Any], alt_type: str) -> tuple[float, fl
         raw = 0.65 * l10 + 0.35 * season if season is not None else l10
     else:
         raw = l10
-    shrunk = (raw * recent_n + 0.5 * PRIOR_STRENGTH) / (recent_n + PRIOR_STRENGTH)
+    # Shrink toward market-implied probability (not 0.5) via empirical Bayes:
+    # p_hat = (k + alpha * p_mkt) / (n + alpha)
+    implied = _probability(row.get("implied_prob"))
+    p_mkt = implied if implied is not None else 0.5
+    k = raw * recent_n
+    shrunk = (k + p_mkt * PRIOR_STRENGTH) / (recent_n + PRIOR_STRENGTH)
     return shrunk, _wilson_lower(shrunk, recent_n + PRIOR_STRENGTH)
 
 
