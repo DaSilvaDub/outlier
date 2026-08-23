@@ -103,10 +103,12 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
     return success
 
 
-def run_explicit_refresh(leagues: list[str]) -> bool:
+def run_explicit_refresh(leagues: list[str], target_date: str | None = None) -> bool:
     logger.info("Starting explicitly ordered refresh pipeline.")
     for league in leagues:
         args = ["--league", league]
+        if target_date:
+            args.extend(["--date", target_date])
         steps = [
             ("--props", "props"),
             ("--insights", "insights"),
@@ -150,9 +152,11 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     return all_safe
 
 
-def run_pack(leagues: list[str]) -> Path | None:
+def run_pack(leagues: list[str], target_date: str | None = None) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
+    if target_date:
+        args.extend(["--date", target_date])
     try:
         return pack.main(args)
     except Exception as e:
@@ -364,6 +368,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Daily Outlier Orchestration Job")
+    parser.add_argument("--date", help="Specific target date (YYYY-MM-DD)")
     parser.add_argument("--leagues", default="MLB,WNBA", help="Comma-separated leagues")
     parser.add_argument(
         "--analysis-profile",

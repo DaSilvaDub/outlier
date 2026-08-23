@@ -27,6 +27,7 @@ def _prop(
         "market_id": f"m-{player}-{market}",
         "outcome_id": f"o-{player}-{market}-{position}",
         "player": player,
+        "player_id": player.casefold(),
         "team": "HOME",
         "matchup": "AWAY @ HOME",
         "market": market,
@@ -53,84 +54,45 @@ def _board(records: list[dict], *, league: str = "MLB") -> list[dict]:
     )
 
 
-def test_player_board_accepts_widened_book_pool_not_just_hard_rock():
-    """A qualifying prop with no Hard Rock offer at all -- but a qualifying
-    price on Fanatics, Midnite, DraftKings, or Novig -- must still surface.
-    Regression for a real gap: several genuinely qualifying alt player props
-    only existed on these other books and were silently dropped when the
-    board was Hard Rock-exclusive."""
+def test_player_board_only_accepts_hard_rock():
+    """Board now strictly requires Hard Rock, and ignores other books."""
     rows = _board(
         [
-            _prop(player="Fanatics Only", book="Fanatics", odds=-250),
+            _prop(player="HR Only", book="Hard Rock", odds=-250),
             _prop(player="Midnite Only", book="Midnite", odds=-300),
             _prop(player="DK Only", book="DraftKings", odds=-400),
-            _prop(player="Novig Only", book="Novig", odds=-500),
-            _prop(player="Still Excluded", book="FanDuel", odds=-250),
         ]
     )
 
-    assert {row["player"] for row in rows} == {
-        "Fanatics Only",
-        "Midnite Only",
-        "DK Only",
-        "Novig Only",
-    }
+    assert {row["player"] for row in rows} == {"HR Only"}
     by_player = {row["player"]: row for row in rows}
-    assert by_player["Fanatics Only"]["best_book"] == "Fanatics"
-    assert by_player["Midnite Only"]["best_book"] == "Midnite"
+    assert by_player["HR Only"]["best_book"] == "Hard Rock"
 
 
-def test_player_board_picks_best_qualifying_price_across_allowed_books():
-    """A non-qualifying Hard Rock price alongside a qualifying price on
-    another allowed book must not cause the row to be dropped -- the
-    qualifying book's price should be picked instead."""
-    rec = _prop(player="Mixed", book="Hard Rock", odds=-105)
-    rec["books"] = [
-        {"book": "Hard Rock", "odds": -105},  # outside -110..-1000, must not win
-        {"book": "Fanatics", "odds": -300},  # qualifies, should be picked
-    ]
-
-    rows = _board([rec])
-
-    assert len(rows) == 1
-    assert rows[0]["best_book"] == "Fanatics"
-    assert rows[0]["best_odds"] == -300
-
-
-def test_strict_player_board_uses_hard_rock_price_and_hit_rate_contract():
-    valid = _prop()
+def test_player_board_ignores_hit_rate():
+    """L5 and L10 hit rate requirements have been removed. Board is built from EV candidates."""
     rows = _board(
         [
-            valid,
-            _prop(player="Bad Price", odds=-105),
-            _prop(player="Bad L5", l5=70.0),
-            _prop(player="Bad L10", l10=70.0),
-            _prop(player="Wrong Book", book="FanDuel"),
-            _prop(player="Similar Book", book="Hardrock R"),
-            _prop(player="Partial", scope="first_inning"),
-            {**_prop(player="Inactive"), "is_active": False},
+            _prop(player="Low Hit Rate", l5=10.0, l10=20.0),
+            _prop(player="High Hit Rate", l5=100.0, l10=100.0),
         ]
     )
 
+    assert {row["player"] for row in rows} == {"Low Hit Rate", "High Hit Rate"}
+
+def test_strict_player_board_uses_ev_over_players():
+    """If ev_over_players is passed, it only accepts those players."""
+    valid = _prop(player="Player One")
+    
+    rows = build_alt_player_props_board(
+        {"records": [valid, _prop(player="Ignored")]},
+        league="MLB",
+        ev_over_players={"player one"}
+    )
+    
     assert len(rows) == 1
     assert rows[0]["player"] == "Player One"
-    assert rows[0]["best_book"] == "Hard Rock"
-    assert rows[0]["best_odds"] == -600
-    assert rows[0]["l5_pct"] == 100.0
-    assert rows[0]["l10_pct"] == 90.0
 
-
-def test_player_board_enforces_75_pct_hit_rate_floor():
-    """L5 and L10 floors were loosened from 100%/90% to a >=75% floor on both."""
-    rows = _board(
-        [
-            _prop(player="Min Boundary", l5=75.0, l10=75.0),
-            _prop(player="Below L5", l5=74.0, l10=90.0),
-            _prop(player="Below L10", l5=100.0, l10=74.0),
-        ]
-    )
-
-    assert {row["player"] for row in rows} == {"Min Boundary"}
 
 
 def test_player_board_accepts_full_inclusive_odds_window():

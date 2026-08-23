@@ -2031,10 +2031,24 @@ def write_pack(
         )
     alt_total_rows.extend(alt_tt_rows)
 
+    ev_over_players: set[str] = {
+        str(r.get("player_id") or "").strip()
+        for r in rows
+        if " OVER " in str(r.get("selection") or "").upper()
+        and _to_float(r.get("edge_pct")) is not None
+        and _to_float(r.get("edge_pct")) > 0
+    }
+    ev_over_players.discard("")
+
     alt_player_rows: list[dict[str, Any]] = []
     alt_player_parlays: list[dict[str, Any]] = []
     for lg, payload in (props_norm_by_league or {}).items():
-        league_rows = build_alt_player_props_board(payload, league=lg, target_date=pack_date)
+        league_rows = build_alt_player_props_board(
+            payload,
+            league=lg,
+            target_date=pack_date,
+            ev_over_players=ev_over_players
+        )
         alt_player_rows.extend(league_rows)
         alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
 

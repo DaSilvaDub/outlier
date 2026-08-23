@@ -17,7 +17,8 @@ MAX_SCHEDULE_EVENT_FETCHES = 50
 
 def write_json(path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
 def _referenced_event_ids(props_payload: dict[str, Any]) -> set[str]:

@@ -20,7 +20,8 @@ from .registry import get_sport_config, supported_leagues, GAME_MARKET_TYPES
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
 def _should_preserve_previous_latest(latest_path: Path, normalized: dict[str, Any]) -> bool:

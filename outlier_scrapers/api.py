@@ -114,7 +114,7 @@ class OutlierApiClient:
                     body = response.read()
                     if body[:2] == b"\x1f\x8b":
                         body = gzip.decompress(body)
-                    payload = json.loads(body.decode("utf-8"))
+                    payload = json.loads(body.decode("utf-8"), strict=False)
                     if isinstance(payload, dict):
                         return payload
                     raise OutlierApiError(f"Unexpected non-object payload for {url}")

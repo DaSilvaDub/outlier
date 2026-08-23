@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 def write_json(path, payload: dict[str, Any]) -> None:
     """Write ``payload`` as pretty JSON (local copy; mirrors props.write_json)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
 # --------------------------------------------------------------------------- #
 # Tunable constants
