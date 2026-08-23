@@ -2002,6 +2002,7 @@ def write_pack(
         format_alt_player_props_md,
     )
     from outlier_scrapers.ultimate_alt import (
+        SHADOW_UNITS,
         ULTIMATE_ALT_HEADER,
         ULTIMATE_ALT_PARLAYS_HEADER,
         build_ultimate_alt_board,
@@ -2031,13 +2032,11 @@ def write_pack(
         )
     alt_total_rows.extend(alt_tt_rows)
 
-    ev_over_players: set[str] = {
-        str(r.get("player_id") or "").strip()
-        for r in rows
-        if " OVER " in str(r.get("selection") or "").upper()
-        and _to_float(r.get("edge_pct")) is not None
-        and _to_float(r.get("edge_pct")) > 0
-    }
+    ev_over_players: set[str] = set()
+    for row in rows:
+        edge = _to_float(row.get("edge_pct"))
+        if " OVER " in str(row.get("selection") or "").upper() and edge is not None and edge > 0:
+            ev_over_players.add(str(row.get("player_id") or "").strip())
     ev_over_players.discard("")
 
     alt_player_rows: list[dict[str, Any]] = []
@@ -2128,8 +2127,8 @@ def write_pack(
             {
                 "actionable": "true",
                 "board": "A",
-                "units": r.get("recommended_units_pre_news") or 0.5,
-                "pre_cap_units": r.get("recommended_units_pre_news") or 0.5,
+                "units": SHADOW_UNITS,
+                "pre_cap_units": SHADOW_UNITS,
             }
         )
         proj = project_risk_identity(risk_input, "ultimate_alt")

@@ -164,7 +164,7 @@ def test_capture_pack_includes_qualified_and_rejected_ultimate_alt_rows(tmp_path
             "market_type": "GAMELINE",
             "shadow_status": "QUALIFIED",
             "board": "ALT_SHADOW_QUALIFIED",
-            "recommended_units_pre_news": "0.5",
+            "recommended_units_pre_news": "",
             "portfolio_shadow_units": "0.5",
         }
     )

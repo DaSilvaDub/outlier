@@ -271,9 +271,6 @@ def build_alt_team_total_board(
             rows.extend(qualifying)
 
     rows.sort(key=lambda r: (r["event_id"], str(r["team"]).lower(), -float(r["line"])))
-    from .sizing import apply_alt_sizing
-    for row in rows:
-        apply_alt_sizing(row)
     return rows
 
 

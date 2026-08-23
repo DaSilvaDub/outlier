@@ -171,6 +171,9 @@ def test_write_pack_emits_spread_only_csvs_without_changing_mixed_bankroll(tmp_p
     assert [(row["league"], row["selection"]) for row in wnba_rows] == [
         ("WNBA", "AWAY -2.5")
     ]
+    assert wnba_rows[0]["model_prob"] == ""
+    assert wnba_rows[0]["edge_pct"] == ""
+    assert wnba_rows[0]["recommended_units"] == ""
     assert mixed_rows == []
 
 
