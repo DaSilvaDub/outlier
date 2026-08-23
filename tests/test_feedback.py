@@ -1208,9 +1208,10 @@ def _seed_settled_row(
             INSERT INTO market_snapshots (
                 snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
                 selection, line, price, book, decimal_price, board, market_type,
-                event_starts_at, signal_flags, hit_rate_component, created_at
+                event_starts_at, signal_flags, hit_rate_component, pack_path,
+                cap_reasons, created_at
             ) VALUES (?, ?, 'WNBA', ?, ?, ?, ?, ?, -110, 'Book', 1.909, ?, 'PLAYER_PROP',
-                      ?, 'hit_rate_support', 65.0, ?)
+                      ?, 'hit_rate_support', 65.0, '/packs/2026-01-01', 'none', ?)
             """,
             (
                 f"snapshot-{suffix}",
@@ -1492,18 +1493,25 @@ def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(t
     rows = {
         row["snapshot_id"]: row
         for row in conn.execute(
-            "SELECT snapshot_id, line, price, hit_rate_component, signal_flags "
-            "FROM market_snapshots"
+            "SELECT snapshot_id, line, price, hit_rate_component, signal_flags, "
+            "pack_path, cap_reasons FROM market_snapshots"
         )
     }
     conn.close()
 
-    # Identity/result-relevant fields survive slimming on the eligible row...
+    # Identity/result-relevant and calibration-training fields all survive
+    # slimming on the eligible row -- fit_blend_weights(),
+    # fit_stake_calibration_from_db(), and generate_report() read
+    # hit_rate_component/signal_flags via the same shared settled-row query,
+    # so retention must never clear them.
     assert rows["snapshot-stale"]["line"] == "10.5"
     assert rows["snapshot-stale"]["price"] == -110
-    # ...but the wide exploratory columns are cleared.
-    assert rows["snapshot-stale"]["hit_rate_component"] is None
-    assert rows["snapshot-stale"]["signal_flags"] is None
+    assert rows["snapshot-stale"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-stale"]["signal_flags"] == "hit_rate_support"
+    # ...but the disposable portfolio-sizing/pack-provenance columns, which
+    # none of those consumers read, are cleared.
+    assert rows["snapshot-stale"]["pack_path"] is None
+    assert rows["snapshot-stale"]["cap_reasons"] is None
 
     # Played, flagged, and recent rows are untouched.
     assert rows["snapshot-played"]["hit_rate_component"] == 65.0
