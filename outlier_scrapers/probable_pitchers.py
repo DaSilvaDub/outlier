@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -44,6 +44,25 @@ def fetch_probable_pitchers_raw(target_date: date) -> dict[str, Any]:
         "&hydrate=probablePitcher,team"
     )
     return _fetch_json(url)
+
+
+def _slate_is_complete(raw_payload: dict[str, Any]) -> bool:
+    """True when the fetched date's games are all Final (or none are scheduled).
+
+    Mirrors ``games._today_slate_is_complete``: a pipeline run late in the day
+    (after the local slate has finished) must not keep matching starters
+    against a day that's already over while props/cards have already
+    auto-advanced to tomorrow's board.
+    """
+    dates = raw_payload.get("dates")
+    games = dates[0].get("games") if isinstance(dates, list) and dates else []
+    if not isinstance(games, list) or not games:
+        return True
+    return all(
+        str((game.get("status") or {}).get("abstractGameState") or "").strip().lower() == "final"
+        for game in games
+        if isinstance(game, dict)
+    )
 
 
 def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, int | None]:
@@ -161,6 +180,7 @@ def export_probable_pitchers(
             "record_count": 0,
         }
 
+    auto_advance = target_date is None
     if target_date is None:
         target_date = datetime.now().astimezone().date()
 
@@ -171,6 +191,23 @@ def export_probable_pitchers(
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         logger.error("Failed to fetch probable pitchers for %s: %s", league, exc)
         return {"status": "error", "reason": str(exc)[:200], "record_count": 0}
+
+    if auto_advance and _slate_is_complete(raw_payload):
+        next_date = target_date + timedelta(days=1)
+        try:
+            next_payload = fetch_probable_pitchers_raw(next_date)
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            logger.warning(
+                "Auto-advance probable-pitcher fetch failed for %s %s: %s",
+                league,
+                next_date,
+                exc,
+            )
+        else:
+            next_dates = next_payload.get("dates")
+            if isinstance(next_dates, list) and next_dates and next_dates[0].get("games"):
+                raw_payload = next_payload
+                target_date = next_date
 
     raw_out = {
         "source": "statsapi.mlb.com",

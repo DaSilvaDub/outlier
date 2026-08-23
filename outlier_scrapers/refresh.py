@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.probable_pitchers:
             try:
-                status = export_probable_pitchers(league)
+                status = export_probable_pitchers(league, target_date=target_date)
                 if status["status"] == "skipped":
                     print(f"{league.upper()} probable pitchers: skipped ({status['reason']})")
                 else:

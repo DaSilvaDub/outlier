@@ -174,6 +174,92 @@ def test_export_probable_pitchers_writes_normalized_and_raw(tmp_path, monkeypatc
     assert written["by_team"]["LAA"]["projected_bf"] == pytest.approx((24 + 22 + 23) / 3)
 
 
+def _raw_schedule_with_status(*, abstract_game_state: str) -> dict:
+    payload = _raw_schedule()
+    payload["dates"][0]["games"][0]["status"] = {"abstractGameState": abstract_game_state}
+    return payload
+
+
+def test_export_probable_pitchers_auto_advances_when_slate_complete(tmp_path, monkeypatch):
+    """Unpinned runs late in the day must roll onto tomorrow's slate.
+
+    Regression for the near-zero independent_model_prob coverage bug: a
+    nightly job running after today's games finish was matching SO markets
+    (already built for tomorrow's board by games.py's own auto-advance)
+    against today's already-final starters, so no pitcher ever matched.
+    """
+    import outlier_scrapers.probable_pitchers as pp
+    from outlier_scrapers.paths import LeaguePaths
+    from datetime import date
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
+
+    import datetime as datetime_module
+
+    class _FrozenDatetime(datetime_module.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 4, 23, 39)
+
+    monkeypatch.setattr(pp, "datetime", _FrozenDatetime)
+
+    today_complete = _raw_schedule_with_status(abstract_game_state="Final")
+    tomorrow_payload = _raw_schedule()
+    tomorrow_payload["dates"][0]["date"] = "2026-08-05"
+
+    def _fake_fetch(target_date):
+        if target_date == date(2026, 8, 4):
+            return today_complete
+        if target_date == date(2026, 8, 5):
+            return tomorrow_payload
+        raise AssertionError(f"unexpected date {target_date}")
+
+    monkeypatch.setattr(pp, "fetch_probable_pitchers_raw", _fake_fetch)
+
+    status = export_probable_pitchers("MLB")
+    assert status == {"status": "ok", "record_count": 1}
+    written = json.loads(fake_paths.probable_pitchers_latest().read_text(encoding="utf-8"))
+    assert written["date"] == "2026-08-05"
+
+
+def test_export_probable_pitchers_does_not_auto_advance_when_pinned(tmp_path, monkeypatch):
+    """An explicit --date pin must be honored even if that slate is final."""
+    import outlier_scrapers.probable_pitchers as pp
+    from outlier_scrapers.paths import LeaguePaths
+    from datetime import date
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
+
+    today_complete = _raw_schedule_with_status(abstract_game_state="Final")
+    calls: list = []
+
+    def _fake_fetch(target_date):
+        calls.append(target_date)
+        return today_complete
+
+    monkeypatch.setattr(pp, "fetch_probable_pitchers_raw", _fake_fetch)
+
+    status = export_probable_pitchers("MLB", target_date=date(2026, 8, 4))
+    assert status == {"status": "ok", "record_count": 1}
+    assert calls == [date(2026, 8, 4)]
+    written = json.loads(fake_paths.probable_pitchers_latest().read_text(encoding="utf-8"))
+    assert written["date"] == "2026-08-04"
+
+
 def test_export_probable_pitchers_handles_fetch_error(tmp_path, monkeypatch):
     import outlier_scrapers.probable_pitchers as pp
     from outlier_scrapers.paths import LeaguePaths
