@@ -1293,6 +1293,7 @@ def test_find_distinct_closing_snapshot_excludes_the_taken_snapshot(tmp_path):
         selection="Player Points OVER 10.5",
         book="Book",
         exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T20:00:00+00:00",
     )
     assert (line, price) == (None, None)
 
@@ -1314,8 +1315,55 @@ def test_find_distinct_closing_snapshot_excludes_the_taken_snapshot(tmp_path):
         selection="Player Points OVER 10.5",
         book="Book",
         exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T20:00:00+00:00",
     )
     assert (line, price) == ("11.5", -120)
+    conn.close()
+
+
+def test_find_distinct_closing_snapshot_ignores_older_history(tmp_path):
+    """A latest-captured taken snapshot with only *older* history available
+    must not have that stale, pre-take quote returned as its "close" --
+    excluding the taken snapshot's own id is not enough on its own; the
+    replacement has to be genuinely later too, or CLV gets fabricated from
+    a quote that predates the bet."""
+
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('older', '2026-08-07T20:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '9.5', -105, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T20:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('taken', '2026-08-07T22:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '10.5', -110, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T22:00:00+00:00')
+        """
+    )
+
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T22:00:00+00:00",
+    )
+    assert (line, price) == (None, None)
     conn.close()
 
 
@@ -1478,6 +1526,81 @@ def test_apply_retention_policy_dry_run_reports_without_changing_anything(tmp_pa
     row = conn.execute("SELECT hit_rate_component FROM market_snapshots").fetchone()
     conn.close()
     assert row[0] == 65.0
+
+
+def test_apply_retention_policy_preserves_fitter_eligibility(tmp_path):
+    """Retention must never shrink the eligible sample fit_blend_weights()
+    and fit_stake_calibration_from_db() see: both read the same wide set of
+    probability/segment columns off market_snapshots via _joined_rows(), so
+    slimming those away as "disposable" silently destroys training data
+    that happens to look identical to a dry calibration report."""
+
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    old = "2026-01-01T20:00:00+00:00"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, market_consensus_prob,
+            independent_model_prob, final_blended_prob, push_prob,
+            data_quality_tier, event_starts_at, hours_before_game,
+            odds_range, time_before_game, market_type, decimal_price,
+            board, created_at
+        ) VALUES (
+            'snap-old', ?, 'WNBA', 'event-old', 'market-old', 'outcome-old',
+            'Player Points OVER 10.5', '10.5', -110, 'Book', 0.55, 0.60, 0.55,
+            0.0, 'CLEAN', '2026-01-01T23:30:00+00:00', 3.5, '-120_TO_-101',
+            'LT_6H', 'PLAYER_PROP', 1.909, 'B', ?
+        )
+        """,
+        (old, old),
+    )
+    conn.execute(
+        """
+        INSERT INTO decisions (
+            decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+            created_at, updated_at
+        ) VALUES ('decision-old', 'snap-old', 'STAND_DOWN', '', 0.0, ?, ?)
+        """,
+        (old, old),
+    )
+    conn.execute(
+        """
+        INSERT INTO settlements (
+            settlement_id, decision_id, snapshot_id, outcome_id, event_id, market_id,
+            actual_result, win_loss_push, closing_line, closing_price, clv_line,
+            clv_price, pnl, would_have_result, settled_at
+        ) VALUES ('settlement-old', 'decision-old', 'snap-old', 'outcome-old',
+                   'event-old', 'market-old', '12', 'W', '11.5', -120, 1.0,
+                   0.09, 0.0, 'W', ?)
+        """,
+        (old,),
+    )
+    conn.commit()
+    conn.close()
+
+    def eligible_samples() -> tuple[int, int]:
+        blend = feedback.fit_blend_weights(
+            db_path, tmp_path / "blend.json", min_samples=1
+        )
+        stake = feedback.fit_stake_calibration_from_db(
+            db_path, tmp_path / "stake.json", min_samples=1
+        )
+        return blend["eligible_samples"], stake["eligible_samples"]
+
+    before = eligible_samples()
+    assert before == (1, 1)
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90)
+    assert stats.slimmed == 1
+
+    after = eligible_samples()
+    assert after == before, (
+        "retention must not shrink fitter-eligible sample counts: "
+        f"before={before}, after={after}"
+    )
 
 
 def test_recover_corrupted_database_salvages_readable_rows(tmp_path):

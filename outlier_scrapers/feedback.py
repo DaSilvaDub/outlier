@@ -1768,24 +1768,31 @@ def find_distinct_closing_snapshot(
     selection: str,
     book: str,
     exclude_snapshot_id: str,
+    after_captured_at: str,
 ) -> tuple[Any, Any]:
-    """Best available *distinct* pre-start snapshot for CLV.
+    """Best available *distinct, later* pre-start snapshot for CLV.
 
     Prefers same book + outcome_id, falls back to any book on the same
     event/outcome, then market_id + selection. ``exclude_snapshot_id`` is
     always excluded: a single capture is not its own close, and returning it
     as one silently manufactures zero CLV on every row that was only ever
-    captured once -- the bug this guards against.
+    captured once. Excluding the taken snapshot is not enough on its own,
+    though: without also requiring ``captured_at > after_captured_at``, an
+    outcome whose *only* other history is an *older* quote would have that
+    stale, pre-take price returned as the "close" -- fabricating CLV from a
+    snapshot that isn't a close at all, just an earlier one. A close has to
+    be a later observation, not merely a different one.
     """
+    params_tail = (exclude_snapshot_id, after_captured_at)
     close = conn.execute(
         """
         SELECT line, price FROM market_snapshots
         WHERE event_id = ? AND outcome_id = ? AND book = ?
-          AND snapshot_id != ?
+          AND snapshot_id != ? AND captured_at > ?
           AND captured_at <= event_starts_at
         ORDER BY captured_at DESC LIMIT 1
         """,
-        (event_id, outcome_id, book, exclude_snapshot_id),
+        (event_id, outcome_id, book, *params_tail),
     ).fetchone()
     if close:
         return close["line"], close["price"]
@@ -1794,11 +1801,11 @@ def find_distinct_closing_snapshot(
         """
         SELECT line, price FROM market_snapshots
         WHERE event_id = ? AND outcome_id = ?
-          AND snapshot_id != ?
+          AND snapshot_id != ? AND captured_at > ?
           AND captured_at <= event_starts_at
         ORDER BY captured_at DESC LIMIT 1
         """,
-        (event_id, outcome_id, exclude_snapshot_id),
+        (event_id, outcome_id, *params_tail),
     ).fetchone()
     if close:
         return close["line"], close["price"]
@@ -1808,11 +1815,11 @@ def find_distinct_closing_snapshot(
             """
             SELECT line, price FROM market_snapshots
             WHERE event_id = ? AND market_id = ? AND selection = ?
-              AND snapshot_id != ?
+              AND snapshot_id != ? AND captured_at > ?
               AND captured_at <= event_starts_at
             ORDER BY captured_at DESC LIMIT 1
             """,
-            (event_id, market_id, selection, exclude_snapshot_id),
+            (event_id, market_id, selection, *params_tail),
         ).fetchone()
         if close:
             return close["line"], close["price"]
@@ -1907,7 +1914,8 @@ def recompute_settlement_clv(
             SELECT t.settlement_id, t.snapshot_id, t.outcome_id,
                    t.closing_line, t.closing_price,
                    s.event_id, s.market_id, s.selection, s.line, s.price,
-                   s.decimal_price, s.book, s.sport, s.event_starts_at
+                   s.decimal_price, s.book, s.sport, s.event_starts_at,
+                   s.captured_at
             FROM settlements t
             JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id
             """
@@ -1931,6 +1939,7 @@ def recompute_settlement_clv(
                 selection=_text(row["selection"]),
                 book=_text(row["book"]),
                 exclude_snapshot_id=_text(row["snapshot_id"]),
+                after_captured_at=_text(row["captured_at"]),
             )
             if new_line is None and new_price is None:
                 new_line, new_price = closing_line_from_movement_export(
@@ -2690,29 +2699,22 @@ def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 _RETENTION_FULL_FIDELITY_VERDICTS = {"PLAY", "BET"}
-_RETENTION_PRESERVED_SNAPSHOT_COLUMNS = {
-    "snapshot_id",
-    "captured_at",
-    "sport",
-    "event_id",
-    "market_id",
-    "outcome_id",
-    "player_id",
-    "selection",
-    "line",
-    "price",
-    "book",
-    "market_consensus_prob",
-    "final_blended_prob",
-    "edge",
-    "market_type",
-    "decimal_price",
-    "board",
-    "selected",
-    "data_quality_tier",
-}
+# Only columns _joined_rows() never selects are safe to clear: that query
+# backs fit_blend_weights(), fit_stake_calibration_from_db(), and
+# generate_report() alike, so anything it reads is live training/calibration
+# input, not disposable detail -- clearing it would silently shrink the
+# eligible sample for every fitter and report metric derived from these
+# rows, not just trim bytes. What's left is portfolio-sizing-at-capture-time
+# and pack-provenance metadata that none of them consume.
 _RETENTION_SLIMMED_COLUMNS = [
-    field for field in MARKET_SNAPSHOT_FIELDS if field not in _RETENTION_PRESERVED_SNAPSHOT_COLUMNS
+    "projection_feature_hash",
+    "projection_quality_flags",
+    "pack_path",
+    "policy_fingerprint",
+    "portfolio_mode",
+    "pre_cap_units",
+    "portfolio_units",
+    "cap_reasons",
 ]
 
 
@@ -2722,16 +2724,21 @@ def apply_retention_policy(
     cutoff_days: int = 90,
     dry_run: bool = False,
 ) -> RetentionStats:
-    """Slim full-detail snapshot rows for settled, never-played history.
+    """Slim disposable snapshot columns for settled, never-played history.
 
-    A row keeps every research column at full fidelity only if it reached
-    ``PLAY``/``BET`` or the desk flagged it (``board = 'A_FLAGGED'``) -- that
-    is the data a calibration report actually needs in full. Everything else
-    that is already settled and older than ``cutoff_days`` has its wide,
-    exploratory columns (signal components, projection hashes, portfolio
-    caps, blend metadata, ...) cleared, keeping only identity/result-relevant
-    fields; unsettled, recent, played, or flagged rows are never touched.
-    Vacuums afterward to actually reclaim the freed pages on disk.
+    A row keeps its portfolio-sizing-at-capture-time and pack-provenance
+    columns (``pre_cap_units``, ``portfolio_units``, ``cap_reasons``,
+    ``policy_fingerprint``, ``portfolio_mode``, ``pack_path``,
+    ``projection_feature_hash``, ``projection_quality_flags``) only if it
+    reached ``PLAY``/``BET`` or the desk flagged it (``board =
+    'A_FLAGGED'``); those columns are cleared once the row is already
+    settled and older than ``cutoff_days``. Every other column -- including
+    the probability/edge/signal-component fields ``fit_blend_weights()``,
+    ``fit_stake_calibration_from_db()``, and ``generate_report()`` all read
+    via the shared settled-row query -- is left alone regardless of age, so
+    retention never shrinks the eligible sample those consume. Unsettled,
+    recent, played, or flagged rows are never touched. Vacuums afterward to
+    actually reclaim the freed pages on disk.
     """
     if cutoff_days < 0:
         # A negative value pushes the cutoff into the future, matching every

@@ -574,6 +574,7 @@ def _latest_local_close(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[Any
     market_id = row["market_id"] if "market_id" in row_keys else ""
     selection = row["selection"] if "selection" in row_keys else ""
     snapshot_id = row["snapshot_id"] if "snapshot_id" in row_keys else ""
+    captured_at = row["captured_at"] if "captured_at" in row_keys else ""
     closing_line, closing_price = feedback.find_distinct_closing_snapshot(
         conn,
         event_id=str(row["event_id"] or ""),
@@ -582,6 +583,7 @@ def _latest_local_close(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[Any
         selection=str(selection or ""),
         book=str(row["book"] or ""),
         exclude_snapshot_id=str(snapshot_id or ""),
+        after_captured_at=str(captured_at or ""),
     )
     if closing_line is not None or closing_price is not None:
         return closing_line, closing_price
