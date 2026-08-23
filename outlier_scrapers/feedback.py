@@ -901,8 +901,8 @@ _RECOVERY_TABLE_FIELDS = {
 }
 
 
-def _sqlite_cli_recover_script(corrupted_path: Path) -> str | None:
-    """Best-effort ``.recover`` dump via the sqlite3 CLI, when it is installed.
+def _run_sqlite_cli_recover(corrupted_path: Path, temp_recovered: Path) -> bool:
+    """Best-effort ``.recover`` via the sqlite3 CLI, when it is installed.
 
     ``.recover`` walks every b-tree page it can still read -- including ones
     orphaned by a damaged freelist or schema table -- and emits SQL that
@@ -910,21 +910,36 @@ def _sqlite_cli_recover_script(corrupted_path: Path) -> str | None:
     plain ``SELECT`` gives up on. It is optional: when the CLI is missing,
     ``_salvage_rows_directly`` still recovers everything readable before the
     first corrupted page.
+
+    For a large ledger that SQL script can be substantial, so it is piped
+    directly from the recovering ``sqlite3`` process into a second ``sqlite3``
+    process that writes ``temp_recovered``, rather than buffered as one big
+    string in this process.
     """
     try:
-        result = subprocess.run(
+        with subprocess.Popen(
             ["sqlite3", str(corrupted_path), ".recover"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            stdout=subprocess.PIPE,
+        ) as recover_proc, subprocess.Popen(
+            ["sqlite3", str(temp_recovered)],
+            stdin=recover_proc.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ) as apply_proc:
+            # Close the parent's copy of the read end now that apply_proc has
+            # its own: otherwise, if apply_proc exits early, recover_proc has
+            # no way to see a SIGPIPE (the parent is still "a reader") and can
+            # block writing to a pipe nothing is draining anymore.
+            recover_proc.stdout.close()  # type: ignore[union-attr]
+            recover_returncode = recover_proc.wait(timeout=300)
+            apply_returncode = apply_proc.wait(timeout=300)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         logger.info("sqlite3 CLI .recover unavailable (%s); falling back to direct salvage.", exc)
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    if recover_returncode != 0 or apply_returncode != 0:
         logger.info("sqlite3 CLI .recover produced no usable output; falling back.")
-        return None
-    return result.stdout
+        return False
+    return True
 
 
 def _open_for_salvage(source_path: Path) -> sqlite3.Connection:
@@ -937,12 +952,14 @@ def _open_for_salvage(source_path: Path) -> sqlite3.Connection:
     an ``immutable`` read-only connection, which skips journal/WAL recovery
     entirely and just reads whatever raw pages remain reachable.
     """
+    conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(str(source_path))
         conn.execute("SELECT 1")
         return conn
     except sqlite3.Error:
-        pass
+        if conn is not None:
+            conn.close()
     return sqlite3.connect(f"file:{source_path}?immutable=1", uri=True)
 
 
@@ -1000,8 +1017,11 @@ def _insert_recovered_row(
     all_fields = [*fields, *extra]
     values = [row.get(field) for field in fields] + list(extra.values())
     try:
+        # A plain INSERT (not OR IGNORE) so a NOT NULL/identity violation
+        # raises and is logged/counted as skipped, instead of OR IGNORE
+        # silently dropping it while this still reports the row as inserted.
         conn.execute(
-            f"INSERT OR IGNORE INTO {table} ({', '.join(all_fields)}) "
+            f"INSERT INTO {table} ({', '.join(all_fields)}) "
             f"VALUES ({', '.join('?' for _ in all_fields)})",
             values,
         )
@@ -1039,26 +1059,11 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
             "recover into a fresh path"
         )
 
-    recovery_sql = _sqlite_cli_recover_script(corrupted_path)
-    used_sqlite_cli = recovery_sql is not None
-    source_path = corrupted_path
-    temp_recovered: Path | None = None
-    if recovery_sql is not None:
-        temp_recovered = corrupted_path.with_name(f"{corrupted_path.name}.recovered.tmp")
-        temp_recovered.unlink(missing_ok=True)
-        temp_conn = sqlite3.connect(temp_recovered)
-        try:
-            temp_conn.executescript(recovery_sql)
-            temp_conn.commit()
-            source_path = temp_recovered
-        except sqlite3.Error as exc:
-            logger.warning(
-                "sqlite3 .recover script did not fully apply (%s); "
-                "falling back to direct salvage of the original file.",
-                exc,
-            )
-        finally:
-            temp_conn.close()
+    candidate_temp = corrupted_path.with_name(f"{corrupted_path.name}.recovered.tmp")
+    candidate_temp.unlink(missing_ok=True)
+    used_sqlite_cli = _run_sqlite_cli_recover(corrupted_path, candidate_temp)
+    source_path = candidate_temp if used_sqlite_cli else corrupted_path
+    temp_recovered: Path | None = candidate_temp if used_sqlite_cli else None
 
     salvaged: dict[str, list[dict[str, Any]]] = {}
     skipped_total = 0
@@ -1072,6 +1077,8 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
     finally:
         if temp_recovered is not None:
             temp_recovered.unlink(missing_ok=True)
+        elif candidate_temp.exists():
+            candidate_temp.unlink(missing_ok=True)
 
     initialize_database(output_path)
     conn = sqlite3.connect(output_path)
