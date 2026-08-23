@@ -1487,6 +1487,16 @@ def test_recover_corrupted_database_salvages_readable_rows(tmp_path):
 
     corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
     corrupted_path.write_bytes(source_db.read_bytes())
+    # WAL-mode commits aren't necessarily checkpointed into the main file yet
+    # (sqlite3's default connection close doesn't force one); the -wal/-shm
+    # companions have to travel with it, exactly as the recover docstring and
+    # docs/feedback-loop.md instruct.
+    for suffix in ("-wal", "-shm"):
+        companion = source_db.with_name(source_db.name + suffix)
+        if companion.exists():
+            corrupted_path.with_name(corrupted_path.name + suffix).write_bytes(
+                companion.read_bytes()
+            )
 
     output_path = tmp_path / "feedback.recovered.sqlite3"
     stats = feedback.recover_corrupted_database(corrupted_path, output_path)
