@@ -34,9 +34,7 @@ MIN_L10_HIT_PCT = 75.0
 # "Hardrock R" is deliberately NOT an alias here: it's a distinctly-named
 # book in the raw feed, not a formatting variant of "Hard Rock" -- treating
 # similarly-named books as identical would risk misattributing a price.
-ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset(
-    {"hardrock", "fanatics", "midnite", "draftkings", "novig"}
-)
+ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset({"hardrock"})
 
 ALT_PLAYER_PROPS_HEADER = [
     "league",
@@ -56,6 +54,9 @@ ALT_PLAYER_PROPS_HEADER = [
     "season_pct",
     "market_id",
     "outcome_id",
+    "model_prob",
+    "edge_pct",
+    "recommended_units",
 ]
 
 ALT_PLAYER_PROPS_PARLAYS_HEADER = [
@@ -82,7 +83,7 @@ def _number(value: Any) -> float | None:
     if value in (None, "", "-"):
         return None
     try:
-        return float(str(value).replace("−", "-"))
+        return float(str(value).replace("-", "-"))
     except (TypeError, ValueError):
         return None
 
@@ -143,6 +144,7 @@ def build_alt_player_props_board(
     league: str,
     now: datetime | None = None,
     target_date: str | None = None,
+    ev_over_players: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return up to four strict alternate player props per event."""
     token = league.strip().upper()
@@ -178,12 +180,16 @@ def build_alt_player_props_board(
         l10 = percent_number(rec.get("l10_pct"))
         if l5 is None or l10 is None:
             continue
-        if not (MIN_L5_HIT_PCT <= l5 <= 100.0) or not (MIN_L10_HIT_PCT <= l10 <= 100.0):
-            continue
+
         player = str(rec.get("player") or rec.get("player_raw") or "").strip()
         if not player:
             continue
         player_id = str(rec.get("player_id") or "").strip()
+        
+        # Enforce that this player is one of the EV OVER candidates
+        if ev_over_players is not None and player_id not in ev_over_players:
+            continue
+            
         outcome_id = str(rec.get("outcome_id") or context.get("outcome_id") or "").strip()
         if not outcome_id:
             continue
@@ -232,6 +238,9 @@ def build_alt_player_props_board(
             selected.append(clean)
             if len(seen) >= 4:
                 break
+    from .sizing import apply_alt_sizing
+    for row in selected:
+        apply_alt_sizing(row)
     return selected
 
 
@@ -345,3 +354,5 @@ def format_alt_player_props_md(
                 f"({_price_text(parlay['leg_2_odds'])})"
             )
     return "\n".join(lines) + "\n"
+
+

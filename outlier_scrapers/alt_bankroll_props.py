@@ -67,6 +67,9 @@ ALT_BANKROLL_PROPS_HEADER = [
     "position",
     "market_id",
     "outcome_id",
+    "model_prob",
+    "edge_pct",
+    "recommended_units",
     "line",
     "l5_hits",
     "l5_total",
@@ -345,6 +348,9 @@ def build_alt_bankroll_board(
         )
 
     rows.sort(key=lambda r: (r["event_id"], str(r["team"]).lower(), str(r["proposition"])))
+    from .sizing import apply_alt_sizing
+    for row in rows:
+        apply_alt_sizing(row)
     return rows
 
 
@@ -491,3 +497,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
