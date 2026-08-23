@@ -1051,6 +1051,72 @@ def project_rows(rows: Iterable[Mapping[str, object]], sport: str) -> list[dict[
     return [project_mlb_row(row) for row in rows]
 
 
+def build_mlb_so_projections(
+    props_rows: Iterable[Mapping[str, object]],
+    probable_by_team: Mapping[str, Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Compute starter-SO projections for every eligible row in normalized props.
+
+    Reuses ``mlb_so_projection_record`` (the same function pack.py falls back to
+    inline) so the file-based artifact and the inline fallback never disagree.
+    """
+
+    records = []
+    for row in props_rows:
+        record = mlb_so_projection_record(row, probable_by_team)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def export_projections(league: str = "MLB") -> dict[str, object]:
+    """Compute and persist independent SO projections for one league's props.
+
+    Reads the already-refreshed ``<league>_props_latest.json`` and
+    ``<league>_probable_pitchers_latest.json`` — both auto-advance to the
+    correct slate on their own, so this step just needs to run after them.
+    Only MLB has a wired independent model today (pitcher SO via starter
+    game logs); other leagues' shadow projections stay audit-only in the
+    inline path and aren't worth persisting here yet.
+    """
+
+    if league.strip().upper() != "MLB":
+        return {
+            "status": "skipped",
+            "reason": f"no independent projection model for {league}",
+            "record_count": 0,
+        }
+
+    from .paths import league_paths
+    from .probable_pitchers import load_probable_pitcher_lookup
+
+    paths_for_league = league_paths("MLB")
+    props_path = paths_for_league.props_normalized_latest()
+    if not props_path.exists():
+        return {"status": "error", "reason": "props_normalized_latest missing", "record_count": 0}
+    try:
+        props_payload = json.loads(props_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "error", "reason": str(exc)[:200], "record_count": 0}
+    props_rows = props_payload.get("records") if isinstance(props_payload, Mapping) else None
+    if not isinstance(props_rows, list):
+        props_rows = []
+
+    probable_by_team = load_probable_pitcher_lookup("MLB")
+    records = build_mlb_so_projections(props_rows, probable_by_team)
+
+    result = {
+        "sport": "MLB",
+        "date": datetime.now().astimezone().date().isoformat(),
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "projections": records,
+    }
+    out_path = paths_for_league.projections_latest()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return {"status": "ok", "record_count": len(records)}
+
+
 def _write_status(command: str, sport: str, output: Path | None) -> int:
     payload = {
         "command": command,
@@ -1069,7 +1135,7 @@ def _write_status(command: str, sport: str, output: Path | None) -> int:
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Independent deterministic projection layer")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("backfill", "train", "project", "validate"):
+    for command in ("backfill", "train", "project", "validate", "export"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--sport", required=True, choices=("MLB", "WNBA"))
         subparser.add_argument("--date", default=date.today().isoformat())
@@ -1086,6 +1152,16 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "export":
+        status = export_projections(args.sport)
+        if status["status"] == "skipped":
+            print(f"{args.sport} projections: skipped ({status['reason']})")
+            return 0
+        if status["status"] == "error":
+            print(f"{args.sport} projections: error ({status['reason']})")
+            return 1
+        print(f"{args.sport} projections: exported {status['record_count']} records")
+        return 0
     if args.command == "project" and args.input:
         payload = json.loads(args.input.read_text(encoding="utf-8"))
         rows = payload.get("records", payload) if isinstance(payload, Mapping) else payload

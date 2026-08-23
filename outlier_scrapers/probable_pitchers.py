@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -44,6 +44,44 @@ def fetch_probable_pitchers_raw(target_date: date) -> dict[str, Any]:
         "&hydrate=probablePitcher,team"
     )
     return _fetch_json(url)
+
+
+_FINAL_GAME_STATE_TOKENS = {"FINAL", "GAMEOVER", "COMPLETEDEARLY"}
+
+
+def _game_state_is_final(game: Any) -> bool:
+    if not isinstance(game, dict):
+        return False
+    status = game.get("status")
+    if not isinstance(status, dict):
+        return False
+    token = str(status.get("abstractGameState") or status.get("detailedState") or "")
+    return token.strip().upper().replace(" ", "") in _FINAL_GAME_STATE_TOKENS
+
+
+def _games_for_date(payload: dict[str, Any]) -> list[Any]:
+    dates = payload.get("dates")
+    first_date = dates[0] if isinstance(dates, list) and dates else None
+    games = first_date.get("games") if isinstance(first_date, dict) else None
+    return games if isinstance(games, list) else []
+
+
+def _slate_is_complete(raw_payload: dict[str, Any]) -> bool:
+    """True when the fetched date has games and every one of them has finished.
+
+    Same intent as ``games._today_slate_is_complete``: a pipeline run late in
+    the day (after the local slate has finished) must not keep matching
+    starters against a day that's already over while props/cards have already
+    auto-advanced to tomorrow's board. A day with zero scheduled games (an
+    off day) is *not* complete, matching ``games.py`` — unpinned runs must not
+    treat "nothing scheduled" as a signal to skip ahead. Final-state check
+    falls back to ``detailedState`` and accepts the same tokens as
+    ``results._mlb_events`` for the same MLB Stats API payload shape.
+    """
+    games = _games_for_date(raw_payload)
+    if not games:
+        return False
+    return all(_game_state_is_final(game) for game in games)
 
 
 def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, int | None]:
@@ -161,6 +199,7 @@ def export_probable_pitchers(
             "record_count": 0,
         }
 
+    auto_advance = target_date is None
     if target_date is None:
         target_date = datetime.now().astimezone().date()
 
@@ -171,6 +210,22 @@ def export_probable_pitchers(
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         logger.error("Failed to fetch probable pitchers for %s: %s", league, exc)
         return {"status": "error", "reason": str(exc)[:200], "record_count": 0}
+
+    if auto_advance and _slate_is_complete(raw_payload):
+        next_date = target_date + timedelta(days=1)
+        try:
+            next_payload = fetch_probable_pitchers_raw(next_date)
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            logger.warning(
+                "Auto-advance probable-pitcher fetch failed for %s %s: %s",
+                league,
+                next_date,
+                exc,
+            )
+        else:
+            if _games_for_date(next_payload):
+                raw_payload = next_payload
+                target_date = next_date
 
     raw_out = {
         "source": "statsapi.mlb.com",

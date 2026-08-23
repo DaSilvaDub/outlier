@@ -16,6 +16,7 @@ from .insights import export_insights_for_league
 from .line_movement import export_line_movement_for_league
 from .paths import league_paths
 from .probable_pitchers import export_probable_pitchers
+from .projections import export_projections
 from .props import export_props_for_league
 from .registry import supported_leagues
 from .slate_strategy import export_slate_strategy_for_league
@@ -84,6 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="game_line_movement",
     )
     parser.add_argument("--probable-pitchers", action="store_true", dest="probable_pitchers")
+    parser.add_argument("--projections", action="store_true", dest="projections")
     parser.add_argument("--slate-strategy", action="store_true", dest="slate_strategy")
     parser.add_argument(
         "--date",
@@ -115,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         and not args.games
         and not args.game_line_movement
         and not args.probable_pitchers
+        and not args.projections
         and not args.slate_strategy
     ):
         print(
@@ -218,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.probable_pitchers:
             try:
-                status = export_probable_pitchers(league)
+                status = export_probable_pitchers(league, target_date=target_date)
                 if status["status"] == "skipped":
                     print(f"{league.upper()} probable pitchers: skipped ({status['reason']})")
                 else:
@@ -229,6 +232,21 @@ def main(argv: list[str] | None = None) -> int:
                         exit_code = 1
             except Exception as exc:
                 print(f"{league.upper()} probable pitchers: failed ({str(exc)[:200]})")
+                exit_code = 1
+
+        if args.projections:
+            try:
+                status = export_projections(league)
+                if status["status"] == "skipped":
+                    print(f"{league.upper()} projections: skipped ({status['reason']})")
+                else:
+                    print(
+                        f"{league.upper()} projections: exported {status['record_count']} records"
+                    )
+                    if status["status"] == "error":
+                        exit_code = 1
+            except Exception as exc:
+                print(f"{league.upper()} projections: failed ({str(exc)[:200]})")
                 exit_code = 1
 
         if args.line_movement:

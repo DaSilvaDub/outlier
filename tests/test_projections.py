@@ -1,8 +1,11 @@
+import json
 import math
 
 import pytest
 
 from outlier_scrapers.projections import (
+    build_mlb_so_projections,
+    export_projections,
     mlb_first_inning_run_distribution,
     mlb_hits_allowed_distribution,
     mlb_so_projection_record,
@@ -127,6 +130,117 @@ def test_first_inning_yes_no_sides_map_to_over_under_partition():
     assert projection["side"] == "YES"
     assert projection["distribution"]["side"] == "OVER"
     assert projection["distribution"]["push_prob"] == 0.0
+
+
+def test_build_mlb_so_projections_only_keeps_eligible_rows():
+    confirmed = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    props_rows = [
+        {
+            "sport": "MLB",
+            "market_type": "SO",
+            "player": "Jackson Jobe",
+            "event_id": "g1",
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "line": 4.5,
+            "position": "OVER",
+        },
+        {
+            "sport": "MLB",
+            "market_type": "SO",
+            "player": "Not A Starter",
+            "event_id": "g2",
+            "market_id": "m2",
+            "outcome_id": "o2",
+            "line": 3.5,
+            "position": "UNDER",
+        },
+    ]
+    records = build_mlb_so_projections(props_rows, confirmed)
+    assert len(records) == 1
+    assert records[0]["row_id"] == "o1"
+    assert records[0]["status"] == "eligible"
+
+
+def test_export_projections_skips_non_mlb():
+    status = export_projections("WNBA")
+    assert status == {
+        "status": "skipped",
+        "reason": "no independent projection model for WNBA",
+        "record_count": 0,
+    }
+
+
+def test_export_projections_missing_props_file_returns_error(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+
+    status = export_projections("MLB")
+    assert status["status"] == "error"
+    assert status["record_count"] == 0
+
+
+def test_export_projections_writes_normalized_projections_file(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    fake_paths.normalized.mkdir(parents=True, exist_ok=True)
+    fake_paths.props_normalized_latest().write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Jackson Jobe",
+                        "event_id": "g1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "line": 4.5,
+                        "position": "OVER",
+                    },
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Not Confirmed",
+                        "event_id": "g2",
+                        "market_id": "m2",
+                        "outcome_id": "o2",
+                        "line": 3.5,
+                        "position": "UNDER",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+    monkeypatch.setattr(
+        "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
+        lambda league: {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
+    )
+
+    status = export_projections("MLB")
+    assert status == {"status": "ok", "record_count": 1}
+    assert fake_paths.projections_latest().exists()
+    written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
+    assert written["sport"] == "MLB"
+    assert len(written["projections"]) == 1
+    assert written["projections"][0]["row_id"] == "o1"
 
 
 def test_non_mlb_shadow_rows_preserve_input_cardinality_and_identity():
