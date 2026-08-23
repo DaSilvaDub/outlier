@@ -916,25 +916,45 @@ def _run_sqlite_cli_recover(corrupted_path: Path, temp_recovered: Path) -> bool:
     process that writes ``temp_recovered``, rather than buffered as one big
     string in this process.
     """
+    # Managed manually rather than via `with Popen(...) as p:` on purpose:
+    # that context manager's __exit__ calls p.wait() with no timeout on the
+    # way out, so a caught TimeoutExpired would just trade a bounded hang
+    # for an unbounded one while unwinding -- never actually reaching the
+    # except block below in any reasonable time.
+    recover_proc: subprocess.Popen | None = None
+    apply_proc: subprocess.Popen | None = None
     try:
-        with subprocess.Popen(
+        recover_proc = subprocess.Popen(
             ["sqlite3", str(corrupted_path), ".recover"],
             stdout=subprocess.PIPE,
-        ) as recover_proc, subprocess.Popen(
+        )
+        apply_proc = subprocess.Popen(
             ["sqlite3", str(temp_recovered)],
             stdin=recover_proc.stdout,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-        ) as apply_proc:
-            # Close the parent's copy of the read end now that apply_proc has
-            # its own: otherwise, if apply_proc exits early, recover_proc has
-            # no way to see a SIGPIPE (the parent is still "a reader") and can
-            # block writing to a pipe nothing is draining anymore.
-            recover_proc.stdout.close()  # type: ignore[union-attr]
-            recover_returncode = recover_proc.wait(timeout=300)
-            apply_returncode = apply_proc.wait(timeout=300)
+        )
+        # Close the parent's copy of the read end now that apply_proc has
+        # its own: otherwise, if apply_proc exits early, recover_proc has
+        # no way to see a SIGPIPE (the parent is still "a reader") and can
+        # block writing to a pipe nothing is draining anymore.
+        recover_proc.stdout.close()  # type: ignore[union-attr]
+        recover_returncode = recover_proc.wait(timeout=300)
+        apply_returncode = apply_proc.wait(timeout=300)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         logger.info("sqlite3 CLI .recover unavailable (%s); falling back to direct salvage.", exc)
+        # A caught TimeoutExpired means a process is still running: kill it
+        # explicitly (a bounded wait afterward, not the unbounded one a bare
+        # .wait() would be) so this doesn't leave an orphaned sqlite3
+        # process behind.
+        for proc in (recover_proc, apply_proc):
+            if proc is None or proc.poll() is not None:
+                continue
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         return False
     if recover_returncode != 0 or apply_returncode != 0:
         logger.info("sqlite3 CLI .recover produced no usable output; falling back.")

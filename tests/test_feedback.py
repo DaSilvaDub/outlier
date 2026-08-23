@@ -1697,3 +1697,32 @@ def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
     assert stats.settlements == 0
     assert stats.skipped_rows == 3
     assert output_path.exists()
+
+
+def test_run_sqlite_cli_recover_kills_hung_processes_on_timeout(tmp_path, monkeypatch):
+    """A caught TimeoutExpired has to actually kill the still-running
+    process(es), not just fall through to `with Popen(...) as p:`'s own
+    __exit__ -- that calls p.wait() with no timeout, trading a bounded
+    300s hang for an unbounded one instead of ever returning."""
+
+    import subprocess
+    from unittest.mock import MagicMock
+
+    recover_mock = MagicMock()
+    recover_mock.stdout = MagicMock()
+    recover_mock.wait.side_effect = subprocess.TimeoutExpired(cmd="sqlite3", timeout=300)
+    recover_mock.poll.return_value = None  # still running
+
+    apply_mock = MagicMock()
+    apply_mock.poll.return_value = None  # still running
+
+    queue = [recover_mock, apply_mock]
+    monkeypatch.setattr(feedback.subprocess, "Popen", lambda *a, **k: queue.pop(0))
+
+    result = feedback._run_sqlite_cli_recover(
+        tmp_path / "corrupted.db", tmp_path / "temp.db"
+    )
+
+    assert result is False
+    recover_mock.kill.assert_called_once()
+    apply_mock.kill.assert_called_once()
