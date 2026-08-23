@@ -1,6 +1,7 @@
 import csv
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -1182,3 +1183,546 @@ def test_model_performance_inverts_negative_recommendation_pnl():
 
     assert performance[0]["recommendation_accuracy"] == pytest.approx(1.0)
     assert performance[0]["would_have_flat_pnl"] == pytest.approx(1.25)
+
+
+def _seed_settled_row(
+    db_path: Path,
+    *,
+    suffix: str,
+    play: bool,
+    board: str,
+    settled_days_ago: int,
+    closing_matches_take: bool,
+) -> None:
+    """Seed one snapshot + decision + settlement for retention/CLV tests."""
+
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        captured_at = (
+            datetime.now(timezone.utc) - timedelta(days=settled_days_ago + 1)
+        ).isoformat()
+        settled_at = (datetime.now(timezone.utc) - timedelta(days=settled_days_ago)).isoformat()
+        conn.execute(
+            """
+            INSERT INTO market_snapshots (
+                snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                selection, line, price, book, decimal_price, board, market_type,
+                event_starts_at, signal_flags, hit_rate_component, pack_path,
+                cap_reasons, created_at
+            ) VALUES (?, ?, 'WNBA', ?, ?, ?, ?, ?, -110, 'Book', 1.909, ?, 'PLAYER_PROP',
+                      ?, 'hit_rate_support', 65.0, '/packs/2026-01-01', 'none', ?)
+            """,
+            (
+                f"snapshot-{suffix}",
+                captured_at,
+                f"event-{suffix}",
+                f"market-{suffix}",
+                f"outcome-{suffix}",
+                f"Player Points OVER {suffix}",
+                "10.5",
+                board,
+                captured_at,
+                captured_at,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions (
+                decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"decision-{suffix}",
+                f"snapshot-{suffix}",
+                "PLAY" if play else "STAND_DOWN",
+                "PLAY" if play else "",
+                1.0 if play else 0.0,
+                captured_at,
+                captured_at,
+            ),
+        )
+        closing_line = "10.5" if closing_matches_take else "11.5"
+        closing_price = -110 if closing_matches_take else -120
+        conn.execute(
+            """
+            INSERT INTO settlements (
+                settlement_id, decision_id, snapshot_id, outcome_id, event_id, market_id,
+                actual_result, win_loss_push, closing_line, closing_price, clv_line,
+                clv_price, pnl, would_have_result, settled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '12', 'W', ?, ?, 0.0, 0.0, 0.0, 'W', ?)
+            """,
+            (
+                f"settlement-{suffix}",
+                f"decision-{suffix}",
+                f"snapshot-{suffix}",
+                f"outcome-{suffix}",
+                f"event-{suffix}",
+                f"market-{suffix}",
+                closing_line,
+                closing_price,
+                settled_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_find_distinct_closing_snapshot_excludes_the_taken_snapshot(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('taken', '2026-08-07T20:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '10.5', -110, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T20:00:00+00:00')
+        """
+    )
+
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T20:00:00+00:00",
+    )
+    assert (line, price) == (None, None)
+
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('close', '2026-08-07T23:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '11.5', -120, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T23:00:00+00:00')
+        """
+    )
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T20:00:00+00:00",
+    )
+    assert (line, price) == ("11.5", -120)
+    conn.close()
+
+
+def test_find_distinct_closing_snapshot_ignores_older_history(tmp_path):
+    """A latest-captured taken snapshot with only *older* history available
+    must not have that stale, pre-take quote returned as its "close" --
+    excluding the taken snapshot's own id is not enough on its own; the
+    replacement has to be genuinely later too, or CLV gets fabricated from
+    a quote that predates the bet."""
+
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('older', '2026-08-07T20:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '9.5', -105, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T20:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('taken', '2026-08-07T22:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '10.5', -110, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T22:00:00+00:00')
+        """
+    )
+
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+        after_captured_at="2026-08-07T22:00:00+00:00",
+    )
+    assert (line, price) == (None, None)
+    conn.close()
+
+
+def test_closing_line_from_movement_export_requires_export_at_or_after_start(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as outlier_paths
+
+    monkeypatch.setattr(outlier_paths, "DATA_DIR", tmp_path / "data")
+    league_paths = outlier_paths.league_paths("WNBA").ensure()
+    export_path = league_paths.normalized / "wnba_line_movement_latest.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-08-07T22:00:00+00:00",
+                "records": [
+                    {
+                        "event_id": "e1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "side": "OVER",
+                        "current_line": 11.5,
+                        "current_odds": -120,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        # Export generated before the event starts: not a genuine close.
+        line, price = feedback.closing_line_from_movement_export(
+            sport="WNBA",
+            event_id="e1",
+            market_id="m1",
+            outcome_id="o1",
+            selection="Player Points OVER 10.5",
+            event_starts_at="2026-08-07T23:30:00+00:00",
+        )
+        assert (line, price) == (None, None)
+
+        # Export generated after the event starts: usable as the close.
+        line, price = feedback.closing_line_from_movement_export(
+            sport="WNBA",
+            event_id="e1",
+            market_id="m1",
+            outcome_id="o1",
+            selection="Player Points OVER 10.5",
+            event_starts_at="2026-08-07T21:00:00+00:00",
+        )
+        assert (line, price) == (11.5, -120)
+    finally:
+        export_path.unlink(missing_ok=True)
+
+
+def test_recompute_settlement_clv_clears_the_self_matched_bug(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path,
+        suffix="bogus",
+        play=True,
+        board="A",
+        settled_days_ago=1,
+        closing_matches_take=True,
+    )
+
+    summary = feedback.recompute_settlement_clv(db_path)
+    assert summary["inspected"] == 1
+    assert summary["cleared"] == 1
+    assert summary["corrected"] == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT closing_line, closing_price, clv_line, clv_price FROM settlements"
+    ).fetchone()
+    conn.close()
+    assert row == (None, None, None, None)
+
+
+def test_recompute_settlement_clv_leaves_genuine_closes_alone(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path,
+        suffix="real",
+        play=True,
+        board="A",
+        settled_days_ago=1,
+        closing_matches_take=False,
+    )
+
+    summary = feedback.recompute_settlement_clv(db_path)
+    assert summary["inspected"] == 1
+    assert summary["unchanged"] == 1
+    assert summary["corrected"] == 0
+    assert summary["cleared"] == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT closing_line, closing_price FROM settlements").fetchone()
+    conn.close()
+    assert row == ("11.5", -120)
+
+
+def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path, suffix="played", play=True, board="A", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="flagged", play=False, board="A_FLAGGED", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="recent", play=False, board="B", settled_days_ago=1,
+        closing_matches_take=False,
+    )
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90)
+    assert stats.eligible == 1
+    assert stats.slimmed == 1
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {
+        row["snapshot_id"]: row
+        for row in conn.execute(
+            "SELECT snapshot_id, line, price, hit_rate_component, signal_flags, "
+            "pack_path, cap_reasons FROM market_snapshots"
+        )
+    }
+    conn.close()
+
+    # Identity/result-relevant and calibration-training fields all survive
+    # slimming on the eligible row -- fit_blend_weights(),
+    # fit_stake_calibration_from_db(), and generate_report() read
+    # hit_rate_component/signal_flags via the same shared settled-row query,
+    # so retention must never clear them.
+    assert rows["snapshot-stale"]["line"] == "10.5"
+    assert rows["snapshot-stale"]["price"] == -110
+    assert rows["snapshot-stale"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-stale"]["signal_flags"] == "hit_rate_support"
+    # ...but the disposable portfolio-sizing/pack-provenance columns, which
+    # none of those consumers read, are cleared.
+    assert rows["snapshot-stale"]["pack_path"] is None
+    assert rows["snapshot-stale"]["cap_reasons"] is None
+
+    # Played, flagged, and recent rows are untouched.
+    assert rows["snapshot-played"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-flagged"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-recent"]["hit_rate_component"] == 65.0
+
+
+def test_apply_retention_policy_dry_run_reports_without_changing_anything(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90, dry_run=True)
+    assert stats.eligible == 1
+    assert stats.slimmed == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT hit_rate_component FROM market_snapshots").fetchone()
+    conn.close()
+    assert row[0] == 65.0
+
+
+def test_apply_retention_policy_preserves_fitter_eligibility(tmp_path):
+    """Retention must never shrink the eligible sample fit_blend_weights()
+    and fit_stake_calibration_from_db() see: both read the same wide set of
+    probability/segment columns off market_snapshots via _joined_rows(), so
+    slimming those away as "disposable" silently destroys training data
+    that happens to look identical to a dry calibration report."""
+
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    old = "2026-01-01T20:00:00+00:00"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, market_consensus_prob,
+            independent_model_prob, final_blended_prob, push_prob,
+            data_quality_tier, event_starts_at, hours_before_game,
+            odds_range, time_before_game, market_type, decimal_price,
+            board, created_at
+        ) VALUES (
+            'snap-old', ?, 'WNBA', 'event-old', 'market-old', 'outcome-old',
+            'Player Points OVER 10.5', '10.5', -110, 'Book', 0.55, 0.60, 0.55,
+            0.0, 'CLEAN', '2026-01-01T23:30:00+00:00', 3.5, '-120_TO_-101',
+            'LT_6H', 'PLAYER_PROP', 1.909, 'B', ?
+        )
+        """,
+        (old, old),
+    )
+    conn.execute(
+        """
+        INSERT INTO decisions (
+            decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+            created_at, updated_at
+        ) VALUES ('decision-old', 'snap-old', 'STAND_DOWN', '', 0.0, ?, ?)
+        """,
+        (old, old),
+    )
+    conn.execute(
+        """
+        INSERT INTO settlements (
+            settlement_id, decision_id, snapshot_id, outcome_id, event_id, market_id,
+            actual_result, win_loss_push, closing_line, closing_price, clv_line,
+            clv_price, pnl, would_have_result, settled_at
+        ) VALUES ('settlement-old', 'decision-old', 'snap-old', 'outcome-old',
+                   'event-old', 'market-old', '12', 'W', '11.5', -120, 1.0,
+                   0.09, 0.0, 'W', ?)
+        """,
+        (old,),
+    )
+    conn.commit()
+    conn.close()
+
+    def eligible_samples() -> tuple[int, int]:
+        blend = feedback.fit_blend_weights(
+            db_path, tmp_path / "blend.json", min_samples=1
+        )
+        stake = feedback.fit_stake_calibration_from_db(
+            db_path, tmp_path / "stake.json", min_samples=1
+        )
+        return blend["eligible_samples"], stake["eligible_samples"]
+
+    before = eligible_samples()
+    assert before == (1, 1)
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90)
+    assert stats.slimmed == 1
+
+    after = eligible_samples()
+    assert after == before, (
+        "retention must not shrink fitter-eligible sample counts: "
+        f"before={before}, after={after}"
+    )
+
+
+def test_recover_corrupted_database_salvages_readable_rows(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, source_db)
+
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    corrupted_path.write_bytes(source_db.read_bytes())
+    # WAL-mode commits aren't necessarily checkpointed into the main file yet
+    # (sqlite3's default connection close doesn't force one); the -wal/-shm
+    # companions have to travel with it, exactly as the recover docstring and
+    # docs/feedback-loop.md instruct.
+    for suffix in ("-wal", "-shm"):
+        companion = source_db.with_name(source_db.name + suffix)
+        if companion.exists():
+            corrupted_path.with_name(corrupted_path.name + suffix).write_bytes(
+                companion.read_bytes()
+            )
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(corrupted_path, output_path)
+
+    assert stats.market_snapshots == 1
+    assert stats.decisions == 1
+    assert output_path.exists()
+
+    conn = sqlite3.connect(output_path)
+    counts = {
+        table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in ("market_snapshots", "decisions", "settlements")
+    }
+    conn.close()
+    assert counts["market_snapshots"] == 1
+    assert counts["decisions"] == 1
+
+
+def test_recover_corrupted_database_refuses_to_overwrite_output(tmp_path):
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    feedback.initialize_database(corrupted_path)
+    output_path = tmp_path / "existing.sqlite3"
+    feedback.initialize_database(output_path)
+
+    with pytest.raises(feedback.FeedbackError):
+        feedback.recover_corrupted_database(corrupted_path, output_path)
+
+
+def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
+    """Corruption in sqlite_master itself (not just a data page) must not
+    crash the whole recovery -- _open_for_salvage's own sanity check
+    (`SELECT 1`) never touches sqlite_master, so it can succeed even when
+    the schema page is the damaged one; the schema/PRAGMA queries inside
+    _salvage_rows_directly are where that has to be caught instead."""
+
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(source_db)
+    conn = sqlite3.connect(source_db)
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('s1', '2026-01-01T00:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'sel', '1', '1', 'B', '2026-01-01T01:00:00+00:00',
+                  '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+    conn.close()
+
+    data = bytearray(source_db.read_bytes())
+    # Corrupt the sqlite_master b-tree page itself (right after the 100-byte
+    # file header) -- this reliably reproduces "database disk image is
+    # malformed" on the schema-discovery queries, not just on row iteration.
+    for i in range(100, 300):
+        data[i] = 0xFF
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    corrupted_path.write_bytes(bytes(data))
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(corrupted_path, output_path)
+
+    assert stats.market_snapshots == 0
+    assert stats.decisions == 0
+    assert stats.settlements == 0
+    assert stats.skipped_rows == 3
+    assert output_path.exists()
+
+
+def test_run_sqlite_cli_recover_kills_hung_processes_on_timeout(tmp_path, monkeypatch):
+    """A caught TimeoutExpired has to actually kill the still-running
+    process(es), not just fall through to `with Popen(...) as p:`'s own
+    __exit__ -- that calls p.wait() with no timeout, trading a bounded
+    300s hang for an unbounded one instead of ever returning."""
+
+    import subprocess
+    from unittest.mock import MagicMock
+
+    recover_mock = MagicMock()
+    recover_mock.stdout = MagicMock()
+    recover_mock.wait.side_effect = subprocess.TimeoutExpired(cmd="sqlite3", timeout=300)
+    recover_mock.poll.return_value = None  # still running
+
+    apply_mock = MagicMock()
+    apply_mock.poll.return_value = None  # still running
+
+    queue = [recover_mock, apply_mock]
+    monkeypatch.setattr(feedback.subprocess, "Popen", lambda *a, **k: queue.pop(0))
+
+    result = feedback._run_sqlite_cli_recover(
+        tmp_path / "corrupted.db", tmp_path / "temp.db"
+    )
+
+    assert result is False
+    recover_mock.kill.assert_called_once()
+    apply_mock.kill.assert_called_once()

@@ -113,7 +113,46 @@ def test_collects_final_game_and_player_results_with_strict_matching(tmp_path):
     assert by_market["market-total"]["win_loss_push"] == "W"
     assert by_market["market-player"]["actual_result"] == "20"
     assert by_market["market-player"]["win_loss_push"] == "W"
-    assert by_market["market-player"]["closing_price"] == -110
+    # Only one snapshot was ever captured for this outcome, so there is no
+    # genuine close distinct from the take: reporting -110 here would be the
+    # historical zero-CLV bug (the take silently standing in as its own
+    # close). No line-movement export exists in this test, so it stays
+    # unknown rather than a manufactured number.
+    assert by_market["market-player"]["closing_price"] is None
+    assert by_market["market-total"]["closing_price"] is None
+
+
+def test_distinct_second_snapshot_is_used_as_the_close(tmp_path):
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    with feedback.open_database(db) as conn:
+        _seed(conn, "player", "Allisha Gray - Points OVER 18.5", "PLAYER_PROP", "18.5")
+        # A later, distinct capture of the same outcome/book closer to game
+        # time is a genuine close and should be preferred over "unknown".
+        conn.execute(
+            """
+            INSERT INTO market_snapshots (
+                snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                selection, line, price, book, market_type, event_starts_at, created_at
+            ) VALUES (
+                'snapshot-player-close', '2026-08-07T23:00:00+00:00', 'WNBA',
+                'outlier-event', 'market-player', 'outcome-player',
+                'Allisha Gray - Points OVER 18.5', '19.5', -120, 'Book',
+                'PLAYER_PROP', '2026-08-07T23:30:00+00:00', '2026-08-07T23:00:00+00:00'
+            )
+            """
+        )
+
+        def fake_fetch(url: str) -> dict:
+            return _summary() if "/summary?" in url else _scoreboard()
+
+        rows, _summary_stats = results.collect_settlement_rows(
+            conn, ["WNBA"], lookback_days=3, now=NOW, fetch_json=fake_fetch
+        )
+
+    row = rows[0]
+    assert row["closing_line"] == "19.5"
+    assert row["closing_price"] == -120
 
 
 def test_nonfinal_events_are_never_graded(tmp_path):

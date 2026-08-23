@@ -18,14 +18,15 @@ import json
 import logging
 import math
 import sqlite3
+import subprocess
 from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import drawdown, probability_blend, stake_calibration
+from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
@@ -383,8 +384,38 @@ class ImportStats:
     unlinked: int = 0
 
 
+@dataclass(frozen=True)
+class RecoverStats:
+    market_snapshots: int
+    decisions: int
+    settlements: int
+    skipped_rows: int
+    used_sqlite_cli: bool
+
+
+@dataclass(frozen=True)
+class RetentionStats:
+    eligible: int
+    slimmed: int
+    bytes_before: int
+    bytes_after: int
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:
@@ -860,6 +891,281 @@ def open_database(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Open an initialized connection for a caller-managed transaction."""
 
     return _connect(Path(db_path))
+
+
+_RECOVERY_TABLE_ORDER = ("market_snapshots", "decisions", "settlements")
+_RECOVERY_TABLE_FIELDS = {
+    "market_snapshots": [*MARKET_SNAPSHOT_FIELDS, "created_at"],
+    "decisions": [*DECISION_FIELDS, "created_at", "updated_at"],
+    "settlements": [*SETTLEMENT_FIELDS, "settled_at"],
+}
+
+
+def _run_sqlite_cli_recover(corrupted_path: Path, temp_recovered: Path) -> bool:
+    """Best-effort ``.recover`` via the sqlite3 CLI, when it is installed.
+
+    ``.recover`` walks every b-tree page it can still read -- including ones
+    orphaned by a damaged freelist or schema table -- and emits SQL that
+    rebuilds as much of the database as is salvageable. It recovers rows a
+    plain ``SELECT`` gives up on. It is optional: when the CLI is missing,
+    ``_salvage_rows_directly`` still recovers everything readable before the
+    first corrupted page.
+
+    For a large ledger that SQL script can be substantial, so it is piped
+    directly from the recovering ``sqlite3`` process into a second ``sqlite3``
+    process that writes ``temp_recovered``, rather than buffered as one big
+    string in this process.
+    """
+    # Managed manually rather than via `with Popen(...) as p:` on purpose:
+    # that context manager's __exit__ calls p.wait() with no timeout on the
+    # way out, so a caught TimeoutExpired would just trade a bounded hang
+    # for an unbounded one while unwinding -- never actually reaching the
+    # except block below in any reasonable time.
+    recover_proc: subprocess.Popen | None = None
+    apply_proc: subprocess.Popen | None = None
+    try:
+        recover_proc = subprocess.Popen(
+            ["sqlite3", str(corrupted_path), ".recover"],
+            stdout=subprocess.PIPE,
+        )
+        apply_proc = subprocess.Popen(
+            ["sqlite3", str(temp_recovered)],
+            stdin=recover_proc.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Close the parent's copy of the read end now that apply_proc has
+        # its own: otherwise, if apply_proc exits early, recover_proc has
+        # no way to see a SIGPIPE (the parent is still "a reader") and can
+        # block writing to a pipe nothing is draining anymore.
+        recover_proc.stdout.close()  # type: ignore[union-attr]
+        recover_returncode = recover_proc.wait(timeout=300)
+        apply_returncode = apply_proc.wait(timeout=300)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.info("sqlite3 CLI .recover unavailable (%s); falling back to direct salvage.", exc)
+        # A caught TimeoutExpired means a process is still running: kill it
+        # explicitly (a bounded wait afterward, not the unbounded one a bare
+        # .wait() would be) so this doesn't leave an orphaned sqlite3
+        # process behind.
+        for proc in (recover_proc, apply_proc):
+            if proc is None or proc.poll() is not None:
+                continue
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        return False
+    if recover_returncode != 0 or apply_returncode != 0:
+        logger.info("sqlite3 CLI .recover produced no usable output; falling back.")
+        return False
+    return True
+
+
+def _open_for_salvage(source_path: Path) -> sqlite3.Connection:
+    """Open a possibly-corrupted database, applying any pending WAL first.
+
+    A plain read-write connection lets SQLite roll a hot journal or WAL file
+    forward the normal way, so rows committed but not yet checkpointed into
+    the main file are not silently missed. Only when that fails outright
+    (the corruption reaches the header/schema itself) does this fall back to
+    an ``immutable`` read-only connection, which skips journal/WAL recovery
+    entirely and just reads whatever raw pages remain reachable.
+    """
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(source_path))
+        conn.execute("SELECT 1")
+        return conn
+    except sqlite3.Error:
+        if conn is not None:
+            conn.close()
+    # Percent-encode via as_uri() rather than raw-interpolating the path: a
+    # literal '#' or '?' in the filename would otherwise land inside the URI
+    # fragment/query instead of the path, and immutable=1 would silently not
+    # apply.
+    return sqlite3.connect(f"{Path(source_path).resolve().as_uri()}?immutable=1", uri=True)
+
+
+def _salvage_rows_directly(
+    source_path: Path, table: str, fields: list[str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Read every row sqlite3 will still hand back before hitting corruption.
+
+    ``sqlite3`` raises ``DatabaseError`` once a cursor walks into a damaged
+    page; rows already yielded up to that point are real and worth keeping,
+    so the table is read one row at a time and the scan stops there instead
+    of discarding everything already recovered.
+    """
+    if table not in _RECOVERY_TABLE_ORDER:
+        raise FeedbackError(f"Unsupported recovery table: {table!r}")
+    rows: list[dict[str, Any]] = []
+    skipped = 0
+    conn = _open_for_salvage(source_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # _open_for_salvage's own sanity check (`SELECT 1`) never touches
+        # sqlite_master, so it happily succeeds even when the schema page
+        # itself is the corrupted one -- these schema/PRAGMA queries and the
+        # initial SELECT's own execute() are where that surfaces instead,
+        # and a crash here should mean "this table isn't salvageable", not
+        # "abort the whole recovery" for every other table too.
+        try:
+            existing_tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if table not in existing_tables:
+                return rows, skipped
+            existing_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            select_fields = [field for field in fields if field in existing_columns]
+            if not select_fields:
+                return rows, skipped
+            cursor = conn.execute(f"SELECT {', '.join(select_fields)} FROM {table}")
+        except sqlite3.Error as exc:
+            logger.warning("Could not scan %s (schema/page corruption): %s", table, exc)
+            skipped += 1
+            return rows, skipped
+        while True:
+            try:
+                row = cursor.fetchone()
+            except sqlite3.DatabaseError:
+                skipped += 1
+                break
+            if row is None:
+                break
+            rows.append(dict(row))
+    finally:
+        conn.close()
+    return rows, skipped
+
+
+def _insert_recovered_row(
+    conn: sqlite3.Connection,
+    table: str,
+    fields: list[str],
+    row: dict[str, Any],
+    *,
+    extra: dict[str, Any],
+) -> bool:
+    if table not in _RECOVERY_TABLE_ORDER:
+        raise FeedbackError(f"Unsupported recovery table: {table!r}")
+    all_fields = [*fields, *extra]
+    values = [row.get(field) for field in fields] + list(extra.values())
+    try:
+        # A plain INSERT (not OR IGNORE) so a NOT NULL/identity violation
+        # raises and is logged/counted as skipped, instead of OR IGNORE
+        # silently dropping it while this still reports the row as inserted.
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(all_fields)}) "
+            f"VALUES ({', '.join('?' for _ in all_fields)})",
+            values,
+        )
+        return True
+    except sqlite3.IntegrityError as exc:
+        logger.warning("Skipping unrecoverable %s row: %s", table, exc)
+        return False
+
+
+def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> RecoverStats:
+    """Salvage a corrupted ledger into a fresh, schema-current database.
+
+    Tries the sqlite3 CLI's ``.recover`` first (it survives page-level
+    corruption a plain query does not); either way, every row that can still
+    be read is copied into a brand-new database created by
+    :func:`initialize_database`, so the result carries the current schema and
+    indexes rather than whatever partial state the source file was in.
+    Rows that fail their NOT NULL/identity constraints on the way in are
+    logged and skipped rather than aborting the whole recovery.
+
+    If ``corrupted_path`` was copied from a live WAL-mode database, bring its
+    ``-wal`` (and ``-shm``) companion files along next to it under the same
+    stem: recovery opens the file with a normal connection first specifically
+    so any not-yet-checkpointed commits sitting in the WAL are applied before
+    reading, and without those companions that data is invisible here, not
+    merely slow to reach.
+    """
+    corrupted_path = Path(corrupted_path)
+    output_path = Path(output_path)
+    if not corrupted_path.exists():
+        raise FeedbackError(f"Corrupted database does not exist: {corrupted_path}")
+    if output_path.exists():
+        raise FeedbackError(
+            f"Refusing to overwrite an existing database at {output_path}; "
+            "recover into a fresh path"
+        )
+
+    candidate_temp = corrupted_path.with_name(f"{corrupted_path.name}.recovered.tmp")
+    candidate_temp.unlink(missing_ok=True)
+    used_sqlite_cli = _run_sqlite_cli_recover(corrupted_path, candidate_temp)
+    source_path = candidate_temp if used_sqlite_cli else corrupted_path
+    temp_recovered: Path | None = candidate_temp if used_sqlite_cli else None
+
+    salvaged: dict[str, list[dict[str, Any]]] = {}
+    skipped_total = 0
+    try:
+        for table in _RECOVERY_TABLE_ORDER:
+            rows, skipped = _salvage_rows_directly(
+                source_path, table, _RECOVERY_TABLE_FIELDS[table]
+            )
+            salvaged[table] = rows
+            skipped_total += skipped
+    finally:
+        if temp_recovered is not None:
+            temp_recovered.unlink(missing_ok=True)
+        elif candidate_temp.exists():
+            candidate_temp.unlink(missing_ok=True)
+
+    initialize_database(output_path)
+    conn = sqlite3.connect(output_path)
+    conn.row_factory = sqlite3.Row
+    inserted = {"market_snapshots": 0, "decisions": 0, "settlements": 0}
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        now = _utc_now()
+        for row in salvaged["market_snapshots"]:
+            if _insert_recovered_row(
+                conn,
+                "market_snapshots",
+                MARKET_SNAPSHOT_FIELDS,
+                row,
+                extra={"created_at": row.get("created_at") or now},
+            ):
+                inserted["market_snapshots"] += 1
+        for row in salvaged["decisions"]:
+            if _insert_recovered_row(
+                conn,
+                "decisions",
+                DECISION_FIELDS,
+                row,
+                extra={
+                    "created_at": row.get("created_at") or now,
+                    "updated_at": row.get("updated_at") or now,
+                },
+            ):
+                inserted["decisions"] += 1
+        for row in salvaged["settlements"]:
+            if _insert_recovered_row(
+                conn,
+                "settlements",
+                SETTLEMENT_FIELDS,
+                row,
+                extra={"settled_at": row.get("settled_at") or now},
+            ):
+                inserted["settlements"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    return RecoverStats(
+        market_snapshots=inserted["market_snapshots"],
+        decisions=inserted["decisions"],
+        settlements=inserted["settlements"],
+        skipped_rows=skipped_total
+        + sum(len(salvaged[t]) for t in _RECOVERY_TABLE_ORDER)
+        - sum(inserted.values()),
+        used_sqlite_cli=used_sqlite_cli,
+    )
 
 
 def _read_csv(path: Path, required: Iterable[str] = ()) -> list[dict[str, str]]:
@@ -1483,6 +1789,223 @@ def compute_clv_price(taken_decimal: Any, closing_price: Any) -> float | None:
     if taken is None or closing_decimal is None or taken <= 1.0 or closing_decimal <= 1.0:
         return None
     return taken / closing_decimal - 1.0
+
+
+def find_distinct_closing_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    outcome_id: str,
+    market_id: str,
+    selection: str,
+    book: str,
+    exclude_snapshot_id: str,
+    after_captured_at: str,
+) -> tuple[Any, Any]:
+    """Best available *distinct, later* pre-start snapshot for CLV.
+
+    Prefers same book + outcome_id, falls back to any book on the same
+    event/outcome, then market_id + selection. ``exclude_snapshot_id`` is
+    always excluded: a single capture is not its own close, and returning it
+    as one silently manufactures zero CLV on every row that was only ever
+    captured once. Excluding the taken snapshot is not enough on its own,
+    though: without also requiring ``captured_at > after_captured_at``, an
+    outcome whose *only* other history is an *older* quote would have that
+    stale, pre-take price returned as the "close" -- fabricating CLV from a
+    snapshot that isn't a close at all, just an earlier one. A close has to
+    be a later observation, not merely a different one.
+    """
+    params_tail = (exclude_snapshot_id, after_captured_at)
+    close = conn.execute(
+        """
+        SELECT line, price FROM market_snapshots
+        WHERE event_id = ? AND outcome_id = ? AND book = ?
+          AND snapshot_id != ? AND captured_at > ?
+          AND captured_at <= event_starts_at
+        ORDER BY captured_at DESC LIMIT 1
+        """,
+        (event_id, outcome_id, book, *params_tail),
+    ).fetchone()
+    if close:
+        return close["line"], close["price"]
+
+    close = conn.execute(
+        """
+        SELECT line, price FROM market_snapshots
+        WHERE event_id = ? AND outcome_id = ?
+          AND snapshot_id != ? AND captured_at > ?
+          AND captured_at <= event_starts_at
+        ORDER BY captured_at DESC LIMIT 1
+        """,
+        (event_id, outcome_id, *params_tail),
+    ).fetchone()
+    if close:
+        return close["line"], close["price"]
+
+    if market_id and selection:
+        close = conn.execute(
+            """
+            SELECT line, price FROM market_snapshots
+            WHERE event_id = ? AND market_id = ? AND selection = ?
+              AND snapshot_id != ? AND captured_at > ?
+              AND captured_at <= event_starts_at
+            ORDER BY captured_at DESC LIMIT 1
+            """,
+            (event_id, market_id, selection, *params_tail),
+        ).fetchone()
+        if close:
+            return close["line"], close["price"]
+    return None, None
+
+
+def closing_line_from_movement_export(
+    *,
+    sport: str,
+    event_id: str,
+    market_id: str,
+    outcome_id: str,
+    selection: str,
+    event_starts_at: str,
+) -> tuple[float | None, float | None]:
+    """Best-effort closing line/price from the current line-movement export.
+
+    The line-movement feed only keeps a single ``latest`` snapshot per league
+    (no dated history), so this is only a genuine close when the export was
+    generated at or after the event started; an earlier export is just
+    another pregame quote and using it would repeat the zero-CLV bug it is
+    meant to fix.
+    """
+    if not sport or not event_id or not market_id:
+        return None, None
+    starts = _parse_utc(event_starts_at)
+    if starts is None:
+        return None, None
+    side = _selection_side({"selection": selection})
+    league_paths = paths.league_paths(sport)
+    for filename in (
+        f"{sport.lower()}_line_movement_latest.json",
+        f"{sport.lower()}_games_line_movement_latest.json",
+    ):
+        export_path = league_paths.normalized / filename
+        if not export_path.exists():
+            continue
+        try:
+            payload = json.loads(export_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        generated = _parse_utc(payload.get("generated_at"))
+        if generated is None or generated < starts:
+            continue
+        for record in payload.get("records") or []:
+            if _text(record.get("event_id")) != event_id:
+                continue
+            if _text(record.get("market_id")) != market_id:
+                continue
+            record_outcome_id = _text(record.get("outcome_id"))
+            if outcome_id and record_outcome_id:
+                if record_outcome_id != outcome_id:
+                    continue
+            elif side:
+                if _text(record.get("side")).upper() != side:
+                    continue
+            else:
+                continue
+            try:
+                line = _float(record.get("current_line"), field="current_line")
+            except FeedbackError:
+                line = None
+            try:
+                price = _float(record.get("current_odds"), field="current_odds")
+            except FeedbackError:
+                price = None
+            if line is not None or price is not None:
+                return line, price
+    return None, None
+
+
+def recompute_settlement_clv(
+    db_path: Path = DEFAULT_DB_PATH, *, dry_run: bool = False
+) -> dict[str, int]:
+    """Recompute CLV for settlements whose recorded close was actually the take.
+
+    Historically ``_latest_local_close`` picked the *taken* snapshot as its
+    own close whenever no second observation had ever been captured for that
+    outcome, so ``clv_line``/``clv_price`` read as a false, precise 0.0
+    instead of "unknown". A settlement is only touched when its stored
+    ``closing_line``/``closing_price`` exactly match the matched snapshot's
+    own ``line``/``price`` -- that match is the fingerprint the bug leaves
+    behind. Each flagged row is re-resolved against a genuinely distinct
+    local snapshot or, failing that, the line-movement export; if neither
+    yields a real close the row is cleared to unknown rather than left wrong.
+    """
+    summary = {"inspected": 0, "corrected": 0, "cleared": 0, "unchanged": 0}
+    conn = _connect(Path(db_path))
+    try:
+        rows = conn.execute(
+            """
+            SELECT t.settlement_id, t.snapshot_id, t.outcome_id,
+                   t.closing_line, t.closing_price,
+                   s.event_id, s.market_id, s.selection, s.line, s.price,
+                   s.decimal_price, s.book, s.sport, s.event_starts_at,
+                   s.captured_at
+            FROM settlements t
+            JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id
+            """
+        ).fetchall()
+        for row in rows:
+            summary["inspected"] += 1
+            bogus = (
+                _text(row["closing_line"]) != ""
+                and _text(row["closing_line"]) == _text(row["line"])
+                and row["closing_price"] == row["price"]
+            )
+            if not bogus:
+                summary["unchanged"] += 1
+                continue
+
+            new_line, new_price = find_distinct_closing_snapshot(
+                conn,
+                event_id=_text(row["event_id"]),
+                outcome_id=_text(row["outcome_id"]),
+                market_id=_text(row["market_id"]),
+                selection=_text(row["selection"]),
+                book=_text(row["book"]),
+                exclude_snapshot_id=_text(row["snapshot_id"]),
+                after_captured_at=_text(row["captured_at"]),
+            )
+            if new_line is None and new_price is None:
+                new_line, new_price = closing_line_from_movement_export(
+                    sport=_text(row["sport"]),
+                    event_id=_text(row["event_id"]),
+                    market_id=_text(row["market_id"]),
+                    outcome_id=_text(row["outcome_id"]),
+                    selection=_text(row["selection"]),
+                    event_starts_at=_text(row["event_starts_at"]),
+                )
+
+            if new_line is None and new_price is None:
+                summary["cleared"] += 1
+                closing_line, closing_price, clv_line, clv_price = None, None, None, None
+            else:
+                summary["corrected"] += 1
+                closing_line, closing_price = new_line, new_price
+                clv_line = compute_clv_line(_text(row["selection"]), row["line"], closing_line)
+                clv_price = compute_clv_price(row["decimal_price"], closing_price)
+
+            if not dry_run:
+                conn.execute(
+                    """
+                    UPDATE settlements
+                    SET closing_line = ?, closing_price = ?, clv_line = ?, clv_price = ?
+                    WHERE settlement_id = ?
+                    """,
+                    (closing_line, closing_price, clv_line, clv_price, row["settlement_id"]),
+                )
+        if not dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+    return summary
 
 
 def _is_play(final_verdict: Any, pipeline_verdict: Any, units: Any) -> bool:
@@ -2207,6 +2730,110 @@ def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_RETENTION_FULL_FIDELITY_VERDICTS = {"PLAY", "BET"}
+# Only columns _joined_rows() never selects are safe to clear: that query
+# backs fit_blend_weights(), fit_stake_calibration_from_db(), and
+# generate_report() alike, so anything it reads is live training/calibration
+# input, not disposable detail -- clearing it would silently shrink the
+# eligible sample for every fitter and report metric derived from these
+# rows, not just trim bytes. What's left is portfolio-sizing-at-capture-time
+# and pack-provenance metadata that none of them consume.
+_RETENTION_SLIMMED_COLUMNS = [
+    "projection_feature_hash",
+    "projection_quality_flags",
+    "pack_path",
+    "policy_fingerprint",
+    "portfolio_mode",
+    "pre_cap_units",
+    "portfolio_units",
+    "cap_reasons",
+]
+
+
+def apply_retention_policy(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    cutoff_days: int = 90,
+    dry_run: bool = False,
+) -> RetentionStats:
+    """Slim disposable snapshot columns for settled, never-played history.
+
+    A row keeps its portfolio-sizing-at-capture-time and pack-provenance
+    columns (``pre_cap_units``, ``portfolio_units``, ``cap_reasons``,
+    ``policy_fingerprint``, ``portfolio_mode``, ``pack_path``,
+    ``projection_feature_hash``, ``projection_quality_flags``) only if it
+    reached ``PLAY``/``BET`` or the desk flagged it (``board =
+    'A_FLAGGED'``); those columns are cleared once the row is already
+    settled and older than ``cutoff_days``. Every other column -- including
+    the probability/edge/signal-component fields ``fit_blend_weights()``,
+    ``fit_stake_calibration_from_db()``, and ``generate_report()`` all read
+    via the shared settled-row query -- is left alone regardless of age, so
+    retention never shrinks the eligible sample those consume. Unsettled,
+    recent, played, or flagged rows are never touched. Vacuums afterward to
+    actually reclaim the freed pages on disk.
+    """
+    if cutoff_days < 0:
+        # A negative value pushes the cutoff into the future, matching every
+        # settled row (including today's) instead of only old ones -- a
+        # typo'd sign here would otherwise silently slim recent history.
+        raise FeedbackError(f"cutoff_days must be non-negative, got {cutoff_days}")
+    db_path = Path(db_path)
+    bytes_before = db_path.stat().st_size if db_path.exists() else 0
+    conn = _connect(db_path)
+    slimmed = 0
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).isoformat()
+        candidates = conn.execute(
+            """
+            SELECT DISTINCT s.snapshot_id
+            FROM market_snapshots s
+            JOIN decisions d ON d.snapshot_id = s.snapshot_id
+            JOIN settlements t ON t.snapshot_id = s.snapshot_id
+            WHERE COALESCE(s.board, '') != 'A_FLAGGED'
+              AND UPPER(COALESCE(NULLIF(d.final_verdict, ''), d.pipeline_verdict, ''))
+                  NOT IN ('PLAY', 'BET')
+              AND t.settled_at < ?
+              AND s.captured_at < ?
+            """,
+            (cutoff, cutoff),
+        ).fetchall()
+        snapshot_ids = [row["snapshot_id"] for row in candidates]
+        if snapshot_ids and not dry_run:
+            clear_assignments = ", ".join(
+                f"{column} = NULL" for column in _RETENTION_SLIMMED_COLUMNS
+            )
+            for start in range(0, len(snapshot_ids), 500):
+                chunk = snapshot_ids[start : start + 500]
+                placeholders = ", ".join("?" for _ in chunk)
+                conn.execute(
+                    f"""
+                    UPDATE market_snapshots
+                    SET {clear_assignments}
+                    WHERE snapshot_id IN ({placeholders})
+                    """,
+                    chunk,
+                )
+                slimmed += len(chunk)
+        conn.commit()
+    finally:
+        conn.close()
+
+    if slimmed and not dry_run:
+        vacuum_conn = sqlite3.connect(db_path)
+        try:
+            vacuum_conn.execute("VACUUM")
+        finally:
+            vacuum_conn.close()
+
+    bytes_after = db_path.stat().st_size if db_path.exists() else bytes_before
+    return RetentionStats(
+        eligible=len(snapshot_ids),
+        slimmed=slimmed,
+        bytes_before=bytes_before,
+        bytes_after=bytes_after,
+    )
+
+
 def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
     output_dir = Path(output_dir)
     with _connect(Path(db_path)) as conn:
@@ -2617,6 +3244,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     replay_parser.add_argument("--as-of-strict", action="store_true", default=True)
 
+    recover_parser = subparsers.add_parser(
+        "recover", help="Salvage a corrupted ledger database into a fresh one."
+    )
+    recover_parser.add_argument("--corrupted", type=Path, required=True)
+    recover_parser.add_argument("--output", type=Path, required=True)
+
+    recompute_clv_parser = subparsers.add_parser(
+        "recompute-clv",
+        help="Recompute settlement CLV where the recorded close was actually the take.",
+    )
+    recompute_clv_parser.add_argument("--dry-run", action="store_true")
+
+    retention_parser = subparsers.add_parser(
+        "retention", help="Slim settled, never-played ledger rows and reclaim disk space."
+    )
+    retention_parser.add_argument("--cutoff-days", type=int, default=90)
+    retention_parser.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -2702,6 +3347,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.db, args.start_date, args.end_date, args.policy, as_of_strict=args.as_of_strict
             )
             print(json.dumps(summary, indent=2, sort_keys=True))
+        elif args.command == "recover":
+            recover_stats = recover_corrupted_database(args.corrupted, args.output)
+            print(json.dumps(recover_stats.__dict__, sort_keys=True))
+        elif args.command == "recompute-clv":
+            clv_summary = recompute_settlement_clv(args.db, dry_run=args.dry_run)
+            print(json.dumps(clv_summary, sort_keys=True))
+        elif args.command == "retention":
+            retention_stats = apply_retention_policy(
+                args.db, cutoff_days=args.cutoff_days, dry_run=args.dry_run
+            )
+            print(json.dumps(retention_stats.__dict__, sort_keys=True))
     except (FeedbackError, OSError, sqlite3.Error, ValueError) as exc:
         logger.error("Feedback tool failed: %s", exc)
         return 1

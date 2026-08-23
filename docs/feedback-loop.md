@@ -172,10 +172,71 @@ The report is useful immediately as a market-derived baseline. Learned Board B
 weights and an independent probability model should be fit only after the
 settled sample is large enough and should be validated out of sample.
 
+## Closing-line/CLV capture
+
+A close must be a genuinely distinct observation from the taken snapshot. An
+outcome that was only ever captured once has no real close: reporting the
+take as its own close manufactures a false, precise `clv_line`/`clv_price` of
+`0.0` instead of leaving it unknown. `_latest_local_close` in `results.py`
+therefore excludes the taken row's own `snapshot_id` and only accepts a
+second, later local capture (same book+outcome, then any book on the
+event/outcome, then market+selection). When no distinct local snapshot
+exists it falls back to the current `*_line_movement_latest.json` export --
+usable only when that export was generated at or after the event's start, so
+it reflects a real close and not just another pregame quote.
+
+If a settled sample was written before this fix, recompute it:
+
+```powershell
+python -m outlier_scrapers.feedback recompute-clv [--dry-run]
+```
+
+This only touches settlements whose stored `closing_line`/`closing_price`
+exactly match the matched snapshot's own `line`/`price` -- the fingerprint
+the bug leaves behind -- and re-resolves each one against a genuinely
+distinct snapshot or the line-movement export, clearing it to unknown rather
+than leaving it wrong when neither is available.
+
+## Recovering a corrupted ledger
+
+```powershell
+python -m outlier_scrapers.feedback recover --corrupted calibration\feedback.sqlite3.corrupted --output calibration\feedback.sqlite3
+```
+
+Tries the `sqlite3` CLI's `.recover` first (it survives page-level corruption
+a plain query does not); either way every row still readable is copied into a
+fresh, schema-current database. Rows that fail NOT NULL/identity constraints
+on the way in are logged and skipped rather than aborting the whole recovery.
+If the corrupted file was copied from a live WAL-mode database, copy its
+`-wal` (and `-shm`) companions alongside it under the same stem -- recovery
+opens the file normally first specifically to apply any not-yet-checkpointed
+commits sitting in the WAL, and without those companions that data is
+invisible here, not merely slow to reach. Re-run `report` against the
+recovered database afterward.
+
+## Retention and vacuum
+
+```powershell
+python -m outlier_scrapers.feedback retention --cutoff-days 90 [--dry-run]
+```
+
+A snapshot row keeps every research column at full fidelity only if it
+reached `PLAY`/`BET` or the desk flagged it (`board = 'A_FLAGGED'`) -- that is
+the data a calibration report actually needs in full. Once a row is settled,
+never played, unflagged, and older than `--cutoff-days`, its wide exploratory
+columns (signal components, projection hashes, portfolio caps, blend
+metadata, ...) are cleared to keep only identity/result-relevant fields;
+unsettled, recent, played, or flagged rows are never touched. The command
+vacuums afterward to actually reclaim the freed pages on disk. Run this
+periodically (or wire it into the daily job) instead of letting the ledger
+grow unbounded.
+
 ## Remaining provider boundary
 
-Completed results are now automatic. Closing-line data uses the last locally
-captured pregame quote, not a separately licensed official close. Feed outages,
-unsupported markets, missing box-score statistics, and ambiguous identities are
-reported and left unsettled for the existing CSV repair path. Use
-`--skip-result-collection` only for an explicit diagnostic.
+Completed results are now automatic. Closing-line data comes from a genuinely
+distinct local capture or the line-movement export at/after event start, not
+a separately licensed official close, and is left unknown rather than guessed
+when neither is available. Feed outages, unsupported markets, missing
+box-score statistics, and ambiguous identities are reported and left
+unsettled for the existing CSV repair path. Use `--skip-result-collection`
+only for an explicit diagnostic.
