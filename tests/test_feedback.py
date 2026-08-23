@@ -1,6 +1,7 @@
 import csv
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -1182,3 +1183,333 @@ def test_model_performance_inverts_negative_recommendation_pnl():
 
     assert performance[0]["recommendation_accuracy"] == pytest.approx(1.0)
     assert performance[0]["would_have_flat_pnl"] == pytest.approx(1.25)
+
+
+def _seed_settled_row(
+    db_path: Path,
+    *,
+    suffix: str,
+    play: bool,
+    board: str,
+    settled_days_ago: int,
+    closing_matches_take: bool,
+) -> None:
+    """Seed one snapshot + decision + settlement for retention/CLV tests."""
+
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        captured_at = (
+            datetime.now(timezone.utc) - timedelta(days=settled_days_ago + 1)
+        ).isoformat()
+        settled_at = (datetime.now(timezone.utc) - timedelta(days=settled_days_ago)).isoformat()
+        conn.execute(
+            """
+            INSERT INTO market_snapshots (
+                snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                selection, line, price, book, decimal_price, board, market_type,
+                event_starts_at, signal_flags, hit_rate_component, created_at
+            ) VALUES (?, ?, 'WNBA', ?, ?, ?, ?, ?, -110, 'Book', 1.909, ?, 'PLAYER_PROP',
+                      ?, 'hit_rate_support', 65.0, ?)
+            """,
+            (
+                f"snapshot-{suffix}",
+                captured_at,
+                f"event-{suffix}",
+                f"market-{suffix}",
+                f"outcome-{suffix}",
+                f"Player Points OVER {suffix}",
+                "10.5",
+                board,
+                captured_at,
+                captured_at,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO decisions (
+                decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"decision-{suffix}",
+                f"snapshot-{suffix}",
+                "PLAY" if play else "STAND_DOWN",
+                "PLAY" if play else "",
+                1.0 if play else 0.0,
+                captured_at,
+                captured_at,
+            ),
+        )
+        closing_line = "10.5" if closing_matches_take else "11.5"
+        closing_price = -110 if closing_matches_take else -120
+        conn.execute(
+            """
+            INSERT INTO settlements (
+                settlement_id, decision_id, snapshot_id, outcome_id, event_id, market_id,
+                actual_result, win_loss_push, closing_line, closing_price, clv_line,
+                clv_price, pnl, would_have_result, settled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, '12', 'W', ?, ?, 0.0, 0.0, 0.0, 'W', ?)
+            """,
+            (
+                f"settlement-{suffix}",
+                f"decision-{suffix}",
+                f"snapshot-{suffix}",
+                f"outcome-{suffix}",
+                f"event-{suffix}",
+                f"market-{suffix}",
+                closing_line,
+                closing_price,
+                settled_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_find_distinct_closing_snapshot_excludes_the_taken_snapshot(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('taken', '2026-08-07T20:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '10.5', -110, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T20:00:00+00:00')
+        """
+    )
+
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+    )
+    assert (line, price) == (None, None)
+
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('close', '2026-08-07T23:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'Player Points OVER 10.5', '11.5', -120, 'Book',
+                  '2026-08-07T23:30:00+00:00', '2026-08-07T23:00:00+00:00')
+        """
+    )
+    line, price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id="e1",
+        outcome_id="o1",
+        market_id="m1",
+        selection="Player Points OVER 10.5",
+        book="Book",
+        exclude_snapshot_id="taken",
+    )
+    assert (line, price) == ("11.5", -120)
+    conn.close()
+
+
+def test_closing_line_from_movement_export_requires_export_at_or_after_start(tmp_path, monkeypatch):
+    from outlier_scrapers import paths as outlier_paths
+
+    monkeypatch.setattr(outlier_paths, "DATA_DIR", tmp_path / "data")
+    league_paths = outlier_paths.league_paths("WNBA").ensure()
+    export_path = league_paths.normalized / "wnba_line_movement_latest.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-08-07T22:00:00+00:00",
+                "records": [
+                    {
+                        "event_id": "e1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "side": "OVER",
+                        "current_line": 11.5,
+                        "current_odds": -120,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        # Export generated before the event starts: not a genuine close.
+        line, price = feedback.closing_line_from_movement_export(
+            sport="WNBA",
+            event_id="e1",
+            market_id="m1",
+            outcome_id="o1",
+            selection="Player Points OVER 10.5",
+            event_starts_at="2026-08-07T23:30:00+00:00",
+        )
+        assert (line, price) == (None, None)
+
+        # Export generated after the event starts: usable as the close.
+        line, price = feedback.closing_line_from_movement_export(
+            sport="WNBA",
+            event_id="e1",
+            market_id="m1",
+            outcome_id="o1",
+            selection="Player Points OVER 10.5",
+            event_starts_at="2026-08-07T21:00:00+00:00",
+        )
+        assert (line, price) == (11.5, -120)
+    finally:
+        export_path.unlink(missing_ok=True)
+
+
+def test_recompute_settlement_clv_clears_the_self_matched_bug(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path,
+        suffix="bogus",
+        play=True,
+        board="A",
+        settled_days_ago=1,
+        closing_matches_take=True,
+    )
+
+    summary = feedback.recompute_settlement_clv(db_path)
+    assert summary["inspected"] == 1
+    assert summary["cleared"] == 1
+    assert summary["corrected"] == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT closing_line, closing_price, clv_line, clv_price FROM settlements"
+    ).fetchone()
+    conn.close()
+    assert row == (None, None, None, None)
+
+
+def test_recompute_settlement_clv_leaves_genuine_closes_alone(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path,
+        suffix="real",
+        play=True,
+        board="A",
+        settled_days_ago=1,
+        closing_matches_take=False,
+    )
+
+    summary = feedback.recompute_settlement_clv(db_path)
+    assert summary["inspected"] == 1
+    assert summary["unchanged"] == 1
+    assert summary["corrected"] == 0
+    assert summary["cleared"] == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT closing_line, closing_price FROM settlements").fetchone()
+    conn.close()
+    assert row == ("11.5", -120)
+
+
+def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path, suffix="played", play=True, board="A", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="flagged", play=False, board="A_FLAGGED", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+    _seed_settled_row(
+        db_path, suffix="recent", play=False, board="B", settled_days_ago=1,
+        closing_matches_take=False,
+    )
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90)
+    assert stats.eligible == 1
+    assert stats.slimmed == 1
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = {
+        row["snapshot_id"]: row
+        for row in conn.execute(
+            "SELECT snapshot_id, line, price, hit_rate_component, signal_flags "
+            "FROM market_snapshots"
+        )
+    }
+    conn.close()
+
+    # Identity/result-relevant fields survive slimming on the eligible row...
+    assert rows["snapshot-stale"]["line"] == "10.5"
+    assert rows["snapshot-stale"]["price"] == -110
+    # ...but the wide exploratory columns are cleared.
+    assert rows["snapshot-stale"]["hit_rate_component"] is None
+    assert rows["snapshot-stale"]["signal_flags"] is None
+
+    # Played, flagged, and recent rows are untouched.
+    assert rows["snapshot-played"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-flagged"]["hit_rate_component"] == 65.0
+    assert rows["snapshot-recent"]["hit_rate_component"] == 65.0
+
+
+def test_apply_retention_policy_dry_run_reports_without_changing_anything(tmp_path):
+    db_path = tmp_path / "feedback.sqlite3"
+    _seed_settled_row(
+        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        closing_matches_take=False,
+    )
+
+    stats = feedback.apply_retention_policy(db_path, cutoff_days=90, dry_run=True)
+    assert stats.eligible == 1
+    assert stats.slimmed == 0
+
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT hit_rate_component FROM market_snapshots").fetchone()
+    conn.close()
+    assert row[0] == 65.0
+
+
+def test_recover_corrupted_database_salvages_readable_rows(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, source_db)
+
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    corrupted_path.write_bytes(source_db.read_bytes())
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(corrupted_path, output_path)
+
+    assert stats.market_snapshots == 1
+    assert stats.decisions == 1
+    assert output_path.exists()
+
+    conn = sqlite3.connect(output_path)
+    counts = {
+        table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in ("market_snapshots", "decisions", "settlements")
+    }
+    conn.close()
+    assert counts["market_snapshots"] == 1
+    assert counts["decisions"] == 1
+
+
+def test_recover_corrupted_database_refuses_to_overwrite_output(tmp_path):
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    feedback.initialize_database(corrupted_path)
+    output_path = tmp_path / "existing.sqlite3"
+    feedback.initialize_database(output_path)
+
+    with pytest.raises(feedback.FeedbackError):
+        feedback.recover_corrupted_database(corrupted_path, output_path)

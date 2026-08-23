@@ -91,32 +91,37 @@ def test_wnba_minutes_features_fail_closed_and_project():
 
 
 def test_latest_local_close_falls_back_without_same_book(tmp_path: Path):
+    from outlier_scrapers import feedback
+
     db = tmp_path / "fb.sqlite3"
+    feedback.initialize_database(db)
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
+    # Only a DK snapshot was ever captured for this outcome; the row being
+    # settled was taken at FD (a snapshot_id that never made it into
+    # market_snapshots here, which is fine -- it only needs to be excluded).
     conn.execute(
         """
-        CREATE TABLE market_snapshots (
-            event_id TEXT, outcome_id TEXT, market_id TEXT, selection TEXT,
-            book TEXT, line REAL, price REAL, captured_at TEXT, event_starts_at TEXT
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES (
+            'dk-snap', '2026-08-20T18:00:00+00:00', 'MLB', 'e1', 'm1', 'o1',
+            'Player SO OVER 5.5', 5.5, -110, 'DK',
+            '2026-08-20T23:00:00+00:00', '2026-08-20T18:00:00+00:00'
         )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO market_snapshots VALUES
-        ('e1','o1','m1','Player SO OVER 5.5','DK',5.5,-110,'2026-08-20T18:00:00+00:00','2026-08-20T23:00:00+00:00')
         """
     )
     conn.commit()
     row = conn.execute(
         """
         SELECT 'e1' AS event_id, 'o1' AS outcome_id, 'm1' AS market_id,
-               'Player SO OVER 5.5' AS selection, 'FD' AS book
+               'Player SO OVER 5.5' AS selection, 'FD' AS book,
+               'taken-snap' AS snapshot_id
         """
     ).fetchone()
     line, price = _latest_local_close(conn, row)
-    assert line == 5.5
+    assert line == "5.5"
     assert price == -110
     conn.close()
 

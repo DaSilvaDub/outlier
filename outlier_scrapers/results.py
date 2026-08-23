@@ -560,53 +560,42 @@ def _pending_rows(
 
 
 def _latest_local_close(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[Any, Any]:
-    """Best available pre-start snapshot for CLV.
+    """Best available *distinct* pre-start snapshot for CLV, with a fallback.
 
-    Prefer same book + outcome_id. Fall back to any book on the same
-    event/outcome, then market_id+selection when outcome_id joins miss.
+    A close must be a genuinely separate observation from the taken snapshot
+    -- see ``feedback.find_distinct_closing_snapshot`` for why: without that
+    exclusion, an outcome captured only once reports itself as its own
+    close, manufacturing a false 0.0 CLV. When no second local capture
+    exists, fall back to the current line-movement export (only usable when
+    it was generated at/after the event's start, so it is a real close and
+    not just another pregame quote).
     """
-    event_id = row["event_id"]
-    outcome_id = row["outcome_id"]
-    book = row["book"]
-    close = conn.execute(
-        """
-        SELECT line, price FROM market_snapshots
-        WHERE event_id = ? AND outcome_id = ? AND book = ?
-          AND captured_at <= event_starts_at
-        ORDER BY captured_at DESC LIMIT 1
-        """,
-        (event_id, outcome_id, book),
-    ).fetchone()
-    if close:
-        return close["line"], close["price"]
+    row_keys = row.keys()
+    market_id = row["market_id"] if "market_id" in row_keys else ""
+    selection = row["selection"] if "selection" in row_keys else ""
+    snapshot_id = row["snapshot_id"] if "snapshot_id" in row_keys else ""
+    closing_line, closing_price = feedback.find_distinct_closing_snapshot(
+        conn,
+        event_id=str(row["event_id"] or ""),
+        outcome_id=str(row["outcome_id"] or ""),
+        market_id=str(market_id or ""),
+        selection=str(selection or ""),
+        book=str(row["book"] or ""),
+        exclude_snapshot_id=str(snapshot_id or ""),
+    )
+    if closing_line is not None or closing_price is not None:
+        return closing_line, closing_price
 
-    close = conn.execute(
-        """
-        SELECT line, price FROM market_snapshots
-        WHERE event_id = ? AND outcome_id = ?
-          AND captured_at <= event_starts_at
-        ORDER BY captured_at DESC LIMIT 1
-        """,
-        (event_id, outcome_id),
-    ).fetchone()
-    if close:
-        return close["line"], close["price"]
-
-    market_id = row["market_id"] if "market_id" in row.keys() else None
-    selection = row["selection"] if "selection" in row.keys() else None
-    if market_id and selection:
-        close = conn.execute(
-            """
-            SELECT line, price FROM market_snapshots
-            WHERE event_id = ? AND market_id = ? AND selection = ?
-              AND captured_at <= event_starts_at
-            ORDER BY captured_at DESC LIMIT 1
-            """,
-            (event_id, market_id, selection),
-        ).fetchone()
-        if close:
-            return close["line"], close["price"]
-    return None, None
+    sport = row["sport"] if "sport" in row_keys else ""
+    event_starts_at = row["event_starts_at"] if "event_starts_at" in row_keys else ""
+    return feedback.closing_line_from_movement_export(
+        sport=str(sport or ""),
+        event_id=str(row["event_id"] or ""),
+        market_id=str(market_id or ""),
+        outcome_id=str(row["outcome_id"] or ""),
+        selection=str(selection or ""),
+        event_starts_at=str(event_starts_at or ""),
+    )
 
 
 def collect_settlement_rows(
