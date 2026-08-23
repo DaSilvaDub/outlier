@@ -960,7 +960,11 @@ def _open_for_salvage(source_path: Path) -> sqlite3.Connection:
     except sqlite3.Error:
         if conn is not None:
             conn.close()
-    return sqlite3.connect(f"file:{source_path}?immutable=1", uri=True)
+    # Percent-encode via as_uri() rather than raw-interpolating the path: a
+    # literal '#' or '?' in the filename would otherwise land inside the URI
+    # fragment/query instead of the path, and immutable=1 would silently not
+    # apply.
+    return sqlite3.connect(f"{Path(source_path).resolve().as_uri()}?immutable=1", uri=True)
 
 
 def _salvage_rows_directly(
@@ -2729,6 +2733,11 @@ def apply_retention_policy(
     fields; unsettled, recent, played, or flagged rows are never touched.
     Vacuums afterward to actually reclaim the freed pages on disk.
     """
+    if cutoff_days < 0:
+        # A negative value pushes the cutoff into the future, matching every
+        # settled row (including today's) instead of only old ones -- a
+        # typo'd sign here would otherwise silently slim recent history.
+        raise FeedbackError(f"cutoff_days must be non-negative, got {cutoff_days}")
     db_path = Path(db_path)
     bytes_before = db_path.stat().st_size if db_path.exists() else 0
     conn = _connect(db_path)
