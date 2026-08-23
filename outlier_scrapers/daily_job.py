@@ -114,6 +114,7 @@ def run_explicit_refresh(leagues: list[str], target_date: str | None = None) -> 
             ("--insights", "insights"),
             ("--games", "games"),
             ("--probable-pitchers", "probable pitchers"),
+            ("--projections", "independent projections"),
             ("--line-movement", "props line-movement"),
             ("--game-line-movement", "game line-movement"),
             ("--cards", "cards"),
