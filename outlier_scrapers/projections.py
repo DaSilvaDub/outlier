@@ -453,7 +453,7 @@ def fetch_pitcher_pitching_game_logs(
     splits = stats[0].get("splits") if isinstance(stats[0], Mapping) else None
     if not isinstance(splits, list):
         return []
-    return [split for split in splits if isinstance(split, Mapping)]
+    return [dict(split) for split in splits if isinstance(split, Mapping)]
 
 
 def fetch_team_batter_k_rate(

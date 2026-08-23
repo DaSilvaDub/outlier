@@ -7,7 +7,7 @@ from outlier_scrapers.alt_bankroll_props import (
     build_alt_bankroll_board,
     build_alt_bankroll_parlays,
 )
-from outlier_scrapers.pack import write_pack
+from outlier_scrapers.pack import CANDIDATES_HEADER, write_pack
 
 
 def _game(
@@ -220,6 +220,7 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         "market_id": "pm1",
         "outcome_id": "po1",
         "player": "Player One",
+        "player_id": "player-one",
         "team": "HOME",
         "matchup": "AWAY @ HOME",
         "market": "SO",
@@ -235,10 +236,28 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
             "outcome_id": "po1",
         },
     }
+    candidate = {field: "" for field in CANDIDATES_HEADER}
+    candidate.update(
+        {
+            "sport": "MLB",
+            "event_id": "e1",
+            "market_id": "pm1",
+            "outcome_id": "po1",
+            "market_type": "PLAYER_PROP",
+            "player_id": "player-one",
+            "selection": "Player One SO OVER 0.5",
+            "edge_pct": 0.05,
+            "price": -110,
+            "decimal_price": 1.9091,
+            "book": "Hard Rock",
+            "actionable": "false",
+            "board": "B",
+        }
+    )
     out_dir = tmp_path / "staging-name-does-not-contain-date"
 
     write_pack(
-        [],
+        [candidate],
         out_dir,
         games_norm_by_league={"MLB": games},
         props_norm_by_league={"MLB": {"records": [player]}},
@@ -251,6 +270,10 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         player_rows = list(csv.DictReader(handle))
     assert [row["event_id"] for row in bankroll_rows] == ["e1"]
     assert [row["player"] for row in player_rows] == ["Player One"]
+    for row in [*bankroll_rows, *player_rows]:
+        assert row["model_prob"] == ""
+        assert row["edge_pct"] == ""
+        assert row["recommended_units"] == ""
     assert (out_dir / "mlb_alt_bankroll_parlays.csv").exists()
 
 

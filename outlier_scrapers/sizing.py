@@ -135,39 +135,3 @@ def compute_historical_edge(
     if push < 0.0 or p_lose < 0.0:
         return None
     return p_win * (decimal_price - 1.0) - p_lose
-
-
-from typing import Any
-def apply_alt_sizing(row: dict[str, Any]) -> None:
-    from .pack import _to_float, american_to_decimal
-    """Add model_prob, edge_pct, and recommended_units to an alt row."""
-    from .pack import _to_float
-    # Try to find the best available hit rate.
-    pct = _to_float(row.get('l10_pct'))
-    if pct is None:
-        pct = _to_float(row.get('season_pct'))
-    if pct is None:
-        pct = _to_float(row.get('l5_pct'))
-
-    if pct is not None:
-        model_prob = pct / 100.0
-    else:
-        model_prob = None
-
-    row['model_prob'] = model_prob
-    dec_price = _to_float(row.get('decimal_price'))
-    if dec_price is None:
-        dec_price = american_to_decimal(row.get('best_odds'))
-        if dec_price is None:
-            dec_price = american_to_decimal(row.get('best_price'))
-
-    if dec_price is not None and model_prob is not None:
-        sizing = compute_sizing(dec_price, model_prob)
-        row['edge_pct'] = sizing.edge_pct
-        row['recommended_units'] = sizing.recommended_units_pre_news
-    else:
-        row['edge_pct'] = None
-        row['recommended_units'] = None
-
-
-

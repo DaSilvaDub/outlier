@@ -273,7 +273,10 @@ def build_ultimate_alt_board(
                 "confidence_score": round(confidence, 3),
                 "shadow_status": "QUALIFIED" if qualified else "REJECTED",
                 "rejection_reasons": ";".join(dict.fromkeys(reasons)),
-                "recommended_units_pre_news": SHADOW_UNITS if qualified else "",
+                # Shadow rows are never actionable. Keep the executable stake
+                # field blank and let the portfolio pass publish only to the
+                # dedicated shadow field.
+                "recommended_units_pre_news": "",
                 "portfolio_shadow_units": "",
                 "actionable": "false",
                 "board": "ALT_SHADOW_QUALIFIED" if qualified else "ALT_SHADOW_REJECTED",
