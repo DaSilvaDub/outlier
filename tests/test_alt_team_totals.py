@@ -367,6 +367,9 @@ def test_write_pack_scopes_alt_board_to_pack_date(tmp_path):
     with open(out_dir / "alt_team_totals.csv", newline="", encoding="utf-8") as fh:
         board = list(csv.DictReader(fh))
     assert [r["team"] for r in board] == ["Aces"]
+    assert board[0]["model_prob"] == ""
+    assert board[0]["edge_pct"] == ""
+    assert board[0]["recommended_units"] == ""
     with open(out_dir / "alt_team_total_parlays.csv", newline="", encoding="utf-8") as fh:
         assert list(csv.DictReader(fh)) == []
 

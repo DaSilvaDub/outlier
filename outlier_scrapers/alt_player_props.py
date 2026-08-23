@@ -238,9 +238,6 @@ def build_alt_player_props_board(
             selected.append(clean)
             if len(seen) >= 4:
                 break
-    from .sizing import apply_alt_sizing
-    for row in selected:
-        apply_alt_sizing(row)
     return selected
 
 

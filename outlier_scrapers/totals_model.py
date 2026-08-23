@@ -187,7 +187,7 @@ def backfill_totals_probabilities(
             continue
 
         l10_over = entry.get("l10_over")
-        used_l10 = bool(isinstance(l10_over, dict) and l10_over.get("pct") is not None)
+        l10_pct = _to_float(l10_over.get("pct")) if isinstance(l10_over, dict) else None
         p_side_market = p_over if side == "OVER" else 1.0 - p_over
 
         push_prob = _to_float(row.get("push_prob"))
@@ -208,8 +208,8 @@ def backfill_totals_probabilities(
         row["final_blended_prob"] = model_prob
         row["model_prob_source"] = SOURCE_DEVIG
         extra_flags = [FLAG_MODEL]
-        if used_l10:
-            l10_side = l10_over["pct"] if side == "OVER" else 1.0 - l10_over["pct"]
+        if l10_pct is not None:
+            l10_side = l10_pct if side == "OVER" else 1.0 - l10_pct
             row["recency_hit_prob"] = l10_side * no_push_factor
             row["independent_model_prob"] = ""
             if abs(p_side_market - l10_side) >= TOTALS_MODEL_DIVERGENCE_THRESHOLD:

@@ -106,6 +106,7 @@ def test_board_ranks_qualified_markets_on_one_price_adjusted_surface():
     }
     assert all(row["actionable"] == "false" for row in board)
     assert all(row["board"].startswith("ALT_SHADOW_") for row in board)
+    assert all(row["recommended_units_pre_news"] == "" for row in board)
 
 
 def test_parlays_require_cross_event_and_multiple_alt_types():
