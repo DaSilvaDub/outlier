@@ -180,6 +180,50 @@ def _raw_schedule_with_status(*, abstract_game_state: str) -> dict:
     return payload
 
 
+def test_slate_is_complete_treats_empty_schedule_as_not_complete():
+    """A day with zero scheduled games (off day) must not look "complete".
+
+    Matches games._today_slate_is_complete, which also returns False when
+    there are no events for the date — otherwise an unpinned run on an off
+    day would auto-advance past a real off day instead of just showing an
+    empty board for it.
+    """
+    from outlier_scrapers.probable_pitchers import _slate_is_complete
+
+    assert _slate_is_complete({"dates": []}) is False
+    assert _slate_is_complete({"dates": [{"date": "2026-08-04", "games": []}]}) is False
+
+
+def test_slate_is_complete_accepts_detailed_state_fallback_tokens():
+    """GAMEOVER/COMPLETEDEARLY (detailedState) must count as final too.
+
+    Mirrors results._mlb_events, which checks the same MLB Stats API payload
+    shape against abstractGameState falling back to detailedState.
+    """
+    from outlier_scrapers.probable_pitchers import _slate_is_complete
+
+    payload = {
+        "dates": [
+            {
+                "games": [
+                    {"status": {"detailedState": "Game Over"}},
+                    {"status": {"detailedState": "Completed Early"}},
+                ]
+            }
+        ]
+    }
+    assert _slate_is_complete(payload) is True
+
+
+def test_slate_is_complete_handles_malformed_payload_without_crashing():
+    """Null/non-dict entries in the schedule payload must fail closed, not raise."""
+    from outlier_scrapers.probable_pitchers import _slate_is_complete
+
+    assert _slate_is_complete({"dates": [None]}) is False
+    assert _slate_is_complete({"dates": [{"games": [None, "not a game"]}]}) is False
+    assert _slate_is_complete({"dates": "not a list"}) is False
+
+
 def test_export_probable_pitchers_auto_advances_when_slate_complete(tmp_path, monkeypatch):
     """Unpinned runs late in the day must roll onto tomorrow's slate.
 

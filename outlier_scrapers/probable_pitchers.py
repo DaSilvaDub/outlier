@@ -46,23 +46,42 @@ def fetch_probable_pitchers_raw(target_date: date) -> dict[str, Any]:
     return _fetch_json(url)
 
 
-def _slate_is_complete(raw_payload: dict[str, Any]) -> bool:
-    """True when the fetched date's games are all Final (or none are scheduled).
+_FINAL_GAME_STATE_TOKENS = {"FINAL", "GAMEOVER", "COMPLETEDEARLY"}
 
-    Mirrors ``games._today_slate_is_complete``: a pipeline run late in the day
-    (after the local slate has finished) must not keep matching starters
-    against a day that's already over while props/cards have already
-    auto-advanced to tomorrow's board.
+
+def _game_state_is_final(game: Any) -> bool:
+    if not isinstance(game, dict):
+        return False
+    status = game.get("status")
+    if not isinstance(status, dict):
+        return False
+    token = str(status.get("abstractGameState") or status.get("detailedState") or "")
+    return token.strip().upper().replace(" ", "") in _FINAL_GAME_STATE_TOKENS
+
+
+def _games_for_date(payload: dict[str, Any]) -> list[Any]:
+    dates = payload.get("dates")
+    first_date = dates[0] if isinstance(dates, list) and dates else None
+    games = first_date.get("games") if isinstance(first_date, dict) else None
+    return games if isinstance(games, list) else []
+
+
+def _slate_is_complete(raw_payload: dict[str, Any]) -> bool:
+    """True when the fetched date has games and every one of them has finished.
+
+    Same intent as ``games._today_slate_is_complete``: a pipeline run late in
+    the day (after the local slate has finished) must not keep matching
+    starters against a day that's already over while props/cards have already
+    auto-advanced to tomorrow's board. A day with zero scheduled games (an
+    off day) is *not* complete, matching ``games.py`` — unpinned runs must not
+    treat "nothing scheduled" as a signal to skip ahead. Final-state check
+    falls back to ``detailedState`` and accepts the same tokens as
+    ``results._mlb_events`` for the same MLB Stats API payload shape.
     """
-    dates = raw_payload.get("dates")
-    games = dates[0].get("games") if isinstance(dates, list) and dates else []
-    if not isinstance(games, list) or not games:
-        return True
-    return all(
-        str((game.get("status") or {}).get("abstractGameState") or "").strip().lower() == "final"
-        for game in games
-        if isinstance(game, dict)
-    )
+    games = _games_for_date(raw_payload)
+    if not games:
+        return False
+    return all(_game_state_is_final(game) for game in games)
 
 
 def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, int | None]:
@@ -204,8 +223,7 @@ def export_probable_pitchers(
                 exc,
             )
         else:
-            next_dates = next_payload.get("dates")
-            if isinstance(next_dates, list) and next_dates and next_dates[0].get("games"):
+            if _games_for_date(next_payload):
                 raw_payload = next_payload
                 target_date = next_date
 
