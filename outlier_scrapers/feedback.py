@@ -984,16 +984,28 @@ def _salvage_rows_directly(
     conn = _open_for_salvage(source_path)
     conn.row_factory = sqlite3.Row
     try:
-        existing_tables = {
-            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        if table not in existing_tables:
+        # _open_for_salvage's own sanity check (`SELECT 1`) never touches
+        # sqlite_master, so it happily succeeds even when the schema page
+        # itself is the corrupted one -- these schema/PRAGMA queries and the
+        # initial SELECT's own execute() are where that surfaces instead,
+        # and a crash here should mean "this table isn't salvageable", not
+        # "abort the whole recovery" for every other table too.
+        try:
+            existing_tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if table not in existing_tables:
+                return rows, skipped
+            existing_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            select_fields = [field for field in fields if field in existing_columns]
+            if not select_fields:
+                return rows, skipped
+            cursor = conn.execute(f"SELECT {', '.join(select_fields)} FROM {table}")
+        except sqlite3.Error as exc:
+            logger.warning("Could not scan %s (schema/page corruption): %s", table, exc)
+            skipped += 1
             return rows, skipped
-        existing_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        select_fields = [field for field in fields if field in existing_columns]
-        if not select_fields:
-            return rows, skipped
-        cursor = conn.execute(f"SELECT {', '.join(select_fields)} FROM {table}")
         while True:
             try:
                 row = cursor.fetchone()

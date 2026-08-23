@@ -1654,3 +1654,46 @@ def test_recover_corrupted_database_refuses_to_overwrite_output(tmp_path):
 
     with pytest.raises(feedback.FeedbackError):
         feedback.recover_corrupted_database(corrupted_path, output_path)
+
+
+def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
+    """Corruption in sqlite_master itself (not just a data page) must not
+    crash the whole recovery -- _open_for_salvage's own sanity check
+    (`SELECT 1`) never touches sqlite_master, so it can succeed even when
+    the schema page is the damaged one; the schema/PRAGMA queries inside
+    _salvage_rows_directly are where that has to be caught instead."""
+
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(source_db)
+    conn = sqlite3.connect(source_db)
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('s1', '2026-01-01T00:00:00+00:00', 'WNBA', 'e1', 'm1', 'o1',
+                  'sel', '1', '1', 'B', '2026-01-01T01:00:00+00:00',
+                  '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+    conn.close()
+
+    data = bytearray(source_db.read_bytes())
+    # Corrupt the sqlite_master b-tree page itself (right after the 100-byte
+    # file header) -- this reliably reproduces "database disk image is
+    # malformed" on the schema-discovery queries, not just on row iteration.
+    for i in range(100, 300):
+        data[i] = 0xFF
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    corrupted_path.write_bytes(bytes(data))
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(corrupted_path, output_path)
+
+    assert stats.market_snapshots == 0
+    assert stats.decisions == 0
+    assert stats.settlements == 0
+    assert stats.skipped_rows == 3
+    assert output_path.exists()
