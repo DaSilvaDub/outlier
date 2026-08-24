@@ -111,8 +111,8 @@ def test_predictor_gates_promote_gamelog_independent_so_sizing(monkeypatch):
         "edge_pct": 0.05,
         "decimal_price": 2.1,
         "push_prob": 0.0,
-        "independent_model_prob": 0.78,
-        "market_consensus_prob": 0.59,
+        "independent_model_prob": 0.60,
+        "market_consensus_prob": 0.40,
         "independent_push_prob": 0.0,
         "projection_feature_hash": sq.GAMELOG_FEATURE_HASH,
         "signal_flags": "insight_support;movement_support",
@@ -123,8 +123,10 @@ def test_predictor_gates_promote_gamelog_independent_so_sizing(monkeypatch):
     }
     apply_predictor_gates(row)
     assert row["model_prob_source"] == sq.INDEPENDENT_SO_SOURCE
-    # Market-tempered: 0.55 * 0.78 + 0.45 * 0.59
-    assert abs(float(row["model_prob"]) - (0.55 * 0.78 + 0.45 * 0.59)) < 1e-9
+    # Market-tempered: 0.55 * 0.60 + 0.45 * 0.40. The raw independent prob alone
+    # (0.60) would imply a ~26% edge that max_edge correctly rejects as
+    # implausible; tempering toward market is what keeps this promotable.
+    assert abs(float(row["model_prob"]) - (0.55 * 0.60 + 0.45 * 0.40)) < 1e-9
     assert float(row["edge_pct"]) > 0.05
     assert 0 < float(row["recommended_units_pre_news"]) <= sq.INDEPENDENT_SO_UNIT_CAP
     assert "independent_gamelog_so_sizing" in row["sizing_flags"]
