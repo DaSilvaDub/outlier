@@ -1061,16 +1061,6 @@ def build_row(
             row["kelly_025_units"] = sizing.kelly_025_units
             row["max_units"] = sizing.max_units
             row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
-            if has_selected_method_contract:
-                source_ev_pct = _to_float(best.get("calculated_ev_pct"))
-                source_edge = source_ev_pct / 100.0 if source_ev_pct is not None else None
-                if (
-                    source_edge is None
-                    or sizing.edge_pct is None
-                    or abs(sizing.edge_pct - source_edge) > 1e-4
-                ):
-                    ev_probability_mismatch = True
-                    row["recommended_units_pre_news"] = ""
     else:
         if ev_summary and (ev_summary or {}).get("is_alt_line_fallback"):
             row["sizing_flags"] = "ev_line_fallback"

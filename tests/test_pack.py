@@ -752,7 +752,7 @@ def test_selected_method_ev_probability_mismatch_fails_closed():
             "sport_context": {
                 "selected_ev_method": "AVERAGE",
                 "calculated_ev_methods": {
-                    "AVERAGE": {"noVigOdds": {"decimal": 2.0}}
+                    "AVERAGE": {"noVigOdds": {}}
                 },
             },
         }
@@ -760,6 +760,7 @@ def test_selected_method_ev_probability_mismatch_fails_closed():
 
     row = make_row(card, ev)
 
+    assert row["model_prob"] is None
     assert "ev_probability_mismatch" in row["data_quality_flags"]
     assert row["recommended_units_pre_news"] == ""
     assert row["actionable"] == "false"
