@@ -742,12 +742,13 @@ def build_totals(
             )
         # Use EB-shrunk probability for Kelly when L10 data is available;
         # fall back to pure market consensus otherwise.
+        model_win_prob: float | None
         if blended_over is not None and used_l10:
             model_win_prob = blended_over if best_side == "OVER" else (1.0 - blended_over)
         else:
             model_win_prob = p_side_market
-        consensus_win_prob = p_side_market
-        independent_win_prob = None
+        consensus_win_prob: float | None = p_side_market
+        independent_win_prob: float | None = None
         if _totals_models_diverge(recency_hit_prob, p_side_market):
             flags.append("totals_model_divergence")
 
