@@ -1,0 +1,8 @@
+{
+  "mode": "shadow",
+  "min_eligible_samples": 1000,
+  "model_version": "",
+  "promoted_by": "",
+  "promoted_at": "",
+  "note": "Set mode to 'live' only after reviewing calibration/blend_weights.json (eligible_samples) and a validation report. Live mode makes final_blended_prob drive model_prob, edge_pct, and Kelly units."
+}

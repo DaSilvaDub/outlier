@@ -827,8 +827,19 @@ def apply_shadow_projection(
     return []
 
 
-def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any] | None) -> None:
-    """Record an audit blend. Never copy it into live model_prob or Kelly units."""
+def apply_learned_probability_blend(
+    row: dict[str, Any],
+    artifact: dict[str, Any] | None,
+    promotion: dict[str, Any] | None = None,
+) -> None:
+    """Record the blend, and let it drive sizing only once it is promoted.
+
+    Shadow (the default) keeps the historical contract: the blend is audit-only
+    and never touches model_prob or Kelly units. Promotion is a manual policy
+    change in ``config/blend_promotion.json`` gated on eligible sample count —
+    the fitted artifact stayed at n=72 (market vs recency L10) for months, which
+    is far too thin to size from.
+    """
 
     if row.get("projection_quality_flags"):
         return
@@ -846,8 +857,39 @@ def apply_learned_probability_blend(row: dict[str, Any], artifact: dict[str, Any
     row["blend_model_version"] = blended["model_version"]
     row["blend_segment"] = json.dumps(blended.get("segment") or {}, sort_keys=True)
     row["final_blended_prob"] = blended["final_probability"]
-    # Audit-only. The fitted artifact is market vs recency L10 (n=72), not a
-    # projection model. Never copy it into live model_prob / Kelly units.
+    status = promotion if promotion is not None else probability_blend.promotion_status(artifact)
+    row["blend_promotion_mode"] = status.get("mode", "shadow")
+    if not status.get("drives_sizing"):
+        row["blend_sizing_source"] = "audit_only"
+        return
+    _apply_blended_sizing(row, blended["final_probability"])
+
+
+def _apply_blended_sizing(row: dict[str, Any], blended_probability: Any) -> None:
+    """Resize one row from the promoted blend, leaving every gate downstream."""
+
+    probability = _to_float(blended_probability)
+    decimal_price = _to_float(row.get("decimal_price"))
+    push_prob = _to_float(row.get("push_prob"))
+    if probability is None or decimal_price is None or push_prob is None:
+        row["blend_sizing_source"] = "audit_only"
+        return
+    if row.get("recommended_units_pre_news") in ("", None):
+        # Sizing was already withheld upstream (push-capable, proxy-only, EV
+        # mismatch); a promoted blend must not revive a suppressed stake.
+        row["blend_sizing_source"] = "audit_only"
+        return
+    sizing = compute_sizing(
+        decimal_price=decimal_price, model_prob=probability, push_prob=push_prob
+    )
+    row["model_prob"] = probability
+    row["model_prob_source"] = "blended_market_model"
+    row["implied_prob"] = sizing.implied_prob
+    row["edge_pct"] = sizing.edge_pct
+    row["kelly_025_units"] = sizing.kelly_025_units
+    row["max_units"] = sizing.max_units
+    row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
+    row["blend_sizing_source"] = "promoted_blend"
 
 
 def _apply_enforced_portfolio_units(row: dict[str, Any], allocated_units: Any) -> None:
@@ -2716,7 +2758,10 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Build the daily AI research-desk pack.")
     parser.add_argument("--leagues", default="MLB,WNBA")
     parser.add_argument("--date")
-    parser.add_argument("--top-ev-n", type=int, default=15)
+    # Portfolio caps are enforced (config/portfolio_risk.json mode=enforce), so
+    # the risk allocator — not a pre-risk truncation — prunes the board. A tight
+    # top-ev-n cut candidates before any cap ever saw them.
+    parser.add_argument("--top-ev-n", type=int, default=40)
     parser.add_argument("--top-signal-n", type=int, default=10)
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument(
@@ -2734,6 +2779,14 @@ def main(argv: Sequence[str] | None = None) -> Path:
     leagues = args.leagues.split(",")
     feed_health_by_league = build_feed_health_by_league(leagues)
     blend_artifact = probability_blend.load_weight_artifact(args.blend_weights)
+    blend_promotion = probability_blend.promotion_status(blend_artifact)
+    logger.info(
+        "Blend weights: mode=%s eligible_samples=%s drives_sizing=%s%s",
+        blend_promotion["mode"],
+        blend_promotion["eligible_samples"],
+        blend_promotion["drives_sizing"],
+        f" ({'; '.join(blend_promotion['reasons'])})" if blend_promotion["reasons"] else "",
+    )
     opportunity_rows: list[dict[str, Any]] = []
     build_kwargs: dict[str, Any] = {
         "opportunity_rows_out": opportunity_rows,

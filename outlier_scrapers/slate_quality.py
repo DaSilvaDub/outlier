@@ -249,9 +249,11 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     Disabled by default. Enable via ``OUTLIER_PROMOTE_INDEPENDENT_SO=1`` (force)
     or auto mode that clears ``so_promotion`` ledger criteria. Kelly uses a
     market-tempered blend of the independent win prob (not raw overconfident
-    tails). Requires GAMELOG v2 feature hash and (for player props) a predictive
+    tails). Requires a current-generation gamelog feature hash (v2, or a
+    promoted calibrated refit) and (for player props) a predictive
     signal. Returns True when sizing was rewritten.
     """
+    from outlier_scrapers.projections import is_current_gamelog_so_hash
     from outlier_scrapers.sizing import compute_sizing
     from outlier_scrapers.so_promotion import (
         independent_so_sizing_enabled,
@@ -268,7 +270,7 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     if (
         independent is None
         or market is None
-        or digest != GAMELOG_FEATURE_HASH
+        or not is_current_gamelog_so_hash(digest)
         or decimal_price is None
         or decimal_price <= 1.0
     ):

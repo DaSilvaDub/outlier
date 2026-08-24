@@ -205,3 +205,135 @@ def test_mlb_so_projection_requires_feature_source_for_independent():
     assert record is not None
     assert record["feature_snapshot_hash"] == LEAGUE_AVG_SO_HASH
     assert independent_projection_eligible(record) is False
+
+
+def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
+    """A promoted artifact replaces the hand-set priors and re-labels the hash."""
+
+    import json
+
+    from outlier_scrapers import projections
+
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "selection": "Michael McGreevy - Strikeouts OVER 5.5",
+        "player": "Michael McGreevy",
+        "event_id": "g1",
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "line": 5.5,
+        "headline_side": "OVER",
+    }
+    probable = {
+        "STL": {
+            "pitcher": "Michael McGreevy",
+            "confirmed": True,
+            "pitcher_id": 700241,
+            "projected_bf": 22.5,
+            "strikeout_rate": 0.27,
+            "starts": 5,
+            "total_bf": 112.0,
+            "total_k": 30.0,
+            "feature_source": "mlb_stats_gamelog",
+        }
+    }
+    baseline = mlb_so_projection_record(row, probable)
+
+    artifact = tmp_path / "MLB_so_model.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": projections.SO_MODEL_SCHEMA_VERSION,
+                "status": "trained",
+                "promoted": True,
+                "model_version": "abc123",
+                "feature_schema_hash": projections.SO_FEATURE_SCHEMA_HASH,
+                "trained_through": "2026-08-01",
+                "parameters": {
+                    "league_strikeout_rate": 0.20,
+                    "starter_projected_bf": 20.0,
+                    "rate_prior_bf": 10.0,
+                    "bf_prior_starts": 1.0,
+                    "base_workload_dispersion": 30.0,
+                    "thin_start_dispersion_step": 0.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(projections, "so_model_artifact_path", lambda sport="MLB": artifact)
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+    promoted_record = mlb_so_projection_record(row, probable)
+    assert promoted_record["feature_snapshot_hash"] == "so-starter-calibrated-abc123"
+    assert independent_projection_eligible(promoted_record) is True
+    assert (
+        promoted_record["distribution"]["win_prob"] != baseline["distribution"]["win_prob"]
+    )
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+
+def test_unpromoted_or_corrupt_artifacts_leave_inference_on_defaults(tmp_path, monkeypatch):
+    import json
+
+    from outlier_scrapers import projections
+
+    artifact = tmp_path / "MLB_so_model.json"
+    monkeypatch.setattr(projections, "so_model_artifact_path", lambda sport="MLB": artifact)
+
+    schema = projections.SO_FEATURE_SCHEMA_HASH
+    for payload in (
+        {"status": "trained", "promoted": False, "model_version": "x", "schema_version": 1,
+         "feature_schema_hash": schema},
+        {"status": "trained", "promoted": True, "model_version": "x", "schema_version": 99,
+         "feature_schema_hash": schema},
+        {"status": "insufficient_samples", "promoted": True, "model_version": "x",
+         "schema_version": 1, "feature_schema_hash": schema},
+        {"promoted": True, "status": "trained", "model_version": "", "schema_version": 1,
+         "feature_schema_hash": schema},
+        # Fitted on a different feature contract than inference feeds it.
+        {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1,
+         "feature_schema_hash": "some-other-schema"},
+        # No compatibility metadata at all.
+        {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1},
+    ):
+        artifact.write_text(json.dumps(payload), encoding="utf-8")
+        projections._PROMOTED_SO_MODEL_CACHE.clear()
+        assert projections.load_promoted_so_model() is None
+
+    artifact.write_text("{not json", encoding="utf-8")
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+    assert projections.load_promoted_so_model() is None
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+
+def test_promoted_model_cache_hands_out_copies(tmp_path, monkeypatch):
+    import json
+
+    from outlier_scrapers import projections
+
+    artifact = tmp_path / "MLB_so_model.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": projections.SO_MODEL_SCHEMA_VERSION,
+                "status": "trained",
+                "promoted": True,
+                "model_version": "abc123",
+                "feature_schema_hash": projections.SO_FEATURE_SCHEMA_HASH,
+                "parameters": {"league_strikeout_rate": 0.20},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(projections, "so_model_artifact_path", lambda sport="MLB": artifact)
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+    first = projections.load_promoted_so_model()
+    first["model_version"] = "mutated"
+    first["parameters"] = {}
+    second = projections.load_promoted_so_model()
+    assert second["model_version"] == "abc123"
+    assert second["parameters"] == {"league_strikeout_rate": 0.20}
+    projections._PROMOTED_SO_MODEL_CACHE.clear()

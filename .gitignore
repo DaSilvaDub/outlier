@@ -18,6 +18,7 @@ terminals/
 # Standalone Outlier auth/session material. Do not commit secrets.
 config/*
 !config/.gitkeep
+!config/blend_promotion.json
 config/outlier_session.json
 config/.outlier_session/
 config/api_bearer_token.txt
@@ -35,6 +36,10 @@ calibration/*.sqlite3-wal
 calibration/reports/
 calibration/exports/
 calibration/settlements/generated/
+# Backfilled projection training samples: large and fully regenerable from
+# `python -m outlier_scrapers.projections backfill`. Fitted model/validation
+# JSON under calibration/projections/ stays committable (small + audited).
+calibration/projections/*.jsonl
 
 # Local credentials for headless auth - never commit.
 .env

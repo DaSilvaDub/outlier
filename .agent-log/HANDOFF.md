@@ -1,3 +1,56 @@
+# Handoff Summary — 2026-08-24 — Claude (projection calibration loop / Tier-3 items 8–11)
+
+**Branch:** `claude/goal-resolution-dra9j0`
+**PR:** https://github.com/DaSilvaDub/outlier/pull/114
+**Plan:** `docs/plans/2026-08-24-projection-calibration-loop.md`
+
+## What this slice did
+
+1. `export_projections()` now covers WNBA as well as MLB, so
+   `wnba_projections_latest.json` is written before `pack` instead of the points
+   scaffold living only inline.
+2. Real `backfill` / `train` / `validate` / `promote` in
+   `outlier_scrapers/projection_training.py`, replacing the `scaffold-ready`
+   stubs. Walk-forward samples from free `statsapi.mlb.com` game logs; staged
+   parameter fit; holdout scoring (NLL/MAE/RMSE/CRPS/PIT/Brier) against the
+   shipped defaults; manual audited promotion.
+3. `daily_job.refit_blend_weights()` refits blend weights from the settled
+   ledger every run (non-fatal, `--skip-blend-refit` opts out).
+   `config/blend_promotion.json` gates whether `final_blended_prob` drives
+   sizing — shipped `shadow`, needs `mode: live` plus 1000 eligible samples.
+4. `--top-ev-n` default 15 → 40 so the enforced portfolio caps prune the board.
+
+Merged `origin/master` (PR #105 SO restaking/promotion gate). A promoted
+calibrated model emits `so-starter-calibrated-<version>` instead of
+`so-starter-gamelog-v2`, so `is_current_gamelog_so_hash()` now backs the hash
+checks in `slate_quality` and `so_eval` — otherwise promotion would silently
+drop those rows out of restaking and out of the promotion gate.
+
+## Explicitly NOT done
+
+- No backfill/train run: no `statsapi.mlb.com` egress from the remote session.
+- No blend refit run: no feedback ledger present. Both are covered by offline
+  tests with injected fetchers.
+- No projection model promoted; `promoted: false` everywhere, blend stays shadow.
+- No paid desk / reasoning.
+
+## Next
+
+1. On a machine with network + ledger: `projections backfill --sport MLB --from
+   2024-03-20 --to <today>`, then `train`, then `validate`; `promote` only on a
+   passing report.
+2. Let `daily_job` accumulate settled rows until `blend_weights.json`
+   `eligible_samples` clears `config/blend_promotion.json`'s
+   `min_eligible_samples` before considering `mode: live`.
+3. PR #105's SO promotion gate still needs settled v2 rows (see previous entry).
+
+## Sync
+
+`report-sync.ps1` could not run in this session (Windows PowerShell path, Linux
+container). Branch state verified with `git fetch origin master` + merge.
+
+---
+
 # Handoff Summary — 2026-08-22 — Grok (SO restaking / promotion gate)
 
 **Branch:** `feat/predictor-accuracy-upgrades` (`d17fc80`)  

@@ -162,11 +162,11 @@ def test_build_mlb_so_projections_only_keeps_eligible_rows():
     assert records[0]["status"] == "eligible"
 
 
-def test_export_projections_skips_non_mlb():
-    status = export_projections("WNBA")
+def test_export_projections_skips_leagues_without_a_projection_model():
+    status = export_projections("NHL")
     assert status == {
         "status": "skipped",
-        "reason": "no independent projection model for WNBA",
+        "reason": "no independent projection model for NHL",
         "record_count": 0,
     }
 
@@ -252,3 +252,117 @@ def test_non_mlb_shadow_rows_preserve_input_cardinality_and_identity():
     assert len(projections) == len(rows)
     assert [projection["row_id"] for projection in projections] == ["w1", "w2"]
     assert {projection["status"] for projection in projections} == {"shadow_only"}
+
+
+def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
+    """WNBA gets its own <sport>_projections_latest.json, not an inline-only path."""
+
+    from outlier_scrapers.paths import LeaguePaths
+    from outlier_scrapers.projections import export_projections
+
+    fake_paths = LeaguePaths(
+        league="WNBA",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    fake_paths.normalized.mkdir(parents=True, exist_ok=True)
+    fake_paths.props_normalized_latest().write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "sport": "WNBA",
+                        "market_type": "PTS",
+                        "player": "Napheesa Collier",
+                        "event_id": "g1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "line": 19.5,
+                        "position": "OVER",
+                        "as_of": "2026-08-24T12:00:00-04:00",
+                    },
+                    {
+                        "sport": "WNBA",
+                        "market_type": "REB",
+                        "player": "Napheesa Collier",
+                        "event_id": "g1",
+                        "market_id": "m2",
+                        "outcome_id": "o2",
+                        "line": 8.5,
+                        "position": "OVER",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+    monkeypatch.setattr(
+        "outlier_scrapers.projections.get_wnba_points_features",
+        lambda name, season, fetch_json=None, cache=None: {
+            "projected_minutes": 32.0,
+            "points_per_minute": 0.62,
+        },
+    )
+
+    status = export_projections("WNBA")
+    assert status == {"status": "ok", "record_count": 1}
+    written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
+    assert written["sport"] == "WNBA"
+    assert [record["row_id"] for record in written["projections"]] == ["o1"]
+    assert written["projections"][0]["feature_snapshot_hash"] == "wnba-minutes-ppm-v1"
+
+
+def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(monkeypatch):
+    """Caching is per player, not per priced outcome, and only points rows fetch."""
+
+    import outlier_scrapers.projections as projections_module
+    from outlier_scrapers.projections import build_wnba_points_projections
+
+    resolved: list[str] = []
+    gamelogs: list[str] = []
+
+    def fake_resolve(player_name, *, fetch_json=None):
+        resolved.append(player_name)
+        return f"id-{player_name}"
+
+    def fake_gamelog(athlete_id, *, season, fetch_json=None):
+        gamelogs.append(str(athlete_id))
+        return [30.0, 31.0, 29.0], [18.0, 20.0, 16.0]
+
+    monkeypatch.setattr(projections_module, "resolve_wnba_athlete_id", fake_resolve)
+    monkeypatch.setattr(projections_module, "fetch_wnba_athlete_gamelog_stats", fake_gamelog)
+
+    rows = [
+        {
+            "sport": "WNBA",
+            "market_type": "PTS",
+            "player": "A Player" if index < 4 else "B Player",
+            "outcome_id": f"o{index}",
+            "line": 15.5,
+            "position": "OVER" if index % 2 else "UNDER",
+        }
+        for index in range(6)
+    ] + [
+        {
+            "sport": "WNBA",
+            "market_type": "AST",
+            "player": "C Player",
+            "outcome_id": "o9",
+            "line": 4.5,
+            "position": "OVER",
+        }
+    ]
+    records = build_wnba_points_projections(rows, season=2026)
+
+    assert len(records) == 6  # every points row is projected
+    assert {record["sport"] for record in records} == {"WNBA"}
+    # Six points rows, two distinct players: one network resolution and one
+    # game-log fetch each. The AST row never reaches the model at all.
+    assert len(resolved) == 2
+    assert len(gamelogs) == 2
+    assert "C Player" not in resolved
+
+

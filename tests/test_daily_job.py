@@ -666,3 +666,55 @@ def test_t30_only_runs_under_daily_writer_lock(tmp_path, monkeypatch):
         ("t30", pack_dir, feedback_db, True),
         "release",
     ]
+
+
+def test_refit_blend_weights_runs_from_the_settled_ledger(tmp_path, monkeypatch):
+    from outlier_scrapers import daily_job
+
+    db = tmp_path / "feedback.sqlite3"
+    db.write_text("", encoding="utf-8")
+    weights = tmp_path / "blend_weights.json"
+    calls: list[tuple] = []
+
+    def fake_fit(db_path, output_path):
+        calls.append((db_path, output_path))
+        return {
+            "status": "active",
+            "eligible_samples": 4200,
+            "model_version": "blend-test-v9",
+        }
+
+    monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", fake_fit)
+    stats = daily_job.refit_blend_weights(db, weights)
+    assert calls == [(db, weights)]
+    assert stats["status"] == "ok"
+    assert stats["eligible_samples"] == 4200
+    # Refitting never promotes on its own: promotion stays a policy change.
+    assert stats["drives_sizing"] is False
+    assert "policy_shadow" in stats["promotion_reasons"]
+
+
+def test_refit_blend_weights_is_non_fatal(tmp_path, monkeypatch):
+    from outlier_scrapers import daily_job, feedback as feedback_module
+
+    db = tmp_path / "feedback.sqlite3"
+    db.write_text("", encoding="utf-8")
+
+    def boom(db_path, output_path):
+        raise feedback_module.FeedbackError("ledger is locked")
+
+    monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", boom)
+    stats = daily_job.refit_blend_weights(db, tmp_path / "weights.json")
+    assert stats["status"] == "failed"
+    assert "locked" in stats["error"]
+
+
+def test_refit_blend_weights_skips_without_a_ledger(tmp_path, monkeypatch):
+    from outlier_scrapers import daily_job
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("must not fit without a ledger")
+
+    monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", unexpected)
+    stats = daily_job.refit_blend_weights(tmp_path / "missing.sqlite3", tmp_path / "w.json")
+    assert stats == {"status": "skipped", "reason": "missing_ledger"}

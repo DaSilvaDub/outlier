@@ -23,6 +23,18 @@ DEFAULT_SOFT_RELIABILITY = 0.45
 DEFAULT_TEMPER_WEIGHT = 0.55
 
 
+def _is_current_gamelog_hash(digest: str) -> bool:
+    """v2 and any calibrated refit of it are the current generation."""
+
+    from outlier_scrapers.projections import is_current_gamelog_so_hash
+
+    return is_current_gamelog_so_hash(digest)
+
+
+def _is_gamelog_hash(digest: str) -> bool:
+    return digest in GAMELOG_HASHES or _is_current_gamelog_hash(digest)
+
+
 def _float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -67,7 +79,9 @@ def evaluate_so_probs(
 ) -> dict[str, Any]:
     """Compare independent vs market Brier on settled SO rows.
 
-    When ``require_v2_hash`` is set, only ``so-starter-gamelog-v2`` rows enter
+    When ``require_v2_hash`` is set, only current-generation rows
+    (``so-starter-gamelog-v2`` and any promoted ``so-starter-calibrated-*``
+    refit of it) enter
     the prefer/Brier metrics (promotion gate must not unlock on v1 wins).
     Soft Brier is diagnostic only; tempered matches live Kelly
     (``temper(raw_indep, market)``).
@@ -144,9 +158,9 @@ def evaluate_so_probs(
         if market is None or independent is None or result == "PUSH":
             continue
         digest = str(row["projection_feature_hash"] or "")
-        if require_v2_hash and digest != GAMELOG_HASH:
+        if require_v2_hash and not _is_current_gamelog_hash(digest):
             continue
-        if require_gamelog_hash and digest not in GAMELOG_HASHES:
+        if require_gamelog_hash and not _is_gamelog_hash(digest):
             continue
         # Prefer reporting latest-hash count separately in aggregates below.
 
@@ -197,8 +211,10 @@ def evaluate_so_probs(
         "market_hit_rate": round(market_hits / n, 4),
         "independent_hit_rate": round(independent_hits / n, 4),
         "prefer_independent": independent_brier < market_brier,
-        "gamelog_rows": sum(1 for item in paired if item["feature_hash"] in GAMELOG_HASHES),
-        "gamelog_v2_rows": sum(1 for item in paired if item["feature_hash"] == GAMELOG_HASH),
+        "gamelog_rows": sum(1 for item in paired if _is_gamelog_hash(item["feature_hash"])),
+        "gamelog_v2_rows": sum(
+            1 for item in paired if _is_current_gamelog_hash(item["feature_hash"])
+        ),
     }
     if include_tempered:
         soft_brier = sum(item["soft_brier"] for item in paired) / n
