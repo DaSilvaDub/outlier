@@ -10,6 +10,8 @@ lane pointing at the automated Pass A prompt.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ IDENTITY_FIELDS = (
 )
 
 VERDICT_PASSES = {"A": "A.md", "B": "B.md", "D": "D.md"}
+ALL_PASSES = {"A": "A.md", "B": "B.md", "C": "C.md", "D": "D.md", "E": "E.md"}
 PACK_ONLY_PASSES = ("A.md", "D.md")
 
 
@@ -44,11 +47,13 @@ def _record_properties(kind: str) -> set[str]:
     return set(schema["properties"][array_key]["items"]["properties"])
 
 
-@pytest.mark.parametrize("pass_, filename", sorted(VERDICT_PASSES.items()))
-def test_verdict_prompt_declares_its_own_pass(pass_: str, filename: str) -> None:
+@pytest.mark.parametrize("pass_, filename", sorted(ALL_PASSES.items()))
+def test_prompt_declares_its_own_pass(pass_: str, filename: str) -> None:
+    """The envelope example must tag the pass the runner publishes it under."""
     body = _text(filename)
-    assert f'`"{pass_}"`' in body
-    for other in VERDICT_PASSES:
+    example = json.loads(re.findall(r"```json\n(.*?)```", body, re.S)[0])
+    assert example["pass"] == pass_
+    for other in ALL_PASSES:
         if other != pass_:
             assert f'| `pass` | `"{other}"` |' not in body
 
@@ -120,3 +125,35 @@ def test_master_cards_lane_has_its_own_markdown_prompt() -> None:
         / "generate_prompts.py"
     ).read_text(encoding="utf-8")
     assert 'load_prompt_template("Master_Cards_Analysis.md")' in script
+
+
+@pytest.mark.parametrize("filename", sorted(ALL_PASSES.values()))
+def test_every_json_example_is_parseable_json(filename: str) -> None:
+    """B and C can fall back to prompt-only JSON, so the shown shape must parse."""
+    blocks = re.findall(r"```json\n(.*?)```", _text(filename), re.S)
+    assert blocks, f"{filename} shows no JSON envelope example"
+    for block in blocks:
+        json.loads(block)
+
+
+@pytest.mark.parametrize("filename", sorted(ALL_PASSES.values()))
+def test_prompts_name_both_quality_flag_columns(filename: str) -> None:
+    """Totals boards carry quality_flags; candidates carry data_quality_flags."""
+    if filename in ("C.md", "E.md"):  # neither gates on row flags itself
+        pytest.skip("pass does not apply the integrity-flag gate")
+    body = _text(filename)
+    assert "data_quality_flags" in body
+    assert "quality_flags" in body
+
+
+def test_master_cards_states_the_desk_stake_limits() -> None:
+    body = _text("Master_Cards_Analysis.md")
+    assert "0.5-unit grid" in body
+    assert "3.0 units" in body
+
+
+def test_reconciliation_prompt_requires_an_upstream_bet() -> None:
+    """E may only back what a verdict pass actually proposed as a BET."""
+    body = _text("E.md")
+    assert "at least one cited A / D / B record carries the verdict" in body
+    assert "`null` when pass C did not run" in body

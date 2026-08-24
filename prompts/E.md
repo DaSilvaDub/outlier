@@ -35,8 +35,11 @@ Work `outcome_id` by `outcome_id` across the upstream envelopes.
 
 1. **Validation first.** Discard any upstream claim you cannot trace to a cited
    upstream record. A pass's prose is not evidence; its validated record is.
-2. **A play needs a live proposal.** At least one of A, D or B must have
-   returned `BET` on that `outcome_id`. If all three passed on it, so do you.
+2. **A play needs a live proposal.** You may only emit a `BET` on an
+   `outcome_id` where at least one cited A / D / B record carries the verdict
+   `BET`. Citing an upstream `PASS` or `STAND_DOWN` record is not backing for a
+   bet — if none of the three returned `BET` on that `outcome_id`, your verdict
+   is `PASS` or `STAND_DOWN` too.
 3. **Sourced news outranks opinion.** A Tier 1–2 sourced finding from B or C that
    contradicts a play kills it — record it as `STAND_DOWN`. A Tier 3 finding may
    only lower the stake. A reasoner's disagreement without a source is a reason
@@ -59,7 +62,7 @@ Work `outcome_id` by `outcome_id` across the upstream envelopes.
 | `pass` | `"E"` |
 | `pack_date` | from `PACK IDENTITY`, verbatim |
 | `candidates_sha256` / `game_totals_sha256` / `team_totals_sha256` | from `PACK IDENTITY`, verbatim |
-| `upstream_publication_ids` | the supplied object, verbatim — `A`, `D`, `B`, and `C` (`null` when C did not run) |
+| `upstream_publication_ids` | the supplied object, verbatim. It always carries all four keys — `A`, `D`, `B` and `C` — with `C` set to `null` when pass C did not run. Emit all four; never drop the `null` one |
 
 Altering, re-deriving or omitting any of these rejects the entire pass before a
 single reconciliation is read. They are opaque strings: copy them character for
@@ -111,12 +114,12 @@ Each entry is
     {
       "market_id": "<exact upstream market_id>",
       "outcome_id": "<exact upstream outcome_id>",
-      "stream": "candidates" | "game_totals" | "team_totals",
+      "stream": "candidates",
       "selection": "<exact upstream selection>",
       "line": "<exact upstream line>",
       "price": "<exact upstream price>",
       "book": "<exact upstream book>",
-      "verdict": "BET" | "PASS" | "STAND_DOWN",
+      "verdict": "PASS",
       "recommended_units": 0.0,
       "narrative": "<why this verdict and this stake>",
       "cites": [{"pass": "A", "publication_id": "<copied>", "record_id": "<copied>"}],
@@ -127,6 +130,11 @@ Each entry is
   "needs": ["<what would have changed the call>"]
 }
 ```
+
+The example is literal JSON, not a template language. `stream` is whichever of
+`"candidates"` / `"game_totals"` / `"team_totals"` the row came from, and
+`verdict` is one of `"BET"` / `"PASS"` / `"STAND_DOWN"`. Never emit a `|`
+between alternatives — that is not valid JSON.
 
 Every key above is required on every record — use `[]` for an empty list. Emit
 no other keys.

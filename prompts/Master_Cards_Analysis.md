@@ -8,7 +8,7 @@ This is a **Master Card** report, produced for a human reader as Markdown.
 It is not the automated desk's structured-envelope contract — produce the
 Markdown report described in §14, not JSON.
 
-This is a Master Card report. The supplied candidate data has already been filtered upstream to the sport-specific Master Card market whitelist — MLB: Moneyline, Spread, Strikeouts; WNBA: Moneyline, Spread, Points, Assists, Rebounds, Points+Assists, Points+Rebounds, Rebounds+Assists, Points+Assists+Rebounds — and to prices from -250 through +150. Do not second-guess market eligibility beyond that; apply every remaining integrity, actionability, and sizing gate below to the rows you were given.
+This is a Master Card report. The supplied candidate data has already been filtered upstream to the sport-specific Master Card market whitelist — MLB: Moneyline, Spread, Strikeouts; WNBA: Moneyline, Spread, Points, Assists, Rebounds, Points+Assists, Points+Rebounds, Rebounds+Assists, Points+Assists+Rebounds — and to prices from -250 up to but not including +150 (a +150-or-longer selection is already excluded). Do not second-guess market eligibility beyond that; apply every remaining integrity, actionability, and sizing gate below to the rows you were given.
 
 # 1. PRIMARY OBJECTIVE
 
@@ -479,7 +479,15 @@ External research should primarily affect:
 
 Use `recommended_units_pre_news` as the starting point whenever supplied.
 
-Respect `max_units`.
+Respect `max_units`. Final units may never exceed the smaller of
+`recommended_units_pre_news` and `max_units`.
+
+Desk-wide stake limits, the same ones the automated desk enforces:
+
+* Stakes sit on a **0.5-unit grid** — 0.5, 1.0, 1.5 and so on. Never emit a
+  fractional off-grid stake such as 0.75 or 1.2.
+* No single position exceeds **3.0 units**.
+* Reduce in whole grid steps, and never below 0.
 
 Unless the pack explicitly provides another post-news formula:
 
@@ -630,6 +638,8 @@ Before answering, verify:
 * MLB player props outside the strict whitelist (pitcher SO only) are not eligible; MLB team props outside R / TOTAL are not eligible.
 * No side restriction was violated (SO OVER only, totals OVER only, 2B UNDER only).
 * No prohibited +150-or-longer longshot is recommended.
+* Every final stake is on the 0.5-unit grid, at or below 3.0 units, and at or
+  below `min(recommended_units_pre_news, max_units)`.
 * No explicit stale or corruption flag has been ignored.
 * No unresolved line mismatch survives.
 * Every betting line, selection, price, book, and market ID comes directly from the pack.

@@ -13,7 +13,7 @@
 |---|---|---|
 | **GPT-5.6 Sol** | Automated stress-tester (A, pack-only) | OpenAI's flagship model; unmatched at pure logic, probability math, and strictly following complex rule constraints without hallucinating. |
 | **Gemini 3.1 Pro** | Wide scanner (B, web) | Google's top model for complex reasoning with a massive context window and native Google Search integration for broad sweeps. |
-| **Grok 4.5** | Deep per-game news (C, web) | xAI's flagship; provides real-time access to the X firehose for breaking sports news, lineup changes, and late scratches. |
+| **Gemini 3.1 Pro** | Deep per-game injury / lineup news (C, web) | `c_research.py` runs C through the same Google-Search-grounded call path as B and requires `GEMINI_API_KEY`. (Grok is the Desk 2 X-sentiment lane, phase X — not this pass.) |
 | **Claude Fable 5** | Red-team (D, pack-only) & Synthesizer (E) | Anthropic's most capable model; highest calibration for finding logical flaws, plus the most professional writing style for the final guide. |
 
 **Key principle:** the desk's job is *as much about killing bad pipeline cards as confirming good ones*. A stand-down is a win. Consensus across models is a filter, not proof — weight independent **sourced information** (deep-research news) above **opinion**.
@@ -121,7 +121,10 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 - **Lineup:** posted lineup card, key bats in/out, platoon/handedness edge, regulars resting (day-after-night, getaway day).
 - **Weather/park:** wind speed + direction (out vs in), temp, rain-delay risk, roof open/closed, hitter vs pitcher park, altitude (Coors).
 - **Umpire:** home-plate ump strike-zone tendency (tight/wide → totals & K props).
-- *Market types in play:* full game, **F5 (first 5)**, run line, total, **NRFI/YRFI**, strikeout props, H+R+RBI.
+- *Market types in play:* full game, run line, total, pitcher strikeout props,
+  team run totals. **Not in play:** H+R+RBI, home runs, hits allowed, walks
+  allowed, and player walks are desk-prohibited (see §3); F5 and NRFI/YRFI are
+  outside the whitelists the passes enforce. Do not research them.
 
 **WNBA** — each answer needs source + tier + timestamp:
 - **Availability:** injury report status (out/quest/prob), load management, rest decisions.
@@ -129,7 +132,9 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 - **Schedule/fatigue:** back-to-back, travel/time-zone, schedule density.
 - **Usage shift:** if a star is out, who absorbs usage/shots → which player-prop **overs** light up.
 - **Game script:** pace matchup, blowout risk (→ star minutes capped → prop **unders**), foul-trouble tendencies.
-- *Market types in play:* spread, total, player points/reb/ast, **PRA**, 3PM, alt lines.
+- *Market types in play:* moneyline, spread, total, player points / rebounds /
+  assists and their combinations (**PRA**). **Not in play:** 3PM and turnovers
+  are prohibited high-variance markets (see §3). Do not research them.
 
 ---
 

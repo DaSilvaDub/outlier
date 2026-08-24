@@ -63,6 +63,11 @@ class PackIndex:
     injuries: dict[str, str]
     locks: dict[str, str]
     policy: PortfolioPolicy
+    # The pack directory's own date. The gate checks an envelope's pack_date
+    # against it: C's freshness window is evaluated against that value, so a
+    # model-chosen date would let a pass set its own staleness bar. Empty when
+    # the caller could not supply one, which disables the check only.
+    pack_date: str = ""
 
 
 def _read_candidates_rows(pack_dir: Path) -> list[dict[str, str]]:
@@ -196,4 +201,5 @@ def build_pack_index(
         injuries=injuries,
         locks=locks,
         policy=policy,
+        pack_date=pack_dir.name,
     )

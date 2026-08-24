@@ -85,6 +85,7 @@ class UpstreamPublication:
     publication_id: str
     record_ids: frozenset[str]
     outcome_ids: frozenset[str] = field(default_factory=frozenset)
+    bet_outcome_ids: frozenset[str] = field(default_factory=frozenset)
     injury_supported_record_ids: frozenset[str] = field(default_factory=frozenset)
     stakes: dict[str, float] = field(default_factory=dict)
 
@@ -130,6 +131,20 @@ def validate_envelope(
     if isinstance(parsed_or_fail, GateResult):
         return parsed_or_fail
     env = parsed_or_fail
+
+    if _is_pack_date(index.pack_date) and env.pack_date != index.pack_date:
+        return _envelope_result(
+            Violation(
+                code="pack_mismatch",
+                outcome_id="",
+                market_id="",
+                detail=(
+                    f"envelope pack_date {env.pack_date!r} does not match pack "
+                    f"{index.pack_date!r}."
+                ),
+                severity="reject",
+            )
+        )
 
     if (
         env.candidates_sha256 != index.candidates_sha256
@@ -245,6 +260,19 @@ def _coerce_envelope(
         )
 
 
+def _is_pack_date(value: str) -> bool:
+    """A pack directory name is an identity only when it is a real date.
+
+    Mirrors _check_finding_timestamp: a directory that is not YYYY-MM-DD (test
+    fixtures, ad-hoc dirs) disables the check rather than failing every pass.
+    """
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _envelope_result(violation: Violation) -> GateResult:
     return GateResult(
         violations=(violation,),
@@ -337,6 +365,7 @@ def _validate_record(
     _check_lock(outcome_id, row, index, now, add)
     _check_integrity(row, add)
     if _is_stake_exempt(record):
+        _check_zero_stake(record, add)
         return found
     _check_markets(record, row, policy, add)
     _check_stakes(record, row, index, add)
@@ -475,12 +504,15 @@ def _check_synthesis(
     if stale:
         return
     verdict_backing = False
+    bet_backing = False
     for cite in cites:
         if cite.pass_ in {"A", "D", "B"}:
             pub = publications.get(cite.pass_)
             if pub and record.outcome_id in pub.outcome_ids:
                 verdict_backing = True
-                break
+                if record.outcome_id in pub.bet_outcome_ids:
+                    bet_backing = True
+                    break
     if not verdict_backing:
         add(
             "unsourced_synthesis",
@@ -488,6 +520,12 @@ def _check_synthesis(
         )
         return
     if record.verdict != "BET":
+        return
+    if not bet_backing:
+        add(
+            "unsourced_synthesis",
+            "E BET cites no upstream A/D/B record whose own verdict was BET.",
+        )
         return
     upstream_stakes = []
     for cite in cites:
@@ -693,6 +731,20 @@ def _check_markets(record: Any, row: Any, policy: VerdictPolicy, add) -> None:
 
     if pack.is_longshot_price(record.price):
         add("longshot_price", f"price {record.price} is at or beyond +{pack.LONGSHOT_AMERICAN_PRICE}.")
+
+
+def _check_zero_stake(record: Any, add) -> None:
+    """PASS / STAND_DOWN assert no position, so they must stake nothing."""
+    units = getattr(record, "recommended_units", None)
+    if units is None:
+        return
+    parsed = _finite_float(units)
+    if parsed is None or abs(parsed) <= 1e-9:
+        return
+    add(
+        "nonzero_stake_on_non_bet",
+        f"verdict {getattr(record, 'verdict', '')!r} carries recommended_units {parsed}.",
+    )
 
 
 def _finite_float(value: Any) -> float | None:

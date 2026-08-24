@@ -116,29 +116,29 @@ pass.** Copy, never retype from memory, never normalize, never "clean up".
     {
       "market_id": "<exact pack market_id>",
       "outcome_id": "<exact pack outcome_id / totals_id>",
-      "stream": "candidates" | "game_totals" | "team_totals",
+      "stream": "candidates",
       "selection": "<exact pack selection>",
       "line": "<exact pack line, or priced_line where one applies>",
       "price": "<exact pack price>",
       "book": "<exact pack book>",
-      "verdict": "BET" | "PASS" | "STAND_DOWN",
+      "verdict": "PASS",
       "confidence": 0.0,
       "recommended_units": 0.0,
       "evidence": [
         {
           "claim": "<one specific, checkable sentence>",
-          "kind": "pack" | "external",
-          "subject_type": "player" | "team" | "event" | "market" | "environment",
+          "kind": "pack",
+          "subject_type": "market",
           "player_id": "<required when subject_type is player, else null>",
           "team": "<team code, or null>",
           "market_id": "<the row this claim is about, or null>",
           "outcome_id": "<the row this claim is about, or null>",
           "source": "<publication or official body, or null>",
-          "tier": <1 | 2 | 3, or null>,
+          "tier": 1,
           "timestamp": "<ISO-8601 time the source published, or null>"
         }
       ],
-      "contradictions": [{"claim": "<what argues against this verdict>", "severity": "minor" | "material"}],
+      "contradictions": [{"claim": "<what argues against this verdict>", "severity": "material"}],
       "kill_triggers": [{"condition": "<pre-lock observable that voids the bet>", "observable_before_lock": true}],
       "rejection_reasons": ["<short reason>"]
     }
@@ -147,6 +147,19 @@ pass.** Copy, never retype from memory, never normalize, never "clean up".
   "needs": ["<specific fact that would upgrade a PASS>"]
 }
 ```
+
+The example above is literal JSON, not a template language: every value shown is
+one legal choice, and the alternatives are —
+
+* `stream`: `"candidates"`, `"game_totals"`, `"team_totals"` (which block the row came from)
+* `verdict`: `"BET"`, `"PASS"`, `"STAND_DOWN"`
+* `evidence[].kind`: `"pack"`, `"external"`
+* `evidence[].tier`: `1`, `2` or `3` — a bare number, not a string, and `null` on a `"pack"` item
+* `evidence[].subject_type`: `"player"`, `"team"`, `"event"`, `"market"`, `"environment"`
+* `contradictions[].severity`: `"minor"`, `"material"`
+
+Never emit a `|` between alternatives — that is not valid JSON and the response
+is parsed as JSON directly.
 
 Every key above is required on every record, including the ones you have nothing
 to say about — use `[]` for an empty list and `null` for an absent scalar. Emit
@@ -170,7 +183,8 @@ A row failing any of these can never be `BET`. Emit it as `PASS` or
 
 * `actionable` is not exactly `true` → never `BET`.
 * `board` is `A_FLAGGED` → never `BET`.
-* `data_quality_flags` contains any of: `spread_sign_conflict`,
+* `data_quality_flags` (candidates) or `quality_flags` (the totals boards)
+  contains any of: `spread_sign_conflict`,
   `movement_line_mismatch`, `implausible_line`, `non_numeric_line`,
   `edge_suspect_stale_line`, `edge_suspect_thin_liquidity`,
   `ev_probability_mismatch`, `SOURCE_INTEGRITY_FLAG`,

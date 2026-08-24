@@ -827,11 +827,13 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
             )
         }
         stakes: dict[str, float] = {}
+        bet_outcome_ids: set[str] = set()
         if pass_name != "C":
             for row in records:
                 if str(row.get("verdict") or "") != "BET":
                     continue
                 outcome_id = str(row.get("outcome_id") or "")
+                bet_outcome_ids.add(outcome_id)
                 try:
                     stakes[outcome_id] = float(row.get("recommended_units") or 0)
                 except (TypeError, ValueError):
@@ -841,6 +843,7 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
             publication_id=pub_id,
             record_ids=frozenset(item for item in record_ids if item),
             outcome_ids=frozenset(item for item in outcome_ids if item),
+            bet_outcome_ids=frozenset(item for item in bet_outcome_ids if item),
             injury_supported_record_ids=frozenset(
                 item for item in injury_supported_record_ids if item
             ),

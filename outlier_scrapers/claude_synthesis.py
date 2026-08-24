@@ -169,8 +169,12 @@ def run_claude_e(
         # Upstream identity is the publication_id, not a hash of prose: a forced
         # rerun can produce a different response under an unchanged request hash,
         # and E must re-run when the publication it reconciles actually changes.
-        upstream_publication_ids = {
-            name: published.publication_id for name, published in upstream.items()
+        # All four keys, always: the reconciliation schema requires A/D/B/C with C
+        # nullable, and E.md tells the model to echo this object verbatim. Dropping
+        # the key when C did not run made a faithful echo fail schema validation.
+        upstream_publication_ids: dict[str, str | None] = {
+            name: upstream[name].publication_id if name in upstream else None
+            for name in (*REQUIRED_UPSTREAM, *OPTIONAL_UPSTREAM)
         }
         request_sha256 = rc.compute_request_hash(
             {
@@ -198,11 +202,13 @@ def run_claude_e(
 
         logger.info("Calling Claude (Prompt E synthesis)...")
         identity = (
-            f"pack_date: {pack_dir.name}\n"
-            f"candidates_sha256: {candidates_sha256}\n"
-            f"game_totals_sha256: {game_totals_sha256}\n"
-            f"team_totals_sha256: {team_totals_sha256}\n"
-            "upstream_publication_ids: "
+            rc.build_pack_identity_block(
+                pack_date=pack_dir.name,
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            )
+            + "upstream_publication_ids: "
             + json.dumps(upstream_publication_ids, sort_keys=True)
             + "\n"
         )

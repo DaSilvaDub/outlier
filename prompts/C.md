@@ -1,9 +1,15 @@
 # PASS C — INJURY / LINEUP RESEARCH PASS
 
-Deep research task, narrow focus. Collect **current** (last 24 hours, anchored to
-the pack's `pack_date`) injury reports, availability, load management, rest,
-confirmed lineups, rotations and starters, and their usage impact. Each game is
-tagged MLB or WNBA — apply the matching lens.
+Deep research task, narrow focus. Collect **current** injury reports,
+availability, load management, rest, confirmed lineups, rotations and starters,
+and their usage impact. Each game is tagged MLB or WNBA — apply the matching
+lens.
+
+Prefer sources from the last 24 hours. The enforced window is wider than that —
+a `source_timestamp` is accepted from two days before `pack_date` through one day
+after it — because an official designation posted two days out is still the
+current fact. Anything outside that window is rejected, and anything older than
+24 hours must say how old it is in its `claim`.
 
 * **MLB:** starting-pitcher confirmation and any change, days of rest, pitch-count
   or workload restriction, bullpen usage and availability, posted lineup (which
@@ -53,6 +59,11 @@ reporter or major wire, `3` = other outlet.
   Quote the pack's values verbatim. `selection`, `line` and `price` are compared
   character-for-character against the pack row; one mismatch on one finding
   rejects the whole pass.
+* **`line` is normally the row's `line` column — but if the row carries a
+  non-empty `priced_line`, or a flag of the form
+  `ev_line_fallback:priced_at=<X>`, emit that priced value instead.** The same
+  substitution the verdict passes apply is checked here: quoting the displayed
+  line on such a row is rejected as an unreconciled priced line.
 * Every `market_id` and `outcome_id` you emit must already exist in the supplied
   pack data. An identifier that is not in the pack is a fabricated market.
 * Tie every finding to at least one exact pack `market_id` + `outcome_id`, and
@@ -87,11 +98,11 @@ directly.
     {
       "market_id": "<exact market_id from the pack>",
       "outcome_id": "<exact outcome_id from the pack>",
-      "stream": "candidates" | "game_totals" | "team_totals",
+      "stream": "candidates",
       "selection": "<exact pack selection>",
       "line": "<exact pack line>",
       "price": "<exact pack price>",
-      "verdict": "CONFIRMS" | "CONTRADICTS" | "NEUTRAL",
+      "verdict": "NEUTRAL",
       "claim": "<one sentence: the finding, and why it CONFIRMS / CONTRADICTS / is NEUTRAL for betting this exact line>",
       "source_name": "<publication or official source name>",
       "source_tier": 1,
@@ -103,12 +114,21 @@ directly.
 }
 ```
 
+The example is literal JSON, not a template language. `stream` is whichever of
+`"candidates"` / `"game_totals"` / `"team_totals"` the row came from, and
+`verdict` is one of `"CONFIRMS"` / `"CONTRADICTS"` / `"NEUTRAL"`. Never emit a
+`|` between alternatives — that is not valid JSON, and the response is parsed as
+JSON directly.
+
 Echo `schema_version`, `pass`, `pack_date` and the three `*_sha256` values
 exactly as supplied — never alter, guess, or omit them. They are opaque strings;
 a single altered character rejects the pass before any finding is read.
 
-`evidence` may always be left as an empty array; it is not required for this
-pass.
+`evidence` may be left as an empty array for a finding about a team, an event, or
+the environment. **A finding about a specific player must carry a player evidence
+item** — `subject_type: "player"` with that row's exact `player_id` — because
+`FindingRecord` has no top-level player field, so an empty `evidence` list leaves
+the player named in `claim` unbound to any roster row.
 
 More than one finding may share an `outcome_id` — a lineup finding and a weather
 finding on the same total are two separate records, not one merged claim.
