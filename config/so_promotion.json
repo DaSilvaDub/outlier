@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "auto_promote": false,
+  "min_settled_gamelog": 20,
+  "require_v2_hash": true,
+  "require_prefer_independent": true,
+  "prefer_tempered_over_market": true,
+  "temper_independent_weight": 0.55,
+  "soft_reliability_fallback": 0.45,
+  "max_units": 2.0,
+  "notes": "Live Kelly from gamelog SO stays off until so_eval on settled v2 rows prefers independent (or tempered) over market. OUTLIER_PROMOTE_INDEPENDENT_SO=1 force-enables; OUTLIER_AUTO_PROMOTE_INDEPENDENT_SO=1 respects this file + ledger."
+}
