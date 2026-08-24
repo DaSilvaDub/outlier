@@ -2984,6 +2984,7 @@ def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
         P.PROJECT_ROOT = original_project_root
 
 
+@pytest.mark.uses_enforce_mode
 def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()
