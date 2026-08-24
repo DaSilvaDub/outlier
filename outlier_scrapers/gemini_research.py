@@ -143,11 +143,13 @@ def run_gemini_b(
 
         logger.info("Calling Gemini (Prompt B)...")
         briefing_input = rc.append_totals_block(
-            "pack_date: "
-            + pack_dir.name
-            + f"\ncandidates_sha256: {candidates_sha256}\n"
-            + f"game_totals_sha256: {game_totals_sha256}\n"
-            + f"team_totals_sha256: {team_totals_sha256}\n\n"
+            rc.build_pack_identity_block(
+                pack_date=pack_dir.name,
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            )
+            + "\n"
             + briefing_text
             + "\n\nAuthoritative candidates.csv:\n"
             + candidates_bytes.decode("utf-8-sig"),

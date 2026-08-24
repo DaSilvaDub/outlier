@@ -242,6 +242,29 @@ def filter_candidates_for_ai(raw_bytes: bytes) -> bytes:
     return out_io.getvalue().encode("utf-8-sig")
 
 
+def build_pack_identity_block(
+    *,
+    pack_date: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+) -> str:
+    """The identity header every pass echoes back in its envelope.
+
+    The gate compares an envelope's ``pack_date`` and three pack hashes against
+    the index and fails the whole pass on any mismatch, so a pass that is never
+    shown these values cannot emit a valid envelope. Every runner sends this
+    block; the prompts refer to it by the ``PACK IDENTITY`` label.
+    """
+    return (
+        "===== PACK IDENTITY =====\n"
+        f"pack_date: {pack_date}\n"
+        f"candidates_sha256: {candidates_sha256}\n"
+        f"game_totals_sha256: {game_totals_sha256}\n"
+        f"team_totals_sha256: {team_totals_sha256}\n"
+    )
+
+
 def build_reasoning_data_block(
     candidates_bytes: bytes,
     totals_bytes: bytes | None,

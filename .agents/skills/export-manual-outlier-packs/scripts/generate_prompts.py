@@ -388,7 +388,10 @@ def generate_for_dir(
     # Alt Spread). The dedicated Alt Spread lane intentionally uses prefix 5
     # so existing prompt filenames and consumers are not renumbered.
     # HitRate prompts are intentionally not generated — dropped pending a redesign.
-    cards_template = load_prompt_template("A.md")
+    # Master Cards is the human-readable Markdown lane. prompts/A.md is the
+    # automated desk's Pass A prompt and emits a JSON verdict envelope, so it
+    # is only the fallback here, not the template.
+    cards_template = load_prompt_template("Master_Cards_Analysis.md")
     cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
 
     # Master Card is split per league (MLB, WNBA) plus a combined variant, each
