@@ -1,3 +1,6 @@
+# Disabled: requires OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, and XAI_API_KEY
+# repo secrets. None are currently funded, so every PR failed all four review jobs.
+# Rename back to ai-pr-review.yml once at least one provider has working API credit.
 name: AI PR Review Consensus
 
 on:

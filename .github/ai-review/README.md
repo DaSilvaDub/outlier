@@ -1,8 +1,12 @@
 # Automated multi-AI pull-request review
 
-Every non-draft pull request and meaningful update fans out to four independent reviewers,
-then a fifth Codex consensus pass waits for the repository's required CI checks and posts an
-enforced merge recommendation.
+**Currently disabled** (`.github/workflows/ai-pr-review.yml.disabled`) — none of the four
+provider API keys below have working credit, so every PR was failing all four review jobs.
+Rename the workflow file back to `.yml` once at least one provider is funded.
+
+When enabled, every non-draft pull request and meaningful update fans out to four independent
+reviewers, then a fifth Codex consensus pass waits for the repository's required CI checks and
+posts an enforced merge recommendation.
 
 ```text
 pull_request opened / synchronize / reopened / ready_for_review
