@@ -52,7 +52,8 @@ def _soften_prob(independent: float, reliability: float) -> float:
         {"win_prob": independent, "push_prob": 0.0, "loss_prob": 1.0 - independent},
         reliability=reliability,
     )
-    return float(soft["win_prob"])
+    win_prob: Any = soft["win_prob"]
+    return float(win_prob)
 
 
 def evaluate_so_probs(
