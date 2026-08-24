@@ -19,6 +19,7 @@ from .otp_fetcher import fetch_and_write_otp
 from . import refresh
 from . import pack
 from . import feedback
+from . import probability_blend
 from . import feed_health
 from . import results
 from . import run_desk
@@ -216,6 +217,48 @@ def collect_completed_results(
     return {"status": "ok", **stats}
 
 
+def refit_blend_weights(
+    db_path: Path | None = None,
+    weights_path: Path | None = None,
+) -> dict:
+    """Refit market/model blend weights from settled ledger rows before the pack.
+
+    The fitted artifact only improves as settlements accumulate, so it is
+    refitted every run instead of whenever someone remembers to call
+    ``feedback fit-blend`` by hand. Failure is non-fatal: the pack falls back to
+    the previous artifact (or to market-only) rather than skipping a slate.
+    """
+
+    db = db_path or feedback.DEFAULT_DB_PATH
+    output = weights_path or probability_blend.DEFAULT_WEIGHTS_PATH
+    if not Path(db).exists():
+        logger.warning("Blend refit skipped: no feedback ledger at %s", db)
+        return {"status": "skipped", "reason": "missing_ledger"}
+    try:
+        artifact = feedback.fit_blend_weights(Path(db), Path(output))
+    except (OSError, sqlite3.Error, feedback.FeedbackError, ValueError) as exc:
+        logger.error("Blend refit failed (keeping previous weights): %s", exc)
+        return {"status": "failed", "error": str(exc)[:300]}
+    promotion = probability_blend.promotion_status(artifact)
+    logger.info(
+        "Blend refit: status=%s eligible_samples=%s model_version=%s drives_sizing=%s",
+        artifact.get("status"),
+        artifact.get("eligible_samples"),
+        artifact.get("model_version"),
+        promotion["drives_sizing"],
+    )
+    if not promotion["drives_sizing"]:
+        logger.info("Blend stays audit-only: %s", "; ".join(promotion["reasons"]))
+    return {
+        "status": "ok",
+        "artifact_status": artifact.get("status"),
+        "eligible_samples": artifact.get("eligible_samples"),
+        "model_version": artifact.get("model_version"),
+        "drives_sizing": promotion["drives_sizing"],
+        "promotion_reasons": promotion["reasons"],
+    }
+
+
 def _count_pack_rows(pack_dir: Path) -> int | None:
     candidates = pack_dir / "candidates.csv"
     if not candidates.exists():
@@ -288,6 +331,10 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
             return 1
         settlement_stats = imported
 
+    blend_refit = {"status": "skipped"}
+    if not args.skip_blend_refit:
+        blend_refit = refit_blend_weights(args.feedback_db)
+
     if not perform_auth_check(leagues):
         if not orchestrate_login(leagues):
             logger.error("Authentication failed. Aborting pipeline.")
@@ -356,6 +403,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         "status_file": str(status_path) if status_path.exists() else None,
         "settlement_ingest": settlement_stats,
         "result_collection": result_collection,
+        "blend_refit": blend_refit,
     }
     _atomic_write_manifest(pack_dir, manifest)
 
@@ -390,6 +438,11 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-result-collection",
         action="store_true",
         help="Explicit diagnostic escape hatch; normal daily runs grade completed events.",
+    )
+    parser.add_argument(
+        "--skip-blend-refit",
+        action="store_true",
+        help="Explicit diagnostic escape hatch; normal daily runs refit blend weights.",
     )
     parser.add_argument(
         "--skip-settlement-ingest",

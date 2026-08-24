@@ -338,6 +338,98 @@ def independent_projection_eligible(projection: Mapping[str, object] | None) -> 
     return digest not in AUDIT_ONLY_PROJECTION_HASHES
 
 
+SO_MODEL_PARAM_KEYS = (
+    "league_strikeout_rate",
+    "starter_projected_bf",
+    "rate_prior_bf",
+    "bf_prior_starts",
+    "base_workload_dispersion",
+    "thin_start_dispersion_step",
+)
+CALIBRATED_SO_HASH_PREFIX = "so-starter-calibrated-"
+SO_MODEL_SCHEMA_VERSION = 1
+
+
+def default_so_model_params() -> dict[str, float]:
+    """Hand-set priors used until a trained artifact is promoted."""
+
+    return {
+        "league_strikeout_rate": LEAGUE_STRIKEOUT_RATE,
+        "starter_projected_bf": STARTER_PROJECTED_BF,
+        "rate_prior_bf": SO_RATE_PRIOR_BF,
+        "bf_prior_starts": SO_BF_PRIOR_STARTS,
+        "base_workload_dispersion": SO_BASE_WORKLOAD_DISPERSION,
+        "thin_start_dispersion_step": SO_THIN_START_DISPERSION_STEP,
+    }
+
+
+def resolve_so_model_params(params: Mapping[str, object] | None = None) -> dict[str, float]:
+    """Overlay a trained artifact's parameters on the defaults, fail-safe."""
+
+    resolved = default_so_model_params()
+    if not isinstance(params, Mapping):
+        return resolved
+    for key in SO_MODEL_PARAM_KEYS:
+        value = _float_stat(params.get(key))
+        if value is None or value < 0:
+            continue
+        resolved[key] = value
+    # Guard rails: a corrupt artifact must not produce a degenerate model.
+    resolved["league_strikeout_rate"] = min(0.45, max(0.08, resolved["league_strikeout_rate"]))
+    resolved["starter_projected_bf"] = min(40.0, max(1.0, resolved["starter_projected_bf"]))
+    resolved["base_workload_dispersion"] = max(1e-3, resolved["base_workload_dispersion"])
+    return resolved
+
+
+def so_model_artifact_path(sport: str = "MLB") -> Path:
+    from . import paths as _paths
+
+    return _paths.PROJECT_ROOT / "calibration" / "projections" / f"{sport.upper()}_so_model.json"
+
+
+_PROMOTED_SO_MODEL_CACHE: dict[str, tuple[float, dict[str, object] | None]] = {}
+
+
+def load_promoted_so_model(path: Path | None = None) -> dict[str, object] | None:
+    """Return the promoted, schema-compatible calibrated SO model, else None.
+
+    Training and validation write artifacts continuously; only an explicitly
+    promoted one changes live inference (docs/plans/independent-projection-layer.md).
+    """
+
+    artifact_path = Path(path) if path is not None else so_model_artifact_path("MLB")
+    try:
+        stamp = artifact_path.stat().st_mtime
+    except OSError:
+        _PROMOTED_SO_MODEL_CACHE.pop(str(artifact_path), None)
+        return None
+    cached = _PROMOTED_SO_MODEL_CACHE.get(str(artifact_path))
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    payload: dict[str, object] | None = None
+    try:
+        loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Unreadable SO model artifact %s: %s", artifact_path, exc)
+        loaded = None
+    if isinstance(loaded, Mapping):
+        compatible = (
+            bool(loaded.get("promoted"))
+            and str(loaded.get("status") or "") == "trained"
+            and int(_float_stat(loaded.get("schema_version")) or 0) == SO_MODEL_SCHEMA_VERSION
+            and bool(str(loaded.get("model_version") or ""))
+        )
+        if compatible:
+            payload = dict(loaded)
+        elif loaded.get("promoted"):
+            logger.warning(
+                "Promoted SO model artifact %s is incompatible; staying on defaults.",
+                artifact_path,
+            )
+    _PROMOTED_SO_MODEL_CACHE[str(artifact_path)] = (stamp, payload)
+    return payload
+
+
 def _default_stats_fetch_json(request_url: str) -> dict[str, object]:
     from urllib.request import Request, urlopen
 
@@ -638,12 +730,18 @@ def mlb_so_projection_record(
         starts = int(_float_stat(listed.get("starts")) or 0)
         total_bf = _float_stat(listed.get("total_bf"))
         total_k = _float_stat(listed.get("total_k"))
+        calibrated = load_promoted_so_model()
+        calibrated_params = calibrated.get("parameters") if calibrated else None
+        model_params = resolve_so_model_params(
+            calibrated_params if isinstance(calibrated_params, Mapping) else None
+        )
         shrunk = shrink_starter_so_features(
             projected_bf,
             strikeout_rate,
             starts=starts,
             total_bf=total_bf,
             total_k=total_k,
+            params=model_params,
         )
         adjusted_bf, adjusted_rate = apply_so_context_adjustments(
             float(shrunk["projected_bf"]),
@@ -657,6 +755,8 @@ def mlb_so_projection_record(
             workload_dispersion=float(shrunk["workload_dispersion"]),
         )
         feature_hash = GAMELOG_SO_HASH
+        if calibrated is not None:
+            feature_hash = f"{CALIBRATED_SO_HASH_PREFIX}{calibrated['model_version']}"
         record = distribution.to_record(line=line_value, side=side)
         record = soften_so_win_probability(
             record,
@@ -686,6 +786,7 @@ def shrink_starter_so_features(
     starts: int = 0,
     total_bf: float | None = None,
     total_k: float | None = None,
+    params: Mapping[str, object] | None = None,
 ) -> dict[str, float]:
     """Empirical-Bayes shrink recent-start BF/K toward league priors.
 
@@ -693,23 +794,28 @@ def shrink_starter_so_features(
     diagnosis: 7/7 more extreme than market). Shrinkage + wider dispersion
     flattens those tails without using the betting line as a feature.
     """
+    settings = resolve_so_model_params(params)
+    prior_bf = settings["rate_prior_bf"]
+    prior_rate = settings["league_strikeout_rate"]
+    prior_starts = settings["bf_prior_starts"]
+    prior_workload = settings["starter_projected_bf"]
     starts = max(0, int(starts))
     observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
     if total_k is not None and total_k >= 0 and observed_bf > 0:
-        rate_numer = float(total_k) + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
-        rate_denom = float(observed_bf) + SO_RATE_PRIOR_BF
+        rate_numer = float(total_k) + prior_bf * prior_rate
+        rate_denom = float(observed_bf) + prior_bf
     else:
-        rate_numer = strikeout_rate * observed_bf + SO_RATE_PRIOR_BF * LEAGUE_STRIKEOUT_RATE
-        rate_denom = observed_bf + SO_RATE_PRIOR_BF
+        rate_numer = strikeout_rate * observed_bf + prior_bf * prior_rate
+        rate_denom = observed_bf + prior_bf
     shrunk_rate = min(0.45, max(0.08, rate_numer / rate_denom))
-    shrunk_bf = (
-        starts * projected_bf + SO_BF_PRIOR_STARTS * STARTER_PROJECTED_BF
-    ) / (starts + SO_BF_PRIOR_STARTS)
-    shrunk_bf = max(1.0, shrunk_bf)
-    dispersion = SO_BASE_WORKLOAD_DISPERSION + SO_THIN_START_DISPERSION_STEP * max(
-        0, DEFAULT_SO_MAX_STARTS - max(starts, 1)
+    shrunk_bf = (starts * projected_bf + prior_starts * prior_workload) / max(
+        1e-9, starts + prior_starts
     )
-    reliability = observed_bf / (observed_bf + SO_RATE_PRIOR_BF)
+    shrunk_bf = max(1.0, shrunk_bf)
+    dispersion = settings["base_workload_dispersion"] + settings[
+        "thin_start_dispersion_step"
+    ] * max(0, DEFAULT_SO_MAX_STARTS - max(starts, 1))
+    reliability = observed_bf / (observed_bf + prior_bf) if observed_bf + prior_bf > 0 else 0.0
     return {
         "projected_bf": shrunk_bf,
         "strikeout_rate": shrunk_rate,
@@ -1069,18 +1175,68 @@ def build_mlb_so_projections(
     return records
 
 
-def export_projections(league: str = "MLB") -> dict[str, object]:
-    """Compute and persist independent SO projections for one league's props.
+def build_wnba_points_projections(
+    props_rows: Iterable[Mapping[str, object]],
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> list[dict[str, object]]:
+    """Compute shadow WNBA points projections for the points rows in a feed.
 
-    Reads the already-refreshed ``<league>_props_latest.json`` and
-    ``<league>_probable_pitchers_latest.json`` — both auto-advance to the
-    correct slate on their own, so this step just needs to run after them.
-    Only MLB has a wired independent model today (pitcher SO via starter
-    game logs); other leagues' shadow projections stay audit-only in the
-    inline path and aren't worth persisting here yet.
+    Feature lookups are cached per player so one slate costs one ESPN call per
+    player, not one per priced outcome. Rows that are not points markets never
+    trigger a fetch.
     """
 
-    if league.strip().upper() != "MLB":
+    cache: dict[str, dict[str, object] | None] = {}
+    records: list[dict[str, object]] = []
+    for row in props_rows:
+        if not isinstance(row, Mapping):
+            continue
+        market = str(
+            row.get("market_type") or row.get("market") or row.get("proposition") or ""
+        ).upper()
+        selection = str(row.get("selection") or "").upper()
+        if market not in {"PTS", "POINTS"} and "POINT" not in selection:
+            continue
+        player = _player_name_from_row(row)
+        if not player:
+            continue
+        features = get_wnba_points_features(
+            player, season=season, fetch_json=fetch_json, cache=cache
+        )
+        record = wnba_points_projection_record(row, features=features)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _projection_season(props_rows: Iterable[Mapping[str, object]]) -> int:
+    """Season year for feature lookups, taken from the feed's own as_of stamp."""
+
+    for row in props_rows:
+        if not isinstance(row, Mapping):
+            continue
+        as_of = str(row.get("as_of") or "")
+        if len(as_of) >= 4 and as_of[:4].isdigit():
+            return int(as_of[:4])
+    return datetime.now().astimezone().year
+
+
+def export_projections(league: str = "MLB") -> dict[str, object]:
+    """Compute and persist independent projections for one league's props.
+
+    Reads the already-refreshed ``<league>_props_latest.json`` (and, for MLB,
+    ``<league>_probable_pitchers_latest.json``) — both auto-advance to the
+    correct slate on their own, so this step just needs to run after them.
+    MLB emits starter pitcher-SO projections from game logs; WNBA emits the
+    shadow points scaffold. Both are written to
+    ``<sport>_projections_latest.json`` so ``pack`` reads a file instead of
+    re-deriving every projection inline.
+    """
+
+    sport = league.strip().upper()
+    if sport not in {"MLB", "WNBA"}:
         return {
             "status": "skipped",
             "reason": f"no independent projection model for {league}",
@@ -1088,9 +1244,8 @@ def export_projections(league: str = "MLB") -> dict[str, object]:
         }
 
     from .paths import league_paths
-    from .probable_pitchers import load_probable_pitcher_lookup
 
-    paths_for_league = league_paths("MLB")
+    paths_for_league = league_paths(sport)
     props_path = paths_for_league.props_normalized_latest()
     if not props_path.exists():
         return {"status": "error", "reason": "props_normalized_latest missing", "record_count": 0}
@@ -1102,11 +1257,18 @@ def export_projections(league: str = "MLB") -> dict[str, object]:
     if not isinstance(props_rows, list):
         props_rows = []
 
-    probable_by_team = load_probable_pitcher_lookup("MLB")
-    records = build_mlb_so_projections(props_rows, probable_by_team)
+    if sport == "MLB":
+        from .probable_pitchers import load_probable_pitcher_lookup
+
+        probable_by_team = load_probable_pitcher_lookup("MLB")
+        records = build_mlb_so_projections(props_rows, probable_by_team)
+    else:
+        records = build_wnba_points_projections(
+            props_rows, season=_projection_season(props_rows)
+        )
 
     result = {
-        "sport": "MLB",
+        "sport": sport,
         "date": datetime.now().astimezone().date().isoformat(),
         "generated_at": datetime.now().astimezone().isoformat(),
         "projections": records,
@@ -1117,36 +1279,46 @@ def export_projections(league: str = "MLB") -> dict[str, object]:
     return {"status": "ok", "record_count": len(records)}
 
 
-def _write_status(command: str, sport: str, output: Path | None) -> int:
-    payload = {
-        "command": command,
-        "sport": sport.upper(),
-        "status": "scaffold-ready",
-        "generated_at": datetime.now().astimezone().isoformat(),
-    }
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    else:
-        print(json.dumps(payload, indent=2))
-    return 0
-
-
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Independent deterministic projection layer")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("backfill", "train", "project", "validate", "export"):
+    for command in ("backfill", "train", "project", "validate", "export", "promote"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--sport", required=True, choices=("MLB", "WNBA"))
         subparser.add_argument("--date", default=date.today().isoformat())
         subparser.add_argument("--output", type=Path)
         if command == "project":
             subparser.add_argument("--input", type=Path)
-        if command in {"backfill", "train"}:
+        if command in {"backfill", "train", "validate"}:
             subparser.add_argument("--from", dest="from_date")
             subparser.add_argument("--to", dest="to_date")
-        if command == "validate":
+        if command == "backfill":
+            subparser.add_argument(
+                "--team",
+                action="append",
+                dest="teams",
+                help="Restrict the roster crawl to these team codes (repeatable).",
+            )
+            subparser.add_argument(
+                "--pitcher-limit",
+                type=int,
+                help="Cap pitchers per season; useful for smoke runs.",
+            )
+        if command in {"train", "validate"}:
+            subparser.add_argument("--dataset", type=Path)
+            subparser.add_argument("--min-samples", type=int)
+        if command == "train":
+            subparser.add_argument("--as-of", dest="as_of")
+        if command in {"validate", "promote"}:
             subparser.add_argument("--artifact", type=Path)
+        if command == "promote":
+            subparser.add_argument("--actor", default="")
+            subparser.add_argument("--validation", type=Path)
+            subparser.add_argument(
+                "--skip-validation",
+                action="store_true",
+                help="Promote without a passing validation report (audited, discouraged).",
+            )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -1162,25 +1334,85 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 1
         print(f"{args.sport} projections: exported {status['record_count']} records")
         return 0
-    if args.command == "project" and args.input:
-        payload = json.loads(args.input.read_text(encoding="utf-8"))
-        rows = payload.get("records", payload) if isinstance(payload, Mapping) else payload
-        if not isinstance(rows, list):
-            raise ValueError("projection input must be a JSON list or an object containing records")
-        result = {
-            "sport": args.sport,
-            "date": args.date,
-            "generated_at": datetime.now().astimezone().isoformat(),
-            "projections": project_rows(rows, args.sport),
-        }
-        rendered = json.dumps(result, indent=2) + "\n"
-        if args.output:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(rendered, encoding="utf-8")
+    if args.command == "project":
+        if args.input:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            rows = payload.get("records", payload) if isinstance(payload, Mapping) else payload
+            if not isinstance(rows, list):
+                raise ValueError(
+                    "projection input must be a JSON list or an object containing records"
+                )
+            result = {
+                "sport": args.sport,
+                "date": args.date,
+                "generated_at": datetime.now().astimezone().isoformat(),
+                "projections": project_rows(rows, args.sport),
+            }
+            rendered = json.dumps(result, indent=2) + "\n"
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(rendered, encoding="utf-8")
+            else:
+                print(rendered, end="")
+            return 0
+        # No explicit input: project the league's refreshed feed in place.
+        status = export_projections(args.sport)
+        print(f"{args.sport} projections: {json.dumps(status, sort_keys=True)}")
+        return 1 if status["status"] == "error" else 0
+
+    from . import projection_training
+
+    try:
+        if args.command == "backfill":
+            if not args.from_date or not args.to_date:
+                print("backfill requires --from and --to (YYYY-MM-DD).")
+                return 2
+            status = projection_training.backfill(
+                args.sport,
+                start=args.from_date,
+                end=args.to_date,
+                output=args.output,
+                team_codes=args.teams,
+                pitcher_limit=args.pitcher_limit,
+            )
+        elif args.command == "train":
+            kwargs: dict[str, Any] = {
+                "as_of": args.as_of or args.date,
+                "dataset": args.dataset,
+                "output": args.output,
+            }
+            if args.min_samples is not None:
+                kwargs["min_samples"] = args.min_samples
+            status = projection_training.train(args.sport, **kwargs)
+        elif args.command == "validate":
+            kwargs = {
+                "artifact": args.artifact,
+                "dataset": args.dataset,
+                "output": args.output,
+                "start": args.from_date,
+                "end": args.to_date,
+            }
+            if args.min_samples is not None:
+                kwargs["min_samples"] = args.min_samples
+            status = projection_training.validate(args.sport, **kwargs)
         else:
-            print(rendered, end="")
-        return 0
-    return _write_status(args.command, args.sport, args.output)
+            status = projection_training.promote(
+                args.sport,
+                artifact=args.artifact,
+                actor=args.actor,
+                require_validation=not args.skip_validation,
+                validation=args.validation,
+            )
+    except projection_training.TrainingError as exc:
+        print(f"{args.sport} {args.command}: {exc}")
+        return 1
+
+    print(json.dumps(status, indent=2, sort_keys=True))
+    if args.command == "validate":
+        return 0 if status.get("verdict") in {"pass", "insufficient_data"} else 1
+    if status.get("status") in {"error"}:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

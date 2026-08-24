@@ -87,7 +87,7 @@ This is the canonical, complete column list — the export header must match it 
 - `local_ev_pct` / `local_kelly_pct` = Locally synthesized EV% and Kelly% when Outlier native EV is missing.
 - `research_leverage` (low/med/high) = how much an unknown (weather, lineup, starter, rest) could move the number — used to prioritize Prompt C (§2d).
 
-Cap with **board quotas** so signal coverage is never starved by EV volume: take the top `top_ev_n` Board-A (EV) cards by `rank_value` desc **and** the top `top_signal_n` Board-B (signal) cards by `rank_value` desc (defaults 15 / 10 ≈ 25 total), union them. One row per card, emitted from the card's `headline_side`. **Never dump the whole slate.**
+Cap with **board quotas** so signal coverage is never starved by EV volume: take the top `top_ev_n` Board-A (EV) cards by `rank_value` desc **and** the top `top_signal_n` Board-B (signal) cards by `rank_value` desc (defaults 40 / 10 ≈ 50 total; the EV quota is deliberately wider than the number of playable cards so the enforced portfolio caps in `config/portfolio_risk.json` do the pruning instead of a pre-risk truncation), union them. One row per card, emitted from the card's `headline_side`. **Never dump the whole slate.**
 
 ### 2c. `briefing.md` — the master pack (read by Gemini B/C + Claude D)
 Header = §2a rules. Body:

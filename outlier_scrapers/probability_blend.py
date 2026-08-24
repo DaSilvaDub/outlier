@@ -330,3 +330,79 @@ def blend_probabilities(
     market_weight = float(resolved["market_weight"])
     final = market_weight * market + (1.0 - market_weight) * independent
     return {**resolved, "final_probability": round(final, 10)}
+
+
+DEFAULT_PROMOTION_PATH = paths.PROJECT_ROOT / "config" / "blend_promotion.json"
+DEFAULT_PROMOTION_MIN_SAMPLES = 1000
+# Cache keyed by policy path -> (mtime, policy); a rewritten file reloads itself.
+_PROMOTION_POLICY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def load_promotion_policy(path: Path = DEFAULT_PROMOTION_PATH) -> dict[str, Any]:
+    """Load the manual promotion policy for the market/model blend.
+
+    Shadow is the default and the fail-safe: an unreadable, malformed, or
+    missing policy never lets the blend drive sizing.
+    """
+
+    policy: dict[str, Any] = {
+        "mode": "shadow",
+        "min_eligible_samples": DEFAULT_PROMOTION_MIN_SAMPLES,
+        "model_version": "",
+        "promoted_by": "",
+        "promoted_at": "",
+    }
+    path = Path(path)
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        _PROMOTION_POLICY_CACHE.pop(str(path), None)
+        return policy
+    cached = _PROMOTION_POLICY_CACHE.get(str(path))
+    if cached is not None and cached[0] == stamp:
+        return dict(cached[1])
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _PROMOTION_POLICY_CACHE[str(path)] = (stamp, dict(policy))
+        return policy
+    if not isinstance(payload, Mapping):
+        return policy
+    mode = str(payload.get("mode") or "shadow").strip().lower()
+    policy["mode"] = mode if mode in {"shadow", "live"} else "shadow"
+    minimum = _float(payload.get("min_eligible_samples"))
+    if minimum is not None and minimum >= 0:
+        policy["min_eligible_samples"] = int(minimum)
+    for key in ("model_version", "promoted_by", "promoted_at"):
+        policy[key] = str(payload.get(key) or "")
+    _PROMOTION_POLICY_CACHE[str(path)] = (stamp, dict(policy))
+    return policy
+
+
+def promotion_status(
+    artifact: Mapping[str, Any] | None, policy: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """Whether the fitted blend may drive live sizing, and why not when it may not."""
+
+    resolved = dict(policy) if policy is not None else load_promotion_policy()
+    minimum = int(resolved.get("min_eligible_samples") or DEFAULT_PROMOTION_MIN_SAMPLES)
+    samples = int(_float((artifact or {}).get("eligible_samples")) or 0)
+    version = str((artifact or {}).get("model_version") or "")
+    pinned = str(resolved.get("model_version") or "")
+    reasons: list[str] = []
+    if not artifact or artifact.get("status") != "active":
+        reasons.append("artifact_inactive")
+    if str(resolved.get("mode")) != "live":
+        reasons.append("policy_shadow")
+    if samples < minimum:
+        reasons.append(f"insufficient_samples:{samples}<{minimum}")
+    if pinned and pinned != version:
+        reasons.append("model_version_mismatch")
+    return {
+        "drives_sizing": not reasons,
+        "mode": str(resolved.get("mode")),
+        "eligible_samples": samples,
+        "min_eligible_samples": minimum,
+        "model_version": version,
+        "reasons": reasons,
+    }
