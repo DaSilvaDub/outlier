@@ -747,8 +747,8 @@ def build_totals(
             model_win_prob = blended_over if best_side == "OVER" else (1.0 - blended_over)
         else:
             model_win_prob = p_side_market
-        consensus_win_prob = p_side_market
-        independent_win_prob = None
+        consensus_win_prob: float | None = p_side_market
+        independent_win_prob: float | None = None
         if _totals_models_diverge(recency_hit_prob, p_side_market):
             flags.append("totals_model_divergence")
 

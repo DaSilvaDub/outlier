@@ -653,9 +653,16 @@ def _ev_metric_fields(ev_outcome: dict[str, Any] | None, *, prefix: str = "ev_")
     if not isinstance(calculated_ev, dict):
         ev_val = calculated_ev
 
-    devig = ev_outcome.get("deVigOdds")
-    if not isinstance(devig, dict):
+    # ``calculatedEV`` can expose several devig methods while the legacy
+    # top-level ``deVigOdds`` describes a different calculation.  Keep the
+    # probability source on the same selected method as EV/Kelly; otherwise
+    # pack sizing can recompute a materially different edge from the one this
+    # record reports.  Legacy scalar calculatedEV payloads have no selected
+    # method and may still use the top-level field.
+    if method_used is not None:
         devig = method_payload.get("noVigOdds")
+    else:
+        devig = ev_outcome.get("deVigOdds")
     devig_american = None
     devig_decimal = None
     if isinstance(devig, dict):

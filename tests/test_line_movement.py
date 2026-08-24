@@ -331,6 +331,24 @@ def test_normalize_market_detail_maps_ev_outcomes_to_side_rows():
     assert under["ev_books"] == []
 
 
+def test_ev_metrics_prefer_selected_method_no_vig_over_legacy_top_level():
+    payload = _market_detail(ev_outcomes=True)
+    over_ev = payload["market"]["evOutcomes"][0]
+    over_ev["deVigOdds"] = {"american": "-119", "decimal": 1.8403361344537816}
+
+    rows = normalize_market_detail(league="MLB", payload=payload)
+    ev_records = normalize_ev_records(league="MLB", payload=payload)
+
+    over = next(row for row in rows if row["side"] == "OVER")
+    over_record = next(row for row in ev_records if row["side"] == "OVER")
+    assert over["ev_calculated_ev_method"] == "AVERAGE"
+    assert over["ev_devig_odds"] == -115
+    assert over["ev_devig_decimal"] == 1.86
+    assert over_record["calculated_ev_method"] == "AVERAGE"
+    assert over_record["devig_odds"] == -115
+    assert over_record["devig_decimal"] == 1.86
+
+
 def test_normalize_market_detail_matches_ev_by_unique_side_when_outcome_id_missing():
     payload = _market_detail(ev_outcomes=True)
     for outcome in payload["market"]["outcomes"]:
