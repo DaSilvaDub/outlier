@@ -350,6 +350,21 @@ CALIBRATED_SO_HASH_PREFIX = "so-starter-calibrated-"
 SO_MODEL_SCHEMA_VERSION = 1
 
 
+def is_current_gamelog_so_hash(digest: object) -> bool:
+    """Is this feature hash the current starter-SO generation?
+
+    The v2 gamelog hash and any calibrated refit of it are the same feature
+    family — a promotion swaps the fitted parameters, not the inputs. Gates that
+    compared against the v2 literal alone would silently drop every row once a
+    calibrated model is promoted, disabling restaking and starving the SO
+    promotion gate. v1 stays excluded: it was the overconfident pre-shrinkage
+    generation.
+    """
+
+    text = str(digest or "")
+    return text == GAMELOG_SO_HASH or text.startswith(CALIBRATED_SO_HASH_PREFIX)
+
+
 def default_so_model_params() -> dict[str, float]:
     """Hand-set priors used until a trained artifact is promoted."""
 

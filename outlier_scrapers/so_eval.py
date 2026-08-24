@@ -14,10 +14,25 @@ from pathlib import Path
 from typing import Any
 
 from outlier_scrapers.paths import PROJECT_ROOT
+from outlier_scrapers.so_sizing_blend import temper_independent_prob
 
 DEFAULT_DB = PROJECT_ROOT / "calibration" / "feedback.sqlite3"
 GAMELOG_HASH = "so-starter-gamelog-v2"
 GAMELOG_HASHES = frozenset({"so-starter-gamelog-v1", "so-starter-gamelog-v2"})
+DEFAULT_SOFT_RELIABILITY = 0.45
+DEFAULT_TEMPER_WEIGHT = 0.55
+
+
+def _is_current_gamelog_hash(digest: str) -> bool:
+    """v2 and any calibrated refit of it are the current generation."""
+
+    from outlier_scrapers.projections import is_current_gamelog_so_hash
+
+    return is_current_gamelog_so_hash(digest)
+
+
+def _is_gamelog_hash(digest: str) -> bool:
+    return digest in GAMELOG_HASHES or _is_current_gamelog_hash(digest)
 
 
 def _float(value: Any) -> float | None:
@@ -42,12 +57,35 @@ def _is_so_selection(selection: str, market_type: str) -> bool:
     )
 
 
+def _soften_prob(independent: float, reliability: float) -> float:
+    from outlier_scrapers.projections import soften_so_win_probability
+
+    soft = soften_so_win_probability(
+        {"win_prob": independent, "push_prob": 0.0, "loss_prob": 1.0 - independent},
+        reliability=reliability,
+    )
+    win_prob: Any = soft["win_prob"]
+    return float(win_prob)
+
+
 def evaluate_so_probs(
     db_path: Path = DEFAULT_DB,
     *,
     require_gamelog_hash: bool = False,
+    require_v2_hash: bool = False,
+    include_tempered: bool = False,
+    soft_reliability: float = DEFAULT_SOFT_RELIABILITY,
+    temper_independent_weight: float = DEFAULT_TEMPER_WEIGHT,
 ) -> dict[str, Any]:
-    """Compare independent vs market Brier on settled SO rows."""
+    """Compare independent vs market Brier on settled SO rows.
+
+    When ``require_v2_hash`` is set, only current-generation rows
+    (``so-starter-gamelog-v2`` and any promoted ``so-starter-calibrated-*``
+    refit of it) enter
+    the prefer/Brier metrics (promotion gate must not unlock on v1 wins).
+    Soft Brier is diagnostic only; tempered matches live Kelly
+    (``temper(raw_indep, market)``).
+    """
     if not db_path.exists():
         return {"status": "missing_db", "db_path": str(db_path), "n": 0}
 
@@ -120,22 +158,33 @@ def evaluate_so_probs(
         if market is None or independent is None or result == "PUSH":
             continue
         digest = str(row["projection_feature_hash"] or "")
-        if require_gamelog_hash and digest not in GAMELOG_HASHES:
+        if require_v2_hash and not _is_current_gamelog_hash(digest):
+            continue
+        if require_gamelog_hash and not _is_gamelog_hash(digest):
             continue
         # Prefer reporting latest-hash count separately in aggregates below.
 
         outcome = 1.0 if result == "W" else 0.0
-        paired.append(
-            {
-                "selection": row["selection"],
-                "market": market,
-                "independent": independent,
-                "outcome": outcome,
-                "feature_hash": digest,
-                "market_brier": _brier(market, outcome),
-                "independent_brier": _brier(independent, outcome),
-            }
-        )
+        item: dict[str, Any] = {
+            "selection": row["selection"],
+            "market": market,
+            "independent": independent,
+            "outcome": outcome,
+            "feature_hash": digest,
+            "market_brier": _brier(market, outcome),
+            "independent_brier": _brier(independent, outcome),
+        }
+        if include_tempered:
+            soft = _soften_prob(independent, soft_reliability)
+            # Live Kelly temper uses raw independent, not soft — keep gate aligned.
+            tempered = temper_independent_prob(
+                independent, market, independent_weight=temper_independent_weight
+            )
+            item["soft"] = soft
+            item["tempered"] = tempered
+            item["soft_brier"] = _brier(soft, outcome)
+            item["tempered_brier"] = _brier(tempered, outcome)
+        paired.append(item)
 
     n = len(paired)
     if n == 0:
@@ -152,7 +201,7 @@ def evaluate_so_probs(
     independent_hits = sum(
         1 for item in paired if (item["independent"] >= 0.5) == (item["outcome"] == 1.0)
     )
-    return {
+    report: dict[str, Any] = {
         "status": "ok",
         "db_path": str(db_path),
         "n": n,
@@ -162,28 +211,71 @@ def evaluate_so_probs(
         "market_hit_rate": round(market_hits / n, 4),
         "independent_hit_rate": round(independent_hits / n, 4),
         "prefer_independent": independent_brier < market_brier,
-        "gamelog_rows": sum(1 for item in paired if item["feature_hash"] in GAMELOG_HASHES),
-        "gamelog_v2_rows": sum(1 for item in paired if item["feature_hash"] == GAMELOG_HASH),
+        "gamelog_rows": sum(1 for item in paired if _is_gamelog_hash(item["feature_hash"])),
+        "gamelog_v2_rows": sum(
+            1 for item in paired if _is_current_gamelog_hash(item["feature_hash"])
+        ),
     }
+    if include_tempered:
+        soft_brier = sum(item["soft_brier"] for item in paired) / n
+        tempered_brier = sum(item["tempered_brier"] for item in paired) / n
+        report.update(
+            {
+                "soft_brier": round(soft_brier, 6),
+                "tempered_brier": round(tempered_brier, 6),
+                "temper_independent_weight": temper_independent_weight,
+                "soft_reliability": soft_reliability,
+                "prefer_soft_independent": soft_brier < market_brier,
+                "prefer_tempered_independent": tempered_brier < market_brier,
+            }
+        )
+    return report
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate SO independent probs vs market")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--require-gamelog-hash", action="store_true")
+    parser.add_argument(
+        "--include-tempered",
+        action="store_true",
+        help="Also report soft/tempered sizing Brier (v1 replay proxy for v2).",
+    )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--promotion-gate",
+        action="store_true",
+        help="Print so_promotion readiness using config/so_promotion.json.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    report = evaluate_so_probs(args.db, require_gamelog_hash=args.require_gamelog_hash)
+    include_tempered = bool(args.include_tempered or args.promotion_gate)
+    report = evaluate_so_probs(
+        args.db,
+        require_gamelog_hash=args.require_gamelog_hash or args.promotion_gate,
+        require_v2_hash=bool(args.promotion_gate),
+        include_tempered=include_tempered,
+    )
+    if args.promotion_gate:
+        from outlier_scrapers.so_promotion import promotion_readiness
+
+        report = {
+            "eval": report,
+            "promotion": promotion_readiness(report),
+        }
     rendered = json.dumps(report, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
-    return 0 if report.get("status") in {"ok", "insufficient_settled_so", "missing_db"} else 1
+    ok_statuses = {"ok", "insufficient_settled_so", "missing_db"}
+    status = report.get("status")
+    if status is None and isinstance(report.get("eval"), dict):
+        status = report["eval"].get("status")
+    return 0 if status in ok_statuses else 1
 
 
 if __name__ == "__main__":

@@ -294,3 +294,47 @@ def test_promotion_requires_a_passing_validation_report(tmp_path):
     assert audit["actor"] == "tester"
     assert audit["model_version"] == promoted["model_version"]
     assert audit["promoted_at"]
+
+
+def test_calibrated_hash_is_recognized_as_the_current_gamelog_generation():
+    """A promoted refit must not fall out of the SO restaking/promotion gates."""
+
+    from outlier_scrapers.projections import is_current_gamelog_so_hash
+    from outlier_scrapers.so_eval import _is_current_gamelog_hash, _is_gamelog_hash
+
+    calibrated = f"{projections.CALIBRATED_SO_HASH_PREFIX}abc123"
+    for predicate in (is_current_gamelog_so_hash, _is_current_gamelog_hash):
+        assert predicate(projections.GAMELOG_SO_HASH) is True
+        assert predicate(calibrated) is True
+        assert predicate("so-starter-gamelog-v1") is False
+        assert predicate(projections.LEAGUE_AVG_SO_HASH) is False
+        assert predicate("") is False
+    assert _is_gamelog_hash("so-starter-gamelog-v1") is True
+    assert _is_gamelog_hash(calibrated) is True
+
+
+def test_promoted_calibrated_row_still_restakes(monkeypatch):
+    import outlier_scrapers.slate_quality as sq
+
+    monkeypatch.setattr(sq, "ENABLE_INDEPENDENT_SO_SIZING", True)
+    row = {
+        "market_type": "SO",
+        "selection": "Cam Schlittler - Strikeouts OVER 5.5",
+        "model_prob_source": "outlier_devig",
+        "recommended_units_pre_news": 1.0,
+        "edge_pct": 0.05,
+        "decimal_price": 2.1,
+        "push_prob": 0.0,
+        "independent_model_prob": 0.60,
+        "market_consensus_prob": 0.40,
+        "independent_push_prob": 0.0,
+        "projection_feature_hash": f"{projections.CALIBRATED_SO_HASH_PREFIX}abc123",
+        "signal_flags": "insight_support;movement_support",
+        "sizing_flags": "",
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+    }
+    sq.apply_predictor_gates(row)
+    assert row["model_prob_source"] == sq.INDEPENDENT_SO_SOURCE
+    assert "independent_gamelog_so_sizing" in row["sizing_flags"]
