@@ -742,6 +742,7 @@ def build_totals(
             )
         # Use EB-shrunk probability for Kelly when L10 data is available;
         # fall back to pure market consensus otherwise.
+        model_win_prob: float | None
         if blended_over is not None and used_l10:
             model_win_prob = blended_over if best_side == "OVER" else (1.0 - blended_over)
         else:
