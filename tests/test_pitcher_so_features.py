@@ -248,7 +248,7 @@ def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
                 "status": "trained",
                 "promoted": True,
                 "model_version": "abc123",
-                "feature_schema_hash": "7284208eba21bd5a",
+                "feature_schema_hash": projections.SO_FEATURE_SCHEMA_HASH,
                 "trained_through": "2026-08-01",
                 "parameters": {
                     "league_strikeout_rate": 0.20,
@@ -282,12 +282,21 @@ def test_unpromoted_or_corrupt_artifacts_leave_inference_on_defaults(tmp_path, m
     artifact = tmp_path / "MLB_so_model.json"
     monkeypatch.setattr(projections, "so_model_artifact_path", lambda sport="MLB": artifact)
 
+    schema = projections.SO_FEATURE_SCHEMA_HASH
     for payload in (
-        {"status": "trained", "promoted": False, "model_version": "x", "schema_version": 1},
-        {"status": "trained", "promoted": True, "model_version": "x", "schema_version": 99},
+        {"status": "trained", "promoted": False, "model_version": "x", "schema_version": 1,
+         "feature_schema_hash": schema},
+        {"status": "trained", "promoted": True, "model_version": "x", "schema_version": 99,
+         "feature_schema_hash": schema},
         {"status": "insufficient_samples", "promoted": True, "model_version": "x",
-         "schema_version": 1},
-        {"promoted": True, "status": "trained", "model_version": "", "schema_version": 1},
+         "schema_version": 1, "feature_schema_hash": schema},
+        {"promoted": True, "status": "trained", "model_version": "", "schema_version": 1,
+         "feature_schema_hash": schema},
+        # Fitted on a different feature contract than inference feeds it.
+        {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1,
+         "feature_schema_hash": "some-other-schema"},
+        # No compatibility metadata at all.
+        {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1},
     ):
         artifact.write_text(json.dumps(payload), encoding="utf-8")
         projections._PROMOTED_SO_MODEL_CACHE.clear()
@@ -296,4 +305,35 @@ def test_unpromoted_or_corrupt_artifacts_leave_inference_on_defaults(tmp_path, m
     artifact.write_text("{not json", encoding="utf-8")
     projections._PROMOTED_SO_MODEL_CACHE.clear()
     assert projections.load_promoted_so_model() is None
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+
+def test_promoted_model_cache_hands_out_copies(tmp_path, monkeypatch):
+    import json
+
+    from outlier_scrapers import projections
+
+    artifact = tmp_path / "MLB_so_model.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "schema_version": projections.SO_MODEL_SCHEMA_VERSION,
+                "status": "trained",
+                "promoted": True,
+                "model_version": "abc123",
+                "feature_schema_hash": projections.SO_FEATURE_SCHEMA_HASH,
+                "parameters": {"league_strikeout_rate": 0.20},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(projections, "so_model_artifact_path", lambda sport="MLB": artifact)
+    projections._PROMOTED_SO_MODEL_CACHE.clear()
+
+    first = projections.load_promoted_so_model()
+    first["model_version"] = "mutated"
+    first["parameters"] = {}
+    second = projections.load_promoted_so_model()
+    assert second["model_version"] == "abc123"
+    assert second["parameters"] == {"league_strikeout_rate": 0.20}
     projections._PROMOTED_SO_MODEL_CACHE.clear()

@@ -41,6 +41,9 @@ from .projections import (
     DEFAULT_SO_MIN_TOTAL_BF,
     MLB_STATS_API_BASE,
     MLB_TEAM_STATS_IDS,
+    SO_FEATURE_SCHEMA,
+    SO_FEATURE_SCHEMA_HASH,
+    SO_MODEL_SCHEMA_VERSION,
     _default_stats_fetch_json,
     _float_stat,
     compute_starter_so_features_from_logs,
@@ -52,15 +55,11 @@ from .projections import (
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
-FEATURE_SCHEMA: tuple[str, ...] = (
-    "projected_bf",
-    "strikeout_rate",
-    "starts",
-    "total_bf",
-    "total_k",
-)
-FEATURE_SCHEMA_HASH = hashlib.sha256("|".join(FEATURE_SCHEMA).encode("utf-8")).hexdigest()[:16]
+SCHEMA_VERSION = SO_MODEL_SCHEMA_VERSION
+# The feature contract lives with the features themselves in projections.py, so
+# inference can refuse an artifact fitted on a different one.
+FEATURE_SCHEMA = SO_FEATURE_SCHEMA
+FEATURE_SCHEMA_HASH = SO_FEATURE_SCHEMA_HASH
 
 DEFAULT_MIN_TRAIN_SAMPLES = 200
 DEFAULT_MIN_VALIDATION_SAMPLES = 100
@@ -107,6 +106,19 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def _read_json(path: Path, *, label: str) -> Any:
+    """Read a JSON artifact, surfacing IO/parse failure as TrainingError.
+
+    The CLI only catches TrainingError, so an unreadable file must not escape as
+    a bare traceback.
+    """
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrainingError(f"unreadable {label} {path}: {exc}") from exc
 
 
 def _parse_date(value: Any, *, field: str) -> date:
@@ -215,6 +227,19 @@ def build_walk_forward_samples(
         )
         if features is None:
             continue
+        projected_bf = _float_stat(features.get("projected_bf"))
+        strikeout_rate = _float_stat(features.get("strikeout_rate"))
+        prior_starts = _float_stat(features.get("starts"))
+        prior_bf = _float_stat(features.get("total_bf"))
+        prior_k = _float_stat(features.get("total_k"))
+        if (
+            projected_bf is None
+            or strikeout_rate is None
+            or prior_starts is None
+            or prior_bf is None
+            or prior_k is None
+        ):
+            continue
         samples.append(
             {
                 "sport": "MLB",
@@ -222,11 +247,11 @@ def build_walk_forward_samples(
                 "date": game_date,
                 "season": int(season),
                 "pitcher_id": int(str(pitcher_id)),
-                "projected_bf": float(features["projected_bf"]),
-                "strikeout_rate": float(features["strikeout_rate"]),
-                "starts": int(features["starts"]),
-                "total_bf": float(features["total_bf"]),
-                "total_k": float(features["total_k"]),
+                "projected_bf": projected_bf,
+                "strikeout_rate": strikeout_rate,
+                "starts": int(prior_starts),
+                "total_bf": prior_bf,
+                "total_k": prior_k,
                 "actual_bf": float(actual_bf),
                 "actual_so": int(actual_so),
                 "feature_schema_hash": FEATURE_SCHEMA_HASH,
@@ -717,10 +742,7 @@ def validate(
     artifact_path = Path(artifact) if artifact is not None else model_path(sport)
     if not artifact_path.exists():
         raise TrainingError(f"no model artifact at {artifact_path}; run `train` first")
-    try:
-        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise TrainingError(f"unreadable model artifact {artifact_path}: {exc}") from exc
+    payload = _read_json(artifact_path, label="model artifact")
     if not isinstance(payload, Mapping):
         raise TrainingError(f"model artifact {artifact_path} is not an object")
     if int(_float_stat(payload.get("schema_version")) or 0) != SCHEMA_VERSION:
@@ -752,7 +774,7 @@ def validate(
     baseline_metrics = _distribution_metrics(holdout, baseline)
     gap = _calibration_gap(fitted_metrics)
 
-    if len(holdout) < min_samples:
+    if len(holdout) < min_samples or not fitted_metrics.get("n"):
         verdict = "insufficient_data"
     elif (
         fitted_metrics["count_nll"] <= baseline_metrics["count_nll"]
@@ -808,14 +830,14 @@ def promote(
     artifact_path = Path(artifact) if artifact is not None else model_path(sport)
     if not artifact_path.exists():
         raise TrainingError(f"no model artifact at {artifact_path}")
-    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload = _read_json(artifact_path, label="model artifact")
     if not isinstance(payload, Mapping) or str(payload.get("status") or "") != "trained":
         raise TrainingError("only a trained artifact can be promoted")
     if require_validation:
         report_path = Path(validation) if validation is not None else validation_report_path(sport)
         if not report_path.exists():
             raise TrainingError(f"no validation report at {report_path}; run `validate` first")
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = _read_json(report_path, label="validation report")
         if not isinstance(report, Mapping) or report.get("verdict") != "pass":
             raise TrainingError(
                 f"validation verdict is {(report or {}).get('verdict')!r}, not 'pass'"

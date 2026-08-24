@@ -315,48 +315,54 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
     assert written["projections"][0]["feature_snapshot_hash"] == "wnba-minutes-ppm-v1"
 
 
-def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets():
+def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(monkeypatch):
+    """Caching is per player, not per priced outcome, and only points rows fetch."""
+
+    import outlier_scrapers.projections as projections_module
     from outlier_scrapers.projections import build_wnba_points_projections
 
-    calls: list[str] = []
+    resolved: list[str] = []
+    gamelogs: list[str] = []
 
-    def fake_features(name, *, season, fetch_json=None, cache=None):
-        calls.append(name)
-        store = cache if cache is not None else {}
-        key = name.casefold()
-        if key in store:
-            return store[key]
-        store[key] = {"projected_minutes": 30.0, "points_per_minute": 0.6}
-        return store[key]
+    def fake_resolve(player_name, *, fetch_json=None):
+        resolved.append(player_name)
+        return f"id-{player_name}"
+
+    def fake_gamelog(athlete_id, *, season, fetch_json=None):
+        gamelogs.append(str(athlete_id))
+        return [30.0, 31.0, 29.0], [18.0, 20.0, 16.0]
+
+    monkeypatch.setattr(projections_module, "resolve_wnba_athlete_id", fake_resolve)
+    monkeypatch.setattr(projections_module, "fetch_wnba_athlete_gamelog_stats", fake_gamelog)
 
     rows = [
         {
             "sport": "WNBA",
             "market_type": "PTS",
-            "player": "A Player",
+            "player": "A Player" if index < 4 else "B Player",
             "outcome_id": f"o{index}",
             "line": 15.5,
             "position": "OVER" if index % 2 else "UNDER",
         }
-        for index in range(4)
+        for index in range(6)
     ] + [
         {
             "sport": "WNBA",
             "market_type": "AST",
-            "player": "A Player",
+            "player": "C Player",
             "outcome_id": "o9",
             "line": 4.5,
             "position": "OVER",
         }
     ]
-    import outlier_scrapers.projections as projections_module
+    records = build_wnba_points_projections(rows, season=2026)
 
-    original = projections_module.get_wnba_points_features
-    projections_module.get_wnba_points_features = fake_features
-    try:
-        records = build_wnba_points_projections(rows, season=2026)
-    finally:
-        projections_module.get_wnba_points_features = original
-    assert len(records) == 4  # the AST row never reaches the model
-    assert len(calls) == 4  # one call per points row, all served by one shared cache
+    assert len(records) == 6  # every points row is projected
     assert {record["sport"] for record in records} == {"WNBA"}
+    # Six points rows, two distinct players: one network resolution and one
+    # game-log fetch each. The AST row never reaches the model at all.
+    assert len(resolved) == 2
+    assert len(gamelogs) == 2
+    assert "C Player" not in resolved
+
+

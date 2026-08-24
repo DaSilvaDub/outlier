@@ -338,3 +338,60 @@ def test_promoted_calibrated_row_still_restakes(monkeypatch):
     sq.apply_predictor_gates(row)
     assert row["model_prob_source"] == sq.INDEPENDENT_SO_SOURCE
     assert "independent_gamelog_so_sizing" in row["sizing_flags"]
+
+
+def test_promote_reports_unreadable_files_as_training_errors(tmp_path):
+    """The CLI only catches TrainingError; corrupt JSON must not escape raw."""
+
+    artifact = tmp_path / "model.json"
+    artifact.write_text("{not json", encoding="utf-8")
+    with pytest.raises(training.TrainingError, match="unreadable model artifact"):
+        training.promote("MLB", artifact=artifact, require_validation=False)
+
+    dataset = _write_samples(tmp_path / "samples.jsonl", _synthetic_samples())
+    training.train(
+        "MLB",
+        as_of="2026-05-20",
+        dataset=dataset,
+        output=artifact,
+        min_samples=50,
+        refine_sample_cap=25,
+    )
+    report = tmp_path / "validation.json"
+    report.write_text("{also not json", encoding="utf-8")
+    with pytest.raises(training.TrainingError, match="unreadable validation report"):
+        training.promote("MLB", artifact=artifact, validation=report)
+
+
+def test_validate_reports_an_unreadable_artifact(tmp_path):
+    artifact = tmp_path / "model.json"
+    artifact.write_text("{broken", encoding="utf-8")
+    with pytest.raises(training.TrainingError, match="unreadable model artifact"):
+        training.validate("MLB", artifact=artifact, dataset=tmp_path / "samples.jsonl")
+
+
+def test_training_and_inference_share_one_feature_schema():
+    assert training.FEATURE_SCHEMA_HASH == projections.SO_FEATURE_SCHEMA_HASH
+    assert training.FEATURE_SCHEMA == projections.SO_FEATURE_SCHEMA
+    assert training.SCHEMA_VERSION == projections.SO_MODEL_SCHEMA_VERSION
+
+
+def test_validate_with_an_empty_holdout_is_insufficient_not_a_crash(tmp_path):
+    """min_samples=0 must not index metrics that an empty holdout never produced."""
+
+    samples = _synthetic_samples()
+    dataset = _write_samples(tmp_path / "samples.jsonl", samples)
+    model = tmp_path / "model.json"
+    training.train(
+        "MLB",
+        as_of="2026-12-31",  # cutoff past every sample: nothing left to score
+        dataset=dataset,
+        output=model,
+        min_samples=50,
+        refine_sample_cap=25,
+    )
+    report = training.validate(
+        "MLB", artifact=model, dataset=dataset, output=tmp_path / "v.json", min_samples=0
+    )
+    assert report["verdict"] == "insufficient_data"
+    assert report["metrics"] == {"n": 0}

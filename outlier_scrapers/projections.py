@@ -8,6 +8,7 @@ stubs remain audit-only and must not fill independent_model_prob.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -348,6 +349,18 @@ SO_MODEL_PARAM_KEYS = (
 )
 CALIBRATED_SO_HASH_PREFIX = "so-starter-calibrated-"
 SO_MODEL_SCHEMA_VERSION = 1
+# The starter-SO feature contract, hashed. Training records it on every sample
+# and artifact; inference refuses a promoted artifact fitted on anything else.
+SO_FEATURE_SCHEMA: tuple[str, ...] = (
+    "projected_bf",
+    "strikeout_rate",
+    "starts",
+    "total_bf",
+    "total_k",
+)
+SO_FEATURE_SCHEMA_HASH = hashlib.sha256(
+    "|".join(SO_FEATURE_SCHEMA).encode("utf-8")
+).hexdigest()[:16]
 
 
 def is_current_gamelog_so_hash(digest: object) -> bool:
@@ -420,7 +433,9 @@ def load_promoted_so_model(path: Path | None = None) -> dict[str, object] | None
         return None
     cached = _PROMOTED_SO_MODEL_CACHE.get(str(artifact_path))
     if cached is not None and cached[0] == stamp:
-        return cached[1]
+        # Hand out a copy: a caller mutating the artifact must not poison the
+        # cache for every later row in the same process.
+        return dict(cached[1]) if cached[1] is not None else None
     payload: dict[str, object] | None = None
     try:
         loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -433,6 +448,9 @@ def load_promoted_so_model(path: Path | None = None) -> dict[str, object] | None
             and str(loaded.get("status") or "") == "trained"
             and int(_float_stat(loaded.get("schema_version")) or 0) == SO_MODEL_SCHEMA_VERSION
             and bool(str(loaded.get("model_version") or ""))
+            # An artifact with no/other feature schema was fitted on different
+            # inputs than inference feeds it; refuse rather than guess.
+            and str(loaded.get("feature_schema_hash") or "") == SO_FEATURE_SCHEMA_HASH
         )
         if compatible:
             payload = dict(loaded)
@@ -442,7 +460,7 @@ def load_promoted_so_model(path: Path | None = None) -> dict[str, object] | None
                 artifact_path,
             )
     _PROMOTED_SO_MODEL_CACHE[str(artifact_path)] = (stamp, payload)
-    return payload
+    return dict(payload) if payload is not None else None
 
 
 def _default_stats_fetch_json(request_url: str) -> dict[str, object]:
