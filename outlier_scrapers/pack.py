@@ -146,6 +146,7 @@ DISQUALIFYING_DQ_FLAGS = {
     "ev_line_fallback",
     "edge_suspect_stale_line",
     "edge_suspect_thin_liquidity",
+    "ev_probability_mismatch",
     "SOURCE_INTEGRITY_FLAG",
     "LOCKED_OR_UNVERIFIED_EVENT",
     "SIDE_RESOLUTION_CONFLICT",
@@ -166,6 +167,40 @@ def american_to_decimal(american: float | int | str | None) -> float | None:
     if val < 0:
         return (100.0 / abs(val)) + 1.0
     return 2.0
+
+
+def _selected_ev_devig_decimal(
+    record: dict[str, Any], ev_summary: dict[str, Any] | None
+) -> tuple[float | None, bool]:
+    """Return devig decimal from the same method that produced the record EV.
+
+    Native EV records retain every calculated method in ``sport_context``.
+    When that contract is present, do not fall back to the legacy top-level
+    devig field: it may describe a different method.  The boolean indicates
+    that the selected-method contract was present, so callers can validate EV
+    coherence and fail closed.  Local/legacy records keep their existing
+    top-level decimal fallback.
+    """
+    context = record.get("sport_context")
+    if isinstance(context, dict):
+        methods = context.get("calculated_ev_methods")
+        if isinstance(methods, dict):
+            method = str(
+                context.get("selected_ev_method")
+                or record.get("calculated_ev_method")
+                or (ev_summary or {}).get("method")
+                or ""
+            ).strip()
+            payload = methods.get(method) if method else None
+            no_vig = payload.get("noVigOdds") if isinstance(payload, dict) else None
+            decimal = _to_float(no_vig.get("decimal")) if isinstance(no_vig, dict) else None
+            return (decimal if decimal is not None and decimal > 1.0 else None), True
+
+    for source in (record, ev_summary or {}):
+        decimal = _to_float(source.get("devig_decimal"))
+        if decimal is not None and decimal > 1.0:
+            return decimal, False
+    return None, False
 
 
 def load_json(path: Path) -> dict[str, Any] | None:
@@ -982,6 +1017,7 @@ def build_row(
     no_push = is_no_push_market(market_token, line)
     push_prob = 0.0 if no_push else None
     row["push_prob"] = push_prob
+    ev_probability_mismatch = False
     usable = [r for r in matched if r.get("book_decimal_odds") is not None]
     eligible = (
         bool(ev_summary) and not (ev_summary or {}).get("is_alt_line_fallback") and bool(usable)
@@ -1001,8 +1037,10 @@ def build_row(
         row["price"] = best.get("book_odds")
         row["decimal_price"] = best.get("book_decimal_odds")
         row["as_of"] = odds_ts
-        devig = (ev_summary or {}).get("devig_decimal")
-        model_prob = (1.0 / devig) if devig else None
+        devig, has_selected_method_contract = _selected_ev_devig_decimal(best, ev_summary)
+        model_prob = (1.0 / devig) if devig is not None else None
+        if has_selected_method_contract and model_prob is None:
+            ev_probability_mismatch = True
         row["model_prob"] = model_prob
         row["market_consensus_prob"] = model_prob
         row["final_blended_prob"] = model_prob
@@ -1023,6 +1061,16 @@ def build_row(
             row["kelly_025_units"] = sizing.kelly_025_units
             row["max_units"] = sizing.max_units
             row["recommended_units_pre_news"] = sizing.recommended_units_pre_news
+            if has_selected_method_contract:
+                source_ev_pct = _to_float(best.get("calculated_ev_pct"))
+                source_edge = source_ev_pct / 100.0 if source_ev_pct is not None else None
+                if (
+                    source_edge is None
+                    or sizing.edge_pct is None
+                    or abs(sizing.edge_pct - source_edge) > 1e-4
+                ):
+                    ev_probability_mismatch = True
+                    row["recommended_units_pre_news"] = ""
     else:
         if ev_summary and (ev_summary or {}).get("is_alt_line_fallback"):
             row["sizing_flags"] = "ev_line_fallback"
@@ -1118,6 +1166,8 @@ def build_row(
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
     # so the desk sees the mismatch instead of silently trusting the shown line.
     dq_flags = [str(f) for f in (card.get("flags") or [])]
+    if ev_probability_mismatch:
+        dq_flags.append("ev_probability_mismatch")
     movement_now = _to_float((side_view.get("movement") or {}).get("current_line"))
     if movement_now is not None and _to_float(line) is not None and movement_now != _to_float(line):
         dq_flags.append("movement_line_mismatch")
@@ -1501,6 +1551,7 @@ ROLE_BLOCK = [
     " line — reconcile to priced_line before quoting an edge and note the mismatch.",
     "- data_quality_flags may also carry cross_sport_market:<LEAGUE>, implausible_line,"
     " non_numeric_line, spread_sign_conflict, movement_line_mismatch,"
+    " ev_probability_mismatch,"
     " edge_suspect_stale_line, edge_suspect_thin_liquidity, SOURCE_INTEGRITY_FLAG,"
     " SIDE_RESOLUTION_CONFLICT, or UNINDEXED_SLATE_GAME — treat any such row as a"
     " data artifact with actionable=false and verdict PASS / STAND-DOWN.",

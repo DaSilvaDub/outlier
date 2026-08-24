@@ -679,6 +679,93 @@ def test_two_book_same_row():
     assert (row["book"], row["price"], row["decimal_price"]) == ("FD", 110, 2.1)
 
 
+def test_selected_method_devig_keeps_pack_edge_coherent_with_source_ev():
+    selected_devig = 1.9826025928312951
+    source_ev_pct = 4.912603641338664
+    card = ev_card(
+        market_type="MONEYLINE",
+        market="MONEYLINE",
+        devig=1.8695652173913042,
+    )
+    card["sides"]["OVER"]["ev"].update(
+        {
+            "best_record_id": "ev1",
+            "best_ev_pct": source_ev_pct,
+            "method": "AVERAGE",
+            "ev_source": "NATIVE",
+        }
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "side": "OVER",
+            "book": "Prophetx",
+            "book_odds": 108,
+            "book_decimal_odds": 2.08,
+            "calculated_ev_pct": source_ev_pct,
+            "calculated_ev_method": "AVERAGE",
+            "devig_decimal": 1.8695652173913042,
+            "record_id": "ev1",
+            "ev_source": "NATIVE",
+            "sport_context": {
+                "selected_ev_method": "AVERAGE",
+                "calculated_ev_methods": {
+                    "AVERAGE": {"noVigOdds": {"decimal": selected_devig}}
+                },
+            },
+        }
+    ]
+
+    row = make_row(card, ev)
+
+    assert row["model_prob"] == pytest.approx(1.0 / selected_devig)
+    assert row["edge_pct"] == pytest.approx(source_ev_pct / 100.0)
+    assert "ev_probability_mismatch" not in row["data_quality_flags"]
+    assert "edge_suspect_no_independent_model" not in row["sizing_flags"]
+    assert row["actionable"] == "true"
+
+
+def test_selected_method_ev_probability_mismatch_fails_closed():
+    card = ev_card(market_type="MONEYLINE", market="MONEYLINE", devig=2.0)
+    card["sides"]["OVER"]["ev"].update(
+        {
+            "best_record_id": "ev1",
+            "best_ev_pct": 5.0,
+            "method": "AVERAGE",
+            "ev_source": "NATIVE",
+        }
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "side": "OVER",
+            "book": "FD",
+            "book_odds": 100,
+            "book_decimal_odds": 2.0,
+            "calculated_ev_pct": 5.0,
+            "calculated_ev_method": "AVERAGE",
+            "devig_decimal": 2.0,
+            "record_id": "ev1",
+            "ev_source": "NATIVE",
+            "sport_context": {
+                "selected_ev_method": "AVERAGE",
+                "calculated_ev_methods": {
+                    "AVERAGE": {"noVigOdds": {"decimal": 2.0}}
+                },
+            },
+        }
+    ]
+
+    row = make_row(card, ev)
+
+    assert "ev_probability_mismatch" in row["data_quality_flags"]
+    assert row["recommended_units_pre_news"] == ""
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+
+
 # 4. Exact-line fallback (outcome_id mismatch, current_line match) still eligible.
 def test_exact_line_eligibility():
     card = ev_card(line=5.5, market_type="MONEYLINE", market="MONEYLINE")
