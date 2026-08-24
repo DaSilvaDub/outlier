@@ -228,9 +228,14 @@ row outside those families is `STAND_DOWN`.
 
 ### 3.5 Side restrictions
 
-* Pitcher strikeouts (`SO`): OVER only.
-* Game totals and team run totals: OVER only.
-* Doubles (`2B`): UNDER only — a `2B` OVER is rejected outright.
+* Doubles (`2B`): UNDER only — a `2B` OVER is rejected outright. This is the
+  one side restriction the gate enforces on the rows you see.
+* The desk's OVER-only rules are scoped to **alternate** markets — alt MLB
+  pitcher-SO props and alt game/team run totals, which are parlayed across
+  different games and live on separate boards this pass is not given. Do not
+  apply them here: an ordinary pitcher-SO UNDER or an ordinary game/team total
+  UNDER is a legitimate candidate, and standing one down as "OVER only" is a
+  false rejection.
 
 ### 3.6 Price
 

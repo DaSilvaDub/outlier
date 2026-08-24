@@ -214,8 +214,10 @@ have published first. C is optional and included when present. Requires
 [prompts/Master_Cards_Analysis.md](prompts/Master_Cards_Analysis.md) is the
 Markdown-report prompt the manual export path pastes into a chat model. It is
 deliberately *not* `A.md`: the automated Pass A emits JSON, while this lane wants
-a written card. `generate_prompts.py` loads it by name and still falls back to
-`A.md` if it is missing.
+a written card. `generate_prompts.py` loads it by name and **fails closed** if it is
+missing, rather than falling back to `A.md` — that fallback would hand this lane
+the automated JSON envelope contract, which is the regression the split exists to
+prevent.
 
 ---
 

@@ -1230,3 +1230,67 @@ def test_e_may_still_pass_a_market_no_upstream_bet(tmp_path):
         current_publications=_pub_a(bet=False),
     )
     assert result.violations == ()
+
+
+# ---------------------------------------------------------------------------
+# A citation binds to the record it names, not to publication-wide sets
+# ---------------------------------------------------------------------------
+
+
+def _pub_a_records(**records):
+    """An A publication carrying per-record detail (what the real loader builds)."""
+    return {
+        "A": verdict_gate.UpstreamPublication(
+            pass_="A",
+            publication_id="pub_a",
+            record_ids=frozenset(records),
+            # Publication-wide sets deliberately say "out1 was bet somewhere",
+            # so only per-record binding can catch a mis-aimed citation.
+            outcome_ids=frozenset({"out1", "other"}),
+            bet_outcome_ids=frozenset({"out1"}),
+            stakes={"out1": 2.0},
+            records=dict(records),
+        )
+    }
+
+
+def test_e_bet_citing_a_record_for_another_outcome_is_unsourced(tmp_path):
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="other", verdict="BET", stake=2.0)
+    )
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=pubs)
+    only_code(result, "unsourced_synthesis")
+
+
+def test_e_bet_citing_a_pass_record_is_unsourced_even_when_outcome_was_bet(tmp_path):
+    """The publication bet out1 on some other record; this citation names a PASS."""
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="PASS", stake=0.0)
+    )
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=pubs)
+    only_code(result, "unsourced_synthesis")
+
+
+def test_e_stake_ceiling_comes_from_the_cited_record(tmp_path):
+    """The cited record staked 1.0; the publication-wide map says 2.0."""
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="BET", stake=1.0)
+    )
+    # 1.5 is inside the row cap (min of pre_news 1.5 / max_units 2.0), so only
+    # the cited record's own stake can reject it.
+    over = gate(_reconciliation(index, CITE_A, units=1.5), index, current_publications=pubs)
+    only_code(over, "stake_above_row_cap")
+
+    at_cap = gate(_reconciliation(index, CITE_A, units=1.0), index, current_publications=pubs)
+    assert at_cap.violations == ()
+
+
+def test_e_bet_citing_a_matching_bet_record_is_clean(tmp_path):
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="BET", stake=2.0)
+    )
+    assert gate(_reconciliation(index, CITE_A), index, current_publications=pubs).violations == ()

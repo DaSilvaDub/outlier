@@ -100,7 +100,7 @@ directly.
       "outcome_id": "<exact outcome_id from the pack>",
       "stream": "candidates",
       "selection": "<exact pack selection>",
-      "line": "<exact pack line>",
+      "line": "<exact pack line, or priced_line where the row has one>",
       "price": "<exact pack price>",
       "verdict": "NEUTRAL",
       "claim": "<one sentence: the finding, and why it CONFIRMS / CONTRADICTS / is NEUTRAL for betting this exact line>",

@@ -164,9 +164,11 @@ Treat their presence as a data-quality problem.
 
 Side restrictions on markets that do survive:
 
-* MLB pitcher strikeouts (SO): OVER only.
-* MLB game totals and team run totals: OVER only.
 * Doubles (2B): UNDER only — never recommend a 2B OVER.
+* The desk's OVER-only rules apply to **alternate** MLB props and alt game/team
+  run totals only. This lane carries ordinary Master Card rows, so a pitcher-SO
+  UNDER or a total UNDER is a legitimate card — do not stand one down for being
+  the under.
 
 Also reject any plus-money selection priced at `+150` or longer.
 
@@ -636,7 +638,7 @@ Before answering, verify:
 * No high-variance prop is recommended.
 * No HR, HA/hits-allowed, WALKS_ALLOWED, or HRR market is recommended, and no player-prop BB.
 * MLB player props outside the strict whitelist (pitcher SO only) are not eligible; MLB team props outside R / TOTAL are not eligible.
-* No side restriction was violated (SO OVER only, totals OVER only, 2B UNDER only).
+* No side restriction was violated (2B UNDER only; the OVER-only rules are scoped to alternate markets and do not apply to this lane).
 * No prohibited +150-or-longer longshot is recommended.
 * Every final stake is on the 0.5-unit grid, at or below 3.0 units, and at or
   below `min(recommended_units_pre_news, max_units)`.

@@ -80,6 +80,15 @@ class Violation:
 
 
 @dataclass(frozen=True)
+class UpstreamRecord:
+    """What one upstream record actually asserted, keyed by its record_id."""
+
+    outcome_id: str
+    verdict: str
+    stake: float | None = None
+
+
+@dataclass(frozen=True)
 class UpstreamPublication:
     pass_: str
     publication_id: str
@@ -88,6 +97,10 @@ class UpstreamPublication:
     bet_outcome_ids: frozenset[str] = field(default_factory=frozenset)
     injury_supported_record_ids: frozenset[str] = field(default_factory=frozenset)
     stakes: dict[str, float] = field(default_factory=dict)
+    # record_id -> what that record said. Populated by the real publication
+    # loader; when empty the gate falls back to the publication-wide sets above,
+    # which cannot bind a citation to the record it names.
+    records: dict[str, UpstreamRecord] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -505,14 +518,33 @@ def _check_synthesis(
         return
     verdict_backing = False
     bet_backing = False
+    upstream_stakes: list[float] = []
     for cite in cites:
-        if cite.pass_ in {"A", "D", "B"}:
-            pub = publications.get(cite.pass_)
-            if pub and record.outcome_id in pub.outcome_ids:
-                verdict_backing = True
-                if record.outcome_id in pub.bet_outcome_ids:
-                    bet_backing = True
-                    break
+        if cite.pass_ not in {"A", "D", "B"}:
+            continue
+        pub = publications.get(cite.pass_)
+        if pub is None:
+            continue
+        cited = pub.records.get(cite.record_id) if pub.records else None
+        if cited is not None:
+            # The citation names a record: that record must be about this
+            # outcome, and a BET must be backed by a record that itself said BET.
+            if cited.outcome_id != record.outcome_id:
+                continue
+            verdict_backing = True
+            if cited.verdict == "BET":
+                bet_backing = True
+                if cited.stake is not None:
+                    upstream_stakes.append(cited.stake)
+            continue
+        # Legacy publication with no per-record detail: fall back to the
+        # publication-wide sets, which cannot bind the citation to its record.
+        if record.outcome_id in pub.outcome_ids:
+            verdict_backing = True
+            if record.outcome_id in pub.bet_outcome_ids:
+                bet_backing = True
+            if record.outcome_id in pub.stakes:
+                upstream_stakes.append(pub.stakes[record.outcome_id])
     if not verdict_backing:
         add(
             "unsourced_synthesis",
@@ -527,13 +559,6 @@ def _check_synthesis(
             "E BET cites no upstream A/D/B record whose own verdict was BET.",
         )
         return
-    upstream_stakes = []
-    for cite in cites:
-        if cite.pass_ not in {"A", "D", "B"}:
-            continue
-        pub = publications.get(cite.pass_)
-        if pub and record.outcome_id in pub.stakes:
-            upstream_stakes.append(pub.stakes[record.outcome_id])
     if upstream_stakes and record.recommended_units > min(upstream_stakes) + 1e-9:
         add(
             "stake_above_row_cap",
