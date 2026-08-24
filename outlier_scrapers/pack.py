@@ -71,6 +71,8 @@ CANDIDATES_HEADER = [
     "blend_weight_source",
     "blend_model_version",
     "blend_segment",
+    "blend_promotion_mode",
+    "blend_sizing_source",
     "push_prob",
     "implied_prob",
     "edge_pct",
