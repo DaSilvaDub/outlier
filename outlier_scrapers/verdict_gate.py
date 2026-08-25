@@ -61,6 +61,28 @@ ENVELOPE_CODES = frozenset(
 )
 WARN_CODES = frozenset({"unbound_name_in_prose"})
 
+# Checks added by the enforcement pass: each one makes the gate enforce a rule
+# the prompts already state. They are severity-gated on policy.mode so they land
+# as telemetry first -- `shadow` records them in violations.json without failing
+# a pass, `enforce` makes them reject. Existing gates are unaffected by mode:
+# nothing here weakens a check that already bites.
+ENFORCEMENT_CODES = frozenset(
+    {
+        "bet_missing_evidence",
+        "bet_missing_contradictions",
+        "external_evidence_in_pack_only_pass",
+        "external_evidence_unsourced",
+        "actionable_not_asserted",
+    }
+)
+PACK_ONLY_PASSES = frozenset({"A", "D"})
+VALID_SOURCE_TIERS = frozenset({1, 2, 3})
+
+
+def enforcement_severity(policy: VerdictPolicy) -> str:
+    """`reject` once the desk is in enforce mode; `warn` while shadowing."""
+    return "reject" if policy.mode == "enforce" else "warn"
+
 _INJURY_RE = re.compile(
     r"\b(injur(?:y|ed)|scratch(?:ed)?|lineup|availability|questionable|"
     r"probable|doubtful|out\b|il\b|inactive)\b",
@@ -191,6 +213,7 @@ def validate_envelope(
                 policy,
                 publications,
                 pack_date=env.pack_date,
+                pass_=env.pass_,
             )
         )
     violations[0:0] = extra_warns
@@ -322,6 +345,7 @@ def _validate_record(
     policy: VerdictPolicy,
     publications: Mapping[str, UpstreamPublication],
     pack_date: str = "",
+    pass_: str = "",
 ) -> list[Violation]:
     found: list[Violation] = []
     outcome_id = record.outcome_id
@@ -372,11 +396,13 @@ def _validate_record(
     _check_injury(record, index, now, policy, publications, add)
 
     if isinstance(record, FindingRecord):
+        _check_evidence(record, policy, pass_, now, add)
         _check_finding_timestamp(record, pack_date, add)
         return found
 
+    _check_evidence(record, policy, pass_, now, add)
     _check_lock(outcome_id, row, index, now, add)
-    _check_integrity(row, add)
+    _check_integrity(row, policy, add)
     if _is_stake_exempt(record):
         _check_zero_stake(record, add)
         return found
@@ -647,6 +673,69 @@ def _check_injury(
         add("unsupported_injury_claim", "injury claim is not bound to pack flags or grounded source.")
 
 
+def _check_evidence(
+    record: Any,
+    policy: VerdictPolicy,
+    pass_: str,
+    now: datetime,
+    add,
+) -> None:
+    """Enforce what the prompts say about evidence.
+
+    The schema accepts an empty evidence list and nullable source fields, so
+    without this a BET can publish carrying no evidence at all, a pack-only pass
+    can claim an external source it has no tool to reach, and an external item
+    can arrive with no source, no tier and no timestamp -- the gate previously
+    checked provenance only when an injury keyword happened to appear.
+    """
+    severity = enforcement_severity(policy)
+    items = _evidence_items(record)
+
+    # E carries no evidence list: a reconciliation is bound by `cites`, which
+    # _check_synthesis already requires to name a real upstream BET record.
+    if isinstance(record, ReconciliationRecord):
+        return
+
+    if _is_attempted_bet(record):
+        if not items:
+            add(
+                "bet_missing_evidence",
+                "BET carries no evidence item.",
+                severity=severity,
+            )
+        if pass_ == "D" and not (getattr(record, "contradictions", ()) or ()):
+            # D is the red team: a BET it cannot argue against was not red-teamed.
+            add(
+                "bet_missing_contradictions",
+                "pass D BET carries no contradiction.",
+                severity=severity,
+            )
+
+    for item in items:
+        if item.kind != "external":
+            continue
+        if pass_ in PACK_ONLY_PASSES:
+            add(
+                "external_evidence_in_pack_only_pass",
+                f"pass {pass_} has no web access but claims external evidence.",
+                severity=severity,
+            )
+            continue
+        missing = []
+        if not (item.source or "").strip():
+            missing.append("source")
+        if item.tier not in VALID_SOURCE_TIERS:
+            missing.append("tier")
+        if not _timestamp_in_window(item.timestamp, now, policy.external_evidence_max_age_h):
+            missing.append("timestamp")
+        if missing:
+            add(
+                "external_evidence_unsourced",
+                f"external evidence item is missing or invalid: {', '.join(missing)}.",
+                severity=severity,
+            )
+
+
 def _check_finding_timestamp(record: FindingRecord, pack_date_str: str, add) -> None:
     """C's source_timestamp window: pack_date-2d .. pack_date+1d.
 
@@ -691,7 +780,7 @@ def _check_lock(outcome_id: str, row: Any, index: PackIndex, now: datetime, add)
         )
 
 
-def _check_integrity(row: Any, add) -> None:
+def _check_integrity(row: Any, policy: VerdictPolicy, add) -> None:
     flags = set(_quality_flag_tokens(row.data))
     # ev_line_fallback:priced_at=… is a priced-line signal, not a standalone DQ here.
     exact = {f for f in flags if not f.startswith("ev_line_fallback:")}
@@ -700,8 +789,18 @@ def _check_integrity(row: Any, add) -> None:
     ):
         add("integrity_flag", f"row carries disqualifying flags {sorted(flags)}.")
         return
-    actionable = str(row.data.get("actionable") or "")
-    if actionable and actionable.lower() != "true":
+    actionable = str(row.data.get("actionable") or "").strip()
+    if not actionable:
+        # Both writers emit a literal "true"/"false", so a blank here means the
+        # row is malformed rather than merely not actionable. Fail closed: an
+        # absent assertion is not an assertion of eligibility.
+        add(
+            "actionable_not_asserted",
+            "row does not assert actionable; a blank value is not eligibility.",
+            severity=enforcement_severity(policy),
+        )
+        return
+    if actionable.lower() != "true":
         add("integrity_flag", "row actionable is not true.")
         return
     if str(row.data.get("board") or "") == "A_FLAGGED":

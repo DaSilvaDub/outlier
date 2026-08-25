@@ -493,13 +493,23 @@ def build_repair_block(violations: Sequence[Any]) -> str:
 
 def structured_request_fields(
     *,
+    pack_date: str,
     candidates_sha256: str,
     game_totals_sha256: str,
     team_totals_sha256: str,
     schema_version: str | None = None,
 ) -> dict[str, str]:
-    """Keys that must join every structured-output request hash."""
+    """Keys that must join every structured-output request hash.
+
+    ``pack_date`` is required, not optional: the gate checks an envelope's
+    pack_date against the pack directory, but the pack hashes do not change when
+    a pack is copied or renamed. Without the date in the hash, ``refresh_if_stale``
+    would consider a cached output current and skip the re-run, leaving an
+    envelope stamped with the old date that the pack-date gate then rejects.
+    Making it required means a runner cannot silently omit it.
+    """
     return {
+        "pack_date": pack_date,
         "candidates_sha256": candidates_sha256,
         "game_totals_sha256": game_totals_sha256,
         "team_totals_sha256": team_totals_sha256,
@@ -654,6 +664,22 @@ def publish_pass(
     )
 
 
+def _require_declared_pass(envelope: Any, expected: str) -> None:
+    """The envelope's own `pass` must be the pass being published.
+
+    The schema accepts any non-empty string here and nothing compared it to the
+    invoking runner, so an A response tagged "D" would publish under D's
+    directory -- and E cites publications by pass, so a mislabelled envelope
+    corrupts the citation graph rather than merely being untidy.
+    """
+    declared = str(getattr(envelope, "pass_", "") or "")
+    if declared != expected:
+        raise RunnerError(
+            f"Pass {expected} envelope declares pass {declared!r}; refusing to publish "
+            f"it as {expected}."
+        )
+
+
 def publish_verdict_pass(
     pack_dir: Path,
     output_text: str,
@@ -676,6 +702,7 @@ def publish_verdict_pass(
         raise RunnerError(f"Pass {pass_} output is not a valid verdict envelope: {exc}") from exc
     if not isinstance(parsed.envelope, verdicts.VerdictEnvelope):
         raise RunnerError(f"Pass {pass_} output did not parse as a verdict envelope")
+    _require_declared_pass(parsed.envelope, pass_)
 
     index = pack_index.build_pack_index(pack_dir)
     policy = load_verdict_policy(paths.PROJECT_ROOT / "config" / "verdict_policy.json")
@@ -698,7 +725,7 @@ def publish_verdict_pass(
         "bet_count": sum(1 for rec in parsed.envelope.verdicts if rec.verdict == "BET"),
         "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
         "violation_codes": codes,
-        "mode": "shadow",
+        "mode": policy.mode,
         "repair_attempts": 0,
         "structured_output_native": True,
     }
@@ -747,6 +774,7 @@ def publish_finding_pass(
         raise RunnerError(f"Pass C output is not a valid finding envelope: {exc}") from exc
     if not isinstance(parsed.envelope, verdicts.FindingEnvelope):
         raise RunnerError("Pass C output did not parse as a finding envelope")
+    _require_declared_pass(parsed.envelope, "C")
 
     index = pack_index.build_pack_index(pack_dir)
     policy = load_verdict_policy(paths.PROJECT_ROOT / "config" / "verdict_policy.json")
@@ -772,7 +800,7 @@ def publish_finding_pass(
         "record_count": len(parsed.envelope.findings),
         "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
         "violation_codes": codes,
-        "mode": "shadow",
+        "mode": policy.mode,
         "repair_attempts": 0,
         "structured_output_native": True,
     }
@@ -798,6 +826,29 @@ def publish_finding_pass(
     return publish_pass(pack_dir, artifacts, now=now)
 
 
+def _rejected_outcome_ids(pack_dir: Path, pass_name: str, pub_id: str) -> frozenset[str]:
+    """outcome_ids carrying a reject violation in that publication's violations.json.
+
+    Violations are keyed by outcome_id, so every record for a rejected outcome is
+    dropped -- the conservative direction, since the alternative is letting E
+    cite a record the gate refused.
+    """
+    path = pack_dir / "verdicts" / str(pass_name) / str(pub_id) / "violations.json"
+    if not path.exists():
+        return frozenset()
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return frozenset()
+    if not isinstance(rows, list):
+        return frozenset()
+    return frozenset(
+        str(row.get("outcome_id") or "")
+        for row in rows
+        if isinstance(row, dict) and row.get("severity") == "reject" and row.get("outcome_id")
+    )
+
+
 def load_current_publications(pack_dir: Path) -> dict[str, Any]:
     """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
     from outlier_scrapers.verdict_gate import (
@@ -819,6 +870,14 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
         data = json.loads(envelope_path.read_text(encoding="utf-8"))
         key = "findings" if pass_name == "C" else "verdicts"
         records = data.get(key) or []
+        # A pass publishes when its reject ratio is under policy, so a
+        # publication can contain individually rejected records. E must not be
+        # able to cite one as backing: drop them before it ever sees them.
+        rejected = _rejected_outcome_ids(pack_dir, pass_name, pub_id)
+        if rejected:
+            records = [
+                row for row in records if str(row.get("outcome_id") or "") not in rejected
+            ]
         record_ids = {str(row.get("record_id") or "") for row in records}
         outcome_ids = {str(row.get("outcome_id") or "") for row in records}
         injury_supported_record_ids = {
@@ -933,6 +992,7 @@ def publish_reconciliation_pass(
         raise RunnerError(f"Pass E output is not a valid reconciliation envelope: {exc}") from exc
     if not isinstance(parsed.envelope, verdicts.ReconciliationEnvelope):
         raise RunnerError("Pass E output did not parse as a reconciliation envelope")
+    _require_declared_pass(parsed.envelope, "E")
 
     with fingerprint_locks(pack_dir, operation="publish_E", now=now):
         index = pack_index.build_pack_index(pack_dir)
@@ -965,7 +1025,7 @@ def publish_reconciliation_pass(
                 1 for item in gate.violations if item.severity == "reject"
             ),
             "violation_codes": codes,
-            "mode": "shadow",
+            "mode": policy.mode,
             "repair_attempts": 0,
             "structured_output_native": True,
         }
