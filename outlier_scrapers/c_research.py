@@ -340,14 +340,15 @@ def run_c_research(
                 return 0
 
         research_input = rc.append_totals_block(
-            "Pack briefing:\n"
+            rc.build_pack_identity_block(
+                pack_date=pack_dir.name,
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            )
+            + "\nPack briefing:\n"
             + briefing_text
-            + "\n\n"
-            + f"pack_date: {pack_dir.name}\n"
-            + f"candidates_sha256: {candidates_sha256}\n"
-            + f"game_totals_sha256: {game_totals_sha256}\n"
-            + f"team_totals_sha256: {team_totals_sha256}\n"
-            + "\nAuthoritative candidates.csv:\n"
+            + "\n\nAuthoritative candidates.csv:\n"
             + candidates_bytes.decode("utf-8-sig"),
             totals_bytes,
             team_totals_bytes,

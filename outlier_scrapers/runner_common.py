@@ -242,6 +242,29 @@ def filter_candidates_for_ai(raw_bytes: bytes) -> bytes:
     return out_io.getvalue().encode("utf-8-sig")
 
 
+def build_pack_identity_block(
+    *,
+    pack_date: str,
+    candidates_sha256: str,
+    game_totals_sha256: str,
+    team_totals_sha256: str,
+) -> str:
+    """The identity header every pass echoes back in its envelope.
+
+    The gate compares an envelope's ``pack_date`` and three pack hashes against
+    the index and fails the whole pass on any mismatch, so a pass that is never
+    shown these values cannot emit a valid envelope. Every runner sends this
+    block; the prompts refer to it by the ``PACK IDENTITY`` label.
+    """
+    return (
+        "===== PACK IDENTITY =====\n"
+        f"pack_date: {pack_date}\n"
+        f"candidates_sha256: {candidates_sha256}\n"
+        f"game_totals_sha256: {game_totals_sha256}\n"
+        f"team_totals_sha256: {team_totals_sha256}\n"
+    )
+
+
 def build_reasoning_data_block(
     candidates_bytes: bytes,
     totals_bytes: bytes | None,
@@ -777,7 +800,11 @@ def publish_finding_pass(
 
 def load_current_publications(pack_dir: Path) -> dict[str, Any]:
     """Read A/D/B/C current.json + verdicts.json into UpstreamPublication maps."""
-    from outlier_scrapers.verdict_gate import UpstreamPublication, _is_injury_text
+    from outlier_scrapers.verdict_gate import (
+        UpstreamPublication,
+        UpstreamRecord,
+        _is_injury_text,
+    )
 
     loaded: dict[str, Any] = {}
     for pass_name in ("A", "D", "B", "C"):
@@ -804,20 +831,35 @@ def load_current_publications(pack_dir: Path) -> dict[str, Any]:
             )
         }
         stakes: dict[str, float] = {}
+        bet_outcome_ids: set[str] = set()
+        # record_id -> what that record asserted, so a citation can be bound to
+        # the record it actually names rather than to publication-wide sets.
+        record_detail: dict[str, UpstreamRecord] = {}
         if pass_name != "C":
             for row in records:
-                if str(row.get("verdict") or "") != "BET":
-                    continue
+                record_id = str(row.get("record_id") or "")
                 outcome_id = str(row.get("outcome_id") or "")
+                row_verdict = str(row.get("verdict") or "")
                 try:
-                    stakes[outcome_id] = float(row.get("recommended_units") or 0)
+                    stake = float(row.get("recommended_units") or 0)
                 except (TypeError, ValueError):
+                    stake = None
+                if record_id:
+                    record_detail[record_id] = UpstreamRecord(
+                        outcome_id=outcome_id, verdict=row_verdict, stake=stake
+                    )
+                if row_verdict != "BET":
                     continue
+                bet_outcome_ids.add(outcome_id)
+                if stake is not None:
+                    stakes[outcome_id] = stake
         loaded[pass_name] = UpstreamPublication(
             pass_=pass_name,
             publication_id=pub_id,
             record_ids=frozenset(item for item in record_ids if item),
             outcome_ids=frozenset(item for item in outcome_ids if item),
+            bet_outcome_ids=frozenset(item for item in bet_outcome_ids if item),
+            records=record_detail,
             injury_supported_record_ids=frozenset(
                 item for item in injury_supported_record_ids if item
             ),

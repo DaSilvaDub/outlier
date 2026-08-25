@@ -698,13 +698,17 @@ def test_2b_under_is_generation_prohibited(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_stand_down_skips_stake_and_variance_but_not_tamper(tmp_path):
+def test_stand_down_skips_stake_caps_and_variance_but_not_tamper(tmp_path):
+    """Cap and variance checks stay skipped for a non-BET; tamper does not, and
+    a non-BET carrying units is itself flagged (nonzero_stake_on_non_bet)."""
     index = build_index(tmp_path, candidates=[candidate_row(market_label="3PM")])
     result = gate(
         parse_verdict(index, verdict="STAND_DOWN", recommended_units=9.0, line="9.9"),
         index,
     )
-    assert codes(result) == ["line_tampered"]
+    assert codes(result) == ["line_tampered", "nonzero_stake_on_non_bet"]
+    assert "stake_above_row_cap" not in codes(result)
+    assert "high_variance_market" not in codes(result)
     assert result.pass_fails is True
 
 
@@ -1095,3 +1099,198 @@ def test_violation_class_split_is_hard_coded():
     assert verdict_gate.violation_class("stake_above_row_cap") == "judgement"
     assert verdict_gate.violation_class("unbound_name_in_prose") == "warn"
     assert verdict_gate.violation_class("pack_mismatch") == "envelope"
+
+
+# ---------------------------------------------------------------------------
+# pack_date is pack truth, not a model-chosen value
+# ---------------------------------------------------------------------------
+
+
+def test_pack_date_mismatch_fails_the_pass(tmp_path):
+    """C's freshness window is evaluated against env.pack_date, so a model that
+    picks its own date would set its own staleness bar."""
+    pack_dir = tmp_path / "2026-08-12"
+    write_pack(pack_dir)
+    index = pack_index.build_pack_index(pack_dir, now=NOW, policy_path=_policy_path(tmp_path))
+    assert index.pack_date == "2026-08-12"
+
+    good = verdicts.parse_envelope(
+        json.dumps(_verdict_dict(index) | {"pack_date": "2026-08-12"}), "verdict"
+    )
+    assert gate(good, index).violations == ()
+
+    bad = verdicts.parse_envelope(
+        json.dumps(_verdict_dict(index) | {"pack_date": "2020-01-01"}), "verdict"
+    )
+    result = gate(bad, index)
+    only_code(result, "pack_mismatch")
+    assert result.pass_fails is True
+
+
+def test_non_date_pack_dir_disables_the_pack_date_check(tmp_path):
+    index = build_index(tmp_path)  # directory is literally "pack"
+    assert index.pack_date == "pack"
+    assert gate(parse_verdict(index), index).violations == ()
+
+
+# ---------------------------------------------------------------------------
+# A rejected record asserts no position, so it must stake nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "STAND_DOWN"])
+def test_nonzero_stake_on_non_bet_is_flagged(tmp_path, verdict):
+    index = build_index(tmp_path)
+    result = gate(
+        parse_verdict(index, verdict=verdict, recommended_units=1.5), index
+    )
+    only_code(result, "nonzero_stake_on_non_bet")
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "STAND_DOWN"])
+def test_zero_stake_on_non_bet_is_clean(tmp_path, verdict):
+    index = build_index(tmp_path)
+    result = gate(parse_verdict(index, verdict=verdict, recommended_units=0), index)
+    assert result.violations == ()
+
+
+# ---------------------------------------------------------------------------
+# E may only back what a verdict pass actually proposed as a BET
+# ---------------------------------------------------------------------------
+
+
+def _reconciliation(index, cites, *, verdict="BET", units=1.0):
+    raw = {
+        "schema_version": verdicts.SCHEMA_VERSION,
+        "pass": "E",
+        "pack_date": "2026-08-12",
+        "candidates_sha256": index.candidates_sha256,
+        "game_totals_sha256": index.game_totals_sha256,
+        "team_totals_sha256": index.team_totals_sha256,
+        "upstream_publication_ids": {"A": "pub_a", "D": None, "B": None, "C": None},
+        "reconciliations": [
+            {
+                "market_id": "mkt1",
+                "outcome_id": "out1",
+                "stream": "candidates",
+                "selection": "Player One Over 5.5",
+                "line": "5.5",
+                "price": "-110",
+                "book": "FD",
+                "verdict": verdict,
+                "recommended_units": units,
+                "narrative": "Reconciled.",
+                "cites": cites,
+                "rejection_reasons": [],
+            }
+        ],
+        "slate_notes": [],
+        "needs": [],
+    }
+    return verdicts.parse_envelope(json.dumps(raw), "reconciliation")
+
+
+def _pub_a(*, bet: bool):
+    """An A publication that saw out1 — as a BET, or only as a PASS."""
+    return {
+        "A": verdict_gate.UpstreamPublication(
+            pass_="A",
+            publication_id="pub_a",
+            record_ids=frozenset({"rec_a"}),
+            outcome_ids=frozenset({"out1"}),
+            bet_outcome_ids=frozenset({"out1"}) if bet else frozenset(),
+            stakes={"out1": 2.0} if bet else {},
+        )
+    }
+
+
+CITE_A = [{"pass": "A", "publication_id": "pub_a", "record_id": "rec_a"}]
+
+
+def test_e_bet_citing_only_an_upstream_pass_is_unsourced(tmp_path):
+    """outcome_ids spans every upstream record; without the BET-only set an E
+    BET could cite an upstream PASS and escape the stake ceiling too."""
+    index = build_index(tmp_path)
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=_pub_a(bet=False))
+    only_code(result, "unsourced_synthesis")
+
+
+def test_e_bet_citing_an_upstream_bet_is_clean(tmp_path):
+    index = build_index(tmp_path)
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=_pub_a(bet=True))
+    assert result.violations == ()
+
+
+def test_e_may_still_pass_a_market_no_upstream_bet(tmp_path):
+    """Narrowing an upstream PASS to a PASS is the whole point of the pass."""
+    index = build_index(tmp_path)
+    result = gate(
+        _reconciliation(index, CITE_A, verdict="PASS", units=0),
+        index,
+        current_publications=_pub_a(bet=False),
+    )
+    assert result.violations == ()
+
+
+# ---------------------------------------------------------------------------
+# A citation binds to the record it names, not to publication-wide sets
+# ---------------------------------------------------------------------------
+
+
+def _pub_a_records(**records):
+    """An A publication carrying per-record detail (what the real loader builds)."""
+    return {
+        "A": verdict_gate.UpstreamPublication(
+            pass_="A",
+            publication_id="pub_a",
+            record_ids=frozenset(records),
+            # Publication-wide sets deliberately say "out1 was bet somewhere",
+            # so only per-record binding can catch a mis-aimed citation.
+            outcome_ids=frozenset({"out1", "other"}),
+            bet_outcome_ids=frozenset({"out1"}),
+            stakes={"out1": 2.0},
+            records=dict(records),
+        )
+    }
+
+
+def test_e_bet_citing_a_record_for_another_outcome_is_unsourced(tmp_path):
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="other", verdict="BET", stake=2.0)
+    )
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=pubs)
+    only_code(result, "unsourced_synthesis")
+
+
+def test_e_bet_citing_a_pass_record_is_unsourced_even_when_outcome_was_bet(tmp_path):
+    """The publication bet out1 on some other record; this citation names a PASS."""
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="PASS", stake=0.0)
+    )
+    result = gate(_reconciliation(index, CITE_A), index, current_publications=pubs)
+    only_code(result, "unsourced_synthesis")
+
+
+def test_e_stake_ceiling_comes_from_the_cited_record(tmp_path):
+    """The cited record staked 1.0; the publication-wide map says 2.0."""
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="BET", stake=1.0)
+    )
+    # 1.5 is inside the row cap (min of pre_news 1.5 / max_units 2.0), so only
+    # the cited record's own stake can reject it.
+    over = gate(_reconciliation(index, CITE_A, units=1.5), index, current_publications=pubs)
+    only_code(over, "stake_above_row_cap")
+
+    at_cap = gate(_reconciliation(index, CITE_A, units=1.0), index, current_publications=pubs)
+    assert at_cap.violations == ()
+
+
+def test_e_bet_citing_a_matching_bet_record_is_clean(tmp_path):
+    index = build_index(tmp_path)
+    pubs = _pub_a_records(
+        rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="BET", stake=2.0)
+    )
+    assert gate(_reconciliation(index, CITE_A), index, current_publications=pubs).violations == ()

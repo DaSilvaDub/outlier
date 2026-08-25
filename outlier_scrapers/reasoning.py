@@ -47,6 +47,7 @@ def call_openai_responses_api(
     totals_bytes: bytes | None = None,
     team_totals_bytes: bytes | None = None,
     client=None,
+    identity_block: str = "",
 ) -> str:
     import openai
 
@@ -59,7 +60,7 @@ def call_openai_responses_api(
     data_block = rc.build_reasoning_data_block(
         raw_csv_bytes, totals_bytes, team_totals_bytes
     )
-    full_prompt = prompt_text + "\n\nData:\n" + data_block
+    full_prompt = prompt_text + "\n\n" + identity_block + "\nData:\n" + data_block
     structured = rc.request_structured("verdict")
 
     max_custom_retries = 10
@@ -250,6 +251,12 @@ def run_reasoning(
             totals_bytes,
             team_totals_bytes,
             client=client,
+            identity_block=rc.build_pack_identity_block(
+                pack_date=pack_dir.name,
+                candidates_sha256=candidates_sha256,
+                game_totals_sha256=game_totals_sha256,
+                team_totals_sha256=team_totals_sha256,
+            ),
         )
         _publish_pass_a(
             pack_dir,

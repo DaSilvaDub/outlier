@@ -305,8 +305,19 @@ def build_fallback_spreads(csv_text: str) -> str:
     return out.getvalue()
 
 
+# prompts/A.md is the automated desk's Pass A prompt and emits a JSON verdict
+# envelope, so it is not a safe stand-in for a human Markdown lane. Only the
+# Markdown analysis prompts may fall back to it.
+JSON_ENVELOPE_PROMPTS = frozenset({"Master_Cards_Analysis.md"})
+
+
 def load_prompt_template(filename: str) -> str:
-    """Read a prompt template from prompts directory, falling back to A.md if missing."""
+    """Read a prompt template from the prompts directory.
+
+    Missing Markdown analysis prompts fall back to A.md. A template that must
+    stay Markdown (see JSON_ENVELOPE_PROMPTS) fails closed instead, because
+    A.md now emits the automated JSON envelope contract.
+    """
     repo_root = Path(__file__).resolve().parents[4]
     candidate_paths = [
         repo_root / "prompts" / filename,
@@ -316,7 +327,14 @@ def load_prompt_template(filename: str) -> str:
         if p.exists():
             with open(p, "r", encoding="utf-8") as f:
                 return f.read()
-    # Safety fallback to Master Cards prompt (A.md)
+    if filename in JSON_ENVELOPE_PROMPTS:
+        raise FileNotFoundError(
+            f"prompt template not found: {filename}. Refusing to fall back to A.md: "
+            "it emits the automated Pass A JSON verdict envelope, not the Markdown "
+            "report this lane needs."
+        )
+
+    # Safety fallback for the Markdown analysis prompts only.
     for fallback_name in ["A.md"]:
         for p in [
             repo_root / "prompts" / fallback_name,
@@ -388,7 +406,10 @@ def generate_for_dir(
     # Alt Spread). The dedicated Alt Spread lane intentionally uses prefix 5
     # so existing prompt filenames and consumers are not renumbered.
     # HitRate prompts are intentionally not generated — dropped pending a redesign.
-    cards_template = load_prompt_template("A.md")
+    # Master Cards is the human-readable Markdown lane. prompts/A.md is the
+    # automated desk's Pass A prompt and emits a JSON verdict envelope, so it
+    # is only the fallback here, not the template.
+    cards_template = load_prompt_template("Master_Cards_Analysis.md")
     cards_2unit = filter_min_unit_candidates(candidates, min_units=2.0)
 
     # Master Card is split per league (MLB, WNBA) plus a combined variant, each

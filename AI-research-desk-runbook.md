@@ -13,7 +13,7 @@
 |---|---|---|
 | **GPT-5.6 Sol** | Automated stress-tester (A, pack-only) | OpenAI's flagship model; unmatched at pure logic, probability math, and strictly following complex rule constraints without hallucinating. |
 | **Gemini 3.1 Pro** | Wide scanner (B, web) | Google's top model for complex reasoning with a massive context window and native Google Search integration for broad sweeps. |
-| **Grok 4.5** | Deep per-game news (C, web) | xAI's flagship; provides real-time access to the X firehose for breaking sports news, lineup changes, and late scratches. |
+| **Gemini 3.1 Pro** | Deep per-game injury / lineup news (C, web) | `c_research.py` runs C through the same Google-Search-grounded call path as B and requires `GEMINI_API_KEY`. (Grok is the Desk 2 X-sentiment lane, phase X — not this pass.) |
 | **Claude Fable 5** | Red-team (D, pack-only) & Synthesizer (E) | Anthropic's most capable model; highest calibration for finding logical flaws, plus the most professional writing style for the final guide. |
 
 **Key principle:** the desk's job is *as much about killing bad pipeline cards as confirming good ones*. A stand-down is a win. Consensus across models is a filter, not proof — weight independent **sourced information** (deep-research news) above **opinion**.
@@ -121,7 +121,10 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 - **Lineup:** posted lineup card, key bats in/out, platoon/handedness edge, regulars resting (day-after-night, getaway day).
 - **Weather/park:** wind speed + direction (out vs in), temp, rain-delay risk, roof open/closed, hitter vs pitcher park, altitude (Coors).
 - **Umpire:** home-plate ump strike-zone tendency (tight/wide → totals & K props).
-- *Market types in play:* full game, **F5 (first 5)**, run line, total, **NRFI/YRFI**, strikeout props, H+R+RBI.
+- *Market types in play:* full game, run line, total, pitcher strikeout props,
+  team run totals. **Not in play:** H+R+RBI, home runs, hits allowed, walks
+  allowed, and player walks are desk-prohibited (see §3); F5 and NRFI/YRFI are
+  outside the whitelists the passes enforce. Do not research them.
 
 **WNBA** — each answer needs source + tier + timestamp:
 - **Availability:** injury report status (out/quest/prob), load management, rest decisions.
@@ -129,104 +132,92 @@ Override rule: only **Tier 1–2, sourced + timestamped** news may flip a pick. 
 - **Schedule/fatigue:** back-to-back, travel/time-zone, schedule density.
 - **Usage shift:** if a star is out, who absorbs usage/shots → which player-prop **overs** light up.
 - **Game script:** pace matchup, blowout risk (→ star minutes capped → prop **unders**), foul-trouble tendencies.
-- *Market types in play:* spread, total, player points/reb/ast, **PRA**, 3PM, alt lines.
+- *Market types in play:* moneyline, spread, total, player points / rebounds /
+  assists and their combinations (**PRA**). **Not in play:** 3PM and turnovers
+  are prohibited high-variance markets (see §3). Do not research them.
 
 ---
 
 ## 3. The five prompt templates
 
-> Paste the §2a rule block + the relevant pack section *above* each prompt. All ask for **structured output** so synthesis is mechanical.
+> Every pass is sent `pack.ROLE_BLOCK` as its system instruction, a
+> `PACK IDENTITY` header (`pack_date` plus the three pack hashes), and its pack
+> data. Each prompt file is the whole user-side contract for that pass.
 
-### Prompt A — ChatGPT reasoning stress-test (input: `candidates.csv`) — PACK-ONLY (Automated)
-[See prompts/A.md](prompts/A.md)
+**All five passes emit a structured envelope, not prose.** A, B and D emit a
+*verdict* envelope (`BET` / `PASS` / `STAND_DOWN` with a stake), C emits a
+*finding* envelope (`CONFIRMS` / `CONTRADICTS` / `NEUTRAL`, no stake), and E
+emits a *reconciliation* envelope that may only narrow what A/D/B already
+proposed. `verdict_gate.validate_envelope` checks every record against
+`pack_index`, and the Markdown a human reads is rendered from the validated
+envelope — never written by the model. Schemas live in `verdicts.py`; the
+per-code rules are in `docs/plans/2026-08-12-structured-ai-verdicts.md`.
 
-Run it independently with `python -m outlier_scrapers.reasoning --date YYYY-MM-DD`
-or append `--run-reasoning` to the daily job. The fixed API configuration is
-`gpt-5.5` with `reasoning.effort="xhigh"`, no web tools, and `store=False`.
-Output is `packs/YYYY-MM-DD/chatgpt_a.md`. The daily job skips an identical
-request by hash; standalone runs preserve existing output unless `--force` is
-provided. This is paid API usage and requires `OPENAI_API_KEY` plus available API
-quota; ChatGPT subscription billing does not fund API calls.
+Two failure modes are worth knowing before editing any prompt:
 
-### Prompt B — Gemini wide-scan Deep Research (input: full `briefing.md`) — WEB ALLOWED
-```
-Deep research task. Here is today's slate with my model's flagged markets (as-of timestamp in header). Each game is tagged MLB or WNBA — use the matching question set:
-- MLB: confirmed starters + days rest, bullpen availability, posted lineup, wind/temp/roof/park, home-plate umpire zone.
-- WNBA: injury status + load management, confirmed starters/minutes limits, back-to-back/travel, usage shift if a star sits, pace & blowout risk.
-Search current sources (last 24h). Do NOT invent, quote, or update any betting line — the pack's lines are the only lines.
+* An envelope whose `pack_date` or three `*_sha256` values do not match the
+  index is rejected **before any verdict is read**. Every runner therefore sends
+  `rc.build_pack_identity_block(...)` and every prompt tells the model to echo it
+  verbatim.
+* One tampered identity field (`market_id`, `outcome_id`, `stream`, `selection`,
+  `line`, `price`, `book`) on *one* record — including a `PASS` record — fails
+  the whole pass. Judgement-class violations only fail the pass when more than
+  `reject_fail_ratio` of the attempted `BET`s are rejected.
 
-For EACH game return:
-- news items: each as { claim | source name | source tier (1/2/3 per the pack) | timestamp }
-- impact: which market_id(s) it affects and direction, tied to the quoted pack line
-- verdict vs my model: CONFIRMS / CONTRADICTS / NEUTRAL, one line why
-Only report what you can source. Flag anything my as-of data likely missed.
-```
+### Prompt A — reasoning stress-test (input: `candidates.csv` + totals) — PACK-ONLY
+[prompts/A.md](prompts/A.md) — verdict envelope. No web tools: the prompt
+forbids external research outright, and an `"external"` evidence item from this
+pass is a fabrication. Run with `python -m outlier_scrapers.reasoning --date
+YYYY-MM-DD`, or append `--run-reasoning` to the daily job. Fixed configuration:
+`reasoning.effort="xhigh"`, `store=False`, OpenAI strict `json_schema` output.
+Output is `packs/YYYY-MM-DD/chatgpt_a.md` plus `verdicts/A/<publication_id>`.
+Paid API usage; requires `OPENAI_API_KEY`.
 
-Run it independently with:
+### Prompt B — wide-scan research (input: `briefing.md` + `candidates.csv` + totals) — WEB ALLOWED
+[prompts/B.md](prompts/B.md) — verdict envelope. Google-Search-grounded (a single
+grounded generation pass, not the multi-step Deep Research UI product).
+Structured output is best-effort: on a grounded-config rejection the runner falls
+back to prompt-instructed JSON, which is why B's prompt carries the envelope
+shape inline and insists on JSON-only output. Every `"external"` evidence item
+needs `source`, `tier` and `timestamp`; injury and lineup claims additionally
+need a `player_id` and a timestamp inside 24 hours. Run with
+`python -m outlier_scrapers.gemini_research --date YYYY-MM-DD`. Requires
+`GEMINI_API_KEY`.
 
-```powershell
-python -m outlier_scrapers.gemini_research --date YYYY-MM-DD
-```
+### Prompt C — injury / lineup research (input: `briefing.md` + `candidates.csv`) — WEB ALLOWED
+[prompts/C.md](prompts/C.md) — finding envelope, JSON only. Narrow scope:
+availability, lineups, starters, rest, usage. `source_timestamp` must be the
+source's own publication time and must fall between `pack_date − 2d` and
+`pack_date + 1d`. C never asserts a stake, and a C finding alone can never
+justify a bet downstream. Run with `python -m outlier_scrapers.c_research --date
+YYYY-MM-DD`. Requires `GEMINI_API_KEY`.
 
-Requires `GEMINI_API_KEY` (paid). This is a single Google-Search-grounded generation pass (not the full multi-step Gemini Deep Research UI product).
+### Prompt D — red-team reasoning (input: `candidates.csv` + totals) — PACK-ONLY
+[prompts/D.md](prompts/D.md) — verdict envelope, emitted through a forced
+`emit_verdicts` tool call. Same gates as A, opposite posture: D reaches its own
+independent read and must record the strongest argument *against* every bet it
+backs in `contradictions`. A `BET` with an unanswerable `material` contradiction
+is a `PASS`. Run with `python -m outlier_scrapers.claude_reasoning --date
+YYYY-MM-DD`. Requires `ANTHROPIC_API_KEY`.
 
-### Prompt C — Gemini injury/lineup research (input: `briefing.md` + `candidates.csv`) — WEB ALLOWED
-```
-Research current injury, availability, lineup, rotation, starter, rest, and usage context.
-Anchor the 24-hour research window to the pack's slate date/as-of timestamp. Emit one
-structured finding per affected market. Copy market_id, selection, line, and price exactly
-from candidates.csv; the runner rejects altered or unknown quotes before writing output.
-```
+### Prompt E — reconciliation → final guide (input: validated A/D/B/C envelopes) — VALIDATION FIRST
+[prompts/E.md](prompts/E.md) — reconciliation envelope. E consumes the upstream
+passes' **validated envelopes**, never their Markdown, and cites each record by
+`(pass, publication_id, record_id)`. It may only narrow: no new market, no new
+number, no stake above the minimum upstream stake for that `outcome_id`. Injury
+language in `narrative` must cite a validated B/C finding. Run with
+`python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD`; A, B and D must
+have published first. C is optional and included when present. Requires
+`ANTHROPIC_API_KEY`.
 
-Run it independently with:
-
-```powershell
-python -m outlier_scrapers.c_research --date YYYY-MM-DD
-```
-
-Requires `GEMINI_API_KEY` (paid). This is a single Google-Search-grounded generation
-pass, not the full multi-step Gemini Deep Research UI product.
-
-### Prompt D — Claude reasoning pass (input: `briefing.md`) — PACK-ONLY
-```
-Act as a calibrated, skeptical betting analyst. From the pack ONLY (no web, no memory), independently evaluate the top EV and signal cards. For each market_id give: verdict (BET/LEAN/PASS/FADE), the line it applies to, confidence 1–5, and the single biggest reason you might be WRONG. Separately list any card that looks like a data artifact and should be stood down. Prefer PASS to a forced lean. Do not propose unit sizes.
-```
-
-Run it independently with:
-
-```powershell
-python -m outlier_scrapers.claude_reasoning --date YYYY-MM-DD
-```
-
-Requires `ANTHROPIC_API_KEY` (paid).
-
-### Prompt E — Claude synthesis → final guide (input: outputs A + B + C + D) — VALIDATION FIRST
-```
-You are the head of the desk. Below are four analyses: two pack-only reasoning passes (A, D) and two web research passes (B, C). Build the final guide.
-
-STEP 1 — VALIDATION PASS (do this before any recommendation):
-- Keep a claim ONLY if it is supported by EITHER the pack OR a sourced B/C item. Discard everything else.
-- Discard any play whose cited line/price does not EXACTLY match the pack.
-- News may override opinion only if it is Tier 1–2, sourced, and timestamped (per §2e). Tier 3 can only lower confidence.
-
-STEP 2 — BUILD:
-- A play needs: positive model edge AND no contradicting Tier 1–2 news AND ≥1 reasoner BET/LEAN.
-- Anything contradicted by **Tier 1–2 sourced** news (Tier 3 cannot kill a play) or flagged as an artifact → STAND-DOWN with reason.
-- SIZING IS FIXED: use the pipeline's recommended_units_pre_news. You MAY downgrade units (e.g. soft news, low confidence) but MUST NOT increase above it, and never above max_units.
-- SGP/parlays: list as CANDIDATES ONLY (no units) unless the pack provides ALL THREE: `sgp_recommended_units_pre_news` + a book combined price + `sgp_correlation_rationale`. Do not multiply leg prices yourself.
-
-Output the §4 schema, plus an AGREE/DISAGREE matrix (market_id × A/B/C/D).
-```
-
-Run it independently with:
-
-```powershell
-python -m outlier_scrapers.claude_synthesis --date YYYY-MM-DD
-```
-
-Requires `ANTHROPIC_API_KEY` (paid). Note the dependency order: E requires outputs from
-A (via daily job or OpenAI), B, and D to exist first for the date. The automated Prompt C
-output is optional and included when present.
+### Master Cards — the human paste lane (not part of the automated desk)
+[prompts/Master_Cards_Analysis.md](prompts/Master_Cards_Analysis.md) is the
+Markdown-report prompt the manual export path pastes into a chat model. It is
+deliberately *not* `A.md`: the automated Pass A emits JSON, while this lane wants
+a written card. `generate_prompts.py` loads it by name and **fails closed** if it is
+missing, rather than falling back to `A.md` — that fallback would hand this lane
+the automated JSON envelope contract, which is the regression the split exists to
+prevent.
 
 ---
 
