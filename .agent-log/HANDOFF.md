@@ -1,53 +1,35 @@
-# Handoff Summary - 2026-08-24
+# Handoff Summary - 2026-08-25
 
 ## 1. Last Commit SHA
-- `58a4d6e4fa5cadbcfbfb5a6041e2a7a1c9f836b2` on branch `claude/outlier-prompts-optimize-fpyxcs`
-- Pull Request: https://github.com/DaSilvaDub/outlier/pull/116 (open, CI green, mergeable)
 
-## 2. What This Branch Does
-Aligns the five AI Research Desk prompts (`prompts/A-E.md`) with the structured
-envelope contract the runners actually enforce.
+- Product commit: `f9d8b34` on branch `fix/824-audit-integrity`
+- Pull request: https://github.com/DaSilvaDub/outlier/pull/119
 
-- `B.md` and `D.md` had been byte-identical, and both were near-copies of `A.md`
-  — one Markdown-report prompt serving three passes with different providers and
-  different tools, while the runners had moved to forced structured output.
-- A and D are pack-only but were told to do 24h Tier-1 web research, which is
-  only satisfiable by fabricating.
-- Neither A nor D was ever shown `pack_date` or the three pack hashes, which the
-  envelope requires and the gate checks before reading a verdict.
-- `prompts/Master_Cards_Analysis.md` is new: the human paste lane's Markdown
-  prompt, split out of `A.md`. `generate_prompts.py` fails closed if it is
-  missing rather than falling back to the now-JSON `A.md`.
+## 2. Files Touched
 
-Three gate changes came out of review, each backing a rule the prompts state:
-`pack_date` validation, E citations bound to the record they name
-(`UpstreamPublication.records`), and `nonzero_stake_on_non_bet`.
+- `outlier_scrapers/feedback.py`: schema-v5 pack membership, recovery support,
+  immutable first-seen attribution, event-time recovery, and decision coverage.
+- `outlier_scrapers/game_totals.py`: event-start export and fail-closed team-total
+  evidence gates.
+- `outlier_scrapers/pack.py`: player projection-side conflict gate.
+- `outlier_scrapers/ultimate_alt.py`: settlement-compatible selection identity.
+- Focused regressions in `tests/test_feedback.py`, `tests/test_game_totals.py`,
+  `tests/test_pack.py`, and `tests/test_ultimate_alt.py`.
+- `docs/feedback-loop.md`: schema and reporting contract updates.
 
 ## 3. Verification
-- `pytest`: 1176 passed locally. 10 failures are environmental in this container
-  (no `openai` / `anthropic` / `google-genai`, no pip network) and fail
-  identically on a stashed clean tree. CI runs all of them green.
-- CI on `58a4d6e`: `test` success, `typecheck` success. `mergeable_state: clean`.
-- `ruff check` clean; `mypy outlier_scrapers` at or below the pre-existing baseline.
-- No reasoning model, desk runner, or provider API was invoked at any point.
-- STEP 0 `report-sync.ps1` was NOT run: Linux container, no PowerShell, no access
-  to the Windows worktrees. Re-run it locally before trusting any branch,
-  worktree, or commit-existence claim from this session.
+
+- 225 focused tests passed.
+- Offline suite: 1231 passed and 2 skipped; one unrelated Windows temp-path
+  `os.replace` access failure passed on immediate isolated rerun.
+- Changed-file Ruff and changed-source MyPy passed.
+- `git diff --check` passed.
+- Independent read-only review found no actionable issues.
+- No paid reasoning provider or desk runner was invoked.
 
 ## 4. Next Steps
-- Merge PR #116 **off-slate**. Prompt text joins every `request_sha256`, so the
-  first desk run after merge is a full re-run by design. The `C: None` fix to
-  `upstream_publication_ids` also changes E's request hash on its own.
-- On that first run, watch `violations.json`: the point of these edits is fewer
-  `pack_mismatch`, `identity_tamper`, `stake_*` and `unsupported_injury_claim`.
-- Follow-up PR (deliberately excluded here, full list in PR #116 comments):
-  enforce in the gate what the prompts state — non-empty `evidence` on a `BET`,
-  `kind: "pack"` for the pack-only passes, external-evidence
-  `source`/`tier`/`timestamp` validation, non-empty `contradictions` on a D
-  `BET`, fail-closed `actionable`, filtering upstream records through
-  `violations.json`, and `pack_date` in `request_sha256`. Each widens the reject
-  surface, so land them with a shadow-mode observation window.
-- Also folded into that follow-up: `test_prompt_contracts` asserts the identity
-  block by source search rather than captured provider requests, and does not
-  cover `claude_synthesis`; and the envelope's `pass` field is not bound to the
-  invoking runner at publish time.
+
+- Wait for fresh PR #119 checks, merge when green, then run the canonical
+  `report-sync.ps1` and confirm `REPORT STATUS: OK`.
+- Do not fit calibration from the 2026-08-24 sample alone; it remains too small
+  and is descriptive rather than an independent calibration cohort.
