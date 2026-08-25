@@ -8,6 +8,8 @@ import pytest
 from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
+    _apply_learned_stake_before_caps,
+    _load_learned_stake_runtime,
     _opportunity_key,
     _apply_enforced_portfolio_units,
     _restore_published_pack,
@@ -33,6 +35,7 @@ from outlier_scrapers.pack import (
     write_pack,
 )
 from outlier_scrapers.sizing import compute_historical_edge
+from outlier_scrapers.schema import ValidationError
 
 SOURCE_TS = {"cards": "CT", "line_movement": "LMT", "props": "PT"}
 
@@ -681,6 +684,15 @@ def test_duplicate_projection_outcome_ids_are_rejected_as_ambiguous():
     assert index_projections(payload) == {}
 
 
+def test_projection_artifact_date_must_be_present_and_match_expected_slate():
+    projection = {"status": "eligible", "row_id": "o1", "event_id": "game-1"}
+    assert index_projections(
+        {"date": "2026-08-25", "projections": [projection]}, "2026-08-25"
+    ) == {"o1": projection}
+    with pytest.raises(ValidationError, match="missing date"):
+        index_projections({"projections": [projection]}, "2026-08-25")
+
+
 def test_local_ev_probability_source_is_labeled_separately():
     card = ev_card(market_type="MONEYLINE", market="MONEYLINE")
     card["sides"]["OVER"]["ev"]["ev_source"] = "LOCAL"
@@ -1019,6 +1031,211 @@ def test_enforce_allocation_preserves_positive_units_for_actionable_board_a_row(
     assert row["actionable"] == "true"
     assert row["board"] == "A"
     assert row["recommended_units_pre_news"] == 0.5
+
+
+def _market_consensus_calibration_artifact() -> dict:
+    return {
+        "schema_version": 1,
+        "artifact_version": "stake-cal-test",
+        "status": "active",
+        "source_probability_column": "market_consensus_prob",
+        "training_cutoff": "2026-01-01T00:00:00+00:00",
+        "min_samples": 30,
+        "prior_strength": 0.0,
+        "confidence_level": 0.8,
+        "global": {
+            "n": 100,
+            "wins": 58,
+            "losses": 42,
+            "observed_mean": 0.58,
+            "predicted_mean": 0.58,
+            "shrunk_observed_mean": 0.58,
+            "shrunk_reliability_factor": 1.0,
+        },
+        "dimensions": {},
+    }
+
+
+def test_active_uncertainty_haircut_reduces_pre_cap_units_and_emits_diagnostics():
+    from outlier_scrapers.portfolio import PortfolioPolicy
+
+    policy = PortfolioPolicy(
+        mode="enforce",
+        streams_in_scope=["candidates"],
+        max_wager_units=10.0,
+        shadow_multipliers_neutral=False,
+    )
+    original = {
+        "actionable": "true",
+        "board": "A",
+        "decimal_price": 1.9090909,
+        "push_prob": 0.0,
+        "market_consensus_prob": 0.58,
+    }
+    projected = {**original, "units": 3.0}
+    _apply_learned_stake_before_caps(
+        projected,
+        original,
+        stream="candidates",
+        policy=policy,
+        runtime={
+            "enabled": True,
+            "source_probability_column": "market_consensus_prob",
+            "calibration_artifact": _market_consensus_calibration_artifact(),
+            "drawdown_state": None,
+            "shadow_multipliers_neutral": False,
+        },
+    )
+
+    assert projected["uncertainty_multiplier"] < 1.0
+    assert 0.0 <= projected["pre_cap_units"] < 3.0
+    assert original["learned_source_probability"] == 0.58
+    assert original["uncertainty_source"] == "global"
+    assert original["learned_multiplier_status"] == "active"
+
+
+def test_shadow_neutral_learned_diagnostics_do_not_change_pre_cap_units():
+    from outlier_scrapers.portfolio import PortfolioPolicy
+
+    policy = PortfolioPolicy(
+        mode="enforce",
+        streams_in_scope=["candidates"],
+        max_wager_units=10.0,
+        shadow_multipliers_neutral=True,
+    )
+    original = {
+        "actionable": "true",
+        "board": "A",
+        "decimal_price": 1.9090909,
+        "push_prob": 0.0,
+        "market_consensus_prob": 0.58,
+    }
+    projected = {**original, "units": 1.5}
+    _apply_learned_stake_before_caps(
+        projected,
+        original,
+        stream="candidates",
+        policy=policy,
+        runtime={
+            "enabled": True,
+            "source_probability_column": "market_consensus_prob",
+            "calibration_artifact": _market_consensus_calibration_artifact(),
+            "drawdown_state": None,
+            "shadow_multipliers_neutral": True,
+        },
+    )
+
+    assert projected["pre_cap_units"] == 1.5
+    assert projected["uncertainty_multiplier"] == 1.0
+    assert projected["learned_multiplier_status"] == "shadow_neutral"
+
+
+def test_learned_stake_runtime_uses_market_consensus_source_from_policy(
+    tmp_path, monkeypatch
+):
+    from outlier_scrapers.portfolio import PortfolioPolicy
+
+    config_dir = tmp_path / "config"
+    calibration_dir = tmp_path / "calibration"
+    config_dir.mkdir()
+    calibration_dir.mkdir()
+    (config_dir / "portfolio_risk.json").write_text(
+        json.dumps(
+            {
+                "calibration": {
+                    "enabled": True,
+                    "source_probability_column": "market_consensus_prob",
+                    "artifact_path": "calibration/stake_calibration.json",
+                },
+                "uncertainty": {"enabled": True},
+                "drawdown": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (calibration_dir / "stake_calibration.json").write_text(
+        json.dumps(_market_consensus_calibration_artifact()), encoding="utf-8"
+    )
+    monkeypatch.setattr(P, "PROJECT_ROOT", tmp_path)
+
+    runtime = _load_learned_stake_runtime(
+        PortfolioPolicy(shadow_multipliers_neutral=False)
+    )
+
+    assert runtime["enabled"] is True
+    assert runtime["source_probability_column"] == "market_consensus_prob"
+    assert runtime["calibration_artifact"]["source_probability_column"] == (
+        "market_consensus_prob"
+    )
+
+
+def test_drawdown_only_policy_stand_down_zeros_pre_cap_units(tmp_path, monkeypatch):
+    from outlier_scrapers.portfolio import PortfolioPolicy
+
+    config_dir = tmp_path / "config"
+    calibration_dir = tmp_path / "calibration"
+    config_dir.mkdir()
+    calibration_dir.mkdir()
+    (config_dir / "portfolio_risk.json").write_text(
+        json.dumps(
+            {
+                "calibration": {"enabled": False},
+                "uncertainty": {"enabled": False},
+                "drawdown": {
+                    "enabled": True,
+                    "state_path": "calibration/drawdown_state.json",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (calibration_dir / "drawdown_state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "equity": 80.0,
+                "high_water_mark": 100.0,
+                "drawdown_pct": 0.20,
+                "as_of": "2026-01-02T00:00:00+00:00",
+                "included_decision_cutoff": "2026-01-01T00:00:00+00:00",
+                "tier": "stand_down",
+                "drawdown_multiplier": 0.0,
+                "sample_count": 10,
+                "status": "active",
+                "reason": "drawdown_tier:stand_down",
+                "tiers_fingerprint": "test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(P, "PROJECT_ROOT", tmp_path)
+    policy = PortfolioPolicy(
+        mode="enforce",
+        streams_in_scope=["candidates"],
+        shadow_multipliers_neutral=False,
+    )
+    runtime = _load_learned_stake_runtime(policy)
+    original = {
+        "actionable": "true",
+        "board": "A",
+        "decimal_price": 1.9090909,
+        "push_prob": 0.0,
+        "market_consensus_prob": 0.58,
+    }
+    projected = {**original, "units": 1.0}
+
+    _apply_learned_stake_before_caps(
+        projected,
+        original,
+        stream="candidates",
+        policy=policy,
+        runtime=runtime,
+    )
+
+    assert runtime["enabled"] is True
+    assert projected["drawdown_multiplier"] == 0.0
+    assert projected["learned_multiplier_status"] == "stand_down"
+    assert projected["pre_cap_units"] == 0.0
 
 
 # 8c2. A NaN/inf line must never crash build_row (found while adding the
@@ -1485,6 +1702,7 @@ def _league_fixture(root, lg):
     (root / "normalized" / f"{low}_props_latest.json").write_text(
         json.dumps(
             {
+                "date": "2099-07-07",
                 "generated_at": "PN",
                 "records": [
                     {
@@ -1501,6 +1719,7 @@ def _league_fixture(root, lg):
     (root / "normalized" / f"{low}_projections_latest.json").write_text(
         json.dumps(
             {
+                "date": "2099-07-07",
                 "generated_at": "PROJ",
                 "projections": [
                     {
@@ -1544,7 +1763,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
     rows, target, games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
-    projection_records = load_projection_records(["MLB", "WNBA"])
+    projection_records = load_projection_records(["MLB", "WNBA"], target)
     sports = {r["sport"] for r in rows}
     assert sports == {"MLB", "WNBA"}
     # both streams represented: a player (board_b) and a game (board_a) row exist
@@ -1602,6 +1821,28 @@ def test_end_to_end(tmp_path, monkeypatch):
     dossiers = list((out_dir / "dossiers").glob("*.md"))
     assert len(dossiers) == len({d.name for d in dossiers})
     assert len(dossiers) >= 2
+
+
+def test_build_pack_rejects_projection_artifact_for_wrong_slate(tmp_path, monkeypatch):
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    _league_fixture(tmp_path / "data" / "MLB", "MLB")
+    projection_path = tmp_path / "data" / "MLB" / "normalized" / "mlb_projections_latest.json"
+    payload = json.loads(projection_path.read_text(encoding="utf-8"))
+    payload["date"] = "2099-07-08"
+    projection_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    with pytest.raises(ValidationError, match="does not match pack slate"):
+        build_pack_with_coverage(["MLB"], None, 15, 10)
 
 
 # 17. Briefing carries the verbatim role block + slate line.
@@ -2242,6 +2483,10 @@ def test_build_pack_coverage_explains_zero_rows_from_missing_event_starts(tmp_pa
     (root / "normalized" / "mlb_props_latest.json").write_text(
         json.dumps({"generated_at": "PN", "records": [{"event_id": "EP", "sport_context": {}}]})
     )
+    projections_path = root / "normalized" / "mlb_projections_latest.json"
+    projections_payload = json.loads(projections_path.read_text(encoding="utf-8"))
+    projections_payload["date"] = "2026-07-13"
+    projections_path.write_text(json.dumps(projections_payload), encoding="utf-8")
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
 
     rows, _target, _games_norm, coverage = build_pack_with_coverage(["MLB"], "2026-07-13", 15, 10)

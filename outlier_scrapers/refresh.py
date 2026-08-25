@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.projections:
             try:
-                status = export_projections(league)
+                status = export_projections(league, target_date=target_date)
                 if status["status"] == "skipped":
                     print(f"{league.upper()} projections: skipped ({status['reason']})")
                 else:

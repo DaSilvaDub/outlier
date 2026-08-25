@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from . import results
 from . import run_desk
 from . import runner_common as rc
 from . import t30_reprice
+from . import verdict_store
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +156,13 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     return all_safe
 
 
-def run_pack(leagues: list[str], target_date: str | None = None) -> Path | None:
+def run_pack(leagues: list[str], target_date: str | None = None, feedback_db: Path | None = None) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
     if target_date:
         args.extend(["--date", target_date])
+    if feedback_db:
+        args.extend(["--feedback-db", str(feedback_db)])
     try:
         return pack.main(args)
     except Exception as e:
@@ -259,6 +263,57 @@ def refit_blend_weights(
     }
 
 
+def maintain_feedback_ledger(
+    db_path: Path | None = None,
+    *,
+    cutoff_days: int = 90,
+    recompute_clv: bool = True,
+    run_retention: bool = True,
+) -> dict:
+    """Run bounded ledger maintenance; each operation is independent and non-fatal."""
+    db = Path(db_path or feedback.DEFAULT_DB_PATH)
+    if not db.exists():
+        return {"status": "skipped", "reason": "missing_ledger"}
+    result: dict = {"status": "ok", "cutoff_days": cutoff_days}
+    failures = 0
+    if recompute_clv:
+        try:
+            result["clv"] = {"status": "ok", **feedback.recompute_settlement_clv(db)}
+        except (OSError, sqlite3.Error, feedback.FeedbackError, ValueError) as exc:
+            failures += 1
+            result["clv"] = {"status": "failed", "error": str(exc)[:300]}
+            logger.error("Settlement CLV recompute failed (continuing): %s", exc)
+    else:
+        result["clv"] = {"status": "skipped", "reason": "disabled"}
+    if run_retention:
+        try:
+            retention = feedback.apply_retention_policy(db, cutoff_days=cutoff_days)
+            result["retention"] = {"status": "ok", **asdict(retention)}
+        except (OSError, sqlite3.Error, feedback.FeedbackError, ValueError) as exc:
+            failures += 1
+            result["retention"] = {"status": "failed", "error": str(exc)[:300]}
+            logger.error("Feedback retention failed (continuing): %s", exc)
+    else:
+        result["retention"] = {"status": "skipped", "reason": "disabled"}
+    attempted = int(recompute_clv) + int(run_retention)
+    result["status"] = "failed" if failures == attempted and attempted else ("partial" if failures else "ok")
+    return result
+
+
+def persist_desk_feedback(pack_dir: Path, db_path: Path | None = None) -> dict:
+    db = Path(db_path or feedback.DEFAULT_DB_PATH)
+    if not db.exists():
+        return {"status": "skipped", "reason": "missing_ledger"}
+    if not (pack_dir / "verdicts" / "desk_snapshot.json").exists():
+        return {"status": "skipped", "reason": "missing_desk_snapshot"}
+    try:
+        stats = verdict_store.persist_desk_snapshot(pack_dir, db)
+    except (OSError, sqlite3.Error, verdict_store.VerdictPersistenceError, ValueError) as exc:
+        logger.error("Desk feedback projection failed closed (continuing): %s", exc)
+        return {"status": "failed", "error": str(exc)[:300]}
+    return {"status": "ok", "publications": stats.publications, "records": stats.records, "decisions_updated": stats.decisions_updated}
+
+
 def _count_pack_rows(pack_dir: Path) -> int | None:
     candidates = pack_dir / "candidates.csv"
     if not candidates.exists():
@@ -331,6 +386,15 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
             return 1
         settlement_stats = imported
 
+    feedback_maintenance = {"status": "skipped", "reason": "disabled"}
+    if not args.skip_feedback_maintenance:
+        feedback_maintenance = maintain_feedback_ledger(
+            args.feedback_db,
+            cutoff_days=args.feedback_retention_days,
+            recompute_clv=not args.skip_clv_recompute,
+            run_retention=not args.skip_feedback_retention,
+        )
+
     blend_refit = {"status": "skipped"}
     if not args.skip_blend_refit:
         blend_refit = refit_blend_weights(args.feedback_db)
@@ -348,7 +412,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         logger.error("Feed-health check failed. Aborting pipeline before pack build.")
         return 1
 
-    pack_dir = run_pack(leagues)
+    pack_dir = run_pack(leagues, target_date=args.date, feedback_db=args.feedback_db)
     if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
         return 1
@@ -384,6 +448,11 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         except Exception as exc:
             logger.error("Desk orchestration error: %s", exc)
 
+    # Always project an authoritative snapshot when one exists. The desk may
+    # have been run separately from this daily job, and waiting for another
+    # paid desk invocation would strand its verdicts outside the ledger.
+    desk_feedback = persist_desk_feedback(pack_dir, args.feedback_db)
+
     status_path = pack_dir / "reasoning_status.json"
     overall = "ok" if empty_pack else "degraded"
     if not empty_pack and status_path.exists():
@@ -404,6 +473,8 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         "settlement_ingest": settlement_stats,
         "result_collection": result_collection,
         "blend_refit": blend_refit,
+        "feedback_maintenance": feedback_maintenance,
+        "desk_feedback": desk_feedback,
     }
     _atomic_write_manifest(pack_dir, manifest)
 
@@ -449,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Explicit diagnostic escape hatch; normal daily runs import pending results.",
     )
+    parser.add_argument("--skip-feedback-maintenance", action="store_true", help="Skip all automatic feedback-ledger maintenance.")
+    parser.add_argument("--skip-clv-recompute", action="store_true", help="Skip settlement CLV repair during maintenance.")
+    parser.add_argument("--skip-feedback-retention", action="store_true", help="Skip feedback-ledger retention during maintenance.")
+    parser.add_argument("--feedback-retention-days", type=int, default=90, help="Retention cutoff in days (default: 90).")
     parser.add_argument(
         "--t30-reprice-only",
         action="store_true",

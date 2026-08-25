@@ -15,8 +15,9 @@ top-N ranking step and then captures the pack into
   the final pack selection state, exact outcome/line identity, probabilities,
   edge, book, data-quality flags, and the four Board B components.
 - `decisions`: one decision per market snapshot, seeded as `PLAY` or
-  `STAND_DOWN`. A/B/C/D and final verdicts remain blank until imported from the
-  pack-local `decisions.csv`. A later price/time snapshot gets its own decision
+  `STAND_DOWN`. After desk orchestration, the daily job projects A/B/C/D and
+  the E-or-fallback final verdict from the authoritative `desk_snapshot.json`
+  into the exact pack-membership-backed decision. A later price/time snapshot gets its own decision
   instead of rewriting the earlier verdict history. There is no `E_verdict`
   column — pass E (or the no-E fallback) is the desk report, not a fifth
   scalar on this row.
@@ -176,6 +177,10 @@ whether the pass saved or cost a bet.
 - `play_vs_stand_down.csv`, `decision_coverage.csv`, and `model_performance.csv`.
   ROI and hit-rate tables are settled-only; `decision_coverage.csv` separately
   reports total, settled, unsettled, and missing-event-time PLAY counts.
+- `missing_edge_diagnostics.csv`. The same diagnostic is embedded in
+  `summary.json`; it reports settled rows with a null edge and groups likely
+  missing inputs, including `GAMELINE` rows with blank `model_prob_source`.
+  It never backfills or estimates an edge.
 - `ledgers/market_snapshots.csv`, `ledgers/decisions.csv`, and
   `ledgers/settlements.csv`, plus `ledgers/pack_snapshot_memberships.csv`
 
@@ -206,7 +211,10 @@ This only touches settlements whose stored `closing_line`/`closing_price`
 exactly match the matched snapshot's own `line`/`price` -- the fingerprint
 the bug leaves behind -- and re-resolves each one against a genuinely
 distinct snapshot or the line-movement export, clearing it to unknown rather
-than leaving it wrong when neither is available.
+than leaving it wrong when neither is available. Local close resolution is a
+set-based indexed operation, and line-movement exports are parsed once per
+sport, so consolidated ledgers do not execute three close queries and two JSON
+loads per settlement.
 
 ## Recovering a corrupted ledger
 
@@ -231,16 +239,34 @@ recovered database afterward.
 python -m outlier_scrapers.feedback retention --cutoff-days 90 [--dry-run]
 ```
 
-A snapshot row keeps every research column at full fidelity only if it
-reached `PLAY`/`BET` or the desk flagged it (`board = 'A_FLAGGED'`) -- that is
-the data a calibration report actually needs in full. Once a row is settled,
-never played, unflagged, and older than `--cutoff-days`, its wide exploratory
-columns (signal components, projection hashes, portfolio caps, blend
-metadata, ...) are cleared to keep only identity/result-relevant fields;
-unsettled, recent, played, or flagged rows are never touched. The command
-vacuums afterward to actually reclaim the freed pages on disk. Run this
-periodically (or wire it into the daily job) instead of letting the ledger
-grow unbounded.
+A snapshot row keeps every field consumed by reports, blend fitting, and stake
+calibration. Once a row is settled, never played, unflagged, and older than
+`--cutoff-days`, only unused pack-provenance and portfolio-at-capture columns
+are cleared (`projection_feature_hash`, projection-quality metadata,
+`pack_path`, policy/portfolio metadata, and cap fields). Unsettled, recent,
+played, or flagged rows are never touched. `VACUUM` runs only when at least one
+row was newly slimmed, so an idempotent rerun does not repeatedly rewrite and
+vacuum the database.
+
+Normal `daily_job` runs perform CLV repair and 90-day retention after result
+collection/settlement ingestion and before blend refitting. Both operations are
+nonfatal and their detailed status is written under `feedback_maintenance` in
+the dated pack manifest. Controls:
+
+```powershell
+python -m outlier_scrapers.daily_job --feedback-retention-days 90
+python -m outlier_scrapers.daily_job --skip-feedback-maintenance
+python -m outlier_scrapers.daily_job --skip-clv-recompute --skip-feedback-retention
+```
+
+After desk orchestration the same run persists only the publications pinned by
+`verdicts/desk_snapshot.json`; pass-level `current.json` pointers are never
+read. Pack date, live fingerprint, pack membership, and `(market_id,
+outcome_id)` must resolve to exactly one decision or the write fails closed and
+is reported nonfatally under `desk_feedback` in the manifest. Repeating the
+same snapshot is idempotent. C reduces with `CONTRADICTS > CONFIRMS > NEUTRAL`,
+and the legacy final verdict follows pass E when pinned or the conservative
+unanimous A+D+B fallback when E is absent.
 
 ## Remaining provider boundary
 

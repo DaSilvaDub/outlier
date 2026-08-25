@@ -4,6 +4,7 @@ import math
 import pytest
 
 from outlier_scrapers.projections import (
+    _projection_slate_date,
     build_mlb_so_projections,
     export_projections,
     mlb_first_inning_run_distribution,
@@ -68,6 +69,21 @@ def test_projection_cli_contract():
     assert args.command == "project"
     assert args.sport == "MLB"
     assert args.date == "2026-07-14"
+
+
+def test_explicit_projection_date_does_not_relabel_a_stale_feed():
+    with pytest.raises(ValueError, match="do not match projection target_date"):
+        _projection_slate_date(
+            {},
+            [
+                {
+                    "sport_context": {
+                        "event_starts_at": "2026-08-24T19:10:00-04:00"
+                    }
+                }
+            ],
+            "2026-08-25",
+        )
 
 
 def test_mlb_so_projection_only_emits_for_confirmed_starters():
@@ -234,11 +250,12 @@ def test_export_projections_writes_normalized_projections_file(tmp_path, monkeyp
         lambda league: {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
     )
 
-    status = export_projections("MLB")
+    status = export_projections("MLB", target_date="2026-08-25")
     assert status == {"status": "ok", "record_count": 1}
     assert fake_paths.projections_latest().exists()
     written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
     assert written["sport"] == "MLB"
+    assert written["date"] == "2026-08-25"
     assert len(written["projections"]) == 1
     assert written["projections"][0]["row_id"] == "o1"
 
@@ -282,6 +299,9 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
                         "line": 19.5,
                         "position": "OVER",
                         "as_of": "2026-08-24T12:00:00-04:00",
+                        "sport_context": {
+                            "event_starts_at": "2026-08-25T00:30:00-04:00"
+                        },
                     },
                     {
                         "sport": "WNBA",
@@ -311,8 +331,65 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
     assert status == {"status": "ok", "record_count": 1}
     written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
     assert written["sport"] == "WNBA"
+    assert written["date"] == "2026-08-25"
     assert [record["row_id"] for record in written["projections"]] == ["o1"]
     assert written["projections"][0]["feature_snapshot_hash"] == "wnba-minutes-ppm-v1"
+
+
+def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    fake_paths.normalized.mkdir(parents=True, exist_ok=True)
+    fake_paths.props_normalized_latest().write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Jackson Jobe",
+                        "event_id": "g1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "line": 4.5,
+                        "position": "OVER",
+                        "sport_context": {"event_starts_at": "2026-08-25T19:10:00-04:00"},
+                    },
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Tarik Skubal",
+                        "event_id": "g2",
+                        "market_id": "m2",
+                        "outcome_id": "o2",
+                        "line": 5.5,
+                        "position": "OVER",
+                        "sport_context": {"event_starts_at": "2026-08-26T19:10:00-04:00"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+    monkeypatch.setattr(
+        "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
+        lambda league: {
+            "DET": {"pitcher": "Jackson Jobe", "confirmed": True},
+            "SEA": {"pitcher": "Tarik Skubal", "confirmed": True},
+        },
+    )
+
+    status = export_projections("MLB")
+    assert status["status"] == "error"
+    assert "projection slate date is not safely derivable" in status["reason"]
 
 
 def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(monkeypatch):

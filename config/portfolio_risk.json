@@ -18,7 +18,7 @@
   "max_correlated_cluster_units": 5.0,
   "max_book_units": 8.0,
   "non_authoritative_book_policy": "flag_and_report_only",
-  "shadow_multipliers_neutral": true,
+  "shadow_multipliers_neutral": false,
   "calibration": {
     "enabled": true,
     "source_probability_column": "market_consensus_prob",

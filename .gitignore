@@ -14,6 +14,13 @@ login_page.html
 totals_output.txt
 betting_report_*.md
 terminals/
+alt.csv
+parlays.csv
+dashboard.html
+do_refactor.py
+generate_refactor.py
+new_write_pack.py
+original_write_pack.py
 
 # Standalone Outlier auth/session material. Do not commit secrets.
 config/*

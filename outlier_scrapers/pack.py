@@ -21,7 +21,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from outlier_scrapers import feed_health, paths, probability_blend, slate_quality
 from outlier_scrapers.game_totals import is_full_game_total
@@ -113,6 +113,23 @@ CANDIDATES_HEADER = [
     "projection_model_version",
     "projection_feature_hash",
     "projection_quality_flags",
+    "learned_source_probability",
+    "learned_calibrated_probability",
+    "learned_conservative_probability",
+    "learned_raw_kelly_units",
+    "calibration_multiplier",
+    "uncertainty_multiplier",
+    "correlation_multiplier",
+    "drawdown_multiplier",
+    "learned_pre_cap_units",
+    "calibration_source",
+    "uncertainty_source",
+    "drawdown_source",
+    "calibration_artifact_version",
+    "uncertainty_artifact_version",
+    "drawdown_tier",
+    "learned_multiplier_status",
+    "learned_multiplier_reason",
     "source_timestamps",
 ]
 
@@ -756,9 +773,30 @@ def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: An
     return " ".join(parts) if parts else (side_s if side_s else "")
 
 
-def index_projections(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+def _validate_projection_artifact_date(
+    payload: dict[str, Any] | None, expected_date: str | None
+) -> None:
+    """Reject a present projection artifact that is not for the pack slate."""
+
+    if payload is None or expected_date is None:
+        return
+    artifact_date = str(payload.get("date") or "").strip()
+    if not artifact_date:
+        raise ValidationError(
+            f"Projection artifact is missing date; expected slate {expected_date}."
+        )
+    if artifact_date != expected_date:
+        raise ValidationError(
+            f"Projection artifact date {artifact_date} does not match pack slate {expected_date}."
+        )
+
+
+def index_projections(
+    payload: dict[str, Any] | None, expected_date: str | None = None
+) -> dict[str, dict[str, Any]]:
     """Index eligible shadow projections by normalized outcome id."""
 
+    _validate_projection_artifact_date(payload, expected_date)
     indexed: dict[str, dict[str, Any]] = {}
     ambiguous: set[str] = set()
     for projection in (payload or {}).get("projections") or []:
@@ -926,6 +964,123 @@ def _apply_enforced_portfolio_units(row: dict[str, Any], allocated_units: Any) -
             row["board"] = "A_FLAGGED"
         if row.get("_board") == "board_a":
             row["_board"] = "flagged"
+
+
+def _load_learned_stake_runtime(policy: Any) -> dict[str, Any]:
+    """Load policy-controlled calibration and drawdown inputs once per pack."""
+
+    policy_path = paths.PROJECT_ROOT / "config" / "portfolio_risk.json"
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    calibration_policy = payload.get("calibration") or {}
+    uncertainty_policy = payload.get("uncertainty") or {}
+    drawdown_policy = payload.get("drawdown") or {}
+    calibration_uncertainty_enabled = bool(calibration_policy.get("enabled")) and bool(
+        uncertainty_policy.get("enabled")
+    )
+    drawdown_enabled = bool(drawdown_policy.get("enabled"))
+    source_column = str(calibration_policy.get("source_probability_column") or "").strip()
+    if calibration_uncertainty_enabled and source_column != "market_consensus_prob":
+        raise ValidationError(
+            "Active learned stake multipliers require policy calibration source "
+            "market_consensus_prob."
+        )
+
+    def policy_path_value(raw: Any, default: Path) -> Path:
+        if raw in (None, ""):
+            return default
+        configured = Path(str(raw))
+        return configured if configured.is_absolute() else paths.PROJECT_ROOT / configured
+
+    from outlier_scrapers import drawdown, stake_calibration
+
+    calibration_path = policy_path_value(
+        calibration_policy.get("artifact_path"), stake_calibration.DEFAULT_ARTIFACT_PATH
+    )
+    drawdown_path = policy_path_value(
+        drawdown_policy.get("state_path"), drawdown.DEFAULT_STATE_PATH
+    )
+    return {
+        "enabled": calibration_uncertainty_enabled or drawdown_enabled,
+        "source_probability_column": source_column or "market_consensus_prob",
+        "calibration_artifact": (
+            stake_calibration.load_stake_calibration_artifact(calibration_path)
+            if calibration_uncertainty_enabled
+            else None
+        ),
+        "drawdown_state": (
+            drawdown.load_drawdown_state(drawdown_path) if drawdown_enabled else None
+        ),
+        "shadow_multipliers_neutral": bool(policy.shadow_multipliers_neutral),
+    }
+
+
+def _apply_learned_stake_before_caps(
+    projected: dict[str, Any],
+    original: dict[str, Any],
+    *,
+    stream: str,
+    policy: Any,
+    runtime: Mapping[str, Any],
+) -> None:
+    """Apply one learned haircut without reviving or increasing a legacy stake."""
+
+    legacy_units = _to_float(projected.get("units"))
+    if legacy_units is None or legacy_units <= 0 or stream not in policy.streams_in_scope:
+        projected["pre_cap_units"] = 0.0
+        return
+
+    from outlier_scrapers.learned_multipliers import apply_learned_multipliers
+
+    result = apply_learned_multipliers(
+        projected,
+        calibration_artifact=runtime.get("calibration_artifact"),
+        drawdown_state=runtime.get("drawdown_state"),
+        shadow_multipliers_neutral=bool(runtime.get("shadow_multipliers_neutral", True)),
+        as_of=datetime.now().astimezone(),
+        max_wager_units=float(policy.max_wager_units),
+        source_probability_column=str(
+            runtime.get("source_probability_column") or "market_consensus_prob"
+        ),
+    )
+    diagnostics = {
+        "learned_source_probability": result.source_probability,
+        "learned_calibrated_probability": result.calibrated_probability,
+        "learned_conservative_probability": result.conservative_probability,
+        "learned_raw_kelly_units": result.raw_kelly_units,
+        "calibration_multiplier": result.calibration_multiplier,
+        "uncertainty_multiplier": result.uncertainty_multiplier,
+        "correlation_multiplier": result.correlation_multiplier,
+        "drawdown_multiplier": result.drawdown_multiplier,
+        "learned_pre_cap_units": result.pre_cap_units,
+        "calibration_source": result.calibration_source,
+        "uncertainty_source": result.uncertainty_source,
+        "drawdown_source": result.drawdown_source,
+        "calibration_artifact_version": result.calibration_artifact_version,
+        "uncertainty_artifact_version": result.uncertainty_artifact_version,
+        "drawdown_tier": result.drawdown_tier,
+        "learned_multiplier_status": result.status,
+        "learned_multiplier_reason": result.reason or "",
+    }
+    projected.update(diagnostics)
+    original.update(diagnostics)
+
+    active = bool(runtime.get("enabled")) and not bool(
+        runtime.get("shadow_multipliers_neutral", True)
+    )
+    learned_legacy_ceiling = legacy_units * (
+        result.calibration_multiplier
+        * result.uncertainty_multiplier
+        * result.correlation_multiplier
+        * result.drawdown_multiplier
+    )
+    projected["pre_cap_units"] = (
+        min(legacy_units, learned_legacy_ceiling, result.pre_cap_units)
+        if active
+        else legacy_units
+    )
 
 
 def build_row(
@@ -1418,6 +1573,7 @@ def process_stream(
     blend_artifact: dict[str, Any] | None = None,
     health_payload: dict[str, Any] | None = None,
     probable_pitchers: dict[str, dict[str, Any]] | None = None,
+    expected_projection_date: str | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -1437,7 +1593,7 @@ def process_stream(
     norm_ts = norm_payload.get("generated_at") if norm_payload else None
     ev_records = lm_payload.get("ev_records", []) if lm_payload else []
     by_outcome = index_ev_by_outcome(ev_records)
-    projections_by_outcome = index_projections(projections_payload)
+    projections_by_outcome = index_projections(projections_payload, expected_projection_date)
     rows: list[dict[str, Any]] = []
     for card in (cards_payload.get("board_a") or []) + (cards_payload.get("board_b") or []):
         row = build_row(
@@ -1479,6 +1635,54 @@ def select_date(
             "Requested date %s has no events; emitting empty pack for that date.", requested
         )
     return kept, target
+
+
+def _expected_pack_slate_date(leagues: Sequence[str], requested: str | None) -> str:
+    """Select the pack date from feed event timestamps before projection joins."""
+
+    proxy_rows: list[dict[str, Any]] = []
+    for raw_league in leagues:
+        league = raw_league.strip().upper()
+        if not league:
+            continue
+        league_root = paths.league_paths(league)
+        normalized = league_root.normalized
+        cards_dir = league_root.root / "cards"
+        low = league.lower()
+        props_payload = load_json(normalized / f"{low}_props_latest.json")
+        games_payload = load_json(normalized / f"{low}_games_latest.json")
+        event_starts = build_event_starts(props_payload, games_payload)
+        for stream in ("props", "games"):
+            cards_name = f"{low}_{'games_' if stream == 'games' else ''}cards_latest.json"
+            movement_name = (
+                f"{low}_{'games_' if stream == 'games' else ''}line_movement_latest.json"
+            )
+            cards_payload = load_json(cards_dir / cards_name)
+            movement_payload = load_json(normalized / movement_name)
+            ev_records = (movement_payload or {}).get("ev_records") or []
+            by_outcome = index_ev_by_outcome(ev_records)
+            for card in (cards_payload or {}).get("board_a", []) + (
+                (cards_payload or {}).get("board_b", [])
+            ):
+                headline_side = card.get("headline_side")
+                side_view = (card.get("sides") or {}).get(headline_side) or {}
+                if not headline_side or not side_view:
+                    continue
+                matched = match_ev_records(
+                    card.get("card_id") or card.get("market_id"),
+                    side_view.get("outcome_id"),
+                    headline_side,
+                    side_view.get("line"),
+                    ev_records,
+                    by_outcome,
+                )
+                ref = matched[0] if matched else {}
+                event_id = card.get("event_id") or ref.get("event_id")
+                starts_at = event_starts.get(str(event_id)) if event_id else None
+                if starts_at:
+                    proxy_rows.append({"_event_starts_at": starts_at})
+    _, selected = select_date(proxy_rows, requested)
+    return selected
 
 
 def rank_rows(rows: list[dict[str, Any]], top_ev_n: int, top_signal_n: int) -> list[dict[str, Any]]:
@@ -2208,6 +2412,7 @@ def write_pack(
             except sqlite3.OperationalError:
                 pass  # table might not exist in an empty db
 
+    learned_runtime = _load_learned_stake_runtime(policy)
     all_projected = []
     for stream_name, stream_rows in [
         ("candidates", rows),
@@ -2219,6 +2424,13 @@ def write_pack(
             if units_val not in (None, ""):
                 r["units"] = float(units_val)
             proj = project_risk_identity(r, stream_name)
+            _apply_learned_stake_before_caps(
+                proj,
+                r,
+                stream=stream_name,
+                policy=policy,
+                runtime=learned_runtime,
+            )
             proj["_original_ref"] = r
             proj["stream"] = stream_name
             all_projected.append(proj)
@@ -2589,6 +2801,7 @@ def build_pack_with_coverage(
     all_rows: list[dict[str, Any]] = []
     games_norm_by_league: dict[str, Any] = {}
     coverage: dict[str, dict[str, int]] = {}
+    expected_slate_date = _expected_pack_slate_date(leagues, requested_date)
     for raw_league in leagues:
         lg = raw_league.strip().upper()
         if not lg:
@@ -2627,6 +2840,7 @@ def build_pack_with_coverage(
             blend_artifact,
             health_payload,
             probable_pitchers,
+            expected_slate_date,
         )
         games_rows = process_stream(
             games_cards,
@@ -2641,6 +2855,7 @@ def build_pack_with_coverage(
             blend_artifact,
             health_payload,
             probable_pitchers,
+            expected_slate_date,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)
@@ -2659,6 +2874,11 @@ def build_pack_with_coverage(
         all_rows.extend(props_rows)
         all_rows.extend(games_rows)
     kept, target_date = select_date(all_rows, requested_date)
+    if target_date != expected_slate_date:
+        raise ValidationError(
+            "Pack slate selection changed after projection validation: "
+            f"expected {expected_slate_date}, selected {target_date}."
+        )
     for lg, stats in coverage.items():
         before = sum(1 for row in all_rows if row.get("sport") == lg)
         after = sum(1 for row in kept if row.get("sport") == lg)
@@ -2738,7 +2958,9 @@ def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
         raise last_err
 
 
-def load_projection_records(leagues: Sequence[str]) -> list[dict[str, Any]]:
+def load_projection_records(
+    leagues: Sequence[str], expected_date: str | None = None
+) -> list[dict[str, Any]]:
     """Load the league projection artifacts for pack-local audit freezing."""
 
     records: list[dict[str, Any]] = []
@@ -2748,6 +2970,7 @@ def load_projection_records(leagues: Sequence[str]) -> list[dict[str, Any]]:
             continue
         league_paths = paths.league_paths(league)
         payload = load_json(league_paths.normalized / f"{league.lower()}_projections_latest.json")
+        _validate_projection_artifact_date(payload, expected_date)
         records.extend((payload or {}).get("projections") or [])
     return records
 
@@ -2823,7 +3046,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
         **build_kwargs,
     )
     props_norm_by_league = load_props_norm_by_league(leagues)
-    projection_records = load_projection_records(leagues)
+    projection_records = load_projection_records(leagues, target_date)
     freshness = build_freshness_section(leagues, feed_health_by_league)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:

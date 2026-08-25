@@ -510,6 +510,9 @@ def _stub_pack_feed_health(monkeypatch) -> None:
         "build_feed_health_by_league",
         lambda leagues: {league: _healthy_feed_health() for league in leagues},
     )
+    # These pack-publication tests isolate feedback atomicity from the
+    # projection artifact's independent slate-date contract.
+    monkeypatch.setattr(pack, "load_projection_records", lambda *_args, **_kwargs: [])
 
 
 def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
@@ -844,6 +847,9 @@ def test_initialize_database_upgrades_reduced_legacy_schema(
     )
     assert {
         "idx_snapshots_market",
+        "idx_snapshots_close_book",
+        "idx_snapshots_close_outcome",
+        "idx_snapshots_close_selection",
         "idx_snapshots_segment",
         "idx_decisions_snapshot",
         "idx_settlements_market",
@@ -1296,6 +1302,39 @@ def test_model_performance_inverts_negative_recommendation_pnl():
     assert performance[0]["would_have_flat_pnl"] == pytest.approx(1.25)
 
 
+def test_missing_edge_diagnostics_surfaces_gameline_missing_model_source():
+    rows = [
+        {
+            "sport": "MLB",
+            "market_type": "GAMELINE",
+            "model_prob_source": "",
+            "edge": None,
+            "market_consensus_prob": None,
+            "decimal_price": 1.91,
+        },
+        {
+            "sport": "WNBA",
+            "market_type": "PLAYER_PROP",
+            "model_prob_source": "market_consensus",
+            "edge": 0.0,
+        },
+    ]
+
+    diagnostics = feedback._missing_edge_diagnostics(rows)
+
+    assert diagnostics["missing_edge_rows"] == 1
+    assert diagnostics["missing_edge_rate"] == pytest.approx(0.5)
+    assert diagnostics["breakdown"] == [
+        {
+            "sport": "MLB",
+            "market_type": "GAMELINE",
+            "reason": "gameline_missing_model_prob_source",
+            "n": 1,
+        }
+    ]
+    assert rows[0]["edge"] is None
+
+
 def _seed_settled_row(
     db_path: Path,
     *,
@@ -1576,6 +1615,80 @@ def test_recompute_settlement_clv_leaves_genuine_closes_alone(tmp_path):
     assert row == ("11.5", -120)
 
 
+def test_recompute_settlement_clv_batches_distinct_close_lookup(tmp_path, monkeypatch):
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    with sqlite3.connect(db_path) as conn:
+        for number in range(40):
+            suffix = str(number)
+            event_id = f"event-{suffix}"
+            outcome_id = f"outcome-{suffix}"
+            market_id = f"market-{suffix}"
+            taken_id = f"taken-{suffix}"
+            close_id = f"close-{suffix}"
+            decision_id = f"decision-{suffix}"
+            conn.execute(
+                """
+                INSERT INTO market_snapshots (
+                    snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                    selection, line, price, book, decimal_price, event_starts_at, created_at
+                ) VALUES (?, '2026-08-07T20:00:00+00:00', 'WNBA', ?, ?, ?,
+                          'Player Points OVER 10.5', '10.5', -110, 'Book', 1.909,
+                          '2026-08-07T23:30:00+00:00', '2026-08-07T20:00:00+00:00')
+                """,
+                (taken_id, event_id, market_id, outcome_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO market_snapshots (
+                    snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+                    selection, line, price, book, event_starts_at, created_at
+                ) VALUES (?, '2026-08-07T23:00:00+00:00', 'WNBA', ?, ?, ?,
+                          'Player Points OVER 10.5', '11.5', -120, 'Book',
+                          '2026-08-07T23:30:00+00:00', '2026-08-07T23:00:00+00:00')
+                """,
+                (close_id, event_id, market_id, outcome_id),
+            )
+            conn.execute(
+                "INSERT INTO decisions (decision_id, snapshot_id, created_at, updated_at) "
+                "VALUES (?, ?, '2026-08-07T20:00:00+00:00', '2026-08-07T20:00:00+00:00')",
+                (decision_id, taken_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO settlements (
+                    settlement_id, decision_id, snapshot_id, outcome_id, event_id,
+                    market_id, win_loss_push, closing_line, closing_price, settled_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'W', '10.5', -110,
+                          '2026-08-08T02:00:00+00:00')
+                """,
+                (f"settlement-{suffix}", decision_id, taken_id, outcome_id, event_id, market_id),
+            )
+        conn.commit()
+
+    statements: list[str] = []
+    original_connect = feedback._connect
+
+    def traced_connect(path):
+        conn = original_connect(path)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(feedback, "_connect", traced_connect)
+    monkeypatch.setattr(
+        feedback,
+        "find_distinct_closing_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("per-settlement close lookup must not be used")
+        ),
+    )
+
+    summary = feedback.recompute_settlement_clv(db_path)
+
+    assert summary == {"inspected": 40, "corrected": 40, "cleared": 0, "unchanged": 0}
+    assert sum("WITH candidates AS" in statement for statement in statements) == 1
+
+
 def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(tmp_path):
     db_path = tmp_path / "feedback.sqlite3"
     _seed_settled_row(
@@ -1629,6 +1742,12 @@ def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(t
     assert rows["snapshot-flagged"]["hit_rate_component"] == 65.0
     assert rows["snapshot-recent"]["hit_rate_component"] == 65.0
 
+    # A rerun sees no still-populated disposable columns, so it neither
+    # rewrites the same rows nor triggers another VACUUM.
+    rerun = feedback.apply_retention_policy(db_path, cutoff_days=90)
+    assert rerun.eligible == 0
+    assert rerun.slimmed == 0
+
 
 def test_apply_retention_policy_dry_run_reports_without_changing_anything(tmp_path):
     db_path = tmp_path / "feedback.sqlite3"
@@ -1666,12 +1785,12 @@ def test_apply_retention_policy_preserves_fitter_eligibility(tmp_path):
             independent_model_prob, final_blended_prob, push_prob,
             data_quality_tier, event_starts_at, hours_before_game,
             odds_range, time_before_game, market_type, decimal_price,
-            board, created_at
+            board, pack_path, cap_reasons, created_at
         ) VALUES (
             'snap-old', ?, 'WNBA', 'event-old', 'market-old', 'outcome-old',
             'Player Points OVER 10.5', '10.5', -110, 'Book', 0.55, 0.60, 0.55,
             0.0, 'CLEAN', '2026-01-01T23:30:00+00:00', 3.5, '-120_TO_-101',
-            'LT_6H', 'PLAYER_PROP', 1.909, 'B', ?
+            'LT_6H', 'PLAYER_PROP', 1.909, 'B', '/packs/old', 'none', ?
         )
         """,
         (old, old),

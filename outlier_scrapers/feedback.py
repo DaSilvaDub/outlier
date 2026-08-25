@@ -733,6 +733,12 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         for statement in (
             "CREATE INDEX IF NOT EXISTS idx_snapshots_market "
             "ON market_snapshots(event_id, market_id, outcome_id, captured_at)",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_close_book "
+            "ON market_snapshots(event_id, outcome_id, book, captured_at)",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_close_outcome "
+            "ON market_snapshots(event_id, outcome_id, captured_at)",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_close_selection "
+            "ON market_snapshots(event_id, market_id, selection, captured_at)",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_segment "
             "ON market_snapshots(sport, market_type, book)",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_blend_segment "
@@ -1983,6 +1989,7 @@ def closing_line_from_movement_export(
     outcome_id: str,
     selection: str,
     event_starts_at: str,
+    _export_cache: dict[str, list[tuple[datetime, dict, dict]]] | None = None,
 ) -> tuple[float | None, float | None]:
     """Best-effort closing line/price from the current line-movement export.
 
@@ -1997,47 +2004,92 @@ def closing_line_from_movement_export(
     starts = _parse_utc(event_starts_at)
     if starts is None:
         return None, None
+    cache = _export_cache if _export_cache is not None else {}
+    if sport not in cache:
+        exports: list[tuple[datetime, dict, dict]] = []
+        league_paths = paths.league_paths(sport)
+        for filename in (f"{sport.lower()}_line_movement_latest.json", f"{sport.lower()}_games_line_movement_latest.json"):
+            export_path = league_paths.normalized / filename
+            if not export_path.exists():
+                continue
+            try:
+                payload = json.loads(export_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            generated = _parse_utc(payload.get("generated_at"))
+            if generated is None:
+                continue
+            by_outcome: dict[tuple[str, str, str], dict[str, Any]] = {}
+            by_side: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for record in payload.get("records") or []:
+                if not isinstance(record, dict):
+                    continue
+                event_key, market_key = _text(record.get("event_id")), _text(record.get("market_id"))
+                outcome_key = _text(record.get("outcome_id"))
+                if outcome_key:
+                    by_outcome.setdefault((event_key, market_key, outcome_key), record)
+                else:
+                    side_key = _text(record.get("side")).upper()
+                    if side_key:
+                        by_side.setdefault((event_key, market_key, side_key), record)
+            exports.append((generated, by_outcome, by_side))
+        cache[sport] = exports
     side = _selection_side({"selection": selection})
-    league_paths = paths.league_paths(sport)
-    for filename in (
-        f"{sport.lower()}_line_movement_latest.json",
-        f"{sport.lower()}_games_line_movement_latest.json",
-    ):
-        export_path = league_paths.normalized / filename
-        if not export_path.exists():
+    for generated, by_outcome, by_side in cache[sport]:
+        if generated < starts:
+            continue
+        record = by_outcome.get((event_id, market_id, outcome_id)) if outcome_id else None
+        if record is None and side:
+            record = by_side.get((event_id, market_id, side))
+        if record is None:
             continue
         try:
-            payload = json.loads(export_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        generated = _parse_utc(payload.get("generated_at"))
-        if generated is None or generated < starts:
-            continue
-        for record in payload.get("records") or []:
-            if _text(record.get("event_id")) != event_id:
-                continue
-            if _text(record.get("market_id")) != market_id:
-                continue
-            record_outcome_id = _text(record.get("outcome_id"))
-            if outcome_id and record_outcome_id:
-                if record_outcome_id != outcome_id:
-                    continue
-            elif side:
-                if _text(record.get("side")).upper() != side:
-                    continue
-            else:
-                continue
-            try:
-                line = _float(record.get("current_line"), field="current_line")
-            except FeedbackError:
-                line = None
-            try:
-                price = _float(record.get("current_odds"), field="current_odds")
-            except FeedbackError:
-                price = None
-            if line is not None or price is not None:
-                return line, price
+            line = _float(record.get("current_line"), field="current_line")
+        except FeedbackError:
+            line = None
+        try:
+            price = _float(record.get("current_odds"), field="current_odds")
+        except FeedbackError:
+            price = None
+        if line is not None or price is not None:
+            return line, price
     return None, None
+
+
+def _find_distinct_closes_for_settlements(conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> dict[str, tuple[Any, Any]]:
+    """Resolve all local closes with three indexed joins instead of N*3 selects."""
+    if not rows:
+        return {}
+    conn.execute("DROP TABLE IF EXISTS temp.clv_recompute_targets")
+    conn.execute("CREATE TEMP TABLE clv_recompute_targets (settlement_id TEXT PRIMARY KEY, snapshot_id TEXT NOT NULL, event_id TEXT NOT NULL, outcome_id TEXT NOT NULL, market_id TEXT NOT NULL, selection TEXT NOT NULL, book TEXT NOT NULL, captured_at TEXT NOT NULL)")
+    try:
+        conn.executemany("INSERT INTO clv_recompute_targets VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [(_text(r["settlement_id"]), _text(r["snapshot_id"]), _text(r["event_id"]), _text(r["outcome_id"]), _text(r["market_id"]), _text(r["selection"]), _text(r["book"]), _text(r["captured_at"])) for r in rows])
+        closes = conn.execute(
+            """
+            WITH candidates AS (
+                SELECT b.settlement_id, c.line, c.price, c.captured_at, 1 AS priority
+                FROM clv_recompute_targets b JOIN market_snapshots c
+                  ON c.event_id=b.event_id AND c.outcome_id=b.outcome_id AND c.book=b.book
+                 AND c.captured_at>b.captured_at AND c.captured_at<=c.event_starts_at AND c.snapshot_id!=b.snapshot_id
+                UNION ALL
+                SELECT b.settlement_id, c.line, c.price, c.captured_at, 2 AS priority
+                FROM clv_recompute_targets b JOIN market_snapshots c
+                  ON c.event_id=b.event_id AND c.outcome_id=b.outcome_id
+                 AND c.captured_at>b.captured_at AND c.captured_at<=c.event_starts_at AND c.snapshot_id!=b.snapshot_id
+                UNION ALL
+                SELECT b.settlement_id, c.line, c.price, c.captured_at, 3 AS priority
+                FROM clv_recompute_targets b JOIN market_snapshots c
+                  ON c.event_id=b.event_id AND c.market_id=b.market_id AND c.selection=b.selection
+                 AND b.market_id!='' AND b.selection!='' AND c.captured_at>b.captured_at
+                 AND c.captured_at<=c.event_starts_at AND c.snapshot_id!=b.snapshot_id
+            ), ranked AS (
+                SELECT settlement_id, line, price, ROW_NUMBER() OVER (PARTITION BY settlement_id ORDER BY priority, captured_at DESC) AS rank FROM candidates
+            ) SELECT settlement_id, line, price FROM ranked WHERE rank=1
+            """
+        ).fetchall()
+        return {_text(row[0]): (row[1], row[2]) for row in closes}
+    finally:
+        conn.execute("DROP TABLE IF EXISTS temp.clv_recompute_targets")
 
 
 def recompute_settlement_clv(
@@ -2069,6 +2121,7 @@ def recompute_settlement_clv(
             JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id
             """
         ).fetchall()
+        bogus_rows = []
         for row in rows:
             summary["inspected"] += 1
             bogus = (
@@ -2079,17 +2132,12 @@ def recompute_settlement_clv(
             if not bogus:
                 summary["unchanged"] += 1
                 continue
-
-            new_line, new_price = find_distinct_closing_snapshot(
-                conn,
-                event_id=_text(row["event_id"]),
-                outcome_id=_text(row["outcome_id"]),
-                market_id=_text(row["market_id"]),
-                selection=_text(row["selection"]),
-                book=_text(row["book"]),
-                exclude_snapshot_id=_text(row["snapshot_id"]),
-                after_captured_at=_text(row["captured_at"]),
-            )
+            bogus_rows.append(row)
+        local_closes = _find_distinct_closes_for_settlements(conn, bogus_rows)
+        export_cache: dict[str, list[tuple[datetime, dict, dict]]] = {}
+        updates = []
+        for row in bogus_rows:
+            new_line, new_price = local_closes.get(_text(row["settlement_id"]), (None, None))
             if new_line is None and new_price is None:
                 new_line, new_price = closing_line_from_movement_export(
                     sport=_text(row["sport"]),
@@ -2098,6 +2146,7 @@ def recompute_settlement_clv(
                     outcome_id=_text(row["outcome_id"]),
                     selection=_text(row["selection"]),
                     event_starts_at=_text(row["event_starts_at"]),
+                    _export_cache=export_cache,
                 )
 
             if new_line is None and new_price is None:
@@ -2109,16 +2158,9 @@ def recompute_settlement_clv(
                 clv_line = compute_clv_line(_text(row["selection"]), row["line"], closing_line)
                 clv_price = compute_clv_price(row["decimal_price"], closing_price)
 
-            if not dry_run:
-                conn.execute(
-                    """
-                    UPDATE settlements
-                    SET closing_line = ?, closing_price = ?, clv_line = ?, clv_price = ?
-                    WHERE settlement_id = ?
-                    """,
-                    (closing_line, closing_price, clv_line, clv_price, row["settlement_id"]),
-                )
+            updates.append((closing_line, closing_price, clv_line, clv_price, row["settlement_id"]))
         if not dry_run:
+            conn.executemany("UPDATE settlements SET closing_line=?, closing_price=?, clv_line=?, clv_price=? WHERE settlement_id=?", updates)
             conn.commit()
     finally:
         conn.close()
@@ -2969,6 +3011,12 @@ def apply_retention_policy(
                   NOT IN ('PLAY', 'BET')
               AND t.settled_at < ?
               AND s.captured_at < ?
+              AND (
+                  s.projection_feature_hash IS NOT NULL OR s.projection_quality_flags IS NOT NULL
+                  OR s.pack_path IS NOT NULL OR s.policy_fingerprint IS NOT NULL
+                  OR s.portfolio_mode IS NOT NULL OR s.pre_cap_units IS NOT NULL
+                  OR s.portfolio_units IS NOT NULL OR s.cap_reasons IS NOT NULL
+              )
             """,
             (cutoff, cutoff),
         ).fetchall()
@@ -3162,6 +3210,39 @@ def _report_markdown(
     return "\n".join(lines)
 
 
+def _missing_edge_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Explain absent edges without manufacturing probability inputs."""
+    counts: dict[tuple[str, str, str], int] = defaultdict(int)
+    missing = 0
+    for row in rows:
+        edge = row.get("edge")
+        if edge is not None and str(edge).strip() != "":
+            continue
+        missing += 1
+        market_type = _text(row.get("market_type"))
+        model_source = _text(row.get("model_prob_source"))
+        if market_type.upper() == "GAMELINE" and not model_source:
+            reason = "gameline_missing_model_prob_source"
+        elif not model_source:
+            reason = "missing_model_prob_source"
+        elif row.get("market_consensus_prob") in (None, ""):
+            reason = "missing_market_consensus_prob"
+        elif row.get("decimal_price") in (None, ""):
+            reason = "missing_decimal_price"
+        else:
+            reason = "missing_edge_unclassified"
+        counts[(_text(row.get("sport")), market_type, reason)] += 1
+    return {
+        "settled_rows": len(rows),
+        "missing_edge_rows": missing,
+        "missing_edge_rate": (missing / len(rows)) if rows else 0.0,
+        "breakdown": [
+            {"sport": sport, "market_type": market_type, "reason": reason, "n": count}
+            for (sport, market_type, reason), count in sorted(counts.items())
+        ],
+    }
+
+
 def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_REPORT_DIR) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3210,6 +3291,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     signal_flags = _signal_results(rows)
     play_vs_stand_down = _play_vs_stand_down(rows)
     model_performance = _model_performance(rows)
+    missing_edge_diagnostics = _missing_edge_diagnostics(rows)
     ultimate_alt_release = ultimate_alt_shadow_release(rows)
 
     metric_fields = [
@@ -3263,6 +3345,11 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         model_performance,
     )
     _write_csv(
+        output_dir / "missing_edge_diagnostics.csv",
+        ["sport", "market_type", "reason", "n"],
+        missing_edge_diagnostics["breakdown"],
+    )
+    _write_csv(
         output_dir / "ultimate_alt_shadow.csv",
         ULTIMATE_ALT_SHADOW_FIELDS,
         [ultimate_alt_release["overall"], *ultimate_alt_release["by_type"]],
@@ -3274,6 +3361,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
                 "decision_coverage": decision_coverage,
                 "probability_metrics": probability_metrics,
                 "ultimate_alt_shadow_release": ultimate_alt_release,
+                "missing_edge_diagnostics": missing_edge_diagnostics,
             },
             indent=2,
             sort_keys=True,

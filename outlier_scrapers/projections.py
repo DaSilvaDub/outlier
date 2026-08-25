@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.error import HTTPError, URLError
 
+from outlier_scrapers.utils import _local_date
+
 logger = logging.getLogger(__name__)
 
 
@@ -1256,12 +1258,69 @@ def _projection_season(props_rows: Iterable[Mapping[str, object]]) -> int:
     return datetime.now().astimezone().year
 
 
-def export_projections(league: str = "MLB") -> dict[str, object]:
+def _projection_slate_date(
+    props_payload: Mapping[str, object],
+    props_rows: Iterable[Mapping[str, object]],
+    target_date: date | str | None,
+) -> str:
+    """Resolve one auditable slate date without trusting wall-clock time."""
+
+    explicit_target: str | None = None
+    if target_date is not None:
+        raw_target = target_date.isoformat() if isinstance(target_date, date) else str(target_date)
+        try:
+            explicit_target = date.fromisoformat(raw_target).isoformat()
+        except ValueError as exc:
+            raise ValueError(f"invalid projection target_date {raw_target!r}") from exc
+
+    candidates: set[str] = set()
+    payload_date = props_payload.get("date")
+    if payload_date not in (None, ""):
+        try:
+            candidates.add(date.fromisoformat(str(payload_date)).isoformat())
+        except ValueError as exc:
+            raise ValueError(f"invalid props artifact date {payload_date!r}") from exc
+    for row in props_rows:
+        if not isinstance(row, Mapping):
+            continue
+        context = row.get("sport_context")
+        context = context if isinstance(context, Mapping) else {}
+        starts_at = (
+            context.get("event_starts_at")
+            or row.get("event_starts_at")
+            or row.get("starts_at")
+        )
+        if local_date := _local_date(str(starts_at) if starts_at else None):
+            candidates.add(local_date)
+
+    if explicit_target is not None:
+        if candidates and candidates != {explicit_target}:
+            detail = ", ".join(sorted(candidates))
+            raise ValueError(
+                f"props feed slate date(s) {detail} do not match projection "
+                f"target_date {explicit_target}"
+            )
+        return explicit_target
+    if len(candidates) != 1:
+        detail = "none" if not candidates else ", ".join(sorted(candidates))
+        raise ValueError(
+            "projection slate date is not safely derivable from the props feed "
+            f"(found {detail}); pass target_date explicitly"
+        )
+    return next(iter(candidates))
+
+
+def export_projections(
+    league: str = "MLB", *, target_date: date | str | None = None
+) -> dict[str, object]:
     """Compute and persist independent projections for one league's props.
 
     Reads the already-refreshed ``<league>_props_latest.json`` (and, for MLB,
     ``<league>_probable_pitchers_latest.json``) — both auto-advance to the
     correct slate on their own, so this step just needs to run after them.
+    ``target_date`` is authoritative when supplied; otherwise the date is
+    derived from the feed's own slate timestamps and ambiguous/undated inputs
+    fail closed instead of being stamped with the current wall-clock date.
     MLB emits starter pitcher-SO projections from game logs; WNBA emits the
     shadow points scaffold. Both are written to
     ``<sport>_projections_latest.json`` so ``pack`` reads a file instead of
@@ -1289,6 +1348,10 @@ def export_projections(league: str = "MLB") -> dict[str, object]:
     props_rows = props_payload.get("records") if isinstance(props_payload, Mapping) else None
     if not isinstance(props_rows, list):
         props_rows = []
+    try:
+        artifact_date = _projection_slate_date(props_payload, props_rows, target_date)
+    except ValueError as exc:
+        return {"status": "error", "reason": str(exc), "record_count": 0}
 
     if sport == "MLB":
         from .probable_pitchers import load_probable_pitcher_lookup
@@ -1302,7 +1365,7 @@ def export_projections(league: str = "MLB") -> dict[str, object]:
 
     result = {
         "sport": sport,
-        "date": datetime.now().astimezone().date().isoformat(),
+        "date": artifact_date,
         "generated_at": datetime.now().astimezone().isoformat(),
         "projections": records,
     }
@@ -1358,7 +1421,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "export":
-        status = export_projections(args.sport)
+        status = export_projections(args.sport, target_date=args.date)
         if status["status"] == "skipped":
             print(f"{args.sport} projections: skipped ({status['reason']})")
             return 0
