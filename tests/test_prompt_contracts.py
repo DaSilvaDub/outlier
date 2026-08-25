@@ -157,3 +157,66 @@ def test_reconciliation_prompt_requires_an_upstream_bet() -> None:
     body = _text("E.md")
     assert "at least one cited A / D / B record carries the verdict" in body
     assert "`null` when pass C did not run" in body
+
+
+# ---------------------------------------------------------------------------
+# Manual paste lanes (Desk 1). These produce Markdown for a human, not an
+# envelope, but they are judged by the same desk invariants as the automated
+# passes -- and they drifted from them once already.
+# ---------------------------------------------------------------------------
+
+MANUAL_LANES = (
+    "Master_Cards_Analysis.md",
+    "Totals_Analysis.md",
+    "Alt_Bankroll_Props_Analysis.md",
+    "Alt_Player_Props_Analysis.md",
+    "Alt_Spreads_Analysis.md",
+    "Ultimate_Alt_Analysis.md",
+)
+
+# Lanes that hand out unit stakes; the parlay lanes do not.
+STAKED_LANES = ("Master_Cards_Analysis.md", "Totals_Analysis.md")
+
+
+@pytest.mark.parametrize("filename", MANUAL_LANES)
+def test_manual_lane_states_the_prohibited_markets(filename: str) -> None:
+    """HR is desk-excluded entirely; an alt player-prop lane is where it would
+    otherwise be most tempting."""
+    body = _text(filename)
+    for token in ("HR", "HRR", "3PM"):
+        assert token in body, f"{filename} never names {token}"
+
+
+@pytest.mark.parametrize("filename", MANUAL_LANES)
+def test_manual_lane_states_the_mlb_whitelists(filename: str) -> None:
+    body = _text(filename)
+    assert "strikeout" in body.lower()
+    assert "whitelist" in body.lower() or "Whitelist" in body
+
+
+@pytest.mark.parametrize("filename", STAKED_LANES)
+def test_staked_manual_lane_states_the_stake_grid_and_cap(filename: str) -> None:
+    """Totals_Analysis told the model to round to 0.25 while the desk grid is 0.5."""
+    body = _text(filename)
+    assert "0.5-unit grid" in body
+    assert "3.0 units" in body
+    assert "0.25 unit" not in body
+
+
+def test_manual_lanes_do_not_ask_for_an_envelope() -> None:
+    """These lanes paste into a chat model and want a written card, not JSON."""
+    for filename in MANUAL_LANES:
+        body = _text(filename)
+        assert "verdict envelope" not in body, f"{filename} asks for an envelope"
+
+
+@pytest.mark.parametrize("filename", ["HitRate_Props_Analysis.md", "Prop_Calibration_System.md"])
+def test_unused_prompts_say_so(filename: str) -> None:
+    """Neither is loaded by the generator; a reader must not mistake them for live."""
+    body = _text(filename)
+    assert "STATUS —" in body
+    script = (
+        Path(__file__).resolve().parents[1]
+        / ".agents" / "skills" / "export-manual-outlier-packs" / "scripts" / "generate_prompts.py"
+    ).read_text(encoding="utf-8")
+    assert f'load_prompt_template("{filename}")' not in script
