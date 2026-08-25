@@ -829,6 +829,21 @@ def apply_shadow_projection(
     return []
 
 
+def _projection_side_conflicts(row: dict[str, Any], expected_side: Any) -> bool:
+    """Return True when an available projection mean opposes the wager side."""
+
+    mean = _to_float(row.get("projection_mean"))
+    line = _to_float(row.get("line"))
+    side = str(expected_side or "").strip().upper()
+    if mean is None or line is None:
+        return False
+    if side in {"OVER", "YES"}:
+        return mean <= line
+    if side in {"UNDER", "NO"}:
+        return mean >= line
+    return False
+
+
 def apply_learned_probability_blend(
     row: dict[str, Any],
     artifact: dict[str, Any] | None,
@@ -1200,6 +1215,10 @@ def build_row(
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
     # so the desk sees the mismatch instead of silently trusting the shown line.
     dq_flags = [str(f) for f in (card.get("flags") or [])]
+    if (has_player or market_type_upper == "PLAYER_PROP") and _projection_side_conflicts(
+        row, headline_side
+    ):
+        dq_flags.append("projection_side_conflict")
     if ev_probability_mismatch:
         dq_flags.append("ev_probability_mismatch")
     movement_now = _to_float((side_view.get("movement") or {}).get("current_line"))

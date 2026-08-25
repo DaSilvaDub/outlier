@@ -136,7 +136,7 @@ def _base_row(row: dict[str, Any], *, alt_type: str) -> dict[str, Any]:
         market = str(row.get("market") or "").upper()
         side = str(row.get("position") or "").upper()
         player = str(row.get("player") or "")
-        selection = f"{player} {market} {side} {row.get('line', '')}".strip()
+        selection = f"{player} - {market} {side} {row.get('line', '')}".strip()
         price = row.get("best_odds")
         book = row.get("best_book")
         market_type = "PLAYER_PROP"
@@ -154,10 +154,11 @@ def _base_row(row: dict[str, Any], *, alt_type: str) -> dict[str, Any]:
         player = ""
         team = str(row.get("team") or "")
         subject = team or str(row.get("matchup") or "Game")
-        selection = f"{subject} {market} {side} {row.get('line', '')}".strip()
         price = row.get("best_price")
         book = row.get("best_book")
         market_type = str(row.get("market_type") or "TEAM_PROP").upper()
+        label = "Team Total" if market_type == "TEAM_PROP" and team else "Total O/U"
+        selection = f"{subject} {label} {side} {row.get('line', '')}".strip()
     decimal = _number(row.get("decimal_price")) or _american_to_decimal(price)
     implied = _probability(row.get("implied_prob"))
     if implied is None and decimal:
@@ -166,7 +167,7 @@ def _base_row(row: dict[str, Any], *, alt_type: str) -> dict[str, Any]:
         "sport": league,
         "league": league,
         "event_id": str(row.get("event_id") or ""),
-        "event_starts_at": row.get("event_starts_at") or "",
+        "event_starts_at": row.get("event_starts_at") or row.get("_event_starts_at") or "",
         "matchup": row.get("matchup") or "",
         "alt_type": alt_type,
         "market_type": market_type,

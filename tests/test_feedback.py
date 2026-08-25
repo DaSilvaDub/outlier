@@ -99,6 +99,7 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
         conn.row_factory = sqlite3.Row
         assert conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM pack_snapshot_memberships").fetchone()[0] == 2
         audit = conn.execute(
             "SELECT selected, hit_rate_component, movement_component "
             "FROM market_snapshots WHERE market_id = 'm2'"
@@ -120,6 +121,56 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
     decision_rows = _read_csv(pack_dir / "decisions.csv")
     assert len(decision_rows) == 2
     assert list(decision_rows[0]) == feedback.DECISION_FIELDS
+
+
+def test_capture_preserves_first_snapshot_pack_and_records_each_pack_vintage(tmp_path):
+    first_row = _candidate()
+    first_pack = _pack(tmp_path, [first_row])
+    second_pack = tmp_path / "packs" / "2026-07-14"
+    second_row = _candidate(actionable=False)
+    _write_csv(second_pack / "candidates.csv", CANDIDATES_HEADER, [second_row])
+    _write_csv(
+        second_pack / "opportunities.csv",
+        [*CANDIDATES_HEADER, "selected"],
+        [second_row],
+    )
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(first_pack, db_path)
+    feedback.capture_pack(second_pack, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot_count = conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]
+        original_pack = conn.execute("SELECT pack_path FROM market_snapshots").fetchone()[0]
+        memberships = conn.execute(
+            "SELECT pack_path, pipeline_verdict, units "
+            "FROM pack_snapshot_memberships ORDER BY pack_path"
+        ).fetchall()
+    assert snapshot_count == 1
+    assert original_pack == str(first_pack.resolve())
+    assert memberships == [
+        (str(first_pack.resolve()), "PLAY", 2.0),
+        (str(second_pack.resolve()), "STAND_DOWN", 0.0),
+    ]
+
+
+def test_schema_v4_backfills_first_seen_pack_membership(tmp_path):
+    pack_dir = _pack(tmp_path, [_candidate()])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE pack_snapshot_memberships")
+        conn.execute("PRAGMA user_version = 4")
+
+    feedback.initialize_database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        membership = conn.execute(
+            "SELECT pack_path, pipeline_verdict, units FROM pack_snapshot_memberships"
+        ).fetchone()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert membership == (str(pack_dir.resolve()), "PLAY", 2.0)
+    assert version == feedback.SCHEMA_VERSION
 
 
 def test_capture_pack_persists_projection_feature_hash(tmp_path):
@@ -578,6 +629,7 @@ def test_pack_swap_failure_rolls_back_ledger_and_restores_published_pack(tmp_pat
 
 def test_capture_preserves_selected_total_alternate_not_represented_by_specialized_board(tmp_path):
     represented = _candidate(market_id="m1", outcome_id="o1", line=10.5)
+    represented["_event_starts_at"] = "2026-07-13T20:00:00+00:00"
     alternate = _candidate(market_id="m1", outcome_id="o2", line=11.5)
     pack_dir = _pack(tmp_path, [represented, alternate])
     total = {field: "" for field in GAME_TOTALS_HEADER}
@@ -616,12 +668,15 @@ def test_capture_preserves_selected_total_alternate_not_represented_by_specializ
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT outcome_id, line FROM market_snapshots ORDER BY line"
+            "SELECT outcome_id, line, event_starts_at FROM market_snapshots ORDER BY line"
         ).fetchall()
         shadow_signal = conn.execute(
             "SELECT signal_flags FROM market_snapshots WHERE outcome_id = 'm1:10.5:OVER'"
         ).fetchone()[0]
-    assert rows == [("m1:10.5:OVER", "10.5"), ("o2", "11.5")]
+    assert rows == [
+        ("m1:10.5:OVER", "10.5", "2026-07-13T20:00:00+00:00"),
+        ("o2", "11.5", ""),
+    ]
     assert "totals_shadow_4pct:QUALIFIED" in shadow_signal
 
 
@@ -758,12 +813,20 @@ def test_initialize_database_upgrades_reduced_legacy_schema(
         snapshot_columns = {row[1] for row in conn.execute("PRAGMA table_info(market_snapshots)")}
         decision_columns = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
         settlement_columns = {row[1] for row in conn.execute("PRAGMA table_info(settlements)")}
+        membership_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(pack_snapshot_memberships)")
+        }
         decision = conn.execute(
             "SELECT decision_id, pipeline_verdict, units, created_at, updated_at FROM decisions"
         ).fetchone()
         indexes = {
             row[1]
-            for table in ("market_snapshots", "decisions", "settlements")
+            for table in (
+                "market_snapshots",
+                "pack_snapshot_memberships",
+                "decisions",
+                "settlements",
+            )
             for row in conn.execute(f"PRAGMA index_list({table})")
         }
         version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -771,6 +834,7 @@ def test_initialize_database_upgrades_reduced_legacy_schema(
     assert set(feedback.MARKET_SNAPSHOT_COLUMN_DEFINITIONS) <= snapshot_columns
     assert set(feedback.DECISION_COLUMN_DEFINITIONS) <= decision_columns
     assert set(feedback.SETTLEMENT_COLUMN_DEFINITIONS) <= settlement_columns
+    assert set(feedback.PACK_MEMBERSHIP_FIELDS) <= membership_columns
     assert decision == (
         stable_decision_id,
         expected_verdict,
@@ -784,6 +848,7 @@ def test_initialize_database_upgrades_reduced_legacy_schema(
         "idx_decisions_snapshot",
         "idx_settlements_market",
         "idx_settlements_decision",
+        "idx_pack_membership_pack_path",
     } <= indexes
     assert version == feedback.SCHEMA_VERSION
 
@@ -951,6 +1016,7 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
         "leagues.csv",
         "signal_flags.csv",
         "play_vs_stand_down.csv",
+        "decision_coverage.csv",
         "model_performance.csv",
         "ultimate_alt_shadow.csv",
         "summary.json",
@@ -967,10 +1033,55 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     market = _read_csv(report_dir / "market_type.csv")[0]
     assert float(market["profit"]) == pytest.approx(2.0)
     assert float(market["roi"]) == pytest.approx(1.0)
+    decision_coverage = {
+        row["decision_class"]: row for row in _read_csv(report_dir / "decision_coverage.csv")
+    }
+    assert int(decision_coverage["PLAY"]["total_decisions"]) == 1
+    assert int(decision_coverage["PLAY"]["settled_decisions"]) == 1
+    assert int(decision_coverage["PLAY"]["unsettled_decisions"]) == 0
+    assert int(decision_coverage["PLAY"]["missing_event_start"]) == 1
     models = _read_csv(report_dir / "model_performance.csv")
     a_bet = next(row for row in models if row["model"] == "A" and row["verdict"] == "BET")
     assert float(a_bet["recommendation_accuracy"]) == pytest.approx(1.0)
     assert (report_dir / "ledgers" / "market_snapshots.csv").exists()
+    assert (report_dir / "ledgers" / "pack_snapshot_memberships.csv").exists()
+
+
+def test_report_separates_unsettled_plays_from_settled_performance(tmp_path):
+    settled = _candidate(market_id="m1", outcome_id="o1")
+    settled["_event_starts_at"] = "2026-07-13T20:00:00+00:00"
+    unsettled = _candidate(market_id="m2", outcome_id="o2", line=12.5)
+    pack_dir = _pack(tmp_path, [settled, unsettled])
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    with feedback.open_database(db_path) as conn:
+        decision_id, snapshot_id = conn.execute(
+            "SELECT d.decision_id, d.snapshot_id FROM decisions d "
+            "JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id "
+            "WHERE s.market_id = 'm1'"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO settlements ("
+            "settlement_id, decision_id, snapshot_id, outcome_id, event_id, market_id, "
+            "win_loss_push, settled_at) VALUES (?, ?, ?, 'o1', 'e1', 'm1', 'W', ?)",
+            ("settled-m1", decision_id, snapshot_id, "2026-07-14T00:00:00+00:00"),
+        )
+
+    report_dir = feedback.generate_report(db_path, tmp_path / "report")
+    play = next(
+        row
+        for row in _read_csv(report_dir / "decision_coverage.csv")
+        if row["decision_class"] == "PLAY"
+    )
+
+    assert int(play["total_decisions"]) == 2
+    assert int(play["settled_decisions"]) == 1
+    assert int(play["unsettled_decisions"]) == 1
+    assert int(play["missing_event_start"]) == 1
+    assert "ROI, profit, hit-rate, and market tables include settled decisions only" in (
+        report_dir / "report.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_ultimate_alt_release_gate_requires_depth_clv_and_each_market_type():
@@ -1633,16 +1744,23 @@ def test_recover_corrupted_database_salvages_readable_rows(tmp_path):
     stats = feedback.recover_corrupted_database(corrupted_path, output_path)
 
     assert stats.market_snapshots == 1
+    assert stats.pack_snapshot_memberships == 1
     assert stats.decisions == 1
     assert output_path.exists()
 
     conn = sqlite3.connect(output_path)
     counts = {
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in ("market_snapshots", "decisions", "settlements")
+        for table in (
+            "market_snapshots",
+            "pack_snapshot_memberships",
+            "decisions",
+            "settlements",
+        )
     }
     conn.close()
     assert counts["market_snapshots"] == 1
+    assert counts["pack_snapshot_memberships"] == 1
     assert counts["decisions"] == 1
 
 
@@ -1693,9 +1811,10 @@ def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
     stats = feedback.recover_corrupted_database(corrupted_path, output_path)
 
     assert stats.market_snapshots == 0
+    assert stats.pack_snapshot_memberships == 0
     assert stats.decisions == 0
     assert stats.settlements == 0
-    assert stats.skipped_rows == 3
+    assert stats.skipped_rows == 4
     assert output_path.exists()
 
 

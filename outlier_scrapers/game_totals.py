@@ -143,6 +143,7 @@ GAME_TOTALS_HEADER = [
     "research_leverage",
     "scope",
     "as_of",
+    "_event_starts_at",
     "source_timestamps",
 ]
 # Shared schema: team totals use the same columns; files are split by stream.
@@ -728,7 +729,6 @@ def build_totals(
                 flags.append("FAIR_TOTAL_DIVERGENCE")
                 flags.append("FAIR_TOTAL_SIDE_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")
-
         p_under = (1.0 - p_over_headline) if p_over_headline is not None else None
         p_side_market = (
             p_over_headline
@@ -748,7 +748,9 @@ def build_totals(
         else:
             model_win_prob = p_side_market
         consensus_win_prob: float | None = p_side_market
-        independent_win_prob: float | None = None
+        independent_win_prob = _to_float(cand.get("independent_model_prob"))
+        if independent_win_prob is not None and not 0.0 <= independent_win_prob <= 1.0:
+            independent_win_prob = None
         if _totals_models_diverge(recency_hit_prob, p_side_market):
             flags.append("totals_model_divergence")
 
@@ -758,6 +760,16 @@ def build_totals(
         decimal_price = _american_to_decimal(best_price)
         _implied_pct_val = implied_probability(best_price)
         implied_prob = round(_implied_pct_val / 100.0, 5) if _implied_pct_val is not None else None
+        if total_kind == TOTAL_KIND_TEAM:
+            if independent_win_prob is None:
+                flags.append("TEAM_TOTAL_INDEPENDENT_MODEL_MISSING")
+                flags.append("SOURCE_INTEGRITY_FLAG")
+            elif implied_prob is not None and independent_win_prob <= implied_prob:
+                flags.append("TEAM_TOTAL_INDEPENDENT_MODEL_CONFLICT")
+                flags.append("SOURCE_INTEGRITY_FLAG")
+            if fair_total is None or abs(fair_total - headline_line) <= FAIR_TOTAL_DIRECTION_TOLERANCE:
+                flags.append("TEAM_TOTAL_FAIR_TOTAL_NO_SEPARATION")
+                flags.append("SOURCE_INTEGRITY_FLAG")
 
         push_blocked = _is_integer_line(headline_line)
         push_prob: float | str = "" if push_blocked else 0.0
@@ -916,6 +928,7 @@ def build_totals(
                 or _research_leverage(prop, scope, sport),
                 "scope": scope,
                 "as_of": cand.get("as_of") or (games_norm or {}).get("generated_at") or "",
+                "_event_starts_at": event_start or "",
                 "source_timestamps": cand.get("source_timestamps") or "",
             }
         )
