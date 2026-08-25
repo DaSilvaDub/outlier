@@ -334,6 +334,7 @@ def build_alt_team_total_parlays(
             continue
         american = _decimal_to_american(combined_decimal)
         flags = ["SGP_CORRELATED_LEGS"] if is_sgp else []
+        rounded_decimal = round(combined_decimal, 4)
         parlays.append(
             {
                 "parlay_id": "+".join(str(leg["outcome_id"]) for leg in combo),
@@ -342,9 +343,9 @@ def build_alt_team_total_parlays(
                 "legs": " + ".join(_leg_text(leg) for leg in combo),
                 "event_ids": ",".join(dict.fromkeys(event_ids)),
                 "is_sgp": "true" if is_sgp else "false",
-                "combined_decimal": round(combined_decimal, 4),
+                "combined_decimal": rounded_decimal,
                 "combined_american": american if american is not None else "",
-                "combined_implied_prob": round(100.0 / combined_decimal, 3),
+                "combined_implied_prob": round(1.0 / rounded_decimal, 6) if rounded_decimal else "",
                 "naive_l10_prob": round(naive_prob * 100.0, 3),
                 "quality_flags": ",".join(flags),
                 "as_of": combo[0].get("as_of") or "",

@@ -17,7 +17,10 @@ from typing import Any, Callable, Sequence
 
 from outlier_scrapers import feedback, pack, paths, probability_blend, refresh
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, TEAM_TOTALS_HEADER
-from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
+from outlier_scrapers.probable_pitchers import (
+    iter_probable_slate_games,
+    load_probable_pitcher_lookup,
+)
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.utils import _parse_start, _write_csv
 
@@ -337,13 +340,30 @@ def _starter_changed(
         current = current_by_team.get(team)
         if not isinstance(original, dict) or not isinstance(current, dict):
             continue
-        original_pitcher = _text(original.get("pitcher"))
-        current_pitcher = _text(current.get("pitcher"))
-        if original_pitcher and original_pitcher != current_pitcher:
-            return True
-        if bool(original.get("confirmed")) and not bool(current.get("confirmed")):
-            return True
+        original_games = iter_probable_slate_games(original)
+        current_games = iter_probable_slate_games(current)
+        if len(original_games) == 1 and len(current_games) == 1:
+            if _probable_pitcher_changed(original_games[0], current_games[0]):
+                return True
+            continue
+        current_by_pk = {
+            game.get("game_pk"): game for game in current_games if game.get("game_pk") is not None
+        }
+        for original_game in original_games:
+            current_game = current_by_pk.get(original_game.get("game_pk"))
+            if not isinstance(current_game, dict):
+                continue
+            if _probable_pitcher_changed(original_game, current_game):
+                return True
     return False
+
+
+def _probable_pitcher_changed(original_game: dict[str, Any], current_game: dict[str, Any]) -> bool:
+    original_pitcher = _text(original_game.get("pitcher"))
+    current_pitcher = _text(current_game.get("pitcher"))
+    if original_pitcher and original_pitcher != current_pitcher:
+        return True
+    return bool(original_game.get("confirmed")) and not bool(current_game.get("confirmed"))
 
 
 def _injury_changed(
@@ -513,15 +533,23 @@ def reprice_row(
         row["time_before_game"] = probability_blend.time_before_game_bucket(hours)
     row["odds_range"] = probability_blend.odds_range(row.get("price"))
     pack.apply_learned_probability_blend(row, blend_artifact)
+    # Shadow (default) keeps T-30 on the live devig. When blend promotion
+    # drives sizing, apply_learned already re-blended on the NEW
+    # market_consensus_prob; size from that instead of clobbering it.
+    blend_drives = str(row.get("blend_sizing_source") or "") == "promoted_blend"
+    sizing_prob = _float(row.get("model_prob")) if blend_drives else market_probability
+    if sizing_prob is None:
+        sizing_prob = market_probability
     max_units = _float(row.get("max_units")) or 3.0
     sizing = compute_sizing(
         decimal_price=decimal_price,
-        model_prob=market_probability,
+        model_prob=sizing_prob,
         push_prob=push_prob,
         max_units=max_units,
         min_edge=T30_MIN_EDGE,
     )
-    row["model_prob"] = market_probability
+    if not blend_drives:
+        row["model_prob"] = market_probability
     row["implied_prob"] = sizing.implied_prob
     row["edge_pct"] = sizing.edge_pct
     row["kelly_025_units"] = sizing.kelly_025_units

@@ -147,6 +147,73 @@ def test_reprice_sizes_on_market_not_blend_and_kills_dead_edge():
     assert result["actionable"] == "false"
 
 
+def test_reprice_sizes_from_reblended_prob_when_promotion_drives_sizing(monkeypatch):
+    monkeypatch.setattr(
+        "outlier_scrapers.probability_blend.promotion_status",
+        lambda artifact, policy=None: {
+            "drives_sizing": True,
+            "mode": "live",
+            "eligible_samples": 5000,
+            "min_eligible_samples": 1000,
+            "model_version": "blend-test",
+            "reasons": [],
+        },
+    )
+    artifact = {
+        "schema_version": 1,
+        "status": "active",
+        "generated_at": "2026-07-19T00:00:00+00:00",
+        "model_version": "blend-test",
+        "prior_strength": 30,
+        "global": {"market_weight": 0.1, "n": 100},
+        "dimensions": {},
+    }
+    market_probability = 1.0 / 1.91
+    expected = 0.1 * market_probability + 0.9 * 0.80
+    result = t30_reprice.reprice_row(
+        _candidate(
+            independent_model_prob="0.80",
+            market_consensus_prob="0.52",
+            model_prob="0.52",
+            recommended_units_pre_news="3",
+        ),
+        state=_state(_record(devig_decimal=1.91, book_decimal_odds=1.91, book_odds=-110)),
+        original_context=_context(),
+        current_context=_context(),
+        blend_artifact=artifact,
+        now=NOW,
+    )
+    assert result["model_prob"] == pytest.approx(expected)
+    assert result["model_prob_source"] == "blended_market_model"
+    assert result["blend_sizing_source"] == "promoted_blend"
+
+
+def test_starter_changed_sees_doubleheader_nightcap_pitcher():
+    original = _context()
+    original["probable_pitchers_by_league"]["MLB"]["AAA"] = {
+        "pitcher": "Starter A",
+        "confirmed": True,
+        "game_pk": 1,
+        "doubleheader": True,
+        "slate_games": [
+            {"pitcher": "Starter A", "confirmed": True, "game_pk": 1},
+            {"pitcher": "Starter C", "confirmed": True, "game_pk": 2},
+        ],
+    }
+    current = _context()
+    current["probable_pitchers_by_league"]["MLB"]["AAA"] = {
+        "pitcher": "Starter A",
+        "confirmed": True,
+        "game_pk": 1,
+        "doubleheader": True,
+        "slate_games": [
+            {"pitcher": "Starter A", "confirmed": True, "game_pk": 1},
+            {"pitcher": "Starter D", "confirmed": True, "game_pk": 2},
+        ],
+    }
+    assert t30_reprice._starter_changed(_candidate(), original, current) is True
+
+
 def test_reprice_emits_reduce_for_smaller_positive_size():
     result = _reprice(candidate=_candidate(recommended_units_pre_news="3"))
 

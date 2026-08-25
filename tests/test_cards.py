@@ -30,6 +30,16 @@ from outlier_scrapers.cards import (
 # --------------------------------------------------------------------------- #
 
 
+def test_match_insights_line_fallback_uses_epsilon():
+    idx = cards.Indexes()
+    idx.insights_by_market_side[("m1", "OVER")] = [
+        {"text": "near", "line": 5.5 + 1e-10},
+        {"text": "other", "line": 4.5},
+    ]
+    matched = cards._match_insights(idx, "m1", "OVER", None, 5.5)
+    assert [row["text"] for row in matched] == ["near"]
+
+
 def test_two_way_fair_removes_vig_symmetric():
     fair = two_way_fair(-110, -110)
     assert fair is not None

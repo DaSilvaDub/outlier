@@ -71,6 +71,61 @@ def test_normalize_probable_pitchers_empty_schedule():
     assert normalized["by_team"] == {}
 
 
+def test_normalize_probable_pitchers_keeps_both_doubleheader_games():
+    payload = {
+        "dates": [
+            {
+                "date": "2026-08-04",
+                "games": [
+                    {
+                        "gamePk": 111,
+                        "gameDate": "2026-08-04T17:05:00Z",
+                        "teams": {
+                            "away": {
+                                "team": {"name": "New York Yankees"},
+                                "probablePitcher": {"id": 1, "fullName": "Gerrit Cole"},
+                            },
+                            "home": {
+                                "team": {"name": "Boston Red Sox"},
+                                "probablePitcher": {"id": 2, "fullName": "Tanner Houck"},
+                            },
+                        },
+                    },
+                    {
+                        "gamePk": 222,
+                        "gameDate": "2026-08-04T23:15:00Z",
+                        "teams": {
+                            "away": {
+                                "team": {"name": "New York Yankees"},
+                                "probablePitcher": {"id": 3, "fullName": "Carlos Rodon"},
+                            },
+                            "home": {
+                                "team": {"name": "Boston Red Sox"},
+                                "probablePitcher": {"id": 4, "fullName": "Brayan Bello"},
+                            },
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    normalized = normalize_probable_pitchers(payload)
+    assert normalized["record_count"] == 2
+    yankees = normalized["by_team"]["NYY"]
+    assert yankees["doubleheader"] is True
+    pitchers = {entry["pitcher"] for entry in yankees["slate_games"]}
+    assert pitchers == {"Gerrit Cole", "Carlos Rodon"}
+    assert {entry["game_pk"] for entry in yankees["slate_games"]} == {111, 222}
+    # Primary slot stays the first confirmed game; the nightcap is not dropped.
+    assert yankees["pitcher"] == "Gerrit Cole"
+    assert yankees["game_pk"] == 111
+    red_sox = normalized["by_team"]["BOS"]
+    assert {entry["pitcher"] for entry in red_sox["slate_games"]} == {
+        "Tanner Houck",
+        "Brayan Bello",
+    }
+
+
 def test_export_probable_pitchers_skips_non_mlb():
     status = export_probable_pitchers("WNBA")
     assert status["status"] == "skipped"

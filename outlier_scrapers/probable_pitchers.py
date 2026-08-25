@@ -19,7 +19,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -95,6 +95,58 @@ def _slate_is_complete(raw_payload: dict[str, Any]) -> bool:
     return all(_game_state_is_final(game) for game in games)
 
 
+def _team_game_entry(
+    *,
+    pitcher: str | None,
+    pitcher_id: int | None,
+    confirmed: bool,
+    opponent: str,
+    home_away: str,
+    game_pk: Any,
+    scheduled_time: Any,
+) -> dict[str, Any]:
+    return {
+        "pitcher": pitcher,
+        "pitcher_id": pitcher_id,
+        "confirmed": confirmed,
+        "opponent": opponent,
+        "home_away": home_away,
+        "game_pk": game_pk,
+        "scheduled_time": scheduled_time,
+    }
+
+
+def iter_probable_slate_games(info: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return every per-game starter record stored under a by_team value."""
+    if not isinstance(info, Mapping):
+        return []
+    slate = info.get("slate_games")
+    if isinstance(slate, list) and slate:
+        return [dict(entry) for entry in slate if isinstance(entry, Mapping)]
+    return [{k: v for k, v in info.items() if k not in {"doubleheader", "slate_games"}}]
+
+
+def _assign_team_game(by_team: dict[str, dict[str, Any]], team: str, entry: dict[str, Any]) -> None:
+    existing = by_team.get(team)
+    if not existing:
+        by_team[team] = dict(entry)
+        return
+    games = iter_probable_slate_games(existing)
+    if any(game.get("game_pk") == entry.get("game_pk") and entry.get("game_pk") is not None for game in games):
+        return
+    games.append(dict(entry))
+    primary = games[0]
+    for candidate in games[1:]:
+        if candidate.get("confirmed") and not primary.get("confirmed"):
+            primary = candidate
+            break
+    by_team[team] = {
+        **primary,
+        "doubleheader": True,
+        "slate_games": games,
+    }
+
+
 def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, int | None]:
     pitcher = side_payload.get("probablePitcher")
     if not isinstance(pitcher, dict):
@@ -160,29 +212,33 @@ def normalize_probable_pitchers(
         )
 
         if away_team:
-            existing = by_team.get(away_team)
-            if not existing or (away_confirmed and not existing.get("confirmed")):
-                by_team[away_team] = {
-                    "pitcher": away_pitcher,
-                    "pitcher_id": away_pitcher_id,
-                    "confirmed": away_confirmed,
-                    "opponent": home_team,
-                    "home_away": "AWAY",
-                    "game_pk": raw_game.get("gamePk"),
-                    "scheduled_time": raw_game.get("gameDate"),
-                }
+            _assign_team_game(
+                by_team,
+                away_team,
+                _team_game_entry(
+                    pitcher=away_pitcher,
+                    pitcher_id=away_pitcher_id,
+                    confirmed=away_confirmed,
+                    opponent=home_team,
+                    home_away="AWAY",
+                    game_pk=raw_game.get("gamePk"),
+                    scheduled_time=raw_game.get("gameDate"),
+                ),
+            )
         if home_team:
-            existing = by_team.get(home_team)
-            if not existing or (home_confirmed and not existing.get("confirmed")):
-                by_team[home_team] = {
-                    "pitcher": home_pitcher,
-                    "pitcher_id": home_pitcher_id,
-                    "confirmed": home_confirmed,
-                    "opponent": away_team,
-                    "home_away": "HOME",
-                    "game_pk": raw_game.get("gamePk"),
-                    "scheduled_time": raw_game.get("gameDate"),
-                }
+            _assign_team_game(
+                by_team,
+                home_team,
+                _team_game_entry(
+                    pitcher=home_pitcher,
+                    pitcher_id=home_pitcher_id,
+                    confirmed=home_confirmed,
+                    opponent=away_team,
+                    home_away="HOME",
+                    game_pk=raw_game.get("gamePk"),
+                    scheduled_time=raw_game.get("gameDate"),
+                ),
+            )
 
     return {
         "league": league,

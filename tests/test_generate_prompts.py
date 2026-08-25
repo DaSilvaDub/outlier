@@ -80,6 +80,32 @@ def test_sequential_prompts_are_opt_in_and_regular_run_removes_stale_bundle(tmp_
     assert not desk2.exists()
 
 
+def test_desk2_prompt_writes_go_through_safe_write_text(tmp_path, monkeypatch):
+    module = _load_module()
+    written: list[Path] = []
+    original = module.safe_write_text
+
+    def _spy(filepath, content, retries=10, delay=1.0):
+        written.append(Path(filepath))
+        original(filepath, content, retries=retries, delay=delay)
+
+    monkeypatch.setattr(module, "safe_write_text", _spy)
+    module.generate_for_dir(
+        tmp_path / "today",
+        "2099-12-31",
+        "briefing",
+        "board,recommended_units_pre_news\nA,3.0\n",
+        ("", "", ""),
+        ("", ""),
+        ("", ""),
+        True,
+        include_sequential_prompts=True,
+    )
+    desk2_writes = [path for path in written if path.parent.name == "Desk2_Manual"]
+    assert desk2_writes
+    assert len(desk2_writes) == 5
+
+
 def test_generate_for_dir_uses_one_ultimate_alt_shadow_prompt_when_available(tmp_path):
     module = _load_module()
     out_dir = tmp_path / "today"

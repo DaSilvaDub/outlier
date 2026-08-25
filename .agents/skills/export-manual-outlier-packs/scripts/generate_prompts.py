@@ -582,6 +582,7 @@ def _write_desk2_prompts(
 
     desk2_count = 0
     if src_desk2_dir.exists():
+        desk2_prompts: list[tuple[str, str, str, str, str, str]] = []
         for p in src_desk2_dir.glob("*.md"):
             with open(p, "r", encoding="utf-8") as pf:
                 p_text = pf.read()
@@ -593,11 +594,9 @@ def _write_desk2_prompts(
                 filename = f"{order}_{phase_name}_{stem}_pack_{date_str}.txt"
             else:
                 filename = f"99_{stem}_pack_{date_str}.txt"
-
-            out_file = desk2_dir / filename
-            with open(out_file, "w", encoding="utf-8") as f:
-                f.write(full_prompt)
-            desk2_count += 1
+            desk2_prompts.append(("", "", "", "", filename, full_prompt))
+        _write_desk2_model_prompts(desk2_dir, desk2_prompts)
+        desk2_count = len(desk2_prompts)
 
     return desk2_count
 

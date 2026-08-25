@@ -590,7 +590,7 @@ def _match_insights(
     fallback = idx.insights_by_market_side.get((market_id, side), [])
     if line is None:
         return fallback
-    return [i for i in fallback if _to_float(i.get("line")) == _to_float(line)]
+    return [i for i in fallback if _line_values_equal(i.get("line"), line)]
 
 
 def _slim_insight(i: dict[str, Any]) -> dict[str, Any]:

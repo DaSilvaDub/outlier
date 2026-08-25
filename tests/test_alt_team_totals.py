@@ -275,6 +275,8 @@ def test_parlay_math():
     assert abs(sgp["combined_decimal"] - round(expected, 4)) < 1e-9
     assert sgp["combined_american"] == -184  # 1.5439 decimal
     assert abs(sgp["naive_l10_prob"] - 90.0) < 1e-9  # 1.0 * 0.9
+    assert 0.0 < sgp["combined_implied_prob"] <= 1.0
+    assert abs(sgp["combined_implied_prob"] - (1.0 / sgp["combined_decimal"])) < 1e-6
     assert parlays[0]["naive_l10_prob"] >= parlays[-1]["naive_l10_prob"]
 
 

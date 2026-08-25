@@ -643,8 +643,9 @@ def enrich_probable_with_so_features(
     enriched: dict[str, dict[str, object]] = {}
     cache: dict[str, dict[str, object] | None] = {}
     opponent_cache: dict[str, float | None] = {}
-    for team, info in by_team.items():
-        row = dict(info) if isinstance(info, Mapping) else {}
+
+    def enrich_row(team: str, info: Mapping[str, object]) -> dict[str, object]:
+        row = dict(info)
         pitcher_id = str(row.get("pitcher_id") or "").strip()
         if row.get("confirmed") and pitcher_id:
             if pitcher_id not in cache:
@@ -703,7 +704,21 @@ def enrich_probable_with_so_features(
                 row["park_k_factor"] = park_factor
                 row["park_k_source"] = "curated_home_park_so"
                 row["park_team"] = venue_team
-        enriched[str(team)] = row
+        return row
+
+    for team, info in by_team.items():
+        payload = dict(info) if isinstance(info, Mapping) else {}
+        slate = payload.get("slate_games")
+        if isinstance(slate, list) and len(slate) > 1:
+            games = [enrich_row(str(team), game) for game in slate if isinstance(game, Mapping)]
+            primary_pk = payload.get("game_pk")
+            primary = next(
+                (game for game in games if game.get("game_pk") == primary_pk),
+                games[0] if games else {},
+            )
+            enriched[str(team)] = {**primary, "doubleheader": True, "slate_games": games}
+        else:
+            enriched[str(team)] = enrich_row(str(team), payload)
     return enriched
 
 
@@ -728,12 +743,17 @@ def mlb_so_projection_record(
     player = _normalize_person_name(_player_name_from_row(row))
     if not player or not probable_by_team:
         return None
+    from .probable_pitchers import iter_probable_slate_games
+
     listed = None
     for info in probable_by_team.values():
         if not isinstance(info, Mapping):
             continue
-        if _normalize_person_name(info.get("pitcher")) == player:
-            listed = info
+        for entry in iter_probable_slate_games(info):
+            if _normalize_person_name(entry.get("pitcher")) == player:
+                listed = entry
+                break
+        if listed is not None:
             break
     if listed is None or not listed.get("confirmed"):
         return None

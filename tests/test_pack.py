@@ -1831,6 +1831,46 @@ def test_mlb_team_total_uses_market_alias_when_proposition_is_missing():
     assert row["selection"] == "LAD Team Total OVER 4.5"
 
 
+def test_mlb_strikeouts_alias_survives_build_row_whitelist():
+    card = ev_card(
+        side="OVER",
+        line=5.5,
+        player="Yusei Kikuchi",
+        market="STRIKEOUTS",
+        market_type="PLAYER_PROP",
+    )
+    row = make_row(card, [])
+    assert row is not None
+    assert "Yusei Kikuchi" in str(row.get("selection") or "")
+
+
+def test_mlb_hits_player_prop_dropped_by_whitelist():
+    card = ev_card(
+        side="OVER",
+        line=1.5,
+        player="Aaron Judge",
+        market="HITS",
+        market_type="PLAYER_PROP",
+    )
+    assert make_row(card, []) is None
+
+
+def test_mlb_runs_alias_survives_team_prop_whitelist():
+    card = {
+        "headline_side": "OVER",
+        "card_id": "tm-runs-alias-token",
+        "proposition": "RUNS",
+        "market": "RUNS",
+        "team": "LAD",
+        "matchup": "LAD @ SF",
+        "board": "B",
+        "sides": {"OVER": {"outcome_id": "to-runs-token", "line": 4.5, "best_odds": -110}},
+    }
+    row = make_row(card, [], sport="MLB")
+    assert row is not None
+    assert row["market_type"] == "TEAM_PROP"
+
+
 def test_period_scoped_team_total_excluded_from_general_candidate_pool():
     # Quarter/period team totals belong exclusively to the dedicated totals
     # pipeline (game_totals.py). Letting them through build_row surfaces them

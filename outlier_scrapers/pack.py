@@ -28,6 +28,7 @@ from outlier_scrapers.game_totals import is_full_game_total
 from outlier_scrapers.registry import (
     classify_foreign_market,
     get_sport_config,
+    normalize_market,
     team_display_name,
 )
 from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
@@ -971,14 +972,24 @@ def build_row(
             market_type = "GAMELINE"
     if is_excluded_market(market_token, market_type):
         return None
-    from outlier_scrapers.normalizer import ALLOWED_MLB_PLAYER_PROPS, ALLOWED_MLB_TEAM_PROPS
+    from outlier_scrapers.normalizer import (
+        ALLOWED_MLB_PLAYER_PROPS,
+        ALLOWED_MLB_TEAM_PROPS,
+        _market_token,
+    )
 
     if sport.upper() == "MLB":
         market_type_u = str(market_type or "").upper()
-        market_token_u = str(market_token or "").upper()
-        if (market_type_u == "PLAYER_PROP" or has_player) and market_token_u not in ALLOWED_MLB_PLAYER_PROPS:
+        config = get_sport_config(sport)
+        canonical = (
+            normalize_market(config, market_token)
+            or normalize_market(config, proposition)
+            or _market_token(market_token)
+        )
+        canonical_u = str(canonical or "").upper()
+        if (market_type_u == "PLAYER_PROP" or has_player) and canonical_u not in ALLOWED_MLB_PLAYER_PROPS:
             return None
-        if market_type_u == "TEAM_PROP" and market_token_u not in ALLOWED_MLB_TEAM_PROPS:
+        if market_type_u == "TEAM_PROP" and canonical_u not in ALLOWED_MLB_TEAM_PROPS:
             return None
     scope = card.get("scope") or ref.get("scope")
     market_type_upper = str(market_type or "").upper()
