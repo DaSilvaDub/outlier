@@ -677,6 +677,58 @@ def test_build_team_totals_shape():
     assert row["total_kind"] == TOTAL_KIND_TEAM
     assert row["market_id"] == "m_team"
     assert "Team Total" in row["selection"]
+    assert row["_event_starts_at"] == "2099-12-31T00:00:00Z"
+    assert row["actionable"] == "false"
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" in row["quality_flags"]
+
+
+def test_team_total_without_independent_support_or_fair_separation_fails_closed():
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "records": [
+            _norm_record(
+                "m_team_equal",
+                4.5,
+                side,
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -110}],
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="A",
+            )
+            for side in ("OVER", "UNDER")
+        ],
+        "context": {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}},
+    }
+
+    row = build_team_totals(
+        [], games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
+    )[0]
+
+    assert row["fair_total"] == ""
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" in row["quality_flags"]
+    assert "TEAM_TOTAL_FAIR_TOTAL_NO_SEPARATION" in row["quality_flags"]
+
+    conflicting = build_team_totals(
+        [
+            {
+                "sport": "MLB",
+                "market_id": "m_team_equal",
+                "market_type": "TEAM_PROP",
+                "_proposition": "RUNS",
+                "team": "A",
+                "line": 4.5,
+                "headline_side": "OVER",
+                "independent_model_prob": 0.40,
+            }
+        ],
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+    )[0]
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_CONFLICT" in conflicting["quality_flags"]
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" not in conflicting["quality_flags"]
 
 
 def test_build_team_totals_accepts_live_shaped_mlb_runs_and_matches_candidate():

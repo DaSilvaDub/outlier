@@ -426,6 +426,49 @@ def test_shadow_projection_populates_reserved_fields_without_changing_consensus_
         assert row[field] == baseline[field]
 
 
+def test_player_projection_mean_against_selected_side_fails_closed():
+    card = ev_card(
+        line=11.5,
+        market_type="PLAYER_PROP",
+        market="PTS",
+        event_id="game-1",
+        player="Example Player",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    projection = {
+        "status": "eligible",
+        "sport": "WNBA",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "line": 11.5,
+        "side": "OVER",
+        "distribution": {
+            "line": 11.5,
+            "side": "OVER",
+            "win_prob": 0.55,
+            "push_prob": 0.0,
+            "mean": 11.3,
+        },
+    }
+
+    row = make_row(card, ev, sport="WNBA", projections={"o1": projection})
+
+    assert "projection_side_conflict" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["recommended_units_pre_news"] == ""
+
+
 def test_active_learned_blend_updates_final_probability_and_sizing():
     card = ev_card(line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1")
     ev = [

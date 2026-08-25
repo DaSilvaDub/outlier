@@ -109,6 +109,24 @@ def test_board_ranks_qualified_markets_on_one_price_adjusted_surface():
     assert all(row["actionable"] == "false" for row in board)
     assert all(row["board"].startswith("ALT_SHADOW_") for row in board)
     assert all(row["recommended_units_pre_news"] == "" for row in board)
+    by_type = {row["alt_type"]: row for row in board}
+    assert by_type["PLAYER_PROP"]["selection"] == "Pitcher - ER OVER 0.5"
+    assert by_type["TOTAL"]["selection"] == "ATL Team Total OVER 80.5"
+
+
+def test_board_preserves_internal_event_start_for_settlement_capture():
+    board = build_ultimate_alt_board(
+        spread_rows=[],
+        total_rows=[],
+        player_rows=[
+            _player(
+                event_starts_at="",
+                _event_starts_at="2099-08-08T21:00:00-04:00",
+            )
+        ],
+    )
+
+    assert board[0]["event_starts_at"] == "2099-08-08T21:00:00-04:00"
 
 
 def test_parlays_require_cross_event_and_multiple_alt_types():

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3")
 DEFAULT_REPORT_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\reports\latest")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MARKET_SNAPSHOT_FIELDS = [
     "snapshot_id",
@@ -127,6 +127,19 @@ SETTLEMENT_FIELDS = [
     "snapshot_id",
     "outcome_id",
     *SETTLEMENT_REQUIRED_FIELDS,
+]
+
+PACK_MEMBERSHIP_FIELDS = [
+    "pack_capture_id",
+    "snapshot_id",
+    "pack_path",
+    "pack_timestamp",
+    "source",
+    "pipeline_verdict",
+    "units",
+    "selected",
+    "actionable",
+    "created_at",
 ]
 
 PROBABILITY_COLUMNS = {
@@ -387,6 +400,7 @@ class ImportStats:
 @dataclass(frozen=True)
 class RecoverStats:
     market_snapshots: int
+    pack_snapshot_memberships: int
     decisions: int
     settlements: int
     skipped_rows: int
@@ -667,6 +681,20 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 settled_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS pack_snapshot_memberships (
+                pack_capture_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL REFERENCES market_snapshots(snapshot_id),
+                pack_path TEXT NOT NULL,
+                pack_timestamp TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                pipeline_verdict TEXT NOT NULL DEFAULT '',
+                units REAL,
+                selected INTEGER NOT NULL DEFAULT 0,
+                actionable INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (pack_capture_id, snapshot_id)
+            );
+
             """
         )
         conn.execute("BEGIN IMMEDIATE")
@@ -678,6 +706,30 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         _migrate_probability_semantics(conn, prior_schema_version)
         conn.execute("DROP INDEX IF EXISTS idx_decisions_snapshot")
         _migrate_decision_ids(conn)
+        if prior_schema_version < 5:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO pack_snapshot_memberships (
+                    pack_capture_id, snapshot_id, pack_path, pack_timestamp,
+                    source, pipeline_verdict, units, selected, actionable, created_at
+                )
+                SELECT
+                    'legacy:' || LOWER(HEX(COALESCE(s.pack_path, ''))),
+                    s.snapshot_id,
+                    COALESCE(s.pack_path, ''),
+                    s.captured_at,
+                    '',
+                    COALESCE(d.pipeline_verdict, ''),
+                    COALESCE(d.units, 0),
+                    COALESCE(s.selected, 0),
+                    CASE WHEN UPPER(COALESCE(d.pipeline_verdict, '')) = 'PLAY'
+                         AND COALESCE(d.units, 0) > 0 THEN 1 ELSE 0 END,
+                    COALESCE(s.created_at, '')
+                FROM market_snapshots s
+                LEFT JOIN decisions d ON d.snapshot_id = s.snapshot_id
+                WHERE COALESCE(s.pack_path, '') <> ''
+                """
+            )
         for statement in (
             "CREATE INDEX IF NOT EXISTS idx_snapshots_market "
             "ON market_snapshots(event_id, market_id, outcome_id, captured_at)",
@@ -691,9 +743,11 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             "CREATE INDEX IF NOT EXISTS idx_settlements_market "
             "ON settlements(event_id, market_id, outcome_id)",
             "CREATE INDEX IF NOT EXISTS idx_settlements_decision ON settlements(decision_id)",
+            "CREATE INDEX IF NOT EXISTS idx_pack_membership_pack_path "
+            "ON pack_snapshot_memberships(pack_path, pack_timestamp)",
         ):
             conn.execute(statement)
-        conn.execute("PRAGMA user_version = 4")
+        conn.execute("PRAGMA user_version = 5")
     return db_path
 
 
@@ -893,9 +947,15 @@ def open_database(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return _connect(Path(db_path))
 
 
-_RECOVERY_TABLE_ORDER = ("market_snapshots", "decisions", "settlements")
+_RECOVERY_TABLE_ORDER = (
+    "market_snapshots",
+    "pack_snapshot_memberships",
+    "decisions",
+    "settlements",
+)
 _RECOVERY_TABLE_FIELDS = {
     "market_snapshots": [*MARKET_SNAPSHOT_FIELDS, "created_at"],
+    "pack_snapshot_memberships": PACK_MEMBERSHIP_FIELDS,
     "decisions": [*DECISION_FIELDS, "created_at", "updated_at"],
     "settlements": [*SETTLEMENT_FIELDS, "settled_at"],
 }
@@ -1119,7 +1179,12 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
     initialize_database(output_path)
     conn = sqlite3.connect(output_path)
     conn.row_factory = sqlite3.Row
-    inserted = {"market_snapshots": 0, "decisions": 0, "settlements": 0}
+    inserted = {
+        "market_snapshots": 0,
+        "pack_snapshot_memberships": 0,
+        "decisions": 0,
+        "settlements": 0,
+    }
     try:
         conn.execute("PRAGMA foreign_keys = OFF")
         now = _utc_now()
@@ -1132,6 +1197,15 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 extra={"created_at": row.get("created_at") or now},
             ):
                 inserted["market_snapshots"] += 1
+        for row in salvaged["pack_snapshot_memberships"]:
+            if _insert_recovered_row(
+                conn,
+                "pack_snapshot_memberships",
+                [field for field in PACK_MEMBERSHIP_FIELDS if field != "created_at"],
+                row,
+                extra={"created_at": row.get("created_at") or now},
+            ):
+                inserted["pack_snapshot_memberships"] += 1
         for row in salvaged["decisions"]:
             if _insert_recovered_row(
                 conn,
@@ -1159,6 +1233,7 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
 
     return RecoverStats(
         market_snapshots=inserted["market_snapshots"],
+        pack_snapshot_memberships=inserted["pack_snapshot_memberships"],
         decisions=inserted["decisions"],
         settlements=inserted["settlements"],
         skipped_rows=skipped_total
@@ -1222,6 +1297,12 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
     if base_source == "candidates":
         for row in base_rows:
             row["selected"] = "true"
+    event_starts_by_id: dict[str, str] = {}
+    for row in base_rows:
+        event_id = _text(row.get("event_id"))
+        event_start = _text(row.get("_event_starts_at") or row.get("event_starts_at"))
+        if event_id and event_start:
+            event_starts_by_id.setdefault(event_id, event_start)
 
     specialized: list[tuple[str, dict[str, Any]]] = []
     for filename, source in (
@@ -1230,6 +1311,10 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
     ):
         for row in _read_csv(pack_dir / filename):
             row["selected"] = "true"
+            if not _text(row.get("_event_starts_at") or row.get("event_starts_at")):
+                row["_event_starts_at"] = event_starts_by_id.get(
+                    _text(row.get("event_id")), ""
+                )
             specialized.append((source, row))
 
     for row in _read_csv(pack_dir / "ultimate_alt.csv"):
@@ -1502,6 +1587,7 @@ def capture_pack(
         raise FeedbackError(f"Pack directory does not exist: {pack_dir}")
 
     fallback_timestamp = _pack_fallback_timestamp(pack_dir)
+    recorded_path = str((recorded_pack_path or pack_dir).resolve())
     if source_filename:
         source_path = pack_dir / source_filename
         if not source_path.exists():
@@ -1512,6 +1598,13 @@ def capture_pack(
             source_rows.append(("candidates", row))
     else:
         source_rows = _load_pack_rows(pack_dir)
+    pack_timestamp = fallback_timestamp
+    if not (pack_dir / "manifest.json").exists():
+        pack_timestamp = _timestamp_extreme(
+            (row.get("as_of") for _, row in source_rows), latest=True
+        ) or fallback_timestamp
+    pack_capture_id = _stable_id("pack-capture", recorded_path, pack_timestamp)
+    captured_rows: list[tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     snapshots: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
     for source, row in source_rows:
@@ -1523,7 +1616,9 @@ def capture_pack(
                 snapshot_namespace, snapshot["snapshot_id"]
             )
         snapshots.append(snapshot)
-        decisions.append(_decision_seed(snapshot, row))
+        decision = _decision_seed(snapshot, row)
+        decisions.append(decision)
+        captured_rows.append((source, row, snapshot, decision))
 
     now = _utc_now()
     connection_context = (
@@ -1582,7 +1677,6 @@ def capture_pack(
                     implied_prob = excluded.implied_prob,
                     board = excluded.board,
                     selected = excluded.selected,
-                    pack_path = excluded.pack_path,
                     policy_fingerprint = excluded.policy_fingerprint,
                     portfolio_mode = excluded.portfolio_mode,
                     pre_cap_units = excluded.pre_cap_units,
@@ -1642,6 +1736,29 @@ def capture_pack(
                 )
                 """,
                 [decision[field] for field in DECISION_FIELDS] + [now, now],
+            )
+
+        for source, row, snapshot, decision in captured_rows:
+            conn.execute(
+                """
+                INSERT INTO pack_snapshot_memberships (
+                    pack_capture_id, snapshot_id, pack_path, pack_timestamp,
+                    source, pipeline_verdict, units, selected, actionable, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pack_capture_id, snapshot_id) DO NOTHING
+                """,
+                (
+                    pack_capture_id,
+                    snapshot["snapshot_id"],
+                    snapshot["pack_path"],
+                    pack_timestamp,
+                    source,
+                    decision["pipeline_verdict"],
+                    decision["units"],
+                    snapshot["selected"],
+                    1 if _truthy(row.get("actionable")) else 0,
+                    now,
+                ),
             )
 
         decision_ids = [decision["decision_id"] for decision in decisions]
@@ -2584,6 +2701,64 @@ def _play_vs_stand_down(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_group_metrics(groups[key], "decision_class", key) for key in sorted(groups)]
 
 
+DECISION_COVERAGE_FIELDS = [
+    "decision_class",
+    "total_decisions",
+    "settled_decisions",
+    "unsettled_decisions",
+    "settlement_rate",
+    "missing_event_start",
+    "total_units",
+    "settled_units",
+]
+
+
+def _decision_coverage(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Report publication-level decision coverage separately from settled ROI."""
+
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rows = conn.execute(
+        """
+        SELECT m.pipeline_verdict, m.units, s.event_starts_at,
+               CASE WHEN EXISTS (
+                   SELECT 1 FROM settlements t WHERE t.snapshot_id = m.snapshot_id
+               ) THEN 1 ELSE 0 END AS settled
+        FROM pack_snapshot_memberships m
+        JOIN market_snapshots s ON s.snapshot_id = m.snapshot_id
+        """
+    )
+    for raw in rows:
+        row = dict(raw)
+        decision_class = (
+            "PLAY"
+            if _is_play("", row.get("pipeline_verdict"), row.get("units"))
+            else "STAND_DOWN"
+        )
+        groups[decision_class].append(row)
+
+    output: list[dict[str, Any]] = []
+    for decision_class in sorted(groups):
+        group = groups[decision_class]
+        settled = [row for row in group if bool(row.get("settled"))]
+        total_units = sum(_float(row.get("units"), field="units") or 0.0 for row in group)
+        settled_units = sum(_float(row.get("units"), field="units") or 0.0 for row in settled)
+        output.append(
+            {
+                "decision_class": decision_class,
+                "total_decisions": len(group),
+                "settled_decisions": len(settled),
+                "unsettled_decisions": len(group) - len(settled),
+                "settlement_rate": len(settled) / len(group) if group else None,
+                "missing_event_start": sum(
+                    not _text(row.get("event_starts_at")) for row in group
+                ),
+                "total_units": total_units,
+                "settled_units": settled_units,
+            }
+        )
+    return output
+
+
 def _model_performance(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for model, field in (
@@ -2882,13 +3057,30 @@ def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
                 """
             )
         ]
+        membership_rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT pack_capture_id, snapshot_id, pack_path, pack_timestamp,
+                       source, pipeline_verdict, units, selected, actionable, created_at
+                FROM pack_snapshot_memberships
+                ORDER BY pack_timestamp, pack_capture_id, snapshot_id
+                """
+            )
+        ]
     _write_csv(output_dir / "market_snapshots.csv", MARKET_SNAPSHOT_FIELDS, snapshot_rows)
     _write_csv(output_dir / "decisions.csv", DECISION_FIELDS, decision_rows)
     _write_csv(output_dir / "settlements.csv", SETTLEMENT_FIELDS, settlement_rows)
+    _write_csv(
+        output_dir / "pack_snapshot_memberships.csv",
+        PACK_MEMBERSHIP_FIELDS,
+        membership_rows,
+    )
     return {
         "market_snapshots": len(snapshot_rows),
         "decisions": len(decision_rows),
         "settlements": len(settlement_rows),
+        "pack_snapshot_memberships": len(membership_rows),
     }
 
 
@@ -2902,9 +3094,13 @@ def _fmt(value: Any) -> str:
 
 def _report_markdown(
     coverage: dict[str, int],
+    decision_coverage: list[dict[str, Any]],
     probability_metrics: list[dict[str, Any]],
     market_type: list[dict[str, Any]],
 ) -> str:
+    play_coverage = next(
+        (row for row in decision_coverage if row["decision_class"] == "PLAY"), {}
+    )
     lines = [
         "# Feedback-loop calibration report",
         "",
@@ -2914,10 +3110,16 @@ def _report_markdown(
         "",
         f"- Market snapshots: {coverage['market_snapshots']}",
         f"- Decisions: {coverage['decisions']}",
+        f"- Pack captures: {coverage['pack_captures']}",
+        f"- Pack decision memberships: {coverage['pack_decision_memberships']}",
         f"- Settlements: {coverage['settlements']}",
         f"- Graded and linked decisions: {coverage['graded_and_linked']}",
         f"- Unlinked settlements: {coverage['unlinked_settlements']}",
         f"- Independent-model probabilities: {coverage['independent_probabilities']}",
+        f"- Published PLAY decisions: {play_coverage.get('total_decisions', 0)}",
+        f"- Settled PLAY decisions: {play_coverage.get('settled_decisions', 0)}",
+        f"- Unsettled PLAY decisions: {play_coverage.get('unsettled_decisions', 0)}",
+        f"- PLAY decisions missing event start: {play_coverage.get('missing_event_start', 0)}",
         "",
         "## Probability quality",
         "",
@@ -2948,6 +3150,10 @@ def _report_markdown(
         "",
         "## Interpretation guardrail",
         "",
+        "ROI, profit, hit-rate, and market tables include settled decisions only. "
+        "Use decision_coverage.csv to verify how much of the published card is still unsettled or "
+        "missing an event start before interpreting performance.",
+        "",
         "Market-consensus and final-blended metrics will be identical while the independent-model "
         "column is empty. This is intentional: the report exposes the current market-derived "
         "baseline instead of relabeling it as an independent model.",
@@ -2961,9 +3167,16 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     output_dir.mkdir(parents=True, exist_ok=True)
     with _connect(Path(db_path)) as conn:
         rows = _joined_rows(conn)
+        decision_coverage = _decision_coverage(conn)
         coverage = {
             "market_snapshots": conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0],
             "decisions": conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0],
+            "pack_captures": conn.execute(
+                "SELECT COUNT(DISTINCT pack_capture_id) FROM pack_snapshot_memberships"
+            ).fetchone()[0],
+            "pack_decision_memberships": conn.execute(
+                "SELECT COUNT(*) FROM pack_snapshot_memberships"
+            ).fetchone()[0],
             "settlements": conn.execute("SELECT COUNT(*) FROM settlements").fetchone()[0],
             "graded_and_linked": len(rows),
             "unlinked_settlements": conn.execute(
@@ -3019,6 +3232,11 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         ["probability_source", "n", "expected_hit_rate", "actual_hit_rate", "calibration_gap"],
         expected_actual,
     )
+    _write_csv(
+        output_dir / "decision_coverage.csv",
+        DECISION_COVERAGE_FIELDS,
+        decision_coverage,
+    )
     for filename, label, table in (
         ("market_type.csv", "market_type", market_type),
         ("edge_buckets.csv", "edge_bucket", edge_buckets),
@@ -3053,6 +3271,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         json.dumps(
             {
                 "coverage": coverage,
+                "decision_coverage": decision_coverage,
                 "probability_metrics": probability_metrics,
                 "ultimate_alt_shadow_release": ultimate_alt_release,
             },
@@ -3062,7 +3281,8 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         encoding="utf-8",
     )
     (output_dir / "report.md").write_text(
-        _report_markdown(coverage, probability_metrics, market_type), encoding="utf-8"
+        _report_markdown(coverage, decision_coverage, probability_metrics, market_type),
+        encoding="utf-8",
     )
     export_ledgers(Path(db_path), output_dir / "ledgers")
     return output_dir

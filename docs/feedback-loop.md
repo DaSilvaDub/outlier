@@ -20,6 +20,11 @@ top-N ranking step and then captures the pack into
   instead of rewriting the earlier verdict history. There is no `E_verdict`
   column — pass E (or the no-E fallback) is the desk report, not a fifth
   scalar on this row.
+- `pack_snapshot_memberships`: immutable dated-pack membership for each quote,
+  keyed by a pack-capture fingerprint plus `snapshot_id`. It preserves the
+  pack path, pack timestamp, seeded verdict, units, and selection/actionability
+  state when the same source quote is reused in a later pack. The legacy
+  `market_snapshots.pack_path` remains the first-seen path and is never reassigned.
 - `verdict_records` (child of `decisions`): one row per structured envelope
   record, primary key `(decision_id, pass, publication_id, record_id)`. This is
   where C's multiple findings per `outcome_id` and forced-rerun publications
@@ -42,6 +47,10 @@ Before a final verdict or settlement, recapture may repair fields on an identica
 snapshot (for example, after a schema-semantics migration). Once either exists,
 both the prediction snapshot and seeded pipeline decision are frozen so grading
 history cannot be rewritten after outcomes are known.
+
+Schema v5 adds pack-capture membership. Existing ledgers are backfilled once
+from their first-seen snapshot path; future pack rebuilds retain distinct
+vintages using the dated pack manifest timestamp.
 
 Schema v3 includes a one-time, auditable conversion of legacy schema-v2 game
 and team-total rows from conditional win probability to unconditional `P(win)`.
@@ -164,9 +173,11 @@ whether the pass saved or cost a bet.
   `expected_vs_actual.csv`
 - `market_type.csv`, `edge_buckets.csv`, `odds_ranges.csv`, `books.csv`,
   `leagues.csv`, and `signal_flags.csv`
-- `play_vs_stand_down.csv` and `model_performance.csv`
+- `play_vs_stand_down.csv`, `decision_coverage.csv`, and `model_performance.csv`.
+  ROI and hit-rate tables are settled-only; `decision_coverage.csv` separately
+  reports total, settled, unsettled, and missing-event-time PLAY counts.
 - `ledgers/market_snapshots.csv`, `ledgers/decisions.csv`, and
-  `ledgers/settlements.csv`
+  `ledgers/settlements.csv`, plus `ledgers/pack_snapshot_memberships.csv`
 
 The report is useful immediately as a market-derived baseline. Learned Board B
 weights and an independent probability model should be fit only after the
