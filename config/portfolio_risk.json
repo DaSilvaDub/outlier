@@ -21,13 +21,13 @@
   "shadow_multipliers_neutral": true,
   "calibration": {
     "enabled": true,
-    "source_probability_column": "final_blended_prob",
+    "source_probability_column": "market_consensus_prob",
     "min_samples": 30,
     "prior_strength": 30.0,
     "artifact_path": "calibration/stake_calibration.json"
   },
   "uncertainty": {
-    "enabled": false,
+    "enabled": true,
     "confidence_level": 0.8,
     "method": "wilson_one_sided"
   },
