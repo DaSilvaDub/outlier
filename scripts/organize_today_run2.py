@@ -67,6 +67,22 @@ def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> Non
                     pass
 
 
+def safe_copytree(src: Path, dst: Path, retries: int = 5, delay: float = 0.5, dirs_exist_ok: bool = False) -> None:
+    """Copy directory tree with retries to handle transient cloud sync locks ([WinError 32])."""
+    for attempt in range(retries):
+        try:
+            shutil.copytree(str(src), str(dst), dirs_exist_ok=dirs_exist_ok)
+            return
+        except OSError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                try:
+                    shutil.copytree(str(src), str(dst), dirs_exist_ok=dirs_exist_ok)
+                except OSError:
+                    pass
+
+
 def safe_rmtree(path: Path, retries: int = 5, delay: float = 0.5) -> None:
     """Remove a directory tree with retries for cloud-sync locks."""
     if not path.exists():
@@ -292,7 +308,7 @@ def copy_pack_into(pipeline_data: Path, latest_pack: Path) -> None:
         try:
             dest = pipeline_data / item.name
             if item.is_dir():
-                shutil.copytree(str(item), str(dest), dirs_exist_ok=False)
+                safe_copytree(item, dest, dirs_exist_ok=False)
             else:
                 safe_copy(item, dest)
         except Exception as e:
@@ -513,7 +529,7 @@ def organize_today_additive(
             src_dir = out_dir / src_folder_name
             std_dir = replace_dir(out_dir / std_name)
             if src_dir.exists():
-                shutil.copytree(str(src_dir), str(std_dir), dirs_exist_ok=True)
+                safe_copytree(src_dir, std_dir, dirs_exist_ok=True)
 
         # Remove empty top-level directories to prevent folder confusion
         for sub in list(out_dir.glob("*")):

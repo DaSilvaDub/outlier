@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,10 +32,20 @@ MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 REQUEST_TIMEOUT = 15
 
 
-def _fetch_json(url: str, *, timeout: int = REQUEST_TIMEOUT) -> dict[str, Any]:
-    request = Request(url, headers={"User-Agent": "outlier-scrapers/1.0"})
-    with urlopen(request, timeout=timeout) as response:  # noqa: S310 (fixed https host)
-        return json.loads(response.read().decode("utf-8"))
+def _fetch_json(url: str, *, timeout: int = REQUEST_TIMEOUT, max_retries: int = 3) -> dict[str, Any]:
+    request = Request(url, headers={"User-Agent": "outlier-scrapers/1.0", "Accept": "application/json"})
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with urlopen(request, timeout=timeout) as response:  # noqa: S310 (fixed https host)
+                return json.loads(response.read().decode("utf-8"), strict=False)
+        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_err = exc
+            if attempt < max_retries:
+                time.sleep(0.5 * attempt)
+    if last_err:
+        raise last_err
+    return {}
 
 
 def fetch_probable_pitchers_raw(target_date: date) -> dict[str, Any]:
@@ -149,25 +160,29 @@ def normalize_probable_pitchers(
         )
 
         if away_team:
-            by_team[away_team] = {
-                "pitcher": away_pitcher,
-                "pitcher_id": away_pitcher_id,
-                "confirmed": away_confirmed,
-                "opponent": home_team,
-                "home_away": "AWAY",
-                "game_pk": raw_game.get("gamePk"),
-                "scheduled_time": raw_game.get("gameDate"),
-            }
+            existing = by_team.get(away_team)
+            if not existing or (away_confirmed and not existing.get("confirmed")):
+                by_team[away_team] = {
+                    "pitcher": away_pitcher,
+                    "pitcher_id": away_pitcher_id,
+                    "confirmed": away_confirmed,
+                    "opponent": home_team,
+                    "home_away": "AWAY",
+                    "game_pk": raw_game.get("gamePk"),
+                    "scheduled_time": raw_game.get("gameDate"),
+                }
         if home_team:
-            by_team[home_team] = {
-                "pitcher": home_pitcher,
-                "pitcher_id": home_pitcher_id,
-                "confirmed": home_confirmed,
-                "opponent": away_team,
-                "home_away": "HOME",
-                "game_pk": raw_game.get("gamePk"),
-                "scheduled_time": raw_game.get("gameDate"),
-            }
+            existing = by_team.get(home_team)
+            if not existing or (home_confirmed and not existing.get("confirmed")):
+                by_team[home_team] = {
+                    "pitcher": home_pitcher,
+                    "pitcher_id": home_pitcher_id,
+                    "confirmed": home_confirmed,
+                    "opponent": away_team,
+                    "home_away": "HOME",
+                    "game_pk": raw_game.get("gamePk"),
+                    "scheduled_time": raw_game.get("gameDate"),
+                }
 
     return {
         "league": league,
@@ -255,7 +270,7 @@ def export_probable_pitchers(
     return {"status": "ok", "record_count": normalized["record_count"]}
 
 
-def load_probable_pitcher_lookup(league: str) -> dict[str, dict[str, Any]]:
+def load_probable_pitcher_lookup(league: str = "MLB") -> dict[str, dict[str, Any]]:
     """Return the ``{team_code: {pitcher, confirmed, opponent, ...}}`` lookup.
 
     Returns ``{}`` when no probable-pitchers file exists yet for this league
@@ -266,7 +281,7 @@ def load_probable_pitcher_lookup(league: str) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"), strict=False)
     except (OSError, json.JSONDecodeError):
         return {}
     by_team = payload.get("by_team")

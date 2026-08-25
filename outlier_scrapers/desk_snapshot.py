@@ -75,16 +75,6 @@ def writer_lock_dir(pack_dir: Path) -> Path:
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
-    if os.name == "nt":
-        import ctypes
-
-        process_query = 0x1000
-        kernel32 = getattr(ctypes, "windll").kernel32
-        handle = kernel32.OpenProcess(process_query, False, int(pid))
-        if handle:
-            kernel32.CloseHandle(handle)
-            return True
-        return False
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:

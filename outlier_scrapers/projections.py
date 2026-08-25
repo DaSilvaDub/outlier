@@ -833,7 +833,7 @@ def shrink_starter_so_features(
     prior_starts = settings["bf_prior_starts"]
     prior_workload = settings["starter_projected_bf"]
     starts = max(0, int(starts))
-    observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
+    observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * starts
     if total_k is not None and total_k >= 0 and observed_bf > 0:
         rate_numer = float(total_k) + prior_bf * prior_rate
         rate_denom = float(observed_bf) + prior_bf

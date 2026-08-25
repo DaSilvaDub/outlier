@@ -226,6 +226,7 @@ def build_alt_team_total_board(
             over_books = (ladder.get(line) or {}).get("over", {})
             best_book, best_price = _best_book_offer(over_books)
             decimal_price = _american_to_decimal(best_price)
+            ip_val = implied_probability(best_price) if best_price not in (None, "") else None
             if decimal_price is None:
                 flags.append(FLAG_NO_PRICE)
 
@@ -252,8 +253,8 @@ def build_alt_team_total_board(
                     "decimal_price": round(decimal_price, 4)
                     if decimal_price is not None
                     else "",
-                    "implied_prob": implied_probability(best_price)
-                    if best_price not in (None, "")
+                    "implied_prob": round(ip_val / 100.0, 5)
+                    if ip_val is not None
                     else "",
                     "books_count": len(over_books),
                     "is_best_line": "false",

@@ -554,6 +554,14 @@ def _write_legacy_alt_prompts(
         )
 
 
+def _write_desk2_model_prompts(
+    out_dir: Path,
+    desk2_prompts: list[tuple[str, str, str, str, str, str]],
+) -> None:
+    for _, _, _, _, filename, prompt in desk2_prompts:
+        safe_write_text(out_dir / filename, prompt)
+
+
 def _write_desk2_prompts(
     prompts_dir: Path,
     date_str: str,

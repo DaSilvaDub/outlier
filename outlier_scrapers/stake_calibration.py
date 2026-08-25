@@ -148,8 +148,7 @@ def wilson_lower_bound(
     """
     if n <= 0:
         return 0.0
-    if wins < 0 or wins > n:
-        raise ValueError("wins must be in [0, n]")
+    wins = min(float(n), max(0.0, float(wins)))
     if not (0.5 < confidence_level < 1.0):
         raise ValueError("confidence_level must be in (0.5, 1.0)")
     # One-sided: Phi(z) = confidence_level
@@ -263,8 +262,9 @@ def _training_observation(
     if result not in {"W", "L"}:
         return None  # exclude pushes from binary calibration
     source = _probability(row.get(source_probability_column))
-    push = _probability(row.get("push_prob"))
-    if source is None or push is None:
+    push_val = row.get("push_prob")
+    push = _probability(push_val) if push_val not in (None, "") else 0.0
+    if source is None or push is None or push >= 1.0:
         return None
     conditional = conditional_non_push_prob(source, push)
     if conditional is None:

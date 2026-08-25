@@ -125,7 +125,7 @@ class OutlierApiClient:
                 if exc.code not in RETRYABLE_STATUS_CODES or attempt >= self.max_retries:
                     raise OutlierApiError(_safe_http_error_message(exc, url)) from exc
                 time.sleep(0.5 * attempt)
-            except URLError as exc:
+            except (URLError, TimeoutError, OSError, gzip.BadGzipFile, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     raise OutlierApiError(f"Network error for {url}: {exc}") from exc
@@ -292,11 +292,14 @@ class OutlierApiClient:
 
 def _safe_http_error_message(exc: HTTPError, url: str) -> str:
     """Return an error string with body shape only, never raw payload values."""
-    body = exc.read().decode("utf-8", errors="replace")
+    try:
+        body = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
     body_note = f"body_len={len(body)}"
     if body.strip():
         try:
-            decoded = json.loads(body)
+            decoded = json.loads(body, strict=False)
         except Exception:
             decoded = None
         if isinstance(decoded, dict):
