@@ -692,7 +692,7 @@ def _ev_for_side(
     matched_rows = [r for r in rows if r.get("outcome_id") == main_outcome_id] if main_outcome_id else []
     if not matched_rows and main_line is not None:
         # Normalized EV rows carry the line as ``current_line`` (no ``line`` key).
-        matched_rows = [r for r in rows if _to_float(r.get("current_line")) == main_line]
+        matched_rows = [r for r in rows if _line_values_equal(r.get("current_line"), main_line)]
 
     is_fallback = False
     if matched_rows:
@@ -1036,7 +1036,8 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     if proposition.strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
         headline = str(card.get("headline_side") or "")
         opposite = "HOME" if headline == "AWAY" else "AWAY"
-        headline_line = _to_float(main_row.get(headline, {}).get("line"))
+        headline_row = main_row.get(headline) or {}
+        headline_line = _to_float(headline_row.get("line"))
         opposite_lines = [
             _to_float(row.get("line")) for row in rows_by_side.get(opposite, [])
         ]
@@ -1047,8 +1048,10 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
                 for other in opposite_lines
             )
         )
+        home_row = main_row.get("HOME") or {}
+        away_row = main_row.get("AWAY") or {}
         if not has_mirror and _spread_sign_conflict(
-            main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
+            home_row.get("line"), away_row.get("line")
         ):
             card.setdefault("flags", []).append("spread_sign_conflict")
     headline = str(card.get("headline_side") or "")

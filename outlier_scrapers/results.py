@@ -340,7 +340,7 @@ def _player_boxscore_key(event: FinalEvent, selection: str) -> str | None:
         return None
     first = _token(parts[0])
     last = _token(parts[-1])
-    if not first or len(last) < 4:
+    if not first or len(last) < 2:
         return None
     matches = [
         name for name in event.players if name.endswith(last) and name.startswith(first)
@@ -368,7 +368,7 @@ def _event_match(event: FinalEvent, selection: str) -> bool:
 
 
 def _team_total_event_match(event: FinalEvent, selection: str) -> bool:
-    match = re.search(r"^([A-Za-z0-9]+)\s+Team Total\b", selection, re.IGNORECASE)
+    match = re.search(r"^(.*?)\s+Team Total\b", selection, re.IGNORECASE)
     return bool(
         match and _team_token(match.group(1)) in {_team_token(event.away), _team_token(event.home)}
     )
@@ -393,6 +393,9 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
             "AST": ("AST",),
             "THREEPOINTERS": ("3PT",),
             "3PTS": ("3PT",),
+            "3PT": ("3PT",),
+            "3PM": ("3PT",),
+            "THREES": ("3PT",),
             "OFFENSIVEREBOUNDS": ("OREB",),
             "OREB": ("OREB",),
             "DEFENSIVEREBOUNDS": ("DREB",),
@@ -432,6 +435,11 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
     aliases = {
         "STRIKEOUTS": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
         "SO": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
+        "PITCHERSTRIKEOUTS": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
+        "PITCHERSO": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
+        "K": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
+        "KS": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
+        "PITCHERKS": ("PITCHING:K", "PITCHING:SO", "K", "SO"),
         "HITS": ("BATTING:H", "H"),
         "H": ("BATTING:H", "H"),
         "TOTALBASES": ("BATTING:TB", "TB"),
@@ -445,6 +453,8 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
         "WALKS": ("BATTING:BB",),
         "BB": ("BATTING:BB",),
         "BASES": ("BATTING:TB",),
+        "HR": ("BATTING:HR", "HR"),
+        "HOMERUNS": ("BATTING:HR", "HR"),
     }
     if token in {"HITSRUNSRBIS", "HRR"}:
         hits = stats.get("BATTING:H")
@@ -480,7 +490,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             else (actual, _side_result(actual, line, player_match.group(3).upper()))
         )
 
-    team_total = re.search(r"^([A-Za-z0-9]+)\s+Team Total\s+(OVER|UNDER)", selection, re.IGNORECASE)
+    team_total = re.search(r"^(.*?)\s+Team Total\s+(OVER|UNDER)", selection, re.IGNORECASE)
     if team_total:
         team = _team_token(team_total.group(1))
         actual = (

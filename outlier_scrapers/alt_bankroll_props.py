@@ -313,6 +313,7 @@ def build_alt_bankroll_board(
         line = _to_float(rec.get("line"))
         best_book, best_price = best_offer
         decimal_price = _american_to_decimal(best_price)
+        ip_val = implied_probability(best_price) if best_price not in (None, "") else None
 
         rows.append(
             {
@@ -340,7 +341,7 @@ def build_alt_bankroll_board(
                 "best_book": best_book,
                 "best_price": best_price if best_price is not None else "",
                 "decimal_price": round(decimal_price, 4) if decimal_price is not None else "",
-                "implied_prob": implied_probability(best_price) if best_price not in (None, "") else "",
+                "implied_prob": round(ip_val / 100.0, 5) if ip_val is not None else "",
                 "include_overtime": rec.get("include_overtime") if rec.get("include_overtime") is not None else "",
                 "scope": period_identity(rec),
                 "as_of": as_of,

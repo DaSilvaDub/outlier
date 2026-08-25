@@ -110,6 +110,13 @@ def segment_context(row: Mapping[str, Any]) -> dict[str, str]:
             row.get("captured_at") or row.get("as_of"),
             row.get("event_starts_at") or row.get("_event_starts_at"),
         )
+    tier = row.get("data_quality_tier")
+    if not tier:
+        tier = data_quality_tier(
+            row.get("data_quality_flags"),
+            row.get("projection_quality_flags"),
+            disqualifying=bool(row.get("disqualifying")),
+        )
     return {
         "league": str(row.get("sport") or row.get("league") or "UNKNOWN").strip().upper(),
         "market_type": str(row.get("market_type") or "UNKNOWN").strip().upper(),
@@ -117,7 +124,7 @@ def segment_context(row: Mapping[str, Any]) -> dict[str, str]:
         "time_before_game": str(
             row.get("time_before_game") or time_before_game_bucket(hours)
         ).strip().upper(),
-        "data_quality_tier": str(row.get("data_quality_tier") or "UNKNOWN").strip().upper(),
+        "data_quality_tier": str(tier or "UNKNOWN").strip().upper(),
     }
 
 
@@ -125,7 +132,8 @@ def _training_pair(row: Mapping[str, Any]) -> tuple[float, float, float] | None:
     result = str(row.get("win_loss_push") or "").strip().upper()
     market = _probability(row.get("market_consensus_prob"))
     independent = _probability(row.get("independent_model_prob"))
-    push = _probability(row.get("push_prob"))
+    push_val = row.get("push_prob")
+    push = _probability(push_val) if push_val not in (None, "") else 0.0
     if result not in {"W", "L"} or market is None or independent is None:
         return None
     if push is None or push >= 1.0:

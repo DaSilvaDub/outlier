@@ -49,6 +49,8 @@ def compute_full_kelly(b: float, p_win: float, p_lose: float) -> float:
 
 def _round_to_half(value: float) -> float:
     # Use decimal for strict half-up rounding
+    if not isfinite(value):
+        return 0.0
     d = Decimal(str(value)) * Decimal("2")
     rounded = d.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return float(rounded) / 2.0
@@ -64,10 +66,10 @@ def compute_sizing(
     min_edge: float = 0.02,
     max_edge: float = 0.10,
 ) -> Sizing:
-    if decimal_price <= 1.0:
-        implied_prob = 1.0 / decimal_price if decimal_price > 0 else 0.0
+    if decimal_price is None or not isfinite(decimal_price) or decimal_price <= 1.0:
+        implied_prob = 1.0 / decimal_price if (decimal_price is not None and isfinite(decimal_price) and decimal_price > 0) else 0.0
         return Sizing(
-            decimal_price=decimal_price,
+            decimal_price=decimal_price if decimal_price is not None else 0.0,
             model_prob=model_prob,
             push_prob=push_prob,
             implied_prob=implied_prob,
@@ -79,7 +81,7 @@ def compute_sizing(
 
     implied_prob = 1.0 / decimal_price
 
-    if model_prob is None:
+    if model_prob is None or not isfinite(model_prob) or not isfinite(push_prob):
         return Sizing(
             decimal_price=decimal_price,
             model_prob=model_prob,
@@ -98,7 +100,7 @@ def compute_sizing(
     # Probabilities must form a valid partition. A push_prob that overlaps p_win
     # (push_prob + model_prob > 1) drives p_lose negative and would otherwise
     # inflate edge/Kelly, so treat inconsistent inputs as ineligible.
-    if push_prob < 0 or p_lose < 0 or (p_win + p_lose) <= 0:
+    if not (0.0 <= p_win <= 1.0) or not (0.0 <= push_prob <= 1.0) or not (0.0 <= p_lose <= 1.0) or (p_win + p_lose) <= 0:
         return Sizing(
             decimal_price=decimal_price,
             model_prob=model_prob,

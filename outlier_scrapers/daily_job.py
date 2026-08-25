@@ -301,7 +301,8 @@ def _release_writer_lock(lock_dir: Path | None) -> None:
 def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:
     mpath = pack_dir / "manifest.json"
     tmp = mpath.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True, default=str)
     os.replace(tmp, mpath)
     logger.info("Wrote %s", mpath)
 
@@ -340,7 +341,12 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
             logger.error("Authentication failed. Aborting pipeline.")
             return 1
 
-    if not run_explicit_refresh(leagues):
+    refresh_ok = (
+        run_explicit_refresh(leagues, target_date=args.date)
+        if args.date
+        else run_explicit_refresh(leagues)
+    )
+    if not refresh_ok:
         logger.error("Refresh pipeline failed. Aborting.")
         return 1
 
@@ -348,7 +354,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         logger.error("Feed-health check failed. Aborting pipeline before pack build.")
         return 1
 
-    pack_dir = run_pack(leagues)
+    pack_dir = run_pack(leagues, target_date=args.date) if args.date else run_pack(leagues)
     if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
         return 1

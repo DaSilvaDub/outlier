@@ -52,7 +52,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _event_local_date(event: dict[str, Any]) -> date | None:
-    start_time_raw = event.get("scheduledTime")
+    start_keys = ("scheduledTime", "startTime", "startDate", "date", "scheduled")
+    start_time_raw = next((event.get(k) for k in start_keys if event.get(k)), None)
     if not start_time_raw:
         return None
     try:

@@ -27,6 +27,7 @@ from .normalizer import (
 from .paths import league_paths
 from .props import write_json
 from .registry import SportConfig, get_sport_config, normalize_market, supported_leagues
+from .utils import _decimal_to_american
 
 
 logger = logging.getLogger(__name__)
@@ -1082,7 +1083,7 @@ def _build_local_ev_records(
                 "calculated_ev_pct": ev * 100.0 if not is_push_capable else None,
                 "kelly_pct": kelly * 100.0 if not is_push_capable else None,
                 "devig_decimal": devig_decimal,
-                "devig_odds": devig_decimal, # devig_odds is typically expected to be decimal in the metrics
+                "devig_odds": _decimal_to_american(devig_decimal) if devig_decimal else None,
                 "vig_pct": (cons_f1 + cons_f2 - 1.0) * 100.0,
                 "width_pct": 0.0,
                 "sport_context": {

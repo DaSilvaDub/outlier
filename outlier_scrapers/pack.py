@@ -653,7 +653,8 @@ def _freeze_t30_originals(
         "lineups_by_league": lineups_by_league,
         "probable_pitchers_by_league": probable_pitchers_by_league,
     }
-    context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
+    with open(context_path, "w", encoding="utf-8") as f:
+        json.dump(context, f, indent=2, sort_keys=True)
 
 
 def _home_away(matchup: Any, team: Any) -> str:
@@ -970,6 +971,15 @@ def build_row(
             market_type = "GAMELINE"
     if is_excluded_market(market_token, market_type):
         return None
+    from outlier_scrapers.normalizer import ALLOWED_MLB_PLAYER_PROPS, ALLOWED_MLB_TEAM_PROPS
+
+    if sport.upper() == "MLB":
+        market_type_u = str(market_type or "").upper()
+        market_token_u = str(market_token or "").upper()
+        if (market_type_u == "PLAYER_PROP" or has_player) and market_token_u not in ALLOWED_MLB_PLAYER_PROPS:
+            return None
+        if market_type_u == "TEAM_PROP" and market_token_u not in ALLOWED_MLB_TEAM_PROPS:
+            return None
     scope = card.get("scope") or ref.get("scope")
     market_type_upper = str(market_type or "").upper()
     is_total_proposition = (
@@ -1015,6 +1025,23 @@ def build_row(
     matchup = card.get("matchup") or ref.get("matchup")
     team = card.get("team") or ref.get("team")
     opponent = card.get("opponent") or ref.get("opponent")
+
+    # Auto-infer missing team or opponent from matchup (AWAY @ HOME)
+    if matchup and " @ " in str(matchup):
+        matchup_parts = [p.strip() for p in str(matchup).split(" @ ", 1)]
+        if len(matchup_parts) == 2:
+            away_tok, home_tok = matchup_parts
+            if team and not opponent:
+                if team.upper() == away_tok.upper():
+                    opponent = home_tok
+                elif team.upper() == home_tok.upper():
+                    opponent = away_tok
+            elif opponent and not team:
+                if opponent.upper() == away_tok.upper():
+                    team = home_tok
+                elif opponent.upper() == home_tok.upper():
+                    team = away_tok
+
     # A row whose own team is unresolved must not carry a populated opponent:
     # the desk reads opponent-only context as the player's side (2026-07-18
     # Carleton row showed her matchup's other team as the only team column).
@@ -2449,13 +2476,11 @@ def write_pack(
         encoding="utf-8",
     )
     if coverage is not None:
-        (out_dir / "candidate_coverage.json").write_text(
-            json.dumps(coverage, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        with open(out_dir / "candidate_coverage.json", "w", encoding="utf-8") as f:
+            json.dump(coverage, f, indent=2, sort_keys=True)
     if feed_health_by_league is not None:
-        (out_dir / "feed_health.json").write_text(
-            json.dumps(feed_health_by_league, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        with open(out_dir / "feed_health.json", "w", encoding="utf-8") as f:
+            json.dump(feed_health_by_league, f, indent=2, sort_keys=True)
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:

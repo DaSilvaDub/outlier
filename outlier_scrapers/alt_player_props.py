@@ -34,7 +34,9 @@ MIN_L10_HIT_PCT = 75.0
 # "Hardrock R" is deliberately NOT an alias here: it's a distinctly-named
 # book in the raw feed, not a formatting variant of "Hard Rock" -- treating
 # similarly-named books as identical would risk misattributing a price.
-ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset({"hardrock"})
+ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset(
+    {"hardrock", "fanatics", "midnite", "draftkings", "novig"}
+)
 
 ALT_PLAYER_PROPS_HEADER = [
     "league",
@@ -83,7 +85,7 @@ def _number(value: Any) -> float | None:
     if value in (None, "", "-"):
         return None
     try:
-        return float(str(value).replace("-", "-"))
+        return float(str(value).replace("−", "-").strip())
     except (TypeError, ValueError):
         return None
 
@@ -218,7 +220,11 @@ def build_alt_player_props_board(
         )
 
     eligible.sort(
-        key=lambda row: (row["l10_pct"], row["season_pct"], -float(row["best_odds"])),
+        key=lambda row: (
+            row["l10_pct"],
+            row["season_pct"],
+            _american_to_decimal(row["best_odds"]) or 0.0,
+        ),
         reverse=True,
     )
     by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)

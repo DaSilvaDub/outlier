@@ -11,7 +11,7 @@ def quantize_down(units: float, increment: float = 0.5) -> float:
 
     if increment <= 0:
         raise ValueError("Increment must be positive")
-    return math.floor(units / increment) * increment
+    return math.floor((units + 1e-9) / increment) * increment
 
 
 @dataclass
