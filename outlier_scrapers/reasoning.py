@@ -117,7 +117,9 @@ def _report_fragment(envelope: verdicts.VerdictEnvelope) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def _status_fragment(envelope: verdicts.VerdictEnvelope, gate) -> bytes:
+def _status_fragment(
+    envelope: verdicts.VerdictEnvelope, gate, policy: VerdictPolicy
+) -> bytes:
     codes: dict[str, int] = {}
     for item in gate.violations:
         codes[item.code] = codes.get(item.code, 0) + 1
@@ -129,7 +131,7 @@ def _status_fragment(envelope: verdicts.VerdictEnvelope, gate) -> bytes:
         "bet_count": sum(1 for record in envelope.verdicts if record.verdict == "BET"),
         "rejected_count": sum(1 for item in gate.violations if item.severity == "reject"),
         "violation_codes": codes,
-        "mode": "shadow",
+        "mode": policy.mode,
         "repair_attempts": 0,
         "structured_output_native": True,
     }
@@ -180,7 +182,7 @@ def _publish_pass_a(
         ),
         violations_json=rc.write_violations(gate.violations),
         report_fragment=_report_fragment(parsed.envelope),
-        status_fragment=_status_fragment(parsed.envelope, gate),
+        status_fragment=_status_fragment(parsed.envelope, gate, verdict_policy),
     )
     rc.publish_pass(pack_dir, artifacts)
 
@@ -226,6 +228,7 @@ def run_reasoning(
             "game_totals_hash": game_totals_sha256,
             "team_totals_hash": team_totals_sha256,
             **rc.structured_request_fields(
+                pack_date=pack_dir.name,
                 candidates_sha256=candidates_sha256,
                 game_totals_sha256=game_totals_sha256,
                 team_totals_sha256=team_totals_sha256,

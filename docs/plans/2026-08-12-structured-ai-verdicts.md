@@ -606,6 +606,23 @@ shadow output is not the report — which is now stated as an invariant with a t
 Promotion from `shadow` to `enforce` is a separate, deliberate change gated on the grounded-Gemini
 probe being recorded and a review of at least one full slate of violation telemetry.
 
+**Implementation status (2026-08-25).** The mode semantics above are *not*
+implemented. `policy.mode` was loaded and validated, then never read: there is no
+demotion path, no `verdicts/shadow/` subtree, and `verdict_report.py` has no
+shadow refusal. A `reject` violation today fails the whole pass via `RunnerError`,
+which is neither the `enforce` behaviour described above (demote the record, keep
+the pass) nor the `shadow` behaviour (telemetry beside the existing report).
+
+The enforcement pass wired `mode` for its own new checks only —
+`ENFORCEMENT_CODES` in `verdict_gate.py` are `warn` under `shadow` and `reject`
+under `enforce`, via `enforcement_severity()`. That gives those checks a real
+observation window without touching any gate that already bites: no existing
+check was weakened, and `shadow` still fails a pass on a tampered line.
+
+Still outstanding for full mode support: record-level demotion to `STAND_DOWN`
+under `enforce`, the separate `verdicts/shadow/` publication tree, the
+`verdict_report.py` refusal, and keeping shadow rows out of `decisions.csv`.
+
 ## Repair loop and failure policy
 
 When validation returns violations, the runner retries up to `repair_attempts` (default 1) with the

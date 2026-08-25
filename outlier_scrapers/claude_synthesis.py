@@ -186,6 +186,7 @@ def run_claude_e(
                 "input_hashes": input_hashes,
                 "upstream_publication_ids": upstream_publication_ids,
                 **rc.structured_request_fields(
+                    pack_date=pack_dir.name,
                     candidates_sha256=candidates_sha256,
                     game_totals_sha256=game_totals_sha256,
                     team_totals_sha256=team_totals_sha256,

@@ -404,18 +404,46 @@ def test_build_repair_block_uses_authoritative_priced_line():
     assert "5.5" not in block
 
 
-def test_structured_request_fields_include_three_hashes_and_schema():
+def test_structured_request_fields_include_pack_date_hashes_and_schema():
     extra = runner_common.structured_request_fields(
+        pack_date="2026-08-25",
         candidates_sha256="c" * 64,
         game_totals_sha256="g" * 64,
         team_totals_sha256="t" * 64,
     )
+    assert extra["pack_date"] == "2026-08-25"
     assert extra["candidates_sha256"] == "c" * 64
     assert extra["game_totals_sha256"] == "g" * 64
     assert extra["team_totals_sha256"] == "t" * 64
     assert extra["schema_version"] == "1.0"
     hashed = runner_common.compute_request_hash({**{"model": "m"}, **extra})
     assert len(hashed) == 64
+
+
+def test_request_hash_changes_with_pack_date_alone():
+    """Copying a pack to a new date leaves every hash identical, so without the
+    date in the request hash refresh_if_stale would skip the required re-run."""
+    common = {
+        "candidates_sha256": "c" * 64,
+        "game_totals_sha256": "g" * 64,
+        "team_totals_sha256": "t" * 64,
+    }
+    first = runner_common.compute_request_hash(
+        runner_common.structured_request_fields(pack_date="2026-08-24", **common)
+    )
+    second = runner_common.compute_request_hash(
+        runner_common.structured_request_fields(pack_date="2026-08-25", **common)
+    )
+    assert first != second
+
+
+def test_structured_request_fields_requires_pack_date():
+    with pytest.raises(TypeError):
+        runner_common.structured_request_fields(  # type: ignore[call-arg]
+            candidates_sha256="c" * 64,
+            game_totals_sha256="g" * 64,
+            team_totals_sha256="t" * 64,
+        )
 
 
 def test_publication_id_covers_all_four_files():
@@ -484,3 +512,186 @@ def test_crash_before_pointer_swap_leaves_previous_current(tmp_path):
     current = json.loads((parent / "current.json").read_text(encoding="utf-8"))
     assert current["publication_id"] == first.publication_id
     assert not (parent / new_id).exists()
+
+
+# ---------------------------------------------------------------------------
+# The envelope's declared pass must match the pass being published.
+# publish_verdict_pass needs no provider SDK, so this runs anywhere.
+# ---------------------------------------------------------------------------
+
+
+def _publishable_pack(tmp_path):
+    from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    pack_dir.mkdir(parents=True)
+    with open(pack_dir / "candidates.csv", "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=pack.CANDIDATES_HEADER)
+        writer.writeheader()
+        row = {field: "" for field in pack.CANDIDATES_HEADER}
+        row.update(
+            {
+                "sport": "MLB",
+                "event_id": "evt1",
+                "_event_starts_at": "2099-12-31T00:00:00Z",
+                "market_id": "mkt1",
+                "outcome_id": "out1",
+                "market_type": "PLAYER_PROP",
+                "market_label": "SO",
+                "selection": "Player One Over 5.5",
+                "line": "5.5",
+                "price": "-110",
+                "book": "FD",
+                "actionable": "true",
+                "board": "A",
+                "max_units": "2.0",
+                "recommended_units_pre_news": "1.5",
+            }
+        )
+        writer.writerow(row)
+    with open(pack_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as fh:
+        csv.DictWriter(fh, fieldnames=GAME_TOTALS_HEADER).writeheader()
+    return pack_dir
+
+
+def _verdict_envelope_json(pack_dir, declared_pass: str) -> str:
+    from outlier_scrapers import pack_index
+
+    index = pack_index.build_pack_index(pack_dir)
+    return json.dumps(
+        {
+            "schema_version": "1.0",
+            "pass": declared_pass,
+            "pack_date": "2026-08-14",
+            "candidates_sha256": index.candidates_sha256,
+            "game_totals_sha256": index.game_totals_sha256,
+            "team_totals_sha256": index.team_totals_sha256,
+            "verdicts": [
+                {
+                    "market_id": "mkt1",
+                    "outcome_id": "out1",
+                    "stream": "candidates",
+                    "selection": "Player One Over 5.5",
+                    "line": "5.5",
+                    "price": "-110",
+                    "book": "FD",
+                    "verdict": "PASS",
+                    "confidence": 0.5,
+                    "recommended_units": 0,
+                    "evidence": [],
+                    "contradictions": [],
+                    "kill_triggers": [],
+                    "rejection_reasons": ["thin_edge"],
+                }
+            ],
+            "slate_notes": [],
+            "needs": [],
+        }
+    )
+
+
+def _publish(pack_dir, output_text, pass_):
+    return runner_common.publish_verdict_pass(
+        pack_dir,
+        output_text,
+        pass_=pass_,
+        request_sha256="r" * 64,
+        candidates_sha256="c" * 64,
+        game_totals_sha256="g" * 64,
+        team_totals_sha256="t" * 64,
+        model="test-model",
+    )
+
+
+def test_publish_rejects_an_envelope_declaring_another_pass(tmp_path, monkeypatch):
+    """Nothing compared the envelope's `pass` to the invoking runner, so an A
+    response tagged "D" would have published under D and corrupted E's citations."""
+    monkeypatch.setattr(runner_common_paths(), "PROJECT_ROOT", tmp_path)
+    pack_dir = _publishable_pack(tmp_path)
+    output = _verdict_envelope_json(pack_dir, declared_pass="D")
+
+    with pytest.raises(runner_common.RunnerError) as excinfo:
+        _publish(pack_dir, output, "A")
+    assert "declares pass 'D'" in str(excinfo.value)
+    assert not (pack_dir / "verdicts" / "A").exists()
+
+
+def test_publish_accepts_a_matching_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_common_paths(), "PROJECT_ROOT", tmp_path)
+    pack_dir = _publishable_pack(tmp_path)
+    result = _publish(pack_dir, _verdict_envelope_json(pack_dir, "A"), "A")
+    assert result.publication_id
+    assert (pack_dir / "verdicts" / "A" / result.publication_id / "verdicts.json").is_file()
+
+
+def runner_common_paths():
+    from outlier_scrapers import paths
+
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# E must not be handed upstream records the gate rejected.
+# ---------------------------------------------------------------------------
+
+
+def _publish_upstream(pack_dir, pass_name, records, violations):
+    """Write a publication tree by hand: verdicts.json plus its violations.json."""
+    pub_id = f"pub_{pass_name.lower()}"
+    dest = pack_dir / "verdicts" / pass_name / pub_id
+    dest.mkdir(parents=True)
+    (dest / "verdicts.json").write_text(
+        json.dumps({"pass": pass_name, "verdicts": records}), encoding="utf-8"
+    )
+    (dest / "violations.json").write_text(json.dumps(violations), encoding="utf-8")
+    (pack_dir / "verdicts" / pass_name / "current.json").write_text(
+        json.dumps({"publication_id": pub_id}), encoding="utf-8"
+    )
+    return pub_id
+
+
+def _upstream_record(outcome_id, record_id, verdict="BET"):
+    return {
+        "record_id": record_id,
+        "outcome_id": outcome_id,
+        "verdict": verdict,
+        "recommended_units": 1.0,
+        "claim": "",
+        "evidence": [],
+    }
+
+
+def test_rejected_upstream_records_are_hidden_from_pass_e(tmp_path):
+    """A pass publishes when its reject ratio is under policy, so a publication
+    can carry individually rejected records. E must not cite one as backing."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    pack_dir.mkdir(parents=True)
+    _publish_upstream(
+        pack_dir,
+        "A",
+        [_upstream_record("out_ok", "rec_ok"), _upstream_record("out_bad", "rec_bad")],
+        [{"code": "line_tampered", "outcome_id": "out_bad", "severity": "reject"}],
+    )
+
+    pubs = runner_common.load_current_publications(pack_dir)
+    pub = pubs["A"]
+    assert "out_ok" in pub.bet_outcome_ids
+    assert "out_bad" not in pub.bet_outcome_ids, "rejected outcome still offered to E"
+    assert "rec_bad" not in pub.record_ids
+    assert "out_bad" not in pub.stakes
+
+
+def test_warn_only_violations_do_not_hide_an_upstream_record(tmp_path):
+    """Only reject-severity violations disqualify a record; warns are telemetry."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    pack_dir.mkdir(parents=True)
+    _publish_upstream(
+        pack_dir,
+        "A",
+        [_upstream_record("out_ok", "rec_ok")],
+        [{"code": "bet_missing_evidence", "outcome_id": "out_ok", "severity": "warn"}],
+    )
+
+    pub = runner_common.load_current_publications(pack_dir)["A"]
+    assert "out_ok" in pub.bet_outcome_ids
+    assert "rec_ok" in pub.record_ids

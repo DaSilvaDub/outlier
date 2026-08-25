@@ -326,6 +326,7 @@ def run_c_research(
                 "game_totals_hash": game_totals_sha256,
                 "team_totals_hash": team_totals_sha256,
                 **rc.structured_request_fields(
+                    pack_date=pack_dir.name,
                     candidates_sha256=candidates_sha256,
                     game_totals_sha256=game_totals_sha256,
                     team_totals_sha256=team_totals_sha256,

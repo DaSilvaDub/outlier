@@ -72,6 +72,9 @@ def totals_row(*, kind=TOTAL_KIND_GAME, **overrides):
             "line": "8.5",
             "price": "-110",
             "book": "FD",
+            # game_totals.py always writes a literal here; a blank would mean a
+            # malformed row, which actionable_not_asserted now catches.
+            "actionable": "true",
         }
     )
     row.update(overrides)
@@ -122,7 +125,22 @@ def _verdict_dict(index, **record_overrides):
         "verdict": "BET",
         "confidence": 0.72,
         "recommended_units": 1.0,
-        "evidence": [],
+        # A BET must carry evidence (bet_missing_evidence), and pass A is
+        # pack-only so the item must be kind "pack".
+        "evidence": [
+            {
+                "claim": "Pack edge supports this side.",
+                "kind": "pack",
+                "subject_type": "market",
+                "player_id": None,
+                "team": None,
+                "market_id": "mkt1",
+                "outcome_id": "out1",
+                "source": None,
+                "tier": None,
+                "timestamp": None,
+            }
+        ],
         "contradictions": [],
         "kill_triggers": [],
         "rejection_reasons": [],
@@ -1294,3 +1312,163 @@ def test_e_bet_citing_a_matching_bet_record_is_clean(tmp_path):
         rec_a=verdict_gate.UpstreamRecord(outcome_id="out1", verdict="BET", stake=2.0)
     )
     assert gate(_reconciliation(index, CITE_A), index, current_publications=pubs).violations == ()
+
+
+# ---------------------------------------------------------------------------
+# Enforcement checks: the gate now enforces rules the prompts already stated.
+# Each is severity-gated on policy.mode -- telemetry in shadow, reject in
+# enforce -- so landing them changes no pass/fail behaviour until the desk is
+# deliberately promoted.
+# ---------------------------------------------------------------------------
+
+ENFORCE = verdict_policy.VerdictPolicy(mode="enforce")
+SHADOW = verdict_policy.VerdictPolicy(mode="shadow")
+
+NO_EVIDENCE: list = []
+EXTERNAL_ITEM = {
+    # Deliberately not injury/lineup wording: that trips the separate
+    # unsupported_injury_claim gate, which needs a bound player_id.
+    "claim": "Forecast wind favours the over at this park.",
+    "kind": "external",
+    "subject_type": "market",
+    "player_id": None,
+    "team": None,
+    "market_id": "mkt1",
+    "outcome_id": "out1",
+    "source": "MLB.com",
+    "tier": 1,
+    "timestamp": None,  # filled per-test
+}
+
+
+def _external(**overrides):
+    item = dict(EXTERNAL_ITEM)
+    # setdefault would not fire: the key exists with an explicit None.
+    item["timestamp"] = (NOW - timedelta(hours=1)).isoformat()
+    item.update(overrides)
+    return item
+
+
+def _envelope(index, *, pass_="A", **record_overrides):
+    raw = _verdict_dict(index, **record_overrides)
+    raw["pass"] = pass_
+    return verdicts.parse_envelope(json.dumps(raw), "verdict")
+
+
+def test_bet_without_evidence_is_flagged(tmp_path):
+    index = build_index(tmp_path)
+    result = gate(_envelope(index, evidence=NO_EVIDENCE), index, policy=ENFORCE)
+    only_code(result, "bet_missing_evidence")
+
+
+def test_non_bet_without_evidence_is_fine(tmp_path):
+    """Only a BET has to justify itself; a PASS documents a rejection."""
+    index = build_index(tmp_path)
+    result = gate(
+        _envelope(index, verdict="PASS", recommended_units=0, evidence=NO_EVIDENCE),
+        index,
+        policy=ENFORCE,
+    )
+    assert result.violations == ()
+
+
+@pytest.mark.parametrize("pass_", ["A", "D"])
+def test_pack_only_pass_may_not_claim_external_evidence(tmp_path, pass_):
+    """A and D have no web tool, so an external item is fabricated provenance."""
+    index = build_index(tmp_path)
+    overrides = {"evidence": [_external()]}
+    if pass_ == "D":
+        overrides["contradictions"] = [{"claim": "Thin sample.", "severity": "minor"}]
+    result = gate(_envelope(index, pass_=pass_, **overrides), index, policy=ENFORCE)
+    only_code(result, "external_evidence_in_pack_only_pass")
+
+
+@pytest.mark.parametrize(
+    "bad, missing",
+    [
+        ({"source": ""}, "source"),
+        ({"tier": None}, "tier"),
+        ({"tier": 9}, "tier"),
+        ({"timestamp": None}, "timestamp"),
+        ({"timestamp": "not-a-date"}, "timestamp"),
+    ],
+)
+def test_external_evidence_needs_source_tier_and_fresh_timestamp(tmp_path, bad, missing):
+    """Provenance used to be checked only when an injury keyword appeared."""
+    index = build_index(tmp_path)
+    result = gate(
+        _envelope(index, pass_="B", evidence=[_external(**bad)]), index, policy=ENFORCE
+    )
+    only_code(result, "external_evidence_unsourced")
+    assert missing in result.violations[0].detail
+
+
+def test_external_evidence_outside_the_freshness_window_is_flagged(tmp_path):
+    index = build_index(tmp_path)
+    stale = (NOW - timedelta(hours=48)).isoformat()
+    result = gate(
+        _envelope(index, pass_="B", evidence=[_external(timestamp=stale)]),
+        index,
+        policy=ENFORCE,
+    )
+    only_code(result, "external_evidence_unsourced")
+
+
+def test_well_sourced_external_evidence_on_a_web_pass_is_clean(tmp_path):
+    index = build_index(tmp_path)
+    result = gate(_envelope(index, pass_="B", evidence=[_external()]), index, policy=ENFORCE)
+    assert result.violations == ()
+
+
+def test_pass_d_bet_without_a_contradiction_is_flagged(tmp_path):
+    """Red-teaming is D's whole job; a BET it cannot argue against wasn't."""
+    index = build_index(tmp_path)
+    result = gate(_envelope(index, pass_="D", contradictions=[]), index, policy=ENFORCE)
+    only_code(result, "bet_missing_contradictions")
+
+
+def test_pass_a_bet_without_a_contradiction_is_fine(tmp_path):
+    index = build_index(tmp_path)
+    result = gate(_envelope(index, pass_="A", contradictions=[]), index, policy=ENFORCE)
+    assert result.violations == ()
+
+
+def test_blank_actionable_fails_closed(tmp_path):
+    index = build_index(tmp_path, candidates=[candidate_row(actionable="")])
+    result = gate(parse_verdict(index), index, policy=ENFORCE)
+    only_code(result, "actionable_not_asserted")
+
+
+# --- mode gating -----------------------------------------------------------
+
+
+ENFORCEMENT_CASES = [
+    ("bet_missing_evidence", {"evidence": NO_EVIDENCE}, "A"),
+    ("bet_missing_contradictions", {"contradictions": []}, "D"),
+    ("external_evidence_in_pack_only_pass", {"evidence": [_external()]}, "A"),
+]
+
+
+@pytest.mark.parametrize("code, overrides, pass_", ENFORCEMENT_CASES)
+def test_enforcement_checks_are_warnings_in_shadow_mode(tmp_path, code, overrides, pass_):
+    """Same violation list in both modes; only severity and pass_fails differ."""
+    index = build_index(tmp_path)
+    envelope = _envelope(index, pass_=pass_, **overrides)
+
+    shadow = gate(envelope, index, policy=SHADOW)
+    assert [v.code for v in shadow.violations] == [code]
+    assert shadow.violations[0].severity == "warn"
+    assert shadow.pass_fails is False, "shadow mode must not fail a pass"
+
+    enforced = gate(envelope, index, policy=ENFORCE)
+    assert [v.code for v in enforced.violations] == [code]
+    assert enforced.violations[0].severity == "reject"
+
+
+def test_shadow_mode_does_not_weaken_existing_gates(tmp_path):
+    """Mode gates only the new checks; a tampered line still fails in shadow."""
+    index = build_index(tmp_path)
+    result = gate(parse_verdict(index, line="9.9"), index, policy=SHADOW)
+    assert "line_tampered" in codes(result)
+    assert result.violations[0].severity == "reject"
+    assert result.pass_fails is True
