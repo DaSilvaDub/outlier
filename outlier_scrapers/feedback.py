@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import sqlite3
 import subprocess
 from collections import defaultdict
@@ -2427,10 +2428,25 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 s.time_before_game, s.market_type, s.model_prob_source, s.decimal_price,
                 s.implied_prob, s.board, s.selected, s.signal_flags,
                 s.hit_rate_component, s.insight_component,
-                s.movement_component, s.orf_component
+                s.movement_component, s.orf_component,
+                COALESCE(m.source, '') AS pack_source,
+                COALESCE(m.pack_path, '') AS pack_source_path,
+                COALESCE(m.pack_timestamp, '') AS pack_source_timestamp
             FROM settlements t
             JOIN decisions d ON d.decision_id = t.decision_id
             JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+            LEFT JOIN (
+                SELECT
+                    snapshot_id, source, pack_path, pack_timestamp,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY snapshot_id
+                        ORDER BY
+                            CASE WHEN COALESCE(source, '') = '' THEN 1 ELSE 0 END,
+                            pack_timestamp,
+                            pack_capture_id
+                    ) AS vintage_rank
+                FROM pack_snapshot_memberships
+            ) m ON m.snapshot_id = s.snapshot_id AND m.vintage_rank = 1
             ORDER BY s.captured_at, d.decision_id
             """
         )
@@ -2592,6 +2608,79 @@ GROUP_METRIC_FIELDS = [
     "avg_clv_price",
     "would_have_flat_pnl",
 ]
+
+
+# Pack-lane -> pack-type labels.  ``pack_snapshot_memberships.source`` records
+# which pack CSV a snapshot was captured from; these are the lanes that reach
+# the ledger today.  Lanes that are generated but never captured are reported as
+# coverage gaps by ``outlier_scrapers.pack_accuracy`` rather than guessed at.
+PACK_SOURCE_TYPES = {
+    "game_totals": "GAME_TOTAL",
+    "team_totals": "TEAM_TOTAL",
+    "ultimate_alt": "ULTIMATE_ALT",
+    "alt_player_props": "ALT_PLAYER_PROP",
+    "alt_team_totals": "ALT_TEAM_TOTAL",
+    "alt_spreads": "ALT_SPREAD",
+    "alt_bankroll_props": "ALT_BANKROLL_PROP",
+}
+
+PACK_TYPE_UNCLASSIFIED = "UNCLASSIFIED"
+
+_PLAYER_SELECTION_RE = re.compile(
+    r"(.+?)\s+-\s+(.+?)\s+(OVER|UNDER)\s+(-?\d+(?:\.\d+)?)", re.IGNORECASE
+)
+_TEAM_TOTAL_SELECTION_RE = re.compile(r"\bTeam Total\b", re.IGNORECASE)
+_GAME_TOTAL_SELECTION_RE = re.compile(r"\b(?:Total O/U|TOTAL)\s+(?:OVER|UNDER)\b", re.IGNORECASE)
+_SPREAD_SELECTION_RE = re.compile(r"\b(?:Spread|Run Line)\s+(?:HOME|AWAY)\b", re.IGNORECASE)
+_MONEYLINE_SELECTION_RE = re.compile(r"\bMoney\s*Line\s+(?:HOME|AWAY)\b", re.IGNORECASE)
+
+
+def classify_pack_type(row: dict[str, Any]) -> str:
+    """Return the pack lane a graded row belongs to.
+
+    The capture lane recorded on ``pack_snapshot_memberships`` is authoritative
+    when present.  Rows captured before lane tracking existed (or through the
+    generic ``opportunities``/``candidates`` lane, which carries every market
+    family at once) are classified from the same selection grammar
+    ``outlier_scrapers.results`` grades with, so a pack type never disagrees
+    with how the row was settled.
+    """
+
+    source = _text(row.get("pack_source")).strip().lower()
+    mapped = PACK_SOURCE_TYPES.get(source)
+    if mapped:
+        return mapped
+
+    selection = _text(row.get("selection"))
+    market_type = _text(row.get("market_type")).replace("_", "").upper()
+    if _PLAYER_SELECTION_RE.fullmatch(selection.strip()) and market_type not in {
+        "GAMELINE",
+        "TEAMPROP",
+    }:
+        return "PLAYER_PROP"
+    if _TEAM_TOTAL_SELECTION_RE.search(selection):
+        return "TEAM_TOTAL"
+    if _MONEYLINE_SELECTION_RE.search(selection):
+        return "MONEYLINE"
+    if _SPREAD_SELECTION_RE.search(selection):
+        return "SPREAD"
+    if _GAME_TOTAL_SELECTION_RE.search(selection):
+        return "GAME_TOTAL"
+    if market_type == "PLAYERPROP":
+        return "PLAYER_PROP"
+    if market_type == "TEAMPROP":
+        return "TEAM_PROP"
+    if market_type == "GAMELINE":
+        return "GAMELINE_OTHER"
+    return PACK_TYPE_UNCLASSIFIED
+
+
+def with_pack_types(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Annotate joined rows with their ``pack_type`` in place."""
+
+    for row in rows:
+        row["pack_type"] = classify_pack_type(row)
+    return rows
 
 
 def _grouped(rows: list[dict[str, Any]], field: str, label: str) -> list[dict[str, Any]]:
@@ -3247,7 +3336,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     with _connect(Path(db_path)) as conn:
-        rows = _joined_rows(conn)
+        rows = with_pack_types(_joined_rows(conn))
         decision_coverage = _decision_coverage(conn)
         coverage = {
             "market_snapshots": conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0],
@@ -3284,6 +3373,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         for row in probability_metrics
     ]
     market_type = _grouped(rows, "market_type", "market_type")
+    pack_type = _grouped(rows, "pack_type", "pack_type")
     edge_buckets = _bucketed(rows, "edge", "edge_bucket", _edge_bucket)
     odds_ranges = _bucketed(rows, "price", "odds_range", _odds_bucket)
     books = _grouped(rows, "book", "book")
@@ -3321,6 +3411,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     )
     for filename, label, table in (
         ("market_type.csv", "market_type", market_type),
+        ("pack_type.csv", "pack_type", pack_type),
         ("edge_buckets.csv", "edge_bucket", edge_buckets),
         ("odds_ranges.csv", "odds_range", odds_ranges),
         ("books.csv", "book", books),

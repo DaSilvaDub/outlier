@@ -172,8 +172,11 @@ whether the pass saved or cost a bet.
 - `report.md` and `summary.json`
 - `probability_metrics.csv`, `calibration_curves.csv`, and
   `expected_vs_actual.csv`
-- `market_type.csv`, `edge_buckets.csv`, `odds_ranges.csv`, `books.csv`,
-  `leagues.csv`, and `signal_flags.csv`
+- `market_type.csv`, `pack_type.csv`, `edge_buckets.csv`, `odds_ranges.csv`,
+  `books.csv`, `leagues.csv`, and `signal_flags.csv`. `pack_type.csv` splits the
+  same settled rows by the pack lane they came from, using the capture `source`
+  on `pack_snapshot_memberships` when present and the settlement selection
+  grammar otherwise, so a lane running cold cannot hide inside an aggregate.
 - `play_vs_stand_down.csv`, `decision_coverage.csv`, and `model_performance.csv`.
   ROI and hit-rate tables are settled-only; `decision_coverage.csv` separately
   reports total, settled, unsettled, and missing-event-time PLAY counts.
@@ -187,6 +190,46 @@ whether the pass saved or cost a bet.
 The report is useful immediately as a market-derived baseline. Learned Board B
 weights and an independent probability model should be fit only after the
 settled sample is large enough and should be validated out of sample.
+
+## Per-pack accuracy audit
+
+`market_type.csv` answers "is the desk calibrated" across the whole ledger.
+`python -m outlier_scrapers.pack_accuracy` answers the narrower daily question:
+how did *this* pack do, lane by lane, and which of its lanes are not measured at
+all.
+
+```bash
+python -m outlier_scrapers.pack_accuracy --date 2026-08-25 --db calibration/feedback.sqlite3
+python -m outlier_scrapers.pack_accuracy --pack packs/2026-08-25 --output calibration/reports/pack_accuracy/2026-08-25
+```
+
+It writes `report.md`, `pack_type_accuracy.csv`, `lane_coverage.csv`, and
+`summary.json`. Two things it deliberately does *not* do:
+
+- It never grades anything itself. Settlement stays in
+  `outlier_scrapers.results`; this audit only reads what that collector wrote,
+  so a pack type can never disagree with how its rows were settled.
+- It never reports an unmeasured lane as a clean sheet. A lane that a pack
+  generated but that has no ledger capture path is reported as `NO_COVERAGE`
+  with a warning, because "0 rows captured" and "0-for-0" are indistinguishable
+  in every other report. `--fail-on-gap` exits non-zero when any such lane has
+  rows, which is the check to wire into a nightly job.
+
+Lane coverage today: `opportunities`/`candidates`, `game_totals`, `team_totals`,
+and `ultimate_alt` reach the ledger. `alt_player_props`, `alt_team_totals`, the
+`*_alt_spreads` and `*_alt_bankroll_props` lanes, and every `*_parlays` lane do
+not — `feedback._load_pack_rows` does not read them. Those CSVs also lack the
+`selection` column that `_snapshot_from_pack_row` requires and that
+`results._grade_row` parses, so capturing them needs a canonical selection
+string synthesized at write time, not just an extra filename in the loader.
+
+Pack-type status values are `ON_TRACK` (actual hit rate within `--tolerance` of
+the model's expected hit rate), `NEEDS_ADJUSTMENT` (model overconfident by more
+than the tolerance, or negative ROI with no model probability to compare),
+`AHEAD_OF_MODEL`, `INSUFFICIENT_DATA` (below `--min-samples`, default 20), and
+`NO_SETTLEMENTS`. A single slate will almost always read `INSUFFICIENT_DATA` per
+lane; run the audit across a date range of packs before treating any lane
+verdict as a signal.
 
 ## Closing-line/CLV capture
 
