@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -137,6 +137,10 @@ def test_rejected_count_from_snapshot(tmp_path):
     assert verdict_store.rejected_count_from_snapshot(pack_dir) == 1
 
 
+def _future() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
+
+
 def _authoritative_pack(tmp_path):
     pack_dir = tmp_path / "packs" / "2026-08-25"
     pack_dir.mkdir(parents=True)
@@ -145,7 +149,7 @@ def _authoritative_pack(tmp_path):
         {
             "sport": "MLB",
             "event_id": "event-1",
-            "_event_starts_at": "2026-08-25T23:30:00+00:00",
+            "_event_starts_at": _future(),
             "as_of": "2026-08-25T12:00:00+00:00",
             "market_id": "market-1",
             "outcome_id": "outcome-1",
