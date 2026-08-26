@@ -3075,6 +3075,16 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 raise ValidationError(
                     "Incomplete published T-30 original snapshot: refusing to rebuild the pack."
                 )
+            sidecar_path = out_dir / "portfolio_risk.json"
+            if sidecar_path.exists():
+                try:
+                    with open(sidecar_path, "r", encoding="utf-8") as sf:
+                        existing = json.load(sf)
+                        if existing.get("mode") == "enforce":
+                            logger.info("Enforce pack already exists. Skipping rebuild.")
+                            return out_dir
+                except Exception:
+                    pass
             shutil.copytree(out_dir, staging_dir)
         conn = None
         backup_dir: Path | None = None
@@ -3109,7 +3119,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
             if published:
                 _restore_published_pack(out_dir, backup_dir)
             if staging_dir.exists():
-                shutil.rmtree(staging_dir)
+                _retry_rmtree(staging_dir)
             raise
         finally:
             if conn is not None:

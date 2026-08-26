@@ -404,7 +404,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
             logger.error("Authentication failed. Aborting pipeline.")
             return 1
 
-    if not run_explicit_refresh(leagues):
+    if not run_explicit_refresh(leagues, target_date=args.date):
         logger.error("Refresh pipeline failed. Aborting.")
         return 1
 
@@ -540,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Bypass the T-30 timing and already-completed gates.",
     )
     args = parser.parse_args(argv)
+
+    if not args.date:
+        args.date = datetime.now().astimezone().date().isoformat()
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
 
