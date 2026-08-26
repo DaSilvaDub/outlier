@@ -91,8 +91,8 @@ class OutlierApiClient:
         *,
         storage_state: dict[str, Any] | None = None,
         opener: Callable[..., Any] = urlopen,
-        max_retries: int = 3,
-        timeout: int = 45,
+        max_retries: int = 5,
+        timeout: int = 60,
         base_url: str = API_BASE_URL,
     ) -> None:
         self.storage_state = storage_state if storage_state is not None else load_storage_state()
@@ -125,7 +125,7 @@ class OutlierApiClient:
                 if exc.code not in RETRYABLE_STATUS_CODES or attempt >= self.max_retries:
                     raise OutlierApiError(_safe_http_error_message(exc, url)) from exc
                 time.sleep(0.5 * attempt)
-            except URLError as exc:
+            except (URLError, OSError) as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     raise OutlierApiError(f"Network error for {url}: {exc}") from exc
