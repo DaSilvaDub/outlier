@@ -543,6 +543,7 @@ def _pending_rows(
     if not league_tokens:
         return []
     placeholders = ",".join("?" for _ in league_tokens)
+    parlay_market_type = feedback.PARLAY_MARKET_TYPE
     query = f"""
         SELECT d.decision_id, d.snapshot_id, s.sport, s.event_id, s.market_id,
                s.outcome_id, s.selection, s.line, s.price, s.book, s.player_id,
@@ -552,6 +553,9 @@ def _pending_rows(
         LEFT JOIN settlements x ON x.decision_id = d.decision_id
         WHERE x.settlement_id IS NULL AND UPPER(s.sport) IN ({placeholders})
           AND s.event_starts_at >= ? AND s.event_starts_at <= ?
+          -- A parlay spans events and settles from its legs, never from one
+          -- box score.  feedback.settle_parlays owns it.
+          AND UPPER(COALESCE(s.market_type, '')) <> '{parlay_market_type}'
         ORDER BY s.event_starts_at, s.event_id, s.market_id
     """
     return conn.execute(

@@ -12,6 +12,7 @@ import math
 from itertools import combinations
 from typing import Any, Iterable
 
+from outlier_scrapers.parlay_legs import encode_legs
 from outlier_scrapers.utils import _american_to_decimal, _decimal_to_american
 
 
@@ -73,6 +74,8 @@ ULTIMATE_ALT_PARLAYS_HEADER = [
     "rank",
     "num_legs",
     "legs",
+    # Machine-readable leg identity; "legs" above is display text only.
+    "legs_json",
     "alt_types",
     "event_ids",
     "combined_decimal",
@@ -369,6 +372,7 @@ def build_ultimate_alt_parlays(board: Iterable[dict[str, Any]]) -> list[dict[str
                     "rank": "",
                     "num_legs": size,
                     "legs": " | ".join(str(leg.get("selection")) for leg in legs),
+                    "legs_json": encode_legs(legs),
                     "alt_types": ",".join(sorted(alt_types)),
                     "event_ids": ",".join(event_ids),
                     "combined_decimal": round(combined_decimal, 4),

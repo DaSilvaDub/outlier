@@ -34,6 +34,7 @@ from outlier_scrapers.utils import (
     _price_text,
 )
 from outlier_scrapers.normalizer import implied_probability, percent_number
+from outlier_scrapers.parlay_legs import encode_legs
 from outlier_scrapers.paths import league_paths
 from outlier_scrapers.registry import supported_leagues
 from outlier_scrapers.team_totals import (
@@ -83,6 +84,8 @@ ALT_TEAM_TOTAL_PARLAYS_HEADER = [
     "league",
     "num_legs",
     "legs",
+    # Machine-readable leg identity; "legs" above is display text only.
+    "legs_json",
     "event_ids",
     "is_sgp",
     "combined_decimal",
@@ -345,6 +348,7 @@ def build_alt_team_total_parlays(
                 "league": combo[0]["league"],
                 "num_legs": len(combo),
                 "legs": " + ".join(_leg_text(leg) for leg in combo),
+                "legs_json": encode_legs(combo),
                 "event_ids": ",".join(dict.fromkeys(event_ids)),
                 "is_sgp": "true" if is_sgp else "false",
                 "combined_decimal": round(combined_decimal, 4),

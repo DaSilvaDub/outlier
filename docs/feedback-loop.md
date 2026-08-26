@@ -26,6 +26,11 @@ top-N ranking step and then captures the pack into
   pack path, pack timestamp, seeded verdict, units, and selection/actionability
   state when the same source quote is reused in a later pack. The legacy
   `market_snapshots.pack_path` remains the first-seen path and is never reassigned.
+- `parlay_legs` (child of `decisions`): the ordered legs of a captured parlay,
+  each linked to the leg's own `market_snapshots` row. Primary key
+  `(parlay_decision_id, leg_index)`. This is what lets a parlay settle from its
+  legs; a recovered ledger that lost it could never settle one again, so
+  `recover_corrupted_database` restores it alongside the other tables.
 - `verdict_records` (child of `decisions`): one row per structured envelope
   record, primary key `(decision_id, pass, publication_id, record_id)`. This is
   where C's multiple findings per `outcome_id` and forced-rerun publications
@@ -221,10 +226,10 @@ Lane coverage today: `opportunities`/`candidates`, `game_totals`, `team_totals`,
 The capture `source` is the CSV's own stem, so the MLB and WNBA boards stay
 distinguishable in `lane_coverage.csv` while both roll up to one pack type.
 
-Only the `*_parlays` lanes are uncaptured, and that is by design rather than a
-gap: a parlay grades only once every leg settles, and a cross-game parlay's legs
-sit on different events, which `outlier_scrapers.results` grades one at a time.
-They are reported as `NOT_GRADEABLE`, which `--fail-on-gap` ignores.
+The `*_parlays` lanes are captured and settled too — see **Parlay settlement**
+below. Every lane a pack generates now has a capture path, so any
+`NO_COVERAGE` row in `lane_coverage.csv` is a real regression rather than a
+known limitation.
 
 ### How alt boards are captured
 
@@ -261,6 +266,46 @@ One related fix went in with the lanes: `results._grade_row` used to require a
 numeric line before grading anything, which meant **no moneyline ever settled** —
 a moneyline has no line. The line is now required only by the branches that
 actually use one (player props, totals, team totals, spreads).
+
+### Parlay settlement
+
+A parlay is never graded against a game. Every parlay leg is drawn from a
+singles board that capture already stores, so a leg resolves to a snapshot that
+`outlier_scrapers.results` grades through the ordinary single-row path; the
+parlay itself settles by combining what its legs did.
+
+Each parlay writer emits a `legs_json` column carrying the
+event/market/outcome ids of its legs, alongside the existing human-readable
+`legs` / `leg_N_*` columns (those are display text and are left untouched).
+Capture runs in two phases — singles first, then parlays — so each leg resolves
+to the snapshot the same capture just created, recorded in the `parlay_legs`
+table. Settlement is `feedback.settle_parlays`, wired into `nightly_audit.ps1`:
+
+```bash
+python -m outlier_scrapers.feedback --db calibration/feedback.sqlite3 settle-parlays
+```
+
+The rules that keep it honest:
+
+- **A parlay with any unsettled leg stays pending.** It is never graded on a
+  subset of its legs.
+- **A parlay whose legs cannot all be resolved is never captured.** One missing
+  leg makes it ungradeable forever, and a stored decision that can only read as
+  pending is worse than an absent one.
+- **A pushed leg drops out and the payout is recomputed from the survivors** —
+  not the combined price the parlay carried before the push was known. A parlay
+  whose legs all push is itself a push.
+- **A won parlay with no price is left unsettled** rather than recorded with a
+  fabricated return.
+- **`results._pending_rows` excludes `market_type = 'PARLAY'` outright**, so the
+  single-row grader can never pick one up and grade it off one box score.
+
+Most parlay boards carry no `recommended_units`, so they seed `STAND_DOWN` and
+measure through `would_have_result` (the flat-stake counterfactual) rather than
+staked PnL. That is the correct reading of a shadow surface, not a gap.
+
+Parlay pack types are `PARLAY_PLAYER_PROP`, `PARLAY_TEAM_TOTAL`,
+`PARLAY_BANKROLL`, and `PARLAY_ULTIMATE_ALT`.
 
 Pack-type status values are `ON_TRACK` (actual hit rate within `--tolerance` of
 the model's expected hit rate), `NEEDS_ADJUSTMENT` (model overconfident by more

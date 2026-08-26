@@ -6,12 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from outlier_scrapers import feedback, pack
+from outlier_scrapers import feedback, pack, parlay_legs
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 from outlier_scrapers.alt_bankroll_props import ALT_BANKROLL_PROPS_HEADER
 from outlier_scrapers.alt_player_props import ALT_PLAYER_PROPS_HEADER
 from outlier_scrapers.alt_spreads import ALT_SPREADS_HEADER
-from outlier_scrapers.alt_team_totals import ALT_TEAM_TOTALS_HEADER
+from outlier_scrapers.alt_team_totals import (
+    ALT_TEAM_TOTAL_PARLAYS_HEADER,
+    ALT_TEAM_TOTALS_HEADER,
+)
 from outlier_scrapers.pack import CANDIDATES_HEADER
 from outlier_scrapers.ultimate_alt import ULTIMATE_ALT_HEADER
 
@@ -1937,7 +1940,8 @@ def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
     assert stats.pack_snapshot_memberships == 0
     assert stats.decisions == 0
     assert stats.settlements == 0
-    assert stats.skipped_rows == 4
+    # One skip per recoverable table whose scan hit the corrupted schema page.
+    assert stats.skipped_rows == len(feedback._RECOVERY_TABLE_ORDER)
     assert output_path.exists()
 
 
@@ -2269,3 +2273,238 @@ def test_alt_lane_price_is_captured_whichever_column_the_board_uses(tmp_path):
         )
     assert priced == {"apm1": -140.0, "attm1": -160.0}
     assert all(value is not None for value in decimals.values())
+
+
+# --- parlay capture and settlement ------------------------------------------
+
+
+def _parlay_pack(tmp_path: Path, *, legs_json: str | None = None) -> Path:
+    """A pack with two alt team-total singles and one parlay over both."""
+
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    leg_one = _alt_team_total_row()
+    leg_two = _alt_team_total_row(
+        event_id="e2",
+        team="AWY",
+        market_id="attm2",
+        outcome_id="atto2",
+        line="3.5",
+        best_price="-200",
+        decimal_price="1.5",
+    )
+    _write_csv(pack_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, [leg_one, leg_two])
+    parlay = {field: "" for field in ALT_TEAM_TOTAL_PARLAYS_HEADER}
+    parlay.update(
+        {
+            "parlay_id": "atto1+atto2",
+            "league": "MLB",
+            "num_legs": 2,
+            "legs": "HME o2.5 + AWY o3.5",
+            "legs_json": parlay_legs.encode_legs([leg_one, leg_two])
+            if legs_json is None
+            else legs_json,
+            "event_ids": "e1,e2",
+            "is_sgp": "false",
+            "combined_decimal": "2.4375",
+            "combined_american": "+138",
+            "combined_implied_prob": "41.026",
+            "naive_l10_prob": "56.0",
+            "as_of": "2026-08-25T16:00:00+00:00",
+            "recommended_units": "1.0",
+        }
+    )
+    _write_csv(pack_dir / "alt_team_total_parlays.csv", ALT_TEAM_TOTAL_PARLAYS_HEADER, [parlay])
+    return pack_dir
+
+
+def _settle_legs(db_path: Path, results: dict[str, str]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT d.decision_id, s.market_id, s.event_id FROM decisions d "
+                "JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id"
+            )
+        ]
+    settlements = []
+    for row in rows:
+        outcome = results.get(row["market_id"])
+        if outcome is None:
+            continue
+        settlement = {field: "" for field in feedback.SETTLEMENT_FIELDS}
+        settlement.update(
+            {
+                "decision_id": row["decision_id"],
+                "event_id": row["event_id"],
+                "market_id": row["market_id"],
+                "actual_result": "5",
+                "win_loss_push": outcome,
+                "would_have_result": outcome,
+            }
+        )
+        settlements.append(settlement)
+    feedback.import_settlements(db_path, settlements)
+
+
+def test_capture_links_a_parlay_to_the_legs_it_was_built_from(tmp_path):
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        legs = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT leg_index, event_id, market_id, outcome_id, leg_snapshot_id "
+                "FROM parlay_legs ORDER BY leg_index"
+            )
+        ]
+        leg_snapshots = {
+            row["snapshot_id"]: row["market_id"]
+            for row in conn.execute("SELECT snapshot_id, market_id FROM market_snapshots")
+        }
+    assert [leg["outcome_id"] for leg in legs] == ["atto1", "atto2"]
+    # Each link must point at the snapshot this same capture created.
+    assert [leg_snapshots[leg["leg_snapshot_id"]] for leg in legs] == ["attm1", "attm2"]
+
+
+def test_a_parlay_settles_only_once_every_leg_has(tmp_path):
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    _settle_legs(db_path, {"attm1": "W"})
+    assert feedback.settle_parlays(db_path) == feedback.ParlayStats(settled=0, pending=1)
+
+    _settle_legs(db_path, {"attm2": "W"})
+    assert feedback.settle_parlays(db_path) == feedback.ParlayStats(settled=1)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = dict(
+            conn.execute(
+                "SELECT t.win_loss_push, t.actual_result, t.pnl, t.would_have_result "
+                "FROM settlements t JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id "
+                "WHERE s.market_type = 'PARLAY'"
+            ).fetchone()
+        )
+    assert row["win_loss_push"] == "W"
+    assert row["actual_result"] == "W/W"
+    assert row["would_have_result"] == "W"
+    # 1.625 * 1.5 = 2.4375 decimal, 1 unit staked -> 1.4375 profit.
+    assert row["pnl"] == pytest.approx(1.4375)
+
+
+def test_a_losing_leg_loses_the_parlay(tmp_path):
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    _settle_legs(db_path, {"attm1": "W", "attm2": "L"})
+
+    assert feedback.settle_parlays(db_path) == feedback.ParlayStats(settled=1)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT t.win_loss_push, t.pnl FROM settlements t "
+            "JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id "
+            "WHERE s.market_type = 'PARLAY'"
+        ).fetchone()
+    assert row[0] == "L"
+    assert row[1] == pytest.approx(-1.0)
+
+
+def test_a_pushed_leg_drops_out_and_shrinks_the_payout(tmp_path):
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    _settle_legs(db_path, {"attm1": "W", "attm2": "PUSH"})
+
+    feedback.settle_parlays(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT t.win_loss_push, t.pnl FROM settlements t "
+            "JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id "
+            "WHERE s.market_type = 'PARLAY'"
+        ).fetchone()
+    assert row[0] == "W"
+    # Only the 1.625 leg survives, so the payout is 0.625 -- not the 1.4375
+    # the parlay was priced at before the push was known.
+    assert row[1] == pytest.approx(0.625)
+
+
+def test_settling_a_parlay_twice_is_idempotent(tmp_path):
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    _settle_legs(db_path, {"attm1": "W", "attm2": "W"})
+
+    assert feedback.settle_parlays(db_path).settled == 1
+    assert feedback.settle_parlays(db_path) == feedback.ParlayStats()
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM settlements t "
+            "JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id "
+            "WHERE s.market_type = 'PARLAY'"
+        ).fetchone()[0]
+    assert count == 1
+
+
+def test_a_parlay_whose_legs_are_not_in_the_pack_is_not_captured(tmp_path):
+    """An unresolvable leg makes the parlay ungradeable forever."""
+
+    missing = parlay_legs.encode_legs(
+        [
+            {"event_id": "e9", "market_id": "gone", "outcome_id": "gone1"},
+            {"event_id": "e8", "market_id": "gone2", "outcome_id": "gone2"},
+        ]
+    )
+    pack_dir = _parlay_pack(tmp_path, legs_json=missing)
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM parlay_legs").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM market_snapshots WHERE market_type = 'PARLAY'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_a_parlay_without_leg_identity_is_not_captured(tmp_path):
+    pack_dir = _parlay_pack(tmp_path, legs_json="")
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM market_snapshots WHERE market_type = 'PARLAY'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_recovery_preserves_parlay_leg_links(tmp_path):
+    """A recovered ledger that lost its links could never settle a parlay."""
+
+    pack_dir = _parlay_pack(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+
+    recovered = tmp_path / "recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(db_path, recovered)
+
+    assert stats.parlay_legs == 2
+    with sqlite3.connect(recovered) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM parlay_legs").fetchone()[0] == 2

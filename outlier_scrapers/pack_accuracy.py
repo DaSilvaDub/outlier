@@ -45,26 +45,16 @@ LANE_FILES: dict[str, str | None] = {
     "game_totals.csv": "game_totals",
     "team_totals.csv": "team_totals",
     "ultimate_alt.csv": "ultimate_alt",
-    **{filename: source for filename, source in feedback.ALT_LANE_SOURCES.items()},
-    # Parlays have no capture path by design: a parlay grades only once every
-    # leg settles, and a cross-game parlay's legs sit on different events.
-    "alt_player_props_parlays.csv": None,
-    "alt_team_total_parlays.csv": None,
-    "mlb_alt_bankroll_parlays.csv": None,
-    "wnba_alt_bankroll_parlays.csv": None,
-    "ultimate_alt_parlays.csv": None,
+    **feedback.ALT_LANE_SOURCES,
+    **feedback.PARLAY_LANE_SOURCES,
 }
 
-# Lanes whose absence from the ledger is a deliberate design decision, not a
-# gap to fix.  They are still listed, but as EXPECTED rather than NO_COVERAGE,
-# so --fail-on-gap stays a signal about lanes that should be measured.
-BY_DESIGN_UNCAPTURED = {
-    "alt_player_props_parlays.csv": "parlay legs span events; results grades one event at a time",
-    "alt_team_total_parlays.csv": "parlay legs span events; results grades one event at a time",
-    "mlb_alt_bankroll_parlays.csv": "parlay legs span events; results grades one event at a time",
-    "wnba_alt_bankroll_parlays.csv": "parlay legs span events; results grades one event at a time",
-    "ultimate_alt_parlays.csv": "parlay legs span events; results grades one event at a time",
-}
+# Lanes whose absence from the ledger would be a deliberate design decision
+# rather than a gap.  Empty now that parlays settle from their legs, but kept
+# as the mechanism: a lane listed here reports NOT_GRADEABLE instead of
+# NO_COVERAGE, so --fail-on-gap stays a signal about lanes that should be
+# measured and are not.
+BY_DESIGN_UNCAPTURED: dict[str, str] = {}
 
 STATUS_BY_DESIGN = "NOT_GRADEABLE"
 

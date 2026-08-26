@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from outlier_scrapers import feedback, pack_accuracy
+from outlier_scrapers import feedback, pack_accuracy, parlay_legs
 from outlier_scrapers.alt_player_props import (
     ALT_PLAYER_PROPS_HEADER,
     ALT_PLAYER_PROPS_PARLAYS_HEADER,
@@ -98,28 +98,40 @@ def _pack_dir(tmp_path: Path) -> Path:
     _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, candidates)
     _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], candidates)
     _write_csv(pack_dir / "game_totals.csv", GAME_TOTALS_HEADER, [_game_total()])
-    alt_row = {field: "" for field in ALT_PLAYER_PROPS_HEADER}
-    alt_row.update(
+    def _alt(index: int, event: str) -> dict:
+        row = {field: "" for field in ALT_PLAYER_PROPS_HEADER}
+        row.update(
+            {
+                "league": "MLB",
+                "event_id": event,
+                "matchup": "AWY @ HME",
+                "market_id": f"alt{index}",
+                "outcome_id": f"alto{index}",
+                "player": f"Pitcher {index}",
+                "market": "SO",
+                "position": "OVER",
+                "line": 4.5,
+                "best_book": "DK",
+                "best_odds": -140,
+                "model_prob": 0.72,
+                "recommended_units": 1.0,
+            }
+        )
+        return row
+
+    alt_rows = [_alt(1, "e1"), _alt(2, "e2")]
+    _write_csv(pack_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, alt_rows)
+    parlay = {field: "" for field in ALT_PLAYER_PROPS_PARLAYS_HEADER}
+    parlay.update(
         {
             "league": "MLB",
-            "event_id": "e1",
-            "matchup": "AWY @ HME",
-            "market_id": "alt1",
-            "outcome_id": "alto1",
-            "player": "Pitcher 1",
-            "market": "SO",
-            "position": "OVER",
-            "line": 4.5,
-            "best_book": "DK",
-            "best_odds": -140,
-            "model_prob": 0.72,
-            "recommended_units": 1.0,
+            "type": "cross_game",
+            "leg_1_player": "Pitcher 1",
+            "leg_2_player": "Pitcher 2",
+            "parlay_odds": "+250",
+            "legs_json": parlay_legs.encode_legs(alt_rows),
         }
     )
-    _write_csv(pack_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, [alt_row])
-    # A parlay lane has no capture path by design: its legs span events.
-    parlay = {field: "" for field in ALT_PLAYER_PROPS_PARLAYS_HEADER}
-    parlay.update({"league": "MLB", "type": "cross_game", "parlay_odds": "+250"})
     _write_csv(
         pack_dir / "alt_player_props_parlays.csv", ALT_PLAYER_PROPS_PARLAYS_HEADER, [parlay]
     )
@@ -164,7 +176,8 @@ def test_inventory_prefers_opportunities_over_candidates(tmp_path):
     assert "candidates.csv" not in counts
     assert counts["opportunities.csv"] == 3
     assert counts["game_totals.csv"] == 1
-    assert counts["alt_player_props.csv"] == 1
+    assert counts["alt_player_props.csv"] == 2
+    assert counts["alt_player_props_parlays.csv"] == 1
 
 
 def test_audit_reports_accuracy_per_pack_type(tmp_path):
@@ -185,7 +198,7 @@ def test_audit_reports_accuracy_per_pack_type(tmp_path):
     assert by_type["GAME_TOTAL"]["losses"] == 1
 
 
-def test_alt_lane_is_captured_and_a_parlay_lane_is_flagged_not_gradeable(tmp_path):
+def test_every_generated_lane_including_parlays_is_captured(tmp_path):
     pack_dir = _pack_dir(tmp_path)
     db_path = tmp_path / "feedback.sqlite3"
     feedback.capture_pack(pack_dir, db_path)
@@ -193,12 +206,10 @@ def test_alt_lane_is_captured_and_a_parlay_lane_is_flagged_not_gradeable(tmp_pat
     audit = pack_accuracy.audit_pack(pack_dir, db_path)
 
     lanes = {lane.file: lane for lane in audit.lanes}
-    assert lanes["alt_player_props.csv"].captured_rows == 1
+    assert lanes["alt_player_props.csv"].captured_rows == 2
     assert lanes["alt_player_props.csv"].coverage_state == pack_accuracy.STATUS_NO_SETTLEMENTS
     assert lanes["opportunities.csv"].coverage_state == pack_accuracy.STATUS_NO_SETTLEMENTS
-    # A parlay lane is uncaptured on purpose, so it must not read as a gap.
-    parlay = lanes["alt_player_props_parlays.csv"]
-    assert parlay.coverage_state == pack_accuracy.STATUS_BY_DESIGN
+    assert lanes["alt_player_props_parlays.csv"].captured_rows == 1
     assert not audit.warnings
 
 
@@ -307,7 +318,7 @@ def test_cli_writes_the_report_and_can_fail_on_a_coverage_gap(tmp_path, capsys):
     assert (output / "pack_type_accuracy.csv").exists()
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["pack_label"] == "2026-08-25"
-    assert summary["captured_rows"] == 5
+    assert summary["captured_rows"] == 7
     assert "Pack accuracy - 2026-08-25" in capsys.readouterr().out
 
 
@@ -339,3 +350,33 @@ def test_pack_lane_join_never_reads_retention_slimmed_columns():
     source = inspect.getsource(feedback._joined_rows)
     for column in feedback._RETENTION_SLIMMED_COLUMNS:
         assert f"s.{column}" not in source, f"_joined_rows must not select s.{column}"
+
+
+def test_parlay_lanes_report_under_their_own_pack_type(tmp_path):
+    """Parlays settle from their legs, so they are measured like any lane."""
+
+    assert not [
+        filename
+        for filename, source in pack_accuracy.LANE_FILES.items()
+        if source is None
+    ], "every generated lane should now have a capture path"
+    for source, pack_type in feedback.PACK_SOURCE_TYPES.items():
+        if source.endswith("parlays"):
+            assert pack_type.startswith("PARLAY_")
+
+
+def test_a_settled_parlay_is_audited_under_its_parlay_pack_type(tmp_path):
+    pack_dir = _pack_dir(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    _settle(db_path, {"alt1": "W", "alt2": "W"})
+    assert feedback.settle_parlays(db_path).settled == 1
+
+    audit = pack_accuracy.audit_pack(pack_dir, db_path, min_samples=1)
+
+    by_type = {row["pack_type"]: row for row in audit.pack_types}
+    assert by_type["ALT_PLAYER_PROP"]["graded"] == 2
+    assert by_type["PARLAY_PLAYER_PROP"]["graded"] == 1
+    assert by_type["PARLAY_PLAYER_PROP"]["wins"] == 1
+    lanes = {lane.file: lane for lane in audit.lanes}
+    assert lanes["alt_player_props_parlays.csv"].settled_rows == 1

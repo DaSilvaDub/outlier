@@ -464,3 +464,77 @@ def test_a_player_prop_without_a_line_is_still_refused():
         )
         is None
     )
+
+
+def test_the_single_row_grader_never_picks_up_a_parlay(tmp_path):
+    """A parlay spans events; grading it off one box score would be wrong.
+
+    feedback.settle_parlays owns parlays, so the pending-row query that feeds
+    _grade_row must exclude them outright rather than relying on their
+    selection text happening not to match any grading branch.
+    """
+
+    from datetime import timedelta
+
+    from outlier_scrapers import feedback
+
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db_path)
+    starts_at = NOW.isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO market_snapshots (snapshot_id, captured_at, sport, event_id, "
+            "market_id, outcome_id, selection, line, market_type, event_starts_at, "
+            "selected, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "snap-parlay",
+                starts_at,
+                "MLB",
+                "parlay-event",
+                "alt_team_total_parlays",
+                "parlay-outcome",
+                "HME o2.5 + AWY o3.5",
+                "",
+                feedback.PARLAY_MARKET_TYPE,
+                starts_at,
+                1,
+                starts_at,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO market_snapshots (snapshot_id, captured_at, sport, event_id, "
+            "market_id, outcome_id, selection, line, market_type, event_starts_at, "
+            "selected, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "snap-single",
+                starts_at,
+                "MLB",
+                "e1",
+                "m1",
+                "o1",
+                "HME Team Total OVER 2.5",
+                "2.5",
+                "TEAM_PROP",
+                starts_at,
+                1,
+                starts_at,
+            ),
+        )
+        for decision_id, snapshot_id in (
+            ("dec-parlay", "snap-parlay"),
+            ("dec-single", "snap-single"),
+        ):
+            conn.execute(
+                "INSERT INTO decisions (decision_id, snapshot_id, pipeline_verdict, units, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (decision_id, snapshot_id, "PLAY", 1.0, starts_at, starts_at),
+            )
+        conn.commit()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        pending = results._pending_rows(
+            conn, ["MLB"], NOW - timedelta(days=1), NOW + timedelta(days=1)
+        )
+
+    assert [row["snapshot_id"] for row in pending] == ["snap-single"]

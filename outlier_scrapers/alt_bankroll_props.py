@@ -36,6 +36,7 @@ from outlier_scrapers.normalizer import (
     implied_probability,
     percent_number,
 )
+from outlier_scrapers.parlay_legs import encode_legs
 from outlier_scrapers.paths import league_paths
 from outlier_scrapers.registry import supported_leagues
 
@@ -364,6 +365,8 @@ ALT_BANKROLL_PARLAYS_HEADER = [
     "leg_2_line",
     "leg_2_odds",
     "parlay_odds",
+    # Machine-readable leg identity; the leg_N_* columns are display text.
+    "legs_json",
 ]
 
 
@@ -436,6 +439,7 @@ def build_alt_bankroll_parlays(board: list[dict[str, Any]]) -> list[dict[str, An
                     "leg_2_line": leg2["line"],
                     "leg_2_odds": leg2["best_price"],
                     "parlay_odds": _decimal_to_american(parlay_decimal),
+                    "legs_json": encode_legs([leg1, leg2]),
                     "_sort_decimal": parlay_decimal,
                     "_l10_avg": (float(leg1["l10_pct"]) + float(leg2["l10_pct"])) / 2.0,
                 }

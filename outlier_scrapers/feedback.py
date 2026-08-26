@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
+from outlier_scrapers import drawdown, parlay_legs, paths, probability_blend, stake_calibration
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.team_totals import is_team_total_proposition
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3")
 DEFAULT_REPORT_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\reports\latest")
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MARKET_SNAPSHOT_FIELDS = [
     "snapshot_id",
@@ -129,6 +129,16 @@ SETTLEMENT_FIELDS = [
     "snapshot_id",
     "outcome_id",
     *SETTLEMENT_REQUIRED_FIELDS,
+]
+
+PARLAY_LEG_FIELDS = [
+    "parlay_decision_id",
+    "leg_index",
+    "leg_snapshot_id",
+    "event_id",
+    "market_id",
+    "outcome_id",
+    "created_at",
 ]
 
 PACK_MEMBERSHIP_FIELDS = [
@@ -407,6 +417,7 @@ class RecoverStats:
     settlements: int
     skipped_rows: int
     used_sqlite_cli: bool
+    parlay_legs: int = 0
 
 
 @dataclass(frozen=True)
@@ -683,6 +694,17 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 settled_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS parlay_legs (
+                parlay_decision_id TEXT NOT NULL REFERENCES decisions(decision_id),
+                leg_index INTEGER NOT NULL,
+                leg_snapshot_id TEXT NOT NULL REFERENCES market_snapshots(snapshot_id),
+                event_id TEXT NOT NULL DEFAULT '',
+                market_id TEXT NOT NULL DEFAULT '',
+                outcome_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (parlay_decision_id, leg_index)
+            );
+
             CREATE TABLE IF NOT EXISTS pack_snapshot_memberships (
                 pack_capture_id TEXT NOT NULL,
                 snapshot_id TEXT NOT NULL REFERENCES market_snapshots(snapshot_id),
@@ -753,9 +775,11 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             "CREATE INDEX IF NOT EXISTS idx_settlements_decision ON settlements(decision_id)",
             "CREATE INDEX IF NOT EXISTS idx_pack_membership_pack_path "
             "ON pack_snapshot_memberships(pack_path, pack_timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_parlay_legs_snapshot "
+            "ON parlay_legs(leg_snapshot_id)",
         ):
             conn.execute(statement)
-        conn.execute("PRAGMA user_version = 5")
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return db_path
 
 
@@ -959,12 +983,14 @@ _RECOVERY_TABLE_ORDER = (
     "market_snapshots",
     "pack_snapshot_memberships",
     "decisions",
+    "parlay_legs",
     "settlements",
 )
 _RECOVERY_TABLE_FIELDS = {
     "market_snapshots": [*MARKET_SNAPSHOT_FIELDS, "created_at"],
     "pack_snapshot_memberships": PACK_MEMBERSHIP_FIELDS,
     "decisions": [*DECISION_FIELDS, "created_at", "updated_at"],
+    "parlay_legs": PARLAY_LEG_FIELDS,
     "settlements": [*SETTLEMENT_FIELDS, "settled_at"],
 }
 
@@ -1191,6 +1217,7 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
         "market_snapshots": 0,
         "pack_snapshot_memberships": 0,
         "decisions": 0,
+        "parlay_legs": 0,
         "settlements": 0,
     }
     try:
@@ -1226,6 +1253,17 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 },
             ):
                 inserted["decisions"] += 1
+        # Recovered after decisions and snapshots so the links they reference
+        # exist.  Losing these would leave every recovered parlay unsettleable.
+        for row in salvaged["parlay_legs"]:
+            if _insert_recovered_row(
+                conn,
+                "parlay_legs",
+                [field for field in PARLAY_LEG_FIELDS if field != "created_at"],
+                row,
+                extra={"created_at": row.get("created_at") or now},
+            ):
+                inserted["parlay_legs"] += 1
         for row in salvaged["settlements"]:
             if _insert_recovered_row(
                 conn,
@@ -1243,6 +1281,7 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
         market_snapshots=inserted["market_snapshots"],
         pack_snapshot_memberships=inserted["pack_snapshot_memberships"],
         decisions=inserted["decisions"],
+        parlay_legs=inserted["parlay_legs"],
         settlements=inserted["settlements"],
         skipped_rows=skipped_total
         + sum(len(salvaged[t]) for t in _RECOVERY_TABLE_ORDER)
@@ -1442,6 +1481,111 @@ def _load_alt_lane_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
             normalized = _normalize_alt_lane_row(source, row)
             if normalized is None:
                 logger.debug("Skipping ungradeable %s row in %s", source, filename)
+                continue
+            rows.append((source, normalized))
+    return rows
+
+
+# Parlay CSVs -> the capture ``source`` recorded on memberships.  A parlay is
+# never graded by ``results._grade_row``: it settles from its legs, each of
+# which is a single this pack already captured.  See ``settle_parlays``.
+PARLAY_LANE_SOURCES = {
+    "alt_player_props_parlays.csv": "alt_player_props_parlays",
+    "alt_team_total_parlays.csv": "alt_team_total_parlays",
+    "mlb_alt_bankroll_parlays.csv": "mlb_alt_bankroll_parlays",
+    "wnba_alt_bankroll_parlays.csv": "wnba_alt_bankroll_parlays",
+    "ultimate_alt_parlays.csv": "ultimate_alt_parlays",
+}
+
+PARLAY_MARKET_TYPE = "PARLAY"
+
+
+def _parlay_probability(value: Any, *, field: str) -> float | None:
+    """Read a parlay probability column that may be a percent or a fraction.
+
+    The lanes disagree: ultimate_alt writes ``combined_implied_prob`` as a
+    0-1 fraction, alt_team_totals writes it as 0-100.  Anything above 1 is
+    therefore a percentage, not an out-of-range probability.
+    """
+
+    parsed = _float(value, field=field)
+    if parsed is None:
+        return None
+    if parsed > 1.0:
+        parsed /= 100.0
+    return _probability(round(parsed, 6), field=field)
+
+
+def _normalize_parlay_row(source: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Translate a parlay board row into the shape capture already reads.
+
+    Returns None when the row carries no resolvable leg identity.  A parlay
+    whose legs cannot be resolved could never settle, and capturing it would
+    leave a decision pending forever.
+    """
+
+    legs = parlay_legs.decode_legs(row.get("legs_json"))
+    if not legs:
+        return None
+    identity = _stable_id("parlay", source, json.dumps(legs, sort_keys=True))
+    display = _text(
+        _coalesce(
+            row.get("legs"),
+            " + ".join(
+                filter(
+                    None,
+                    (
+                        _text(row.get("leg_1_label") or row.get("leg_1_player")),
+                        _text(row.get("leg_2_label") or row.get("leg_2_player")),
+                    ),
+                )
+            ),
+        )
+    )
+    normalized = dict(row)
+    normalized["event_id"] = identity
+    normalized["market_id"] = source
+    normalized["outcome_id"] = identity
+    normalized["selection"] = display or f"{source} {identity}"
+    normalized["market_type"] = PARLAY_MARKET_TYPE
+    normalized["sport"] = _text(row.get("sport")) or _text(row.get("league")).upper()
+    normalized["line"] = ""
+    normalized["price"] = _coalesce(row.get("parlay_odds"), row.get("combined_american"))
+    normalized["decimal_price"] = _coalesce(row.get("decimal_price"), row.get("combined_decimal"))
+    normalized["implied_prob"] = ""
+    normalized["push_prob"] = ""
+    normalized["data_quality_flags"] = _text(row.get("quality_flags"))
+    # These boards are shadow surfaces: most carry no recommended units, so
+    # they seed STAND_DOWN and measure through would_have_result rather than
+    # staked PnL.  That is the honest reading, not a gap.
+    units = _float(row.get("recommended_units"), field="recommended_units")
+    normalized["recommended_units_pre_news"] = row.get("recommended_units", "")
+    normalized["actionable"] = "true" if units and units > 0 else "false"
+    normalized["selected"] = "true"
+    normalized["_parlay_legs"] = legs
+    # The lanes name their model probability three ways and disagree on whether
+    # it is a percent; normalize it into the column the generic capture path
+    # already reads.  implied_prob is left blank so it derives from the
+    # combined decimal price rather than from a second, possibly stale column.
+    model_prob = _parlay_probability(
+        _coalesce(
+            row.get("model_prob"),
+            row.get("combined_conservative_prob"),
+            row.get("naive_l10_prob"),
+        ),
+        field="model_prob",
+    )
+    normalized["model_prob"] = "" if model_prob is None else model_prob
+    return normalized
+
+
+def _load_parlay_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
+    rows: list[tuple[str, dict[str, Any]]] = []
+    for filename, source in PARLAY_LANE_SOURCES.items():
+        for row in _read_csv(pack_dir / filename):
+            normalized = _normalize_parlay_row(source, row)
+            if normalized is None:
+                logger.debug("Skipping parlay without leg identity in %s", filename)
                 continue
             rows.append((source, normalized))
     return rows
@@ -1763,6 +1907,9 @@ def capture_pack(
             source_rows.append(("candidates", row))
     else:
         source_rows = _load_pack_rows(pack_dir)
+    # Parlays are captured after their legs so a leg can be resolved to the
+    # snapshot this same capture just created for it.
+    parlay_rows = [] if source_filename else _load_parlay_rows(pack_dir)
     pack_timestamp = fallback_timestamp
     if not (pack_dir / "manifest.json").exists():
         pack_timestamp = _timestamp_extreme(
@@ -1784,6 +1931,52 @@ def capture_pack(
         decision = _decision_seed(snapshot, row)
         decisions.append(decision)
         captured_rows.append((source, row, snapshot, decision))
+
+    leg_index_by_identity = {
+        (
+            _text(snapshot["event_id"]),
+            _text(snapshot["market_id"]),
+            _text(snapshot["outcome_id"]),
+        ): snapshot["snapshot_id"]
+        for snapshot in snapshots
+    }
+    parlay_leg_links: list[dict[str, Any]] = []
+    for source, row in parlay_rows:
+        raw_legs = row.pop("_parlay_legs", None)
+        legs: list[dict[str, str]] = raw_legs if isinstance(raw_legs, list) else []
+        resolved = [
+            leg_index_by_identity.get(
+                (leg["event_id"], leg["market_id"], leg["outcome_id"])
+            )
+            for leg in legs
+        ]
+        if not resolved or any(snapshot_id is None for snapshot_id in resolved):
+            # One unresolved leg makes the parlay ungradeable forever.  Skip it
+            # rather than storing a decision that can only ever read as pending.
+            logger.debug("Skipping %s parlay with an unresolved leg", source)
+            continue
+        snapshot = _snapshot_from_pack_row(
+            source, row, pack_dir, fallback_timestamp, recorded_pack_path
+        )
+        if snapshot_namespace:
+            snapshot["snapshot_id"] = _stable_id(
+                snapshot_namespace, snapshot["snapshot_id"]
+            )
+        snapshots.append(snapshot)
+        decision = _decision_seed(snapshot, row)
+        decisions.append(decision)
+        captured_rows.append((source, row, snapshot, decision))
+        for index, (leg, leg_snapshot_id) in enumerate(zip(legs, resolved)):
+            parlay_leg_links.append(
+                {
+                    "parlay_decision_id": decision["decision_id"],
+                    "leg_index": index,
+                    "leg_snapshot_id": leg_snapshot_id,
+                    "event_id": leg["event_id"],
+                    "market_id": leg["market_id"],
+                    "outcome_id": leg["outcome_id"],
+                }
+            )
 
     now = _utc_now()
     connection_context = (
@@ -1922,6 +2115,30 @@ def capture_pack(
                     decision["units"],
                     snapshot["selected"],
                     1 if _truthy(row.get("actionable")) else 0,
+                    now,
+                ),
+            )
+
+        for link in parlay_leg_links:
+            conn.execute(
+                """
+                INSERT INTO parlay_legs (
+                    parlay_decision_id, leg_index, leg_snapshot_id,
+                    event_id, market_id, outcome_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(parlay_decision_id, leg_index) DO UPDATE SET
+                    leg_snapshot_id = excluded.leg_snapshot_id,
+                    event_id = excluded.event_id,
+                    market_id = excluded.market_id,
+                    outcome_id = excluded.outcome_id
+                """,
+                (
+                    link["parlay_decision_id"],
+                    link["leg_index"],
+                    link["leg_snapshot_id"],
+                    link["event_id"],
+                    link["market_id"],
+                    link["outcome_id"],
                     now,
                 ),
             )
@@ -2213,6 +2430,121 @@ def closing_line_from_movement_export(
         if line is not None or price is not None:
             return line, price
     return None, None
+
+
+@dataclass(frozen=True)
+class ParlayStats:
+    settled: int = 0
+    pending: int = 0
+    unresolvable: int = 0
+
+
+def _pending_parlays(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
+    """Legs of every captured parlay that has no settlement yet."""
+
+    rows = conn.execute(
+        """
+        SELECT
+            p.parlay_decision_id, p.leg_index, p.leg_snapshot_id,
+            d.units AS parlay_units, d.pipeline_verdict, d.final_verdict,
+            s.snapshot_id AS parlay_snapshot_id, s.event_id AS parlay_event_id,
+            s.market_id AS parlay_market_id, s.outcome_id AS parlay_outcome_id,
+            leg.decimal_price AS leg_decimal_price,
+            leg_t.win_loss_push AS leg_result,
+            leg_t.would_have_result AS leg_would_have
+        FROM parlay_legs p
+        JOIN decisions d ON d.decision_id = p.parlay_decision_id
+        JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+        LEFT JOIN market_snapshots leg ON leg.snapshot_id = p.leg_snapshot_id
+        LEFT JOIN settlements leg_t ON leg_t.snapshot_id = p.leg_snapshot_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM settlements t WHERE t.decision_id = p.parlay_decision_id
+        )
+        ORDER BY p.parlay_decision_id, p.leg_index
+        """
+    ).fetchall()
+    grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["parlay_decision_id"])].append(row)
+    return grouped
+
+
+def settle_parlays(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> ParlayStats:
+    """Settle captured parlays whose legs have all settled.
+
+    A parlay is never graded against a game: each of its legs is a single this
+    pipeline already captured and ``outlier_scrapers.results`` already graded,
+    so settling one is purely a matter of combining leg results. A parlay with
+    any unsettled leg is left pending rather than graded on a subset.
+    """
+
+    owns_connection = connection is None
+    conn = connection if connection is not None else _connect(Path(db_path))
+    settled = pending = unresolvable = 0
+    try:
+        now = _utc_now()
+        for decision_id, legs in _pending_parlays(conn).items():
+            results = [leg["leg_result"] for leg in legs]
+            combined = parlay_legs.combine_results(results)
+            if combined is None:
+                pending += 1
+                continue
+            decimals = [leg["leg_decimal_price"] for leg in legs]
+            effective_decimal = parlay_legs.surviving_decimal(results, decimals)
+            units = _float(legs[0]["parlay_units"], field="units") or 0.0
+            play = _is_play(
+                legs[0]["final_verdict"], legs[0]["pipeline_verdict"], units
+            )
+            pnl = parlay_legs.parlay_pnl(
+                combined, units if play else 0.0, effective_decimal
+            )
+            if pnl is None:
+                # A won parlay with no price cannot state its return.  Leaving
+                # it unsettled is better than recording a fabricated one.
+                unresolvable += 1
+                continue
+            would_have = parlay_legs.combine_results(
+                [leg["leg_would_have"] for leg in legs]
+            )
+            conn.execute(
+                """
+                INSERT INTO settlements (
+                    settlement_id, decision_id, snapshot_id, outcome_id,
+                    event_id, market_id, actual_result, win_loss_push,
+                    closing_line, closing_price, clv_line, clv_price,
+                    pnl, would_have_result, settled_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(settlement_id) DO NOTHING
+                """,
+                (
+                    _stable_id("settlement", decision_id),
+                    decision_id,
+                    legs[0]["parlay_snapshot_id"],
+                    legs[0]["parlay_outcome_id"],
+                    legs[0]["parlay_event_id"],
+                    legs[0]["parlay_market_id"],
+                    "/".join(str(result or "") for result in results),
+                    combined,
+                    None,
+                    None,
+                    None,
+                    None,
+                    pnl,
+                    would_have or "",
+                    now,
+                ),
+            )
+            settled += 1
+        if owns_connection:
+            conn.commit()
+    finally:
+        if owns_connection:
+            conn.close()
+    return ParlayStats(settled=settled, pending=pending, unresolvable=unresolvable)
 
 
 def _find_distinct_closes_for_settlements(conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> dict[str, tuple[Any, Any]]:
@@ -2782,6 +3114,11 @@ PACK_SOURCE_TYPES = {
     "wnba_alt_spreads": "ALT_SPREAD",
     "mlb_alt_bankroll_props": "ALT_BANKROLL_PROP",
     "wnba_alt_bankroll_props": "ALT_BANKROLL_PROP",
+    "alt_player_props_parlays": "PARLAY_PLAYER_PROP",
+    "alt_team_total_parlays": "PARLAY_TEAM_TOTAL",
+    "mlb_alt_bankroll_parlays": "PARLAY_BANKROLL",
+    "wnba_alt_bankroll_parlays": "PARLAY_BANKROLL",
+    "ultimate_alt_parlays": "PARLAY_ULTIMATE_ALT",
 }
 
 PACK_TYPE_UNCLASSIFIED = "UNCLASSIFIED"
@@ -3743,6 +4080,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     settle_parser = subparsers.add_parser("settle", help="Import settlement/result rows.")
     settle_parser.add_argument("--input", type=Path, required=True)
 
+    subparsers.add_parser(
+        "settle-parlays",
+        help="Settle captured parlays whose legs have all settled.",
+    )
     report_parser = subparsers.add_parser("report", help="Generate all feedback reports.")
     report_parser.add_argument("--output", type=Path, default=DEFAULT_REPORT_DIR)
 
@@ -3834,6 +4175,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "settle":
             settlement_stats = import_settlement_file(args.input, args.db)
             print(json.dumps(settlement_stats, sort_keys=True))
+        elif args.command == "settle-parlays":
+            parlay_stats = settle_parlays(args.db)
+            print(json.dumps(parlay_stats.__dict__, sort_keys=True))
         elif args.command == "report":
             print(generate_report(args.db, args.output))
         elif args.command == "fit-blend":

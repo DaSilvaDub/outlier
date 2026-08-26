@@ -34,6 +34,11 @@ function Write-AuditStatus {
 try {
     Set-Location -LiteralPath $repoRoot
 
+    Write-Output "Settling parlays whose legs have all settled..."
+    Invoke-CheckedPython @(
+        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb, "settle-parlays"
+    )
+
     Write-Output "Recomputing trustworthy closing-line value..."
     Invoke-CheckedPython @(
         "-m", "outlier_scrapers.feedback", "--db", $feedbackDb, "recompute-clv"

@@ -15,6 +15,7 @@ from typing import Any
 
 from outlier_scrapers.game_totals import FULL_GAME_SCOPES
 from outlier_scrapers.normalizer import MLB_ALT_PLAYER_OVER_MARKETS, percent_number
+from outlier_scrapers.parlay_legs import encode_legs
 from outlier_scrapers.utils import (
     _american_to_decimal,
     _local_date,
@@ -74,6 +75,9 @@ ALT_PLAYER_PROPS_PARLAYS_HEADER = [
     "leg_2_line",
     "leg_2_odds",
     "parlay_odds",
+    # Machine-readable leg identity. The leg_N_* columns above are a human
+    # board; only this column can resolve a leg back to its captured single.
+    "legs_json",
 ]
 
 WNBA_TARGET_MARKETS = frozenset({"AST", "REB", "PTS", "PRA", "PA", "PR", "RA"})
@@ -293,6 +297,7 @@ def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str
                     "leg_2_line": leg2["line"],
                     "leg_2_odds": leg2["best_odds"],
                     "parlay_odds": _decimal_to_american(parlay_decimal),
+                    "legs_json": encode_legs([leg1, leg2]),
                     "_sort_decimal": parlay_decimal,
                     "_l10_avg": (leg1["l10_pct"] + leg2["l10_pct"]) / 2.0,
                 }
