@@ -8,6 +8,10 @@ import pytest
 
 from outlier_scrapers import feedback, pack
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
+from outlier_scrapers.alt_bankroll_props import ALT_BANKROLL_PROPS_HEADER
+from outlier_scrapers.alt_player_props import ALT_PLAYER_PROPS_HEADER
+from outlier_scrapers.alt_spreads import ALT_SPREADS_HEADER
+from outlier_scrapers.alt_team_totals import ALT_TEAM_TOTALS_HEADER
 from outlier_scrapers.pack import CANDIDATES_HEADER
 from outlier_scrapers.ultimate_alt import ULTIMATE_ALT_HEADER
 
@@ -1964,3 +1968,304 @@ def test_run_sqlite_cli_recover_kills_hung_processes_on_timeout(tmp_path, monkey
     assert result is False
     recover_mock.kill.assert_called_once()
     apply_mock.kill.assert_called_once()
+
+
+# --- alt lane capture -------------------------------------------------------
+
+
+def _alt_player_row(**overrides) -> dict:
+    row = {field: "" for field in ALT_PLAYER_PROPS_HEADER}
+    row.update(
+        {
+            "league": "MLB",
+            "event_id": "e1",
+            "event_starts_at": "2026-08-25T23:05:00+00:00",
+            "matchup": "AWY @ HME",
+            "player": "Pitcher One",
+            "player_id": "p1",
+            "team": "HME",
+            "market": "SO",
+            "position": "OVER",
+            "line": "4.5",
+            "best_book": "DK",
+            "best_odds": "-140",
+            "market_id": "apm1",
+            "outcome_id": "apo1",
+            "model_prob": "0.72",
+            "edge_pct": "0.06",
+            "recommended_units": "1.5",
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def _alt_team_total_row(**overrides) -> dict:
+    row = {field: "" for field in ALT_TEAM_TOTALS_HEADER}
+    row.update(
+        {
+            "league": "MLB",
+            "event_id": "e1",
+            "event_starts_at": "2026-08-25T23:05:00+00:00",
+            "matchup": "AWY @ HME",
+            "team": "HME",
+            "market_id": "attm1",
+            "outcome_id": "atto1",
+            "position": "OVER",
+            "line": "2.5",
+            "best_book": "DK",
+            "best_price": "-160",
+            "decimal_price": "1.625",
+            "implied_prob": "0.6154",
+            "is_best_line": "true",
+            "as_of": "2026-08-25T16:00:00+00:00",
+            "model_prob": "0.70",
+            "edge_pct": "0.08",
+            "recommended_units": "1.0",
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def _alt_spread_row(**overrides) -> dict:
+    row = {field: "" for field in ALT_SPREADS_HEADER}
+    row.update(
+        {
+            "league": "MLB",
+            "event_id": "e1",
+            "event_starts_at": "2026-08-25T23:05:00+00:00",
+            "matchup": "AWY @ HME",
+            "team": "HME",
+            "market_type": "GAMELINE",
+            "proposition": "SPREAD",
+            "position": "HOME",
+            "market_id": "asm1",
+            "outcome_id": "aso1",
+            "model_prob": "0.64",
+            "edge_pct": "0.05",
+            "recommended_units": "1.0",
+            "line": "-1.5",
+            "signed_line": "-1.5",
+            "selection": "HME -1.5",
+            "best_book": "DK",
+            "best_price": "-120",
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def _alt_bankroll_row(**overrides) -> dict:
+    row = {field: "" for field in ALT_BANKROLL_PROPS_HEADER}
+    row.update(
+        {
+            "league": "MLB",
+            "event_id": "e1",
+            "event_starts_at": "2026-08-25T23:05:00+00:00",
+            "matchup": "AWY @ HME",
+            "team": "HME",
+            "market_type": "GAMELINE",
+            "proposition": "TOTAL",
+            "position": "OVER",
+            "market_id": "abm1",
+            "outcome_id": "abo1",
+            "model_prob": "0.78",
+            "edge_pct": "0.04",
+            "recommended_units": "0.5",
+            "line": "7.5",
+            "best_book": "DK",
+            "best_price": "-200",
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def test_alt_lanes_build_selections_the_grader_can_parse():
+    cases = {
+        "alt_player_props": (_alt_player_row(), "Pitcher One - SO OVER 4.5"),
+        "alt_team_totals": (_alt_team_total_row(), "HME Team Total OVER 2.5"),
+        "alt_spreads": (_alt_spread_row(), "AWY @ HME Spread HOME -1.5"),
+        "alt_bankroll_props": (_alt_bankroll_row(), "AWY @ HME Total O/U OVER 7.5"),
+    }
+    for kind, (row, expected) in cases.items():
+        assert feedback._alt_selection(kind, row) == expected
+
+
+def test_alt_bankroll_moneyline_and_team_prop_selections():
+    moneyline = _alt_bankroll_row(proposition="MONEYLINE", position="HOME", line="")
+    assert feedback._alt_selection("alt_bankroll_props", moneyline) == "AWY @ HME Money Line HOME"
+
+    team_runs = _alt_bankroll_row(
+        market_type="TEAM_PROP", proposition="R", position="OVER", line="4.5"
+    )
+    assert feedback._alt_selection("alt_bankroll_props", team_runs) == "HME Team Total OVER 4.5"
+
+
+def test_non_scoring_team_prop_is_skipped_rather_than_graded_against_runs():
+    """A team-hits prop must not become a team-total row graded off the score."""
+
+    hits = _alt_bankroll_row(
+        market_type="TEAM_PROP", proposition="H", position="OVER", line="8.5"
+    )
+    assert feedback._alt_selection("alt_bankroll_props", hits) == ""
+    assert feedback._normalize_alt_lane_row("mlb_alt_bankroll_props", hits) is None
+
+
+def test_alt_row_without_a_parseable_side_is_skipped():
+    assert feedback._alt_selection("alt_player_props", _alt_player_row(position="")) == ""
+    assert feedback._alt_selection("alt_team_totals", _alt_team_total_row(position="")) == ""
+    assert feedback._alt_selection("alt_spreads", _alt_spread_row(position="OVER")) == ""
+
+
+def test_capture_persists_every_alt_lane_with_its_own_source(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    _write_csv(pack_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, [_alt_player_row()])
+    _write_csv(pack_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, [_alt_team_total_row()])
+    _write_csv(pack_dir / "mlb_alt_spreads.csv", ALT_SPREADS_HEADER, [_alt_spread_row()])
+    _write_csv(
+        pack_dir / "mlb_alt_bankroll_props.csv", ALT_BANKROLL_PROPS_HEADER, [_alt_bankroll_row()]
+    )
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sources = {
+            row["source"]: row["n"]
+            for row in conn.execute(
+                "SELECT source, COUNT(*) AS n FROM pack_snapshot_memberships GROUP BY source"
+            )
+        }
+        selections = {
+            row["selection"]: dict(row)
+            for row in conn.execute("SELECT selection, sport, market_type, book FROM market_snapshots")
+        }
+    assert sources == {
+        "alt_player_props": 1,
+        "alt_team_totals": 1,
+        "mlb_alt_spreads": 1,
+        "mlb_alt_bankroll_props": 1,
+    }
+    assert set(selections) == {
+        "Pitcher One - SO OVER 4.5",
+        "HME Team Total OVER 2.5",
+        "AWY @ HME Spread HOME -1.5",
+        "AWY @ HME Total O/U OVER 7.5",
+    }
+    assert selections["Pitcher One - SO OVER 4.5"]["sport"] == "MLB"
+    assert selections["Pitcher One - SO OVER 4.5"]["market_type"] == "PLAYER_PROP"
+    assert selections["Pitcher One - SO OVER 4.5"]["book"] == "DK"
+
+
+def test_alt_units_seed_a_play_and_a_zero_unit_row_stands_down(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    _write_csv(
+        pack_dir / "alt_player_props.csv",
+        ALT_PLAYER_PROPS_HEADER,
+        [
+            _alt_player_row(),
+            _alt_player_row(
+                market_id="apm2", outcome_id="apo2", player="Pitcher Two", recommended_units=""
+            ),
+        ],
+    )
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        verdicts = dict(
+            conn.execute(
+                "SELECT s.market_id, d.pipeline_verdict FROM decisions d "
+                "JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id"
+            )
+        )
+    assert verdicts == {"apm1": "PLAY", "apm2": "STAND_DOWN"}
+
+
+def test_alt_ladder_keeps_only_the_best_line_selected(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    _write_csv(
+        pack_dir / "alt_team_totals.csv",
+        ALT_TEAM_TOTALS_HEADER,
+        [
+            _alt_team_total_row(),
+            _alt_team_total_row(
+                market_id="attm2", outcome_id="atto2", line="3.5", is_best_line="false"
+            ),
+        ],
+    )
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        selected = dict(conn.execute("SELECT market_id, selected FROM market_snapshots"))
+    assert selected == {"attm1": 1, "attm2": 0}
+
+
+def test_alt_total_that_duplicates_the_totals_ledger_is_not_counted_twice(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    totals_row = {field: "" for field in GAME_TOTALS_HEADER}
+    totals_row.update(
+        {
+            "sport": "MLB",
+            "event_id": "e1",
+            "market_id": "abm1",
+            "outcome_id": "gto1",
+            "total_kind": "game",
+            "selection": "AWY @ HME Total O/U OVER 7.5",
+            "line": "7.5",
+            "best_side": "OVER",
+            "projected_over_prob": "0.6",
+            "projected_under_prob": "0.4",
+            "as_of": "2026-08-25T16:00:00+00:00",
+        }
+    )
+    _write_csv(pack_dir / "game_totals.csv", GAME_TOTALS_HEADER, [totals_row])
+    _write_csv(
+        pack_dir / "mlb_alt_bankroll_props.csv", ALT_BANKROLL_PROPS_HEADER, [_alt_bankroll_row()]
+    )
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        sources = [row[0] for row in conn.execute("SELECT source FROM pack_snapshot_memberships")]
+    assert sources == ["game_totals"]
+
+
+def test_alt_lane_price_is_captured_whichever_column_the_board_uses(tmp_path):
+    """A row with no price cannot compute PnL when it wins, so the odds column
+    each board happens to use must all reach the snapshot."""
+
+    pack_dir = tmp_path / "packs" / "2026-08-25"
+    _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, [])
+    _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], [])
+    # alt_player_props spells it best_odds; alt_team_totals spells it best_price.
+    _write_csv(pack_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, [_alt_player_row()])
+    _write_csv(pack_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, [_alt_team_total_row()])
+    db_path = tmp_path / "feedback.sqlite3"
+
+    feedback.capture_pack(pack_dir, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        priced = dict(
+            conn.execute("SELECT market_id, price FROM market_snapshots")
+        )
+        decimals = dict(
+            conn.execute("SELECT market_id, decimal_price FROM market_snapshots")
+        )
+    assert priced == {"apm1": -140.0, "attm1": -160.0}
+    assert all(value is not None for value in decimals.values())

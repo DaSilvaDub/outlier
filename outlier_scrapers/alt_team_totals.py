@@ -53,6 +53,11 @@ ALT_TEAM_TOTALS_HEADER = [
     "team",
     "market_id",
     "outcome_id",
+    # The board is OVER-only by construction (see the position filter in
+    # alt_team_total_rows).  Recording the side explicitly keeps a downstream
+    # consumer -- notably feedback capture, which has to build a gradeable
+    # selection -- from having to assume it.
+    "position",
     "line",
     "l10_hits",
     "l10_total",
@@ -240,6 +245,7 @@ def build_alt_team_total_board(
                     "team": identity.get("team") or identity.get("team_raw") or "",
                     "market_id": str(rec.get("market_id") or ""),
                     "outcome_id": str(rec.get("outcome_id") or ""),
+                    "position": "OVER",
                     "line": line,
                     "l10_hits": l10.get("hits") if l10.get("hits") is not None else "",
                     "l10_total": l10.get("total")

@@ -29,6 +29,7 @@ from typing import Any, Iterable, Sequence
 
 from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
+from outlier_scrapers.team_totals import is_team_total_proposition
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
 logger = logging.getLogger(__name__)
@@ -1296,6 +1297,156 @@ def _total_representation_key(row: dict[str, Any]) -> tuple[str, str, str, str, 
     )
 
 
+# Alt-lane CSVs -> the capture ``source`` recorded on
+# ``pack_snapshot_memberships``.  Every lane here is a board of single wagers,
+# and the source is the file's own stem so a per-file coverage report can tell
+# the MLB board from the WNBA one; the lane *kind* below -- which decides how a
+# selection is built -- is what the two share.
+#
+# The ``*_parlays.csv`` lanes are deliberately absent: a parlay grades only when
+# every leg settles, and legs of a cross-game parlay live on different events,
+# which ``outlier_scrapers.results`` grades one event at a time.  Capturing them
+# as single rows would create decisions that can never settle.
+ALT_LANE_SOURCES = {
+    "alt_player_props.csv": "alt_player_props",
+    "alt_team_totals.csv": "alt_team_totals",
+    "mlb_alt_spreads.csv": "mlb_alt_spreads",
+    "wnba_alt_spreads.csv": "wnba_alt_spreads",
+    "mlb_alt_bankroll_props.csv": "mlb_alt_bankroll_props",
+    "wnba_alt_bankroll_props.csv": "wnba_alt_bankroll_props",
+}
+
+ALT_LANE_KINDS = {
+    "alt_player_props": "alt_player_props",
+    "alt_team_totals": "alt_team_totals",
+    "mlb_alt_spreads": "alt_spreads",
+    "wnba_alt_spreads": "alt_spreads",
+    "mlb_alt_bankroll_props": "alt_bankroll_props",
+    "wnba_alt_bankroll_props": "alt_bankroll_props",
+}
+
+_OVER_UNDER = {"OVER", "UNDER"}
+_HOME_AWAY = {"HOME", "AWAY"}
+
+
+def _alt_side(row: dict[str, Any]) -> str:
+    return _text(_coalesce(row.get("position"), row.get("side"), row.get("best_side"))).upper()
+
+
+def _alt_selection(kind: str, row: dict[str, Any]) -> str:
+    """Build a selection string ``results._grade_row`` can actually parse.
+
+    The alt lanes were written for human boards, so they carry ``player`` /
+    ``team`` / ``market`` columns instead of the selection grammar the
+    settlement collector parses.  Anything that cannot be expressed in that
+    grammar returns "" and is skipped at capture rather than stored as a row
+    that could only ever be graded by guessing.
+    """
+
+    side = _alt_side(row)
+    line = _text(row.get("line"))
+    team = _text(row.get("team"))
+    matchup = _text(row.get("matchup"))
+
+    if kind == "alt_player_props":
+        player = _text(row.get("player"))
+        market = _text(row.get("market"))
+        if not (player and market and line and side in _OVER_UNDER):
+            return ""
+        return f"{player} - {market} {side} {line}"
+
+    if kind == "alt_team_totals":
+        if not (team and line and side in _OVER_UNDER):
+            return ""
+        return f"{team} Team Total {side} {line}"
+
+    if kind == "alt_spreads":
+        if not (matchup and side in _HOME_AWAY):
+            return ""
+        signed = _text(row.get("signed_line")) or line
+        return f"{matchup} Spread {side} {signed}".strip()
+
+    if kind == "alt_bankroll_props":
+        market_type = _text(row.get("market_type")).replace("_", "").upper()
+        proposition = _text(row.get("proposition") or row.get("market")).upper()
+        if market_type == "GAMELINE":
+            if proposition == "MONEYLINE" and matchup and side in _HOME_AWAY:
+                return f"{matchup} Money Line {side}"
+            if proposition == "SPREAD" and matchup and side in _HOME_AWAY:
+                signed = _text(row.get("signed_line")) or line
+                return f"{matchup} Spread {side} {signed}".strip()
+            if proposition == "TOTAL" and matchup and line and side in _OVER_UNDER:
+                return f"{matchup} Total O/U {side} {line}"
+            return ""
+        if market_type == "TEAMPROP":
+            # A team-total selection grades against the team's final score, so
+            # it may only be built for a proposition that *is* that score.  A
+            # non-scoring team prop (team hits, team walks) would otherwise be
+            # graded against runs and silently marked wrong.
+            sport = _text(row.get("league") or row.get("sport")).upper()
+            if not is_team_total_proposition(proposition, sport=sport):
+                return ""
+            if not (team and line and side in _OVER_UNDER):
+                return ""
+            return f"{team} Team Total {side} {line}"
+    return ""
+
+
+def _alt_market_type(kind: str, row: dict[str, Any]) -> str:
+    explicit = _text(row.get("market_type"))
+    if explicit:
+        return explicit
+    if kind == "alt_player_props":
+        return "PLAYER_PROP"
+    if kind == "alt_team_totals":
+        return "TEAM_PROP"
+    return ""
+
+
+def _normalize_alt_lane_row(source: str, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Translate an alt-lane board row into the shape capture already reads."""
+
+    kind = ALT_LANE_KINDS.get(source, source)
+    selection = _alt_selection(kind, row)
+    if not selection:
+        return None
+    normalized = dict(row)
+    normalized["selection"] = selection
+    normalized["sport"] = _text(row.get("sport")) or _text(row.get("league")).upper()
+    normalized["market_type"] = _alt_market_type(kind, row)
+    normalized["book"] = _text(_coalesce(row.get("book"), row.get("best_book")))
+    # The boards spell the American price three different ways; without one the
+    # snapshot has no decimal price and a winning row cannot compute its PnL.
+    normalized["price"] = _coalesce(
+        row.get("price"), row.get("best_price"), row.get("best_odds")
+    )
+    # ``_decision_seed`` reads the pack's units/actionable contract; the alt
+    # boards spell the same two facts differently.
+    units = _float(row.get("recommended_units"), field="recommended_units")
+    normalized["recommended_units_pre_news"] = row.get("recommended_units", "")
+    normalized["actionable"] = "true" if units and units > 0 else "false"
+    # An alt ladder emits every qualifying rung.  Only the headline rung is a
+    # selection; the rest stay captured but unselected, exactly as non-selected
+    # opportunities do, so the board's accuracy is not inflated by its ladder.
+    if _text(row.get("is_best_line")):
+        normalized["selected"] = "true" if _truthy(row.get("is_best_line")) else "false"
+    else:
+        normalized["selected"] = "true"
+    return normalized
+
+
+def _load_alt_lane_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
+    rows: list[tuple[str, dict[str, Any]]] = []
+    for filename, source in ALT_LANE_SOURCES.items():
+        for row in _read_csv(pack_dir / filename):
+            normalized = _normalize_alt_lane_row(source, row)
+            if normalized is None:
+                logger.debug("Skipping ungradeable %s row in %s", source, filename)
+                continue
+            rows.append((source, normalized))
+    return rows
+
+
 def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
     opportunities_path = pack_dir / "opportunities.csv"
     candidates_path = pack_dir / "candidates.csv"
@@ -1343,6 +1494,13 @@ def _load_pack_rows(pack_dir: Path) -> list[tuple[str, dict[str, Any]]]:
             continue
         output.append((base_source, row))
     output.extend(specialized)
+    # An alt board can re-list a total the specialized totals ledger already
+    # owns at the same event/market/line/side.  That is one wager, not two, and
+    # counting it twice would inflate the lane it lands in.
+    for source, row in _load_alt_lane_rows(pack_dir):
+        if _truthy(row.get("selected")) and _total_representation_key(row) in specialized_keys:
+            continue
+        output.append((source, row))
     return output
 
 
@@ -2620,8 +2778,10 @@ PACK_SOURCE_TYPES = {
     "ultimate_alt": "ULTIMATE_ALT",
     "alt_player_props": "ALT_PLAYER_PROP",
     "alt_team_totals": "ALT_TEAM_TOTAL",
-    "alt_spreads": "ALT_SPREAD",
-    "alt_bankroll_props": "ALT_BANKROLL_PROP",
+    "mlb_alt_spreads": "ALT_SPREAD",
+    "wnba_alt_spreads": "ALT_SPREAD",
+    "mlb_alt_bankroll_props": "ALT_BANKROLL_PROP",
+    "wnba_alt_bankroll_props": "ALT_BANKROLL_PROP",
 }
 
 PACK_TYPE_UNCLASSIFIED = "UNCLASSIFIED"

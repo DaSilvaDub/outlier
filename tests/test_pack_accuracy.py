@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from outlier_scrapers import feedback, pack_accuracy
-from outlier_scrapers.alt_player_props import ALT_PLAYER_PROPS_HEADER
+from outlier_scrapers.alt_player_props import (
+    ALT_PLAYER_PROPS_HEADER,
+    ALT_PLAYER_PROPS_PARLAYS_HEADER,
+)
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 from outlier_scrapers.pack import CANDIDATES_HEADER
 
@@ -95,20 +98,31 @@ def _pack_dir(tmp_path: Path) -> Path:
     _write_csv(pack_dir / "candidates.csv", CANDIDATES_HEADER, candidates)
     _write_csv(pack_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], candidates)
     _write_csv(pack_dir / "game_totals.csv", GAME_TOTALS_HEADER, [_game_total()])
-    # A generated alt lane that the ledger has no capture path for.
     alt_row = {field: "" for field in ALT_PLAYER_PROPS_HEADER}
     alt_row.update(
         {
             "league": "MLB",
             "event_id": "e1",
+            "matchup": "AWY @ HME",
             "market_id": "alt1",
             "outcome_id": "alto1",
             "player": "Pitcher 1",
             "market": "SO",
+            "position": "OVER",
             "line": 4.5,
+            "best_book": "DK",
+            "best_odds": -140,
+            "model_prob": 0.72,
+            "recommended_units": 1.0,
         }
     )
     _write_csv(pack_dir / "alt_player_props.csv", ALT_PLAYER_PROPS_HEADER, [alt_row])
+    # A parlay lane has no capture path by design: its legs span events.
+    parlay = {field: "" for field in ALT_PLAYER_PROPS_PARLAYS_HEADER}
+    parlay.update({"league": "MLB", "type": "cross_game", "parlay_odds": "+250"})
+    _write_csv(
+        pack_dir / "alt_player_props_parlays.csv", ALT_PLAYER_PROPS_PARLAYS_HEADER, [parlay]
+    )
     return pack_dir
 
 
@@ -171,7 +185,7 @@ def test_audit_reports_accuracy_per_pack_type(tmp_path):
     assert by_type["GAME_TOTAL"]["losses"] == 1
 
 
-def test_uncaptured_lane_is_reported_as_a_coverage_gap(tmp_path):
+def test_alt_lane_is_captured_and_a_parlay_lane_is_flagged_not_gradeable(tmp_path):
     pack_dir = _pack_dir(tmp_path)
     db_path = tmp_path / "feedback.sqlite3"
     feedback.capture_pack(pack_dir, db_path)
@@ -179,10 +193,39 @@ def test_uncaptured_lane_is_reported_as_a_coverage_gap(tmp_path):
     audit = pack_accuracy.audit_pack(pack_dir, db_path)
 
     lanes = {lane.file: lane for lane in audit.lanes}
-    assert lanes["alt_player_props.csv"].coverage_state == pack_accuracy.STATUS_NO_COVERAGE
-    assert lanes["alt_player_props.csv"].captured_rows == 0
+    assert lanes["alt_player_props.csv"].captured_rows == 1
+    assert lanes["alt_player_props.csv"].coverage_state == pack_accuracy.STATUS_NO_SETTLEMENTS
     assert lanes["opportunities.csv"].coverage_state == pack_accuracy.STATUS_NO_SETTLEMENTS
+    # A parlay lane is uncaptured on purpose, so it must not read as a gap.
+    parlay = lanes["alt_player_props_parlays.csv"]
+    assert parlay.coverage_state == pack_accuracy.STATUS_BY_DESIGN
+    assert not audit.warnings
+
+
+def test_a_lane_with_no_capture_path_is_reported_as_a_coverage_gap(tmp_path, monkeypatch):
+    pack_dir = _pack_dir(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    monkeypatch.setitem(pack_accuracy.LANE_FILES, "alt_player_props.csv", None)
+
+    audit = pack_accuracy.audit_pack(pack_dir, db_path)
+
+    lanes = {lane.file: lane for lane in audit.lanes}
+    assert lanes["alt_player_props.csv"].coverage_state == pack_accuracy.STATUS_NO_COVERAGE
     assert any("alt_player_props.csv" in warning for warning in audit.warnings)
+
+
+def test_alt_player_prop_rows_are_graded_under_their_own_pack_type(tmp_path):
+    pack_dir = _pack_dir(tmp_path)
+    db_path = tmp_path / "feedback.sqlite3"
+    feedback.capture_pack(pack_dir, db_path)
+    _settle(db_path, {"alt1": "W"})
+
+    audit = pack_accuracy.audit_pack(pack_dir, db_path, min_samples=1)
+
+    by_type = {row["pack_type"]: row for row in audit.pack_types}
+    assert by_type["ALT_PLAYER_PROP"]["graded"] == 1
+    assert by_type["ALT_PLAYER_PROP"]["wins"] == 1
 
 
 def test_uncaptured_pack_warns_instead_of_reporting_a_clean_sheet(tmp_path):
@@ -258,12 +301,13 @@ def test_cli_writes_the_report_and_can_fail_on_a_coverage_gap(tmp_path, capsys):
         ]
     )
 
-    assert exit_code == 1
+    # Every gradeable lane in this pack is captured, so there is no gap to fail on.
+    assert exit_code == 0
     assert (output / "report.md").exists()
     assert (output / "pack_type_accuracy.csv").exists()
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["pack_label"] == "2026-08-25"
-    assert summary["captured_rows"] == 4
+    assert summary["captured_rows"] == 5
     assert "Pack accuracy - 2026-08-25" in capsys.readouterr().out
 
 

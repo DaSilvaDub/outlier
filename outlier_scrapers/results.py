@@ -460,14 +460,14 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
 def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     selection = str(row["selection"] or "")
     line = _number(row["line"])
-    if line is None:
-        return None
     market_type = _token(row["market_type"])
     player_match = re.fullmatch(
         r"(.+?)\s+-\s+(.+?)\s+(OVER|UNDER)\s+(-?\d+(?:\.\d+)?)", selection, re.IGNORECASE
     )
-    if player_match and (
-        market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"}
+    if (
+        player_match
+        and line is not None
+        and (market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"})
     ):
         player_key = _player_boxscore_key(event, selection) or _token(player_match.group(1))
         stats = event.players.get(player_key)
@@ -481,7 +481,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         )
 
     team_total = re.search(r"^([A-Za-z0-9]+)\s+Team Total\s+(OVER|UNDER)", selection, re.IGNORECASE)
-    if team_total:
+    if team_total and line is not None:
         team = _team_token(team_total.group(1))
         actual = (
             event.away_score
@@ -499,11 +499,11 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     if not _event_match(event, selection):
         return None
     total = re.search(r"\b(?:Total O/U|TOTAL)\s+(OVER|UNDER)\b", selection, re.IGNORECASE)
-    if total:
+    if total and line is not None:
         actual = event.away_score + event.home_score
         return actual, _side_result(actual, line, total.group(1).upper())
     spread = re.search(r"\b(?:Spread|Run Line)\s+(HOME|AWAY)\b", selection, re.IGNORECASE)
-    if spread:
+    if spread and line is not None:
         selected_score, other_score = (
             (event.home_score, event.away_score)
             if spread.group(1).upper() == "HOME"

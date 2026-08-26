@@ -45,17 +45,28 @@ LANE_FILES: dict[str, str | None] = {
     "game_totals.csv": "game_totals",
     "team_totals.csv": "team_totals",
     "ultimate_alt.csv": "ultimate_alt",
-    "alt_player_props.csv": None,
-    "alt_team_totals.csv": None,
-    "mlb_alt_spreads.csv": None,
-    "wnba_alt_spreads.csv": None,
-    "mlb_alt_bankroll_props.csv": None,
-    "wnba_alt_bankroll_props.csv": None,
+    **{filename: source for filename, source in feedback.ALT_LANE_SOURCES.items()},
+    # Parlays have no capture path by design: a parlay grades only once every
+    # leg settles, and a cross-game parlay's legs sit on different events.
     "alt_player_props_parlays.csv": None,
     "alt_team_total_parlays.csv": None,
     "mlb_alt_bankroll_parlays.csv": None,
+    "wnba_alt_bankroll_parlays.csv": None,
     "ultimate_alt_parlays.csv": None,
 }
+
+# Lanes whose absence from the ledger is a deliberate design decision, not a
+# gap to fix.  They are still listed, but as EXPECTED rather than NO_COVERAGE,
+# so --fail-on-gap stays a signal about lanes that should be measured.
+BY_DESIGN_UNCAPTURED = {
+    "alt_player_props_parlays.csv": "parlay legs span events; results grades one event at a time",
+    "alt_team_total_parlays.csv": "parlay legs span events; results grades one event at a time",
+    "mlb_alt_bankroll_parlays.csv": "parlay legs span events; results grades one event at a time",
+    "wnba_alt_bankroll_parlays.csv": "parlay legs span events; results grades one event at a time",
+    "ultimate_alt_parlays.csv": "parlay legs span events; results grades one event at a time",
+}
+
+STATUS_BY_DESIGN = "NOT_GRADEABLE"
 
 # ``opportunities.csv`` supersedes ``candidates.csv`` when both exist, matching
 # ``feedback._load_pack_rows``.  Counting both would double-count the same bets.
@@ -329,18 +340,23 @@ def audit_pack(
     for filename, pack_rows in sorted(lane_counts.items()):
         capture_source = LANE_FILES.get(filename)
         if capture_source is None:
-            state = STATUS_NO_COVERAGE if pack_rows else "EMPTY"
-            note = (
-                "lane is generated but never captured into the feedback ledger; "
-                "its accuracy is unmeasurable"
-                if pack_rows
-                else "lane produced no rows"
-            )
-            if pack_rows:
-                warnings.append(
-                    f"{filename}: {pack_rows} generated rows are never captured, "
-                    "so this lane has no accuracy history"
+            by_design = BY_DESIGN_UNCAPTURED.get(filename)
+            if by_design:
+                state = STATUS_BY_DESIGN if pack_rows else "EMPTY"
+                note = by_design if pack_rows else "lane produced no rows"
+            else:
+                state = STATUS_NO_COVERAGE if pack_rows else "EMPTY"
+                note = (
+                    "lane is generated but never captured into the feedback ledger; "
+                    "its accuracy is unmeasurable"
+                    if pack_rows
+                    else "lane produced no rows"
                 )
+                if pack_rows:
+                    warnings.append(
+                        f"{filename}: {pack_rows} generated rows are never captured, "
+                        "so this lane has no accuracy history"
+                    )
             lanes.append(
                 LaneCoverage(
                     lane=Path(filename).stem,

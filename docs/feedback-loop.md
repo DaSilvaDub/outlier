@@ -216,12 +216,51 @@ It writes `report.md`, `pack_type_accuracy.csv`, `lane_coverage.csv`, and
   rows, which is the check to wire into a nightly job.
 
 Lane coverage today: `opportunities`/`candidates`, `game_totals`, `team_totals`,
-and `ultimate_alt` reach the ledger. `alt_player_props`, `alt_team_totals`, the
-`*_alt_spreads` and `*_alt_bankroll_props` lanes, and every `*_parlays` lane do
-not — `feedback._load_pack_rows` does not read them. Those CSVs also lack the
-`selection` column that `_snapshot_from_pack_row` requires and that
-`results._grade_row` parses, so capturing them needs a canonical selection
-string synthesized at write time, not just an extra filename in the loader.
+`ultimate_alt`, and every alt board — `alt_player_props`, `alt_team_totals`,
+`{mlb,wnba}_alt_spreads`, and `{mlb,wnba}_alt_bankroll_props` — reach the ledger.
+The capture `source` is the CSV's own stem, so the MLB and WNBA boards stay
+distinguishable in `lane_coverage.csv` while both roll up to one pack type.
+
+Only the `*_parlays` lanes are uncaptured, and that is by design rather than a
+gap: a parlay grades only once every leg settles, and a cross-game parlay's legs
+sit on different events, which `outlier_scrapers.results` grades one at a time.
+They are reported as `NOT_GRADEABLE`, which `--fail-on-gap` ignores.
+
+### How alt boards are captured
+
+The alt boards were written for human reading: they carry `player` / `team` /
+`market` / `position` columns, not the selection grammar `results._grade_row`
+parses. `feedback._alt_selection` builds that grammar per lane:
+
+| lane | selection built |
+| --- | --- |
+| `alt_player_props` | `{player} - {market} {side} {line}` |
+| `alt_team_totals` | `{team} Team Total {side} {line}` |
+| `*_alt_spreads` | `{matchup} Spread {HOME\|AWAY} {signed_line}` |
+| `*_alt_bankroll_props` | `{matchup} Money Line {HOME\|AWAY}`, `{matchup} Spread ...`, `{matchup} Total O/U {side} {line}`, or `{team} Team Total {side} {line}` |
+
+Four rules keep the capture honest:
+
+- **A row that cannot be expressed in that grammar is skipped, not stored.** No
+  side, no line, no matchup means no snapshot — a captured row that can never
+  settle is worse than an absent one, because it reads as pending forever.
+- **A team-total selection is only built for a proposition that *is* the team's
+  score** (`team_totals.is_team_total_proposition`). A team-hits or team-walks
+  prop would otherwise be graded against runs and silently marked wrong.
+- **An alt ladder keeps only its `is_best_line` rung selected.** The other rungs
+  are captured unselected, exactly as non-selected opportunities are, so a lane's
+  hit rate is not inflated by counting every rung of one wager.
+- **An alt total that duplicates a `game_totals`/`team_totals` row at the same
+  event/market/line/side is dropped.** That is one wager, not two.
+
+The boards also spell the American price three ways (`price`, `best_price`,
+`best_odds`); all three are read, because a snapshot with no price cannot
+compute PnL when it wins.
+
+One related fix went in with the lanes: `results._grade_row` used to require a
+numeric line before grading anything, which meant **no moneyline ever settled** —
+a moneyline has no line. The line is now required only by the branches that
+actually use one (player props, totals, team totals, spreads).
 
 Pack-type status values are `ON_TRACK` (actual hit rate within `--tolerance` of
 the model's expected hit rate), `NEEDS_ADJUSTMENT` (model overconfident by more

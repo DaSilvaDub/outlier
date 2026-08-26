@@ -341,3 +341,126 @@ def test_last_name_suffix_does_not_match_longer_name():
     )
     assert results._player_boxscore_key(event, "A. Berg - Hits OVER 0.5") is None
     assert results._player_event_candidates([event], "A. Berg - Hits OVER 0.5") == []
+
+
+def test_captured_alt_lane_selections_grade_end_to_end():
+    """Every alt-lane selection feedback synthesizes must be gradeable.
+
+    The alt boards carry player/team/market columns, not the selection grammar
+    this collector parses. Capture builds that grammar; if the two ever drift,
+    alt rows would be captured and then sit unsettled forever, which is the
+    exact blind spot the lanes were added to close.
+    """
+
+    from outlier_scrapers import feedback
+
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="MLB",
+        event_date=NOW.date(),
+        away="AWY",
+        home="HME",
+        away_score=3,
+        home_score=6,
+        players={"PITCHERONE": {"PITCHING:K": 7.0}},
+    )
+    cases = [
+        (
+            "alt_player_props",
+            {"player": "Pitcher One", "market": "SO", "position": "OVER", "line": "4.5"},
+            "PLAYER_PROP",
+            (7.0, "W"),
+        ),
+        (
+            "alt_team_totals",
+            {"team": "HME", "position": "OVER", "line": "2.5"},
+            "TEAM_PROP",
+            (6.0, "W"),
+        ),
+        (
+            "alt_spreads",
+            {
+                "matchup": "AWY @ HME",
+                "position": "HOME",
+                "line": "-1.5",
+                "signed_line": "-1.5",
+            },
+            "GAMELINE",
+            (3.0, "W"),
+        ),
+        (
+            "alt_bankroll_props",
+            {
+                "matchup": "AWY @ HME",
+                "market_type": "GAMELINE",
+                "proposition": "TOTAL",
+                "position": "OVER",
+                "line": "7.5",
+            },
+            "GAMELINE",
+            (9.0, "W"),
+        ),
+        (
+            "alt_bankroll_props",
+            {
+                "matchup": "AWY @ HME",
+                "market_type": "GAMELINE",
+                "proposition": "MONEYLINE",
+                "position": "HOME",
+                "line": "",
+            },
+            "GAMELINE",
+            (3.0, "W"),
+        ),
+    ]
+    for kind, row, market_type, expected in cases:
+        selection = feedback._alt_selection(kind, row)
+        assert selection, f"{kind} produced no selection"
+        graded = results._grade_row(
+            {"selection": selection, "line": row.get("line", ""), "market_type": market_type},
+            event,
+        )
+        assert graded == expected, f"{kind} -> {selection!r} graded {graded}, want {expected}"
+
+
+def test_moneyline_without_a_line_still_grades():
+    """A moneyline has no line; requiring one left every one of them unsettled."""
+
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="MLB",
+        event_date=NOW.date(),
+        away="AWY",
+        home="HME",
+        away_score=3,
+        home_score=6,
+        players={},
+    )
+    assert results._grade_row(
+        {"selection": "AWY @ HME Money Line AWAY", "line": "", "market_type": "GAMELINE"},
+        event,
+    ) == (-3, "L")
+
+
+def test_a_player_prop_without_a_line_is_still_refused():
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="MLB",
+        event_date=NOW.date(),
+        away="AWY",
+        home="HME",
+        away_score=3,
+        home_score=6,
+        players={"PITCHERONE": {"PITCHING:K": 7.0}},
+    )
+    assert (
+        results._grade_row(
+            {
+                "selection": "Pitcher One - SO OVER 4.5",
+                "line": "",
+                "market_type": "PLAYER_PROP",
+            },
+            event,
+        )
+        is None
+    )
