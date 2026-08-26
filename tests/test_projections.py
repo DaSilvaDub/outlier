@@ -392,6 +392,66 @@ def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatc
     assert "projection slate date is not safely derivable" in status["reason"]
 
 
+def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+    from outlier_scrapers.projections import export_projections
+
+    fake_paths = LeaguePaths(
+        league="MLB",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    fake_paths.normalized.mkdir(parents=True, exist_ok=True)
+    fake_paths.props_normalized_latest().write_text(
+        json.dumps(
+            {
+                "date": "2026-08-26",
+                "records": [
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Jackson Jobe",
+                        "event_id": "g1",
+                        "market_id": "m1",
+                        "outcome_id": "o1",
+                        "line": 4.5,
+                        "position": "OVER",
+                        "sport_context": {"event_starts_at": "2026-08-25T19:10:00-04:00"},
+                    },
+                    {
+                        "sport": "MLB",
+                        "market_type": "SO",
+                        "player": "Tarik Skubal",
+                        "event_id": "g2",
+                        "market_id": "m2",
+                        "outcome_id": "o2",
+                        "line": 5.5,
+                        "position": "OVER",
+                        "sport_context": {"event_starts_at": "2026-08-26T19:10:00-04:00"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+    monkeypatch.setattr(
+        "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
+        lambda league: {
+            "DET": {"pitcher": "Jackson Jobe", "confirmed": True},
+            "SEA": {"pitcher": "Tarik Skubal", "confirmed": True},
+        },
+    )
+
+    status = export_projections("MLB", target_date="2026-08-26")
+    assert status["status"] == "ok"
+    written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
+    assert written["date"] == "2026-08-26"
+    assert "o1" not in [record.get("row_id") for record in written["projections"]]
+
+
 def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(monkeypatch):
     """Caching is per player, not per priced outcome, and only points rows fetch."""
 

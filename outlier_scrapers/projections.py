@@ -1258,6 +1258,17 @@ def _projection_season(props_rows: Iterable[Mapping[str, object]]) -> int:
     return datetime.now().astimezone().year
 
 
+def _row_slate_date(row: Mapping[str, object]) -> str | None:
+    context = row.get("sport_context")
+    context = context if isinstance(context, Mapping) else {}
+    starts_at = (
+        context.get("event_starts_at")
+        or row.get("event_starts_at")
+        or row.get("starts_at")
+    )
+    return _local_date(str(starts_at) if starts_at else None)
+
+
 def _projection_slate_date(
     props_payload: Mapping[str, object],
     props_rows: Iterable[Mapping[str, object]],
@@ -1283,18 +1294,11 @@ def _projection_slate_date(
     for row in props_rows:
         if not isinstance(row, Mapping):
             continue
-        context = row.get("sport_context")
-        context = context if isinstance(context, Mapping) else {}
-        starts_at = (
-            context.get("event_starts_at")
-            or row.get("event_starts_at")
-            or row.get("starts_at")
-        )
-        if local_date := _local_date(str(starts_at) if starts_at else None):
+        if local_date := _row_slate_date(row):
             candidates.add(local_date)
 
     if explicit_target is not None:
-        if candidates and candidates != {explicit_target}:
+        if candidates and explicit_target not in candidates:
             detail = ", ".join(sorted(candidates))
             raise ValueError(
                 f"props feed slate date(s) {detail} do not match projection "
@@ -1352,6 +1356,14 @@ def export_projections(
         artifact_date = _projection_slate_date(props_payload, props_rows, target_date)
     except ValueError as exc:
         return {"status": "error", "reason": str(exc), "record_count": 0}
+
+    dated_rows = [
+        row
+        for row in props_rows
+        if isinstance(row, Mapping) and _row_slate_date(row) == artifact_date
+    ]
+    if any(_row_slate_date(row) for row in props_rows if isinstance(row, Mapping)):
+        props_rows = dated_rows
 
     if sport == "MLB":
         from .probable_pitchers import load_probable_pitcher_lookup
