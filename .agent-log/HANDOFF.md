@@ -1,4 +1,3 @@
-1. **Last Commit SHA**: 695bdce18d758e108e4564bbdbd8a0c0238190ac
-2. **Files Touched**: outlier_scrapers/daily_job.py, outlier_scrapers/pack.py, calibration/blend_weights.json
-3. **Next Steps**: The pipeline and AI desk orchestration now completes successfully for both MLB and WNBA. The user requested to run the pipeline, which is now done. Next agent can review the local desk output or proceed with any further user requests.
-PR Link: https://github.com/DaSilvaDub/outlier/pull/121
+1. **Last Commit SHA**: `8dcdf0a3b28b5fc87ea78e2f81304f8a15d88197`
+2. **Files Touched**: `outlier_scrapers/pack.py`, `tests/test_pack.py`
+3. **Next Steps**: PR `#123` is open at https://github.com/DaSilvaDub/outlier/pull/123. The pack writer now preserves the canonical slate date for feedback-staging directories, aligns HOME/AWAY gameline team identity from matchup context, infers missing opponents from matchup tokens, and demotes candidate totals when the exact specialized totals board rejects that representation. Focused offline verification passed: `python -m pytest tests/test_pack.py -q`, `python -m pytest tests/test_pack.py tests/test_game_totals.py -q`, `python -m ruff check outlier_scrapers/pack.py tests/test_pack.py`, and `python -m mypy outlier_scrapers/pack.py`. Unrelated local work remains unstaged in `calibration/blend_weights.json`, `calibration/alerts/`, and `fetch_stats.py`; preserve it.
