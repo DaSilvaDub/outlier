@@ -540,7 +540,6 @@ def _is_original_recommendation(row: dict[str, Any]) -> bool:
         and units > 0
     )
 
-
 def _freeze_t30_originals(
     out_dir: Path,
     rows: list[dict[str, Any]],
@@ -588,11 +587,7 @@ def _freeze_t30_originals(
         event_starts.update(build_event_starts(props_payload, games_payload))
         probable_pitchers_by_league[league] = load_probable_pitcher_lookup(league)
 
-    pack_date = target_date if target_date else out_dir.name
-    try:
-        datetime.strptime(pack_date, "%Y-%m-%d")
-    except ValueError:
-        pack_date = ""
+    pack_date = _canonical_pack_date(target_date, out_dir)
     if pack_date:
         event_starts = {
             event_id: start
@@ -673,6 +668,39 @@ def _freeze_t30_originals(
     context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
 
 
+_SLATE_DATE_RE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+_GAMELINE_SIDE_PROPOSITIONS = {"MONEYLINE", "SPREAD", "RUN_LINE", "PUCK_LINE"}
+
+
+def _canonical_pack_date(target_date: str | None, out_dir: Path) -> str:
+    """Return the slate date without leaking a feedback-staging directory name."""
+
+    for candidate in (target_date, out_dir.name):
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        matches = [text, *_SLATE_DATE_RE.findall(text)]
+        for match in matches:
+            try:
+                datetime.strptime(match, "%Y-%m-%d")
+            except ValueError:
+                continue
+            return match
+    return str(target_date or out_dir.name)
+
+
+def _matchup_sides(matchup: Any) -> tuple[str, str] | None:
+    """Split an ``AWAY @ HOME`` matchup into its original-case tokens."""
+
+    matchup_s = str(matchup or "").strip()
+    if " @ " not in matchup_s:
+        return None
+    away_token, home_token = (part.strip() for part in matchup_s.split(" @ ", 1))
+    if not away_token or not home_token:
+        return None
+    return away_token, home_token
+
+
 def _home_away(matchup: Any, team: Any) -> str:
     """Resolve whether ``team`` is HOME or AWAY within an ``AWAY @ HOME`` matchup.
 
@@ -680,16 +708,119 @@ def _home_away(matchup: Any, team: Any) -> str:
     Comparison is code-level; matchup strings are built from canonical aliases in
     the normalizer, so an exact token match is reliable.
     """
-    matchup_s = str(matchup or "").strip()
+    sides = _matchup_sides(matchup)
     team_s = str(team or "").strip().upper()
-    if not matchup_s or not team_s or " @ " not in matchup_s:
+    if not sides or not team_s:
         return ""
-    away_tok, home_tok = (p.strip().upper() for p in matchup_s.split(" @ ", 1))
-    if team_s == home_tok:
+    away_token, home_token = sides
+    if team_s == home_token.upper():
         return "HOME"
-    if team_s == away_tok:
+    if team_s == away_token.upper():
         return "AWAY"
     return ""
+
+
+def _opponent_from_matchup(matchup: Any, team: Any) -> str | None:
+    sides = _matchup_sides(matchup)
+    team_s = str(team or "").strip().upper()
+    if not sides or not team_s:
+        return None
+    away_token, home_token = sides
+    if team_s == away_token.upper():
+        return home_token
+    if team_s == home_token.upper():
+        return away_token
+    return None
+
+
+def _align_gameline_team(
+    *,
+    matchup: Any,
+    team: Any,
+    opponent: Any,
+    headline_side: Any,
+    market_type: Any,
+    proposition: Any,
+) -> tuple[Any, Any]:
+    """Align a HOME/AWAY gameline row to the selected matchup side."""
+
+    side = str(headline_side or "").strip().upper()
+    proposition_s = str(proposition or "").strip().upper()
+    market_type_s = str(market_type or "").strip().upper()
+    if side not in {"HOME", "AWAY"} or (
+        market_type_s != "GAMELINE" and proposition_s not in _GAMELINE_SIDE_PROPOSITIONS
+    ):
+        return team, opponent
+    sides = _matchup_sides(matchup)
+    if not sides:
+        return team, opponent
+    away_token, home_token = sides
+    if side == "HOME":
+        return home_token, away_token
+    return away_token, home_token
+
+
+def _selection_side(row: Mapping[str, Any]) -> str:
+    explicit = str(row.get("best_side") or "").strip().upper()
+    if explicit in {"OVER", "UNDER"}:
+        return explicit
+    selection = f" {str(row.get('selection') or '').strip().upper()} "
+    if " UNDER " in selection:
+        return "UNDER"
+    if " OVER " in selection:
+        return "OVER"
+    return ""
+
+
+def _total_reconciliation_key(
+    row: Mapping[str, Any],
+) -> tuple[str, str, str, str, str, str]:
+    line = _to_float(row.get("line"))
+    return (
+        str(row.get("sport") or "").strip().upper(),
+        str(row.get("event_id") or "").strip(),
+        str(row.get("market_id") or "").strip(),
+        "" if line is None else f"{line:.10g}",
+        _selection_side(row),
+        str(row.get("team") or "").strip().upper(),
+    )
+
+
+def _reconcile_candidates_with_totals_board(
+    rows: list[dict[str, Any]],
+    totals_rows: list[dict[str, Any]],
+    team_totals_rows: list[dict[str, Any]],
+) -> None:
+    """Demote candidates rejected by the exact specialized totals representation."""
+
+    rejected: set[tuple[str, str, str, str, str, str]] = set()
+    for total in [*totals_rows, *team_totals_rows]:
+        key = _total_reconciliation_key(total)
+        if (
+            str(total.get("actionable") or "").strip().lower() != "true"
+            and all(key[:5])
+        ):
+            rejected.add(key)
+    for row in rows:
+        if _total_reconciliation_key(row) not in rejected:
+            continue
+        if str(row.get("actionable") or "").lower() != "true" and str(
+            row.get("board") or ""
+        ).upper() != "A":
+            continue
+        flags = [
+            flag.strip()
+            for flag in str(row.get("data_quality_flags") or "").split(";")
+            if flag.strip()
+        ]
+        if "totals_board_rejected" not in flags:
+            flags.append("totals_board_rejected")
+        row["data_quality_flags"] = ";".join(flags)
+        row["actionable"] = "false"
+        row["recommended_units_pre_news"] = ""
+        if str(row.get("board") or "").upper() == "A" or row.get("_board") == "board_a":
+            row["board"] = "A_FLAGGED"
+            row["_board"] = "flagged"
 
 
 def _priced_line_from_ev(ev_records: list[dict[str, Any]], record_id: Any) -> Any:
@@ -1185,6 +1316,14 @@ def build_row(
     matchup = card.get("matchup") or ref.get("matchup")
     team = card.get("team") or ref.get("team")
     opponent = card.get("opponent") or ref.get("opponent")
+    team, opponent = _align_gameline_team(
+        matchup=matchup,
+        team=team,
+        opponent=opponent,
+        headline_side=headline_side,
+        market_type=market_type,
+        proposition=proposition,
+    )
     # A row whose own team is unresolved must not carry a populated opponent:
     # the desk reads opponent-only context as the player's side (2026-07-18
     # Carleton row showed her matchup's other team as the only team column).
@@ -1192,6 +1331,8 @@ def build_row(
     team_enrichment_failed = not team and bool(opponent or is_player_row)
     if team_enrichment_failed:
         opponent = None
+    elif team and not opponent:
+        opponent = _opponent_from_matchup(matchup, team)
     try:
         config = get_sport_config(sport, allow_disabled=True)
     except ValueError:
@@ -2215,7 +2356,7 @@ def write_pack(
             )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    pack_date = target_date or out_dir.name
+    pack_date = _canonical_pack_date(target_date, out_dir)
     clear_derived_pack_outputs(out_dir)
     dossiers_dir = out_dir / "dossiers"
     if dossiers_dir.exists():
@@ -2284,6 +2425,12 @@ def write_pack(
             or str(r.get("matchup")).upper() in slate_matchups
             or (r.get("team") and str(r.get("team")).upper() in slate_teams)
         ]
+
+    _reconcile_candidates_with_totals_board(rows, totals_rows, team_totals_rows)
+    if opportunity_rows is not None:
+        _reconcile_candidates_with_totals_board(
+            opportunity_rows, totals_rows, team_totals_rows
+        )
 
     # Build all legacy alternate artifacts first, then compare them on one
     # conservative, price-aware shadow surface.  The legacy files remain for
@@ -2572,7 +2719,7 @@ def write_pack(
         "policy_fingerprint": policy_fingerprint(policy),
         "mode": policy.mode,
         "code_git_sha": git_sha,
-        "slate_date": out_dir.name,
+        "slate_date": pack_date,
         "row_counts": {
             "candidates": len(rows),
             "game_totals": len(totals_rows),
@@ -2670,7 +2817,7 @@ def write_pack(
     (out_dir / "briefing.md").write_text(
         build_briefing(
             rows,
-            out_dir.name,
+            pack_date,
             freshness_lines,
             totals_rows if games_norm_by_league is not None else None,
             team_totals_rows if games_norm_by_league is not None else None,

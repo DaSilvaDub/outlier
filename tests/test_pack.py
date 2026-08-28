@@ -9,9 +9,11 @@ from outlier_scrapers import paths as P
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _apply_learned_stake_before_caps,
+    _canonical_pack_date,
     _load_learned_stake_runtime,
     _opportunity_key,
     _apply_enforced_portfolio_units,
+    _reconcile_candidates_with_totals_board,
     _restore_published_pack,
     _swap_staged_pack,
     american_to_decimal,
@@ -2730,6 +2732,157 @@ def test_gameline_without_team_context_is_not_flagged():
     row = make_row(card, ev)
     assert row is not None
     assert "team_enrichment_failed" not in row["data_quality_flags"]
+
+
+def _priced_ev(line=None):
+    record = {
+        "market_id": "m1",
+        "outcome_id": "o1",
+        "book": "FD",
+        "book_odds": 110,
+        "book_decimal_odds": 2.1,
+        "calculated_ev_pct": 0.05,
+    }
+    if line is not None:
+        record["current_line"] = line
+    return record
+
+
+def test_moneyline_home_uses_home_team_from_matchup():
+    card = ev_card(
+        side="HOME",
+        market_type="GAMELINE",
+        market="MONEYLINE",
+        proposition="MONEYLINE",
+        matchup="CIN @ SF",
+        team="CIN",
+        opponent="SF",
+        line=0,
+    )
+    row = make_row(card, [_priced_ev()])
+    assert row["team"] == "SF"
+    assert row["opponent"] == "CIN"
+    assert row["home_away"] == "HOME"
+
+
+def test_spread_away_infers_opponent_from_matchup():
+    card = ev_card(
+        side="AWAY",
+        market_type="GAMELINE",
+        market="SPREAD",
+        proposition="SPREAD",
+        matchup="BAL @ STL",
+        team="BAL",
+        line=0.5,
+    )
+    row = make_row(card, [_priced_ev()])
+    assert row["team"] == "BAL"
+    assert row["opponent"] == "STL"
+    assert row["home_away"] == "AWAY"
+
+
+def test_team_total_infers_opponent_without_realigning_over_under_side():
+    card = ev_card(
+        side="OVER",
+        market_type="TEAM_PROP",
+        market="R",
+        proposition="RUNS",
+        matchup="CHC @ ARI",
+        team="ARI",
+        line=4.5,
+    )
+    row = make_row(card, [_priced_ev()])
+    assert row["team"] == "ARI"
+    assert row["opponent"] == "CHC"
+    assert row["home_away"] == "HOME"
+
+
+def test_canonical_pack_date_strips_feedback_staging_dirname():
+    staging = Path(".2026-08-26.feedback-staging-46d28fba875041119023a0545c4b4bec")
+    assert _canonical_pack_date("2026-08-26", staging) == "2026-08-26"
+    assert _canonical_pack_date(None, staging) == "2026-08-26"
+    assert _canonical_pack_date(None, Path("2026-08-26")) == "2026-08-26"
+
+
+def test_write_pack_briefing_slate_ignores_staging_dirname(tmp_path):
+    staging = tmp_path / ".2026-08-26.feedback-staging-deadbeefcafebabe"
+    write_pack([], staging, target_date="2026-08-26")
+    briefing = (staging / "briefing.md").read_text(encoding="utf-8")
+    assert briefing.splitlines()[0] == "SLATE: 2026-08-26"
+    sidecar = json.loads((staging / "portfolio_risk.json").read_text(encoding="utf-8"))
+    assert sidecar["slate_date"] == "2026-08-26"
+
+
+def _candidate_total(*, side="OVER", line=8.5, team=""):
+    return {
+        "sport": "MLB",
+        "event_id": "game-1",
+        "market_id": "total-market",
+        "selection": f"Game Total {side} {line}",
+        "line": line,
+        "team": team,
+        "actionable": "true",
+        "board": "A",
+        "_board": "board_a",
+        "recommended_units_pre_news": 1.0,
+        "data_quality_flags": "",
+    }
+
+
+def _specialized_total(*, side="OVER", line=8.5, team="", actionable="false"):
+    return {
+        "sport": "MLB",
+        "event_id": "game-1",
+        "market_id": "total-market",
+        "selection": f"Game Total {side} {line}",
+        "best_side": side,
+        "line": line,
+        "team": team,
+        "actionable": actionable,
+        "quality_flags": "BELOW_MIN_EDGE",
+    }
+
+
+def test_reconcile_demotes_exact_candidate_rejected_by_totals_board():
+    rows = [_candidate_total()]
+    _reconcile_candidates_with_totals_board(rows, [_specialized_total()], [])
+    assert rows[0]["actionable"] == "false"
+    assert rows[0]["board"] == "A_FLAGGED"
+    assert rows[0]["_board"] == "flagged"
+    assert rows[0]["recommended_units_pre_news"] == ""
+    assert rows[0]["data_quality_flags"] == "totals_board_rejected"
+
+
+@pytest.mark.parametrize(
+    "specialized",
+    [
+        _specialized_total(side="UNDER"),
+        _specialized_total(line=9.5),
+        {**_specialized_total(), "event_id": "game-2"},
+    ],
+)
+def test_reconcile_preserves_nonmatching_total_representation(specialized):
+    rows = [_candidate_total()]
+    _reconcile_candidates_with_totals_board(rows, [specialized], [])
+    assert rows[0]["actionable"] == "true"
+    assert rows[0]["board"] == "A"
+    assert rows[0]["recommended_units_pre_news"] == 1.0
+
+
+def test_reconcile_preserves_candidate_when_exact_specialized_total_is_actionable():
+    rows = [_candidate_total()]
+    _reconcile_candidates_with_totals_board(
+        rows, [_specialized_total(actionable="true")], []
+    )
+    assert rows[0]["actionable"] == "true"
+
+
+def test_reconcile_team_total_identity_includes_team():
+    rows = [_candidate_total(team="NYY")]
+    _reconcile_candidates_with_totals_board(
+        rows, [], [_specialized_total(team="BOS")]
+    )
+    assert rows[0]["actionable"] == "true"
 
 
 def test_market_label_disambiguates_terse_code():
