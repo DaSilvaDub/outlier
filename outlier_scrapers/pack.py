@@ -588,7 +588,7 @@ def _freeze_t30_originals(
         probable_pitchers_by_league[league] = load_probable_pitcher_lookup(league)
 
     pack_date = _canonical_pack_date(target_date, out_dir)
-    if pack_date:
+    if _SLATE_DATE_RE.fullmatch(pack_date):
         event_starts = {
             event_id: start
             for event_id, start in event_starts.items()

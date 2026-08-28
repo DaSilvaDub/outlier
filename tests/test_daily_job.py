@@ -245,7 +245,9 @@ def _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall: str) -> int:
     (fake_pack / "briefing.md").write_text("SLATE", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(
+        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
+    )
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -424,7 +426,11 @@ def test_writer_lock_conflict_prevents_every_pipeline_mutation(monkeypatch):
         lambda *_args, **_kwargs: called.append("settlements"),
     )
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda *_args: called.append("auth"))
-    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda *_args: called.append("refresh"))
+    monkeypatch.setattr(
+        daily_job,
+        "run_explicit_refresh",
+        lambda *_args, **_kwargs: called.append("refresh"),
+    )
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: called.append("pack"))
 
     assert daily_job.main(["--leagues", "MLB"]) == 2
@@ -462,7 +468,9 @@ def test_writer_lock_precedes_mutations_and_spans_manifest(tmp_path, monkeypatch
         daily_job, "perform_auth_check", lambda *_args: calls.append("auth") or True
     )
     monkeypatch.setattr(
-        daily_job, "run_explicit_refresh", lambda *_args: calls.append("refresh") or True
+        daily_job,
+        "run_explicit_refresh",
+        lambda *_args, **_kwargs: calls.append("refresh") or True,
     )
     monkeypatch.setattr(
         daily_job, "check_freshness", lambda *_args: calls.append("health") or True
@@ -522,7 +530,9 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     (fake_pack / "briefing.md").write_text("No pregame candidates", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(
+        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
+    )
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -572,7 +582,9 @@ def test_daily_job_runs_desk_for_actionable_totals_only(tmp_path, monkeypatch):
     (fake_pack / "briefing.md").write_text("Totals only", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(
+        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
+    )
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -617,7 +629,9 @@ def test_daily_job_runs_desk_for_actionable_team_totals_only(tmp_path, monkeypat
     (fake_pack / "briefing.md").write_text("Team totals only", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues: True)
+    monkeypatch.setattr(
+        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
+    )
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
