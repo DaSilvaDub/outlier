@@ -21,6 +21,23 @@ DIMENSIONS = (
     "data_quality_tier",
 )
 
+# 2026-07 ledger rows carry a column-misalignment corruption: market_type and
+# time_before_game land as stringified percentile literals ('50.0', '25.0',
+# '75.0') instead of real category labels. Training on them poisons every
+# dimension keyed by those columns, so they are quarantined before fitting.
+_CORRUPT_COLUMN_VALUES = {"50.0", "25.0", "75.0"}
+
+# Until a segment demonstrates an out-of-sample Brier improvement over the
+# market-only baseline, its learned weight is floored here rather than
+# trusted at its raw in-sample fit. fit_weight_artifact has no chronological
+# holdout of its own history, so this is the safety margin against
+# overriding the market on noise.
+DEFAULT_MARKET_WEIGHT_FLOOR = 0.75
+DEFAULT_HOLDOUT_FRACTION = 0.2
+# Minimum rows required on each side of the chronological split before an
+# out-of-sample verdict is trusted at all; below this, the floor applies.
+MIN_HOLDOUT_SAMPLES = 20
+
 
 def _float(value: Any) -> float | None:
     if value in (None, "") or isinstance(value, bool):
@@ -121,6 +138,13 @@ def segment_context(row: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _is_corrupt_row(row: Mapping[str, Any]) -> bool:
+    """True when the row carries the 2026-07 column-misalignment corruption."""
+    market_type = str(row.get("market_type") or "").strip()
+    time_before_game = str(row.get("time_before_game") or "").strip()
+    return market_type in _CORRUPT_COLUMN_VALUES or time_before_game in _CORRUPT_COLUMN_VALUES
+
+
 def _training_pair(row: Mapping[str, Any]) -> tuple[float, float, float] | None:
     result = str(row.get("win_loss_push") or "").strip().upper()
     market = _probability(row.get("market_consensus_prob"))
@@ -162,19 +186,109 @@ def fit_market_weight(pairs: Iterable[tuple[float, float, float]]) -> dict[str, 
     }
 
 
+def _brier(pairs: Iterable[tuple[float, float, float]], market_weight: float) -> float | None:
+    kept = list(pairs)
+    if not kept:
+        return None
+    total = sum(
+        (market_weight * market + (1.0 - market_weight) * independent - actual) ** 2
+        for market, independent, actual in kept
+    )
+    return total / len(kept)
+
+
+def _chronological_split(
+    timestamped_pairs: list[tuple[datetime, tuple[float, float, float]]],
+    holdout_fraction: float,
+) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+    ordered = sorted(timestamped_pairs, key=lambda item: item[0])
+    holdout_n = int(round(len(ordered) * holdout_fraction))
+    if holdout_n < 1 or holdout_n >= len(ordered):
+        return [pair for _, pair in ordered], []
+    train = ordered[:-holdout_n]
+    holdout = ordered[-holdout_n:]
+    return [pair for _, pair in train], [pair for _, pair in holdout]
+
+
+def _evaluate_oos(
+    timestamped_pairs: list[tuple[datetime, tuple[float, float, float]]],
+    *,
+    holdout_fraction: float,
+    min_samples: int,
+) -> dict[str, Any] | None:
+    """Fit on the earlier slice, score the later slice against the market baseline.
+
+    Returns None when there isn't enough data on both sides of the split to
+    trust a verdict; callers must treat that as "no OOS evidence" and floor
+    the weight rather than trust the in-sample fit.
+    """
+    train_pairs, holdout_pairs = _chronological_split(timestamped_pairs, holdout_fraction)
+    if len(train_pairs) < min_samples or len(holdout_pairs) < MIN_HOLDOUT_SAMPLES:
+        return None
+    trained = fit_market_weight(train_pairs)
+    market_only_brier = _brier(holdout_pairs, 1.0)
+    blended_brier = _brier(holdout_pairs, float(trained["market_weight"]))
+    if market_only_brier is None or blended_brier is None:
+        return None
+    return {
+        "n_train": len(train_pairs),
+        "n_holdout": len(holdout_pairs),
+        "trained_market_weight": trained["market_weight"],
+        "market_only_brier": round(market_only_brier, 10),
+        "blended_brier": round(blended_brier, 10),
+        "improved": blended_brier < market_only_brier,
+    }
+
+
+def _apply_floor(fit: dict[str, Any], floor: float, holdout: dict[str, Any] | None) -> dict[str, Any]:
+    """Publish a weight the holdout actually backs, or floor it.
+
+    When the holdout split shows improvement, the published weight must be
+    the train-only fit that was scored against the holdout
+    (``holdout["trained_market_weight"]``) — never ``fit["market_weight"]``,
+    which is fit on every eligible row *including* the holdout slice. Using
+    the all-data fit here would leak the holdout labels into the very
+    number the holdout was supposed to validate, silently publishing a
+    weight that was never actually tested out-of-sample.
+    """
+    if holdout is not None and holdout.get("improved"):
+        validated = float(holdout["trained_market_weight"])
+        return {
+            **fit,
+            "raw_market_weight": fit["market_weight"],
+            "market_weight": round(validated, 8),
+            "model_weight": round(1.0 - validated, 8),
+        }
+    floored = max(float(fit["market_weight"]), floor)
+    return {
+        **fit,
+        "raw_market_weight": fit["market_weight"],
+        "market_weight": round(floored, 8),
+        "model_weight": round(1.0 - floored, 8),
+    }
+
+
 def fit_weight_artifact(
     rows: Iterable[Mapping[str, Any]],
     *,
-    min_samples: int = 30,
+    min_samples: int = 200,
     prior_strength: float = 30.0,
     generated_at: str | None = None,
+    holdout_fraction: float = DEFAULT_HOLDOUT_FRACTION,
+    market_weight_floor: float = DEFAULT_MARKET_WEIGHT_FLOOR,
 ) -> dict[str, Any]:
     if min_samples < 1:
         raise ValueError("min_samples must be at least 1")
     if prior_strength < 0:
         raise ValueError("prior_strength cannot be negative")
+    if not 0.0 <= holdout_fraction < 1.0:
+        raise ValueError("holdout_fraction must be in [0.0, 1.0)")
+    if not 0.0 <= market_weight_floor <= 1.0:
+        raise ValueError("market_weight_floor must be in [0.0, 1.0]")
     eligible: list[tuple[Mapping[str, Any], tuple[float, float, float]]] = []
     for row in rows:
+        if _is_corrupt_row(row):
+            continue
         pair = _training_pair(row)
         context = segment_context(row)
         hours = _float(row.get("hours_before_game"))
@@ -183,30 +297,47 @@ def fit_weight_artifact(
         if pair is None or hours is None or hours < 0 or "UNKNOWN" in context.values():
             continue
         eligible.append((row, pair))
+
+    def _timestamp(row: Mapping[str, Any]) -> datetime:
+        return _parse_timestamp(row.get("captured_at")) or datetime.min.replace(tzinfo=timezone.utc)
+
+    global_timestamped = [(_timestamp(row), pair) for row, pair in eligible]
     global_fit = fit_market_weight(pair for _, pair in eligible)
     active = global_fit["n"] >= min_samples
+    global_holdout: dict[str, Any] | None = None
     if not active:
         global_fit = {**global_fit, "market_weight": 1.0, "model_weight": 0.0}
+    else:
+        global_holdout = _evaluate_oos(
+            global_timestamped, holdout_fraction=holdout_fraction, min_samples=min_samples
+        )
+        global_fit = _apply_floor(global_fit, market_weight_floor, global_holdout)
     dimensions: dict[str, dict[str, dict[str, Any]]] = {}
     if active:
         global_weight = float(global_fit["market_weight"])
         for dimension in DIMENSIONS:
-            groups: dict[str, list[tuple[float, float, float]]] = defaultdict(list)
+            groups: dict[str, list[tuple[datetime, tuple[float, float, float]]]] = defaultdict(list)
             for row, pair in eligible:
-                groups[segment_context(row)[dimension]].append(pair)
+                groups[segment_context(row)[dimension]].append((_timestamp(row), pair))
             fitted: dict[str, dict[str, Any]] = {}
-            for value, pairs in sorted(groups.items()):
+            for value, timestamped in sorted(groups.items()):
+                pairs = [pair for _, pair in timestamped]
                 if len(pairs) < min_samples:
                     continue
                 raw = fit_market_weight(pairs)
+                segment_holdout = _evaluate_oos(
+                    timestamped, holdout_fraction=holdout_fraction, min_samples=min_samples
+                )
+                floored = _apply_floor(raw, market_weight_floor, segment_holdout)
                 shrunk = (
-                    len(pairs) * float(raw["market_weight"]) + prior_strength * global_weight
+                    len(pairs) * float(floored["market_weight"]) + prior_strength * global_weight
                 ) / (len(pairs) + prior_strength)
                 fitted[value] = {
                     **raw,
                     "raw_market_weight": raw["market_weight"],
                     "market_weight": round(shrunk, 8),
                     "model_weight": round(1.0 - shrunk, 8),
+                    "holdout": segment_holdout,
                 }
             dimensions[dimension] = fitted
     artifact: dict[str, Any] = {
@@ -219,8 +350,11 @@ def fit_weight_artifact(
         "objective": "brier_score",
         "min_samples": min_samples,
         "prior_strength": prior_strength,
+        "holdout_fraction": holdout_fraction,
+        "market_weight_floor": market_weight_floor,
         "eligible_samples": len(eligible),
         "global": global_fit,
+        "global_holdout": global_holdout,
         "dimensions": dimensions,
     }
     fingerprint_payload = {key: value for key, value in artifact.items() if key != "generated_at"}
