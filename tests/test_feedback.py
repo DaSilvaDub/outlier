@@ -117,6 +117,9 @@ def test_capture_pack_is_idempotent_and_keeps_unselected_signal_features(tmp_pat
             )
         }
         assert verdicts == {"m1": "PLAY", "m2": "STAND_DOWN"}
+        positive_population = feedback._positive_unit_recommendation_rows(conn)
+        assert [row["market_id"] for row in positive_population] == ["m1"]
+        assert positive_population[0]["win_loss_push"] is None
 
     decision_rows = _read_csv(pack_dir / "decisions.csv")
     assert len(decision_rows) == 2
@@ -1025,6 +1028,7 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
         "decision_coverage.csv",
         "model_performance.csv",
         "ultimate_alt_shadow.csv",
+        "learned_multiplier_promotion.json",
         "summary.json",
         "report.md",
     }
@@ -1046,11 +1050,98 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     assert int(decision_coverage["PLAY"]["settled_decisions"]) == 1
     assert int(decision_coverage["PLAY"]["unsettled_decisions"]) == 0
     assert int(decision_coverage["PLAY"]["missing_event_start"]) == 1
+    promotion = json.loads(
+        (report_dir / "learned_multiplier_promotion.json").read_text(encoding="utf-8")
+    )
+    assert promotion["status"] == "NOT_READY"
+    assert promotion["auto_promotion"] is False
+    assert promotion["population_definition"] == (
+        "settled_positive_unit_pack_recommendations_v1"
+    )
+    assert promotion["population"]["total_recommendations"] == 1
+    assert promotion["population"]["settled_recommendations"] == 1
+    assert "minimum_settled_recommendations" in promotion["failed_gates"]
+    summary = json.loads((report_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["learned_multiplier_promotion"] == promotion
+    assert "## Learned-multiplier promotion signal" in (
+        report_dir / "report.md"
+    ).read_text(encoding="utf-8")
     models = _read_csv(report_dir / "model_performance.csv")
     a_bet = next(row for row in models if row["model"] == "A" and row["verdict"] == "BET")
     assert float(a_bet["recommendation_accuracy"]) == pytest.approx(1.0)
     assert (report_dir / "ledgers" / "market_snapshots.csv").exists()
     assert (report_dir / "ledgers" / "pack_snapshot_memberships.csv").exists()
+
+
+def test_learned_multiplier_signal_turns_ready_only_when_every_gate_passes():
+    rows = []
+    for index in range(200):
+        rows.append(
+            {
+                "pack_capture_id": f"pack-{index}",
+                "snapshot_id": f"snapshot-{index}",
+                "units": 1.0,
+                "sport": "MLB" if index % 2 == 0 else "WNBA",
+                "event_starts_at": f"2026-07-{index % 30 + 1:02d}T20:00:00+00:00",
+                "win_loss_push": "W" if index < 110 else "L",
+                "decimal_price": 2.0,
+                "market_consensus_prob": 0.55,
+                "push_prob": 0.0,
+                "clv_price": 0.01,
+            }
+        )
+    policy = {
+        **feedback.LEARNED_MULTIPLIER_PROMOTION_DEFAULTS,
+        "required_sport_samples": {"MLB": 50, "WNBA": 50},
+        "config_valid": True,
+        "config_reason": "ok",
+    }
+
+    signal = feedback.learned_multiplier_promotion_signal(rows, policy)
+
+    assert signal["status"] == "READY_FOR_MANUAL_REVIEW"
+    assert signal["ready_for_manual_promotion_review"] is True
+    assert signal["auto_promotion"] is False
+    assert signal["failed_gates"] == []
+    assert signal["population"]["settled_recommendations"] == 200
+    assert signal["population"]["observation_days"] == 30
+    assert signal["population"]["roi"] == pytest.approx(0.10)
+    assert signal["population"]["calibration_gap"] == pytest.approx(0.0)
+    assert signal["population"]["price_coverage"] == pytest.approx(1.0)
+
+    source_mismatch = feedback.learned_multiplier_promotion_signal(
+        rows, policy, active_source_probability_column="final_blended_prob"
+    )
+    assert source_mismatch["status"] == "NOT_READY"
+    assert source_mismatch["gates"]["source_probability_matches_portfolio_policy"] is False
+
+    for row in rows[:11]:
+        row["decimal_price"] = None
+    price_blocked = feedback.learned_multiplier_promotion_signal(rows, policy)
+    assert price_blocked["status"] == "NOT_READY"
+    assert price_blocked["gates"]["minimum_price_coverage"] is False
+    for row in rows[:11]:
+        row["decimal_price"] = 2.0
+
+    rows[0]["event_starts_at"] = ""
+    blocked = feedback.learned_multiplier_promotion_signal(rows, policy)
+    assert blocked["status"] == "NOT_READY"
+    assert blocked["gates"]["maximum_missing_event_start_rate"] is False
+    assert blocked["ready_for_manual_promotion_review"] is False
+
+
+def test_learned_multiplier_promotion_policy_is_fail_closed(tmp_path):
+    malformed = tmp_path / "learned_multiplier_promotion.json"
+    malformed.write_text('{"min_settled_recommendations": "many"}', encoding="utf-8")
+
+    policy = feedback.load_learned_multiplier_promotion_policy(malformed)
+    signal = feedback.learned_multiplier_promotion_signal([], policy)
+
+    assert policy["config_valid"] is False
+    assert policy["config_reason"] == "invalid_config_values"
+    assert signal["status"] == "NOT_READY"
+    assert signal["gates"]["config_valid"] is False
+    assert "config_valid" in signal["failed_gates"]
 
 
 def test_report_separates_unsettled_plays_from_settled_performance(tmp_path):

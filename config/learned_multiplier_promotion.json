@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "source_probability_column": "market_consensus_prob",
+  "min_settled_recommendations": 200,
+  "min_observation_days": 30,
+  "min_settlement_rate": 0.8,
+  "max_missing_event_start_rate": 0.0,
+  "min_probability_coverage": 0.95,
+  "max_absolute_calibration_gap": 0.03,
+  "require_positive_roi": true,
+  "min_price_coverage": 0.95,
+  "min_clv_coverage": 0.8,
+  "min_mean_price_clv": 0.0,
+  "required_sport_samples": {
+    "MLB": 50,
+    "WNBA": 50
+  }
+}

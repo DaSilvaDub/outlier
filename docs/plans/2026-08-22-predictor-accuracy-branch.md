@@ -46,7 +46,10 @@ This worktree is for development/tests only until explicitly merged.
   and drawdown activation is validated on the actual settled positive-unit
   recommendation population (not the broad eligible/non-play population).
   Portfolio caps remain enforced, and liquidity, projection-side-conflict, and
-  predictive-signal gates remain active independently of this switch.
+  predictive-signal gates remain active independently of this switch. The
+  automatic readiness result is emitted as
+  `calibration/reports/latest/learned_multiplier_promotion.json`; only
+  `READY_FOR_MANUAL_REVIEW` authorizes a promotion review, never auto-activation.
 - Full projection layer (hits allowed, totals, NRFI, channel C) remains plan-level
 
 ## Verify

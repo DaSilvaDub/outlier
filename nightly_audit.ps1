@@ -17,7 +17,8 @@ function Invoke-CheckedPython {
 function Write-AuditStatus {
     param(
         [Parameter(Mandatory = $true)][ValidateSet("ok", "failed")][string]$Status,
-        [Parameter(Mandatory = $true)][string]$Message
+        [Parameter(Mandatory = $true)][string]$Message,
+        [hashtable]$LearnedMultiplierPromotion = @{}
     )
 
     New-Item -ItemType Directory -Path $alertsDir -Force | Out-Null
@@ -25,9 +26,10 @@ function Write-AuditStatus {
         status = $Status
         timestamp_utc = [DateTime]::UtcNow.ToString("o")
         message = $Message
+        learned_multiplier_promotion = $LearnedMultiplierPromotion
     }
     $temporary = "$statusPath.tmp"
-    $payload | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
+    $payload | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporary -Encoding UTF8
     Move-Item -LiteralPath $temporary -Destination $statusPath -Force
 }
 
@@ -55,6 +57,17 @@ try {
     if (-not (Test-Path -LiteralPath $reportPath)) {
         throw "missing $reportPath after feedback report generation"
     }
+    $promotionPath = Join-Path $repoRoot "calibration\reports\latest\learned_multiplier_promotion.json"
+    if (-not (Test-Path -LiteralPath $promotionPath)) {
+        throw "missing $promotionPath after feedback report generation"
+    }
+    $promotion = Get-Content -Raw -LiteralPath $promotionPath | ConvertFrom-Json
+    $promotionReceipt = @{
+        status = [string]$promotion.status
+        ready_for_manual_promotion_review = [bool]$promotion.ready_for_manual_promotion_review
+        failed_gates = @($promotion.failed_gates)
+    }
+    Write-Output "Learned-multiplier promotion signal: $($promotionReceipt.status)"
 
     Write-Output "Refitting audit-only blend weights..."
     Invoke-CheckedPython @(
@@ -79,7 +92,8 @@ try {
         "--policy", (Join-Path $repoRoot "config\portfolio_risk.json")
     )
 
-    Write-AuditStatus -Status "ok" -Message "Nightly calibration audit completed."
+    Write-AuditStatus -Status "ok" -Message "Nightly calibration audit completed." `
+        -LearnedMultiplierPromotion $promotionReceipt
     Write-Output "Nightly calibration audit completed."
 }
 catch {

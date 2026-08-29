@@ -177,6 +177,15 @@ whether the pass saved or cost a bet.
 - `play_vs_stand_down.csv`, `decision_coverage.csv`, and `model_performance.csv`.
   ROI and hit-rate tables are settled-only; `decision_coverage.csv` separately
   reports total, settled, unsettled, and missing-event-time PLAY counts.
+- `learned_multiplier_promotion.json`. This fail-closed signal counts only pack
+  memberships that were selected, actionable, assigned positive units, and
+  published as `PLAY`/`BET`. Thresholds live in
+  `config/learned_multiplier_promotion.json`; the same signal is embedded in
+  `summary.json` and summarized in `report.md`. `READY_FOR_MANUAL_REVIEW` never
+  changes live policy automatically: activation still requires a reviewed,
+  checked-in change to `shadow_multipliers_neutral`. The nightly audit also
+  copies the status and failed-gate list into
+  `calibration/alerts/nightly_audit_status.json`.
 - `missing_edge_diagnostics.csv`. The same diagnostic is embedded in
   `summary.json`; it reports settled rows with a null edge and groups likely
   missing inputs, including `GAMELINE` rows with blank `model_prob_source`.
