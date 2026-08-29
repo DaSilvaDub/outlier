@@ -236,6 +236,85 @@ def mlb_total_bases_distribution(
     return _bounded_distribution(aggregate)
 
 
+# NB2 dispersion for full-game MLB run totals. Not fit from data: it is a
+# literature-typical placeholder (variance moderately above the Poisson mean,
+# consistent with well-documented run-total overdispersion) pending an
+# empirical method-of-moments refit from settled ``actual_result`` totals
+# once enough accumulate (see ``empirical_game_total_dispersion``). Anything
+# derived from it is a market-implied diagnostic, never an independent
+# forecast, until it is replaced with a fitted value.
+DEFAULT_MLB_GAME_TOTAL_DISPERSION = 12.0
+
+
+def mlb_game_total_runs_distribution(
+    mean: float, *, dispersion: float = DEFAULT_MLB_GAME_TOTAL_DISPERSION, maximum: int | None = None
+) -> ProjectionDistribution:
+    """Project full-game combined run total as a single NB2 around ``mean``.
+
+    ``mean`` is expected to come from the market itself (e.g. the ladder's
+    interpolated fair total) rather than a fundamentals forecast — this
+    pipeline has no independent run-scoring model yet. The distribution
+    exists to give that market-implied point a shape (sigma, quantiles) so
+    edges can be standardized and multi-line probabilities stay internally
+    consistent, not to claim new predictive power.
+    """
+    if mean < 0:
+        raise ValueError("mean must be nonnegative")
+    return negative_binomial_distribution(mean, dispersion, maximum=maximum)
+
+
+def standardized_edge(distribution: ProjectionDistribution, line: float) -> float:
+    """(mean - line) / sigma for a projection distribution at a totals line.
+
+    A dimensionless alternative to a raw probability-edge threshold: it
+    expresses how many standard deviations the distribution's mean sits from
+    the line, so the same gate is comparable across totals with very
+    different scales (e.g. a game total vs. a team total) instead of a flat
+    percentage-point cutoff like ``MIN_EDGE_TOTALS``.
+    """
+    variance = distribution.variance
+    if variance <= 0:
+        raise ValueError("distribution variance must be positive")
+    return (distribution.mean - float(line)) / math.sqrt(variance)
+
+
+def fit_negative_binomial_dispersion(mean: float, sample_variance: float) -> float | None:
+    """Method-of-moments NB2 dispersion from an observed mean/variance.
+
+    Returns None when the sample is not overdispersed relative to Poisson
+    (``sample_variance <= mean``): NB2 cannot represent that, and the caller
+    should fall back to a Poisson distribution or the documented default.
+    """
+    if mean <= 0 or sample_variance <= mean:
+        return None
+    return mean * mean / (sample_variance - mean)
+
+
+def empirical_game_total_dispersion(actual_totals: Iterable[float]) -> dict[str, float | int | None]:
+    """Method-of-moments NB2 dispersion fit from settled game-total outcomes.
+
+    Pure, DB-free: callers pass in the actual settled totals (e.g. from
+    ``settlements.actual_result``) they've already fetched. Returns n/mean/
+    variance alongside the fitted dispersion (None when underdispersed or
+    n < 2) so a caller can decide whether to trust it over the placeholder
+    default.
+    """
+    values = [float(value) for value in actual_totals]
+    n = len(values)
+    if n == 0:
+        return {"n": 0, "mean": None, "variance": None, "dispersion": None}
+    mean = sum(values) / n
+    if n < 2:
+        return {"n": n, "mean": mean, "variance": None, "dispersion": None}
+    variance = sum((value - mean) ** 2 for value in values) / (n - 1)
+    return {
+        "n": n,
+        "mean": mean,
+        "variance": variance,
+        "dispersion": fit_negative_binomial_dispersion(mean, variance),
+    }
+
+
 STARTER_PROJECTED_BF = 22.0
 LEAGUE_STRIKEOUT_RATE = 0.225
 LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"

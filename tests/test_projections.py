@@ -6,8 +6,11 @@ import pytest
 from outlier_scrapers.projections import (
     _projection_slate_date,
     build_mlb_so_projections,
+    empirical_game_total_dispersion,
     export_projections,
+    fit_negative_binomial_dispersion,
     mlb_first_inning_run_distribution,
+    mlb_game_total_runs_distribution,
     mlb_hits_allowed_distribution,
     mlb_so_projection_record,
     mlb_strikeout_distribution,
@@ -15,6 +18,7 @@ from outlier_scrapers.projections import (
     negative_binomial_distribution,
     parse_args,
     project_rows,
+    standardized_edge,
 )
 
 
@@ -62,6 +66,68 @@ def test_total_bases_has_zero_hurdle_and_compound_outcomes():
     assert_valid_distribution(distribution)
     assert distribution.pmf[0] == pytest.approx(0.65**4)
     assert distribution.pmf.get(1, 0.0) > 0
+
+
+def test_mlb_game_total_runs_distribution_is_bounded_and_calibrated():
+    distribution = mlb_game_total_runs_distribution(8.5)
+    assert_valid_distribution(distribution)
+    assert distribution.mean == pytest.approx(8.5, abs=0.01)
+
+
+def test_mlb_game_total_runs_distribution_rejects_negative_mean():
+    with pytest.raises(ValueError, match="nonnegative"):
+        mlb_game_total_runs_distribution(-1.0)
+
+
+def test_standardized_edge_sign_and_scale():
+    distribution = mlb_game_total_runs_distribution(9.0)
+    sigma = math.sqrt(distribution.variance)
+    over_edge = standardized_edge(distribution, 9.0 - sigma)
+    under_edge = standardized_edge(distribution, 9.0 + sigma)
+    assert over_edge == pytest.approx(1.0, abs=1e-6)
+    assert under_edge == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_standardized_edge_rejects_zero_variance_distribution():
+    degenerate = negative_binomial_distribution(0.0, 8.0)
+    with pytest.raises(ValueError, match="variance"):
+        standardized_edge(degenerate, 1.0)
+
+
+def test_fit_negative_binomial_dispersion_matches_known_variance():
+    # NB2 with mean=4, dispersion=8 has variance = mean + mean^2/dispersion = 6.0.
+    dispersion = fit_negative_binomial_dispersion(4.0, 6.0)
+    assert dispersion == pytest.approx(8.0)
+
+
+def test_fit_negative_binomial_dispersion_none_when_not_overdispersed():
+    assert fit_negative_binomial_dispersion(4.0, 4.0) is None
+    assert fit_negative_binomial_dispersion(4.0, 3.0) is None
+    assert fit_negative_binomial_dispersion(0.0, 6.0) is None
+
+
+def test_empirical_game_total_dispersion_fits_from_settled_totals():
+    # Construct a sample with a known mean/variance by hand.
+    totals = [6.0, 8.0, 8.0, 10.0, 8.0, 10.0, 6.0, 8.0]
+    result = empirical_game_total_dispersion(totals)
+    assert result["n"] == len(totals)
+    assert result["mean"] == pytest.approx(sum(totals) / len(totals))
+    assert result["variance"] is not None
+    if result["variance"] > result["mean"]:
+        assert result["dispersion"] is not None
+    else:
+        assert result["dispersion"] is None
+
+
+def test_empirical_game_total_dispersion_handles_empty_and_singleton():
+    assert empirical_game_total_dispersion([]) == {
+        "n": 0, "mean": None, "variance": None, "dispersion": None,
+    }
+    single = empirical_game_total_dispersion([9.0])
+    assert single["n"] == 1
+    assert single["mean"] == pytest.approx(9.0)
+    assert single["variance"] is None
+    assert single["dispersion"] is None
 
 
 def test_projection_cli_contract():

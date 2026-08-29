@@ -17,6 +17,7 @@ Reasoning agents consume the output; they never recompute probability or edge.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -29,9 +30,12 @@ from outlier_scrapers.game_totals import (
     blend_over_probability,
     build_market_ladder,
     derive_push_prob,
+    interpolate_fair_total,
     is_full_game_total,
+    is_game_total_record,
     logical_market_key,
 )
+from outlier_scrapers.projections import mlb_game_total_runs_distribution, standardized_edge
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.team_totals import team_total_propositions
 
@@ -77,6 +81,13 @@ def build_totals_prob_index(
     for the OVER side) and ``push_prob`` (0.0 for half lines, derived from the
     bracketing ladder for integer lines, None when underivable). Raw market_ids
     that split one logical market share the same line map.
+
+    Full-game GAMELINE totals also carry an audit-only distributional
+    diagnostic: ``fair_total`` (ladder-interpolated), ``projection_mean``/
+    ``projection_sigma`` (a market-implied NB2 shape around it), and
+    ``standardized_edge_diagnostic`` (sigma-units from that mean to the
+    entry's line). None of these are independent forecasts and none feed
+    p_over, model_prob, or sizing.
     """
     records = (games_norm or {}).get("records") or []
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -117,16 +128,41 @@ def build_totals_prob_index(
             if l10 is not None:
                 l10_by_line[rec_line] = l10
 
+        # Audit-only distributional diagnostic (Phase 3 of the totals audit):
+        # a market-implied mean (the ladder's fair-total crossing) given shape
+        # via a placeholder-dispersion NB2, so sigma/standardized-edge exist
+        # to measure against outcomes. It is not an independent forecast and
+        # never touches p_over, model_prob, or sizing. Full-game GAMELINE
+        # totals only — team totals are a different scale/distribution.
+        fair_total_diagnostic: dict[str, Any] | None = None
+        fair_total_distribution = None
+        if market_records and is_game_total_record(market_records[0]):
+            fair_total, fair_flags = interpolate_fair_total(ladder_p)
+            if fair_total is not None:
+                fair_total_distribution = mlb_game_total_runs_distribution(fair_total)
+                fair_total_diagnostic = {
+                    "fair_total": fair_total,
+                    "fair_total_flags": fair_flags,
+                    "projection_mean": fair_total_distribution.mean,
+                    "projection_sigma": math.sqrt(fair_total_distribution.variance),
+                }
+
         lines: dict[float, dict[str, Any]] = {}
         for line, entry in raw_entries.items():
             if line == int(line):
                 push_prob = derive_push_prob(line, ladder_p)
             else:
                 push_prob = 0.0
+            diagnostic = dict(fair_total_diagnostic) if fair_total_diagnostic else {}
+            if fair_total_distribution is not None:
+                diagnostic["standardized_edge_diagnostic"] = standardized_edge(
+                    fair_total_distribution, line
+                )
             lines[line] = {
                 **entry,
                 "l10_over": l10_by_line.get(line),
                 "push_prob": push_prob,
+                **diagnostic,
             }
 
         for rec in market_records:
@@ -207,6 +243,18 @@ def backfill_totals_probabilities(
         row["market_consensus_prob"] = consensus
         row["final_blended_prob"] = model_prob
         row["model_prob_source"] = SOURCE_DEVIG
+
+        # Audit-only distributional diagnostic (Phase 3 of the totals audit).
+        # Market-implied, not an independent forecast; never read by sizing.
+        fair_total = entry.get("fair_total")
+        if fair_total is not None:
+            row["totals_fair_total"] = fair_total
+            row["totals_projection_mean"] = entry.get("projection_mean")
+            row["totals_projection_sigma"] = entry.get("projection_sigma")
+            side_edge = entry.get("standardized_edge_diagnostic")
+            if side_edge is not None:
+                row["totals_standardized_edge"] = side_edge if side == "OVER" else -side_edge
+
         extra_flags = [FLAG_MODEL]
         if l10_pct is not None:
             l10_side = l10_pct if side == "OVER" else 1.0 - l10_pct

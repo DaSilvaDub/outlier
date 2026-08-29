@@ -199,6 +199,63 @@ def test_index_derives_push_prob_for_integer_lines():
     assert index["m3"][8.5]["push_prob"] == 0.0
 
 
+def test_index_game_total_carries_market_implied_diagnostic_with_bracketing_ladder():
+    norm = _game_norm(
+        [
+            _rec("m4", 8.0, "OVER", _books(-140)),
+            _rec("m4", 8.0, "UNDER", _books(120)),
+            _rec("m4", 9.0, "OVER", _books(110)),
+            _rec("m4", 9.0, "UNDER", _books(-130)),
+        ]
+    )
+    index = build_totals_prob_index(norm, league="MLB")
+    for line in (8.0, 9.0):
+        entry = index["m4"][line]
+        assert entry["fair_total"] is not None
+        assert entry["projection_mean"] == pytest.approx(entry["fair_total"])
+        assert entry["projection_sigma"] > 0
+        assert entry["standardized_edge_diagnostic"] is not None
+    # A line above the fair total should have a negative standardized edge
+    # (mean below the line) and vice versa.
+    low_entry, high_entry = index["m4"][8.0], index["m4"][9.0]
+    assert low_entry["standardized_edge_diagnostic"] > high_entry["standardized_edge_diagnostic"]
+
+
+def test_index_game_total_omits_diagnostic_without_bracketing_ladder():
+    # A single quoted line can't interpolate a fair-total crossing.
+    norm = _game_norm(_two_sided("m5", 8.5))
+    entry = build_totals_prob_index(norm, league="MLB")["m5"][8.5]
+    assert "fair_total" not in entry
+    assert "standardized_edge_diagnostic" not in entry
+
+
+def test_index_team_total_never_carries_game_total_diagnostic():
+    norm = _game_norm(
+        [
+            _rec(
+                "t2", 4.0, "OVER", _books(-140),
+                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+            ),
+            _rec(
+                "t2", 4.0, "UNDER", _books(120),
+                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+            ),
+            _rec(
+                "t2", 5.0, "OVER", _books(110),
+                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+            ),
+            _rec(
+                "t2", 5.0, "UNDER", _books(-130),
+                market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+            ),
+        ]
+    )
+    index = build_totals_prob_index(norm, league="MLB")
+    for line in (4.0, 5.0):
+        assert "fair_total" not in index["t2"][line]
+        assert "standardized_edge_diagnostic" not in index["t2"][line]
+
+
 # ---------------------------------------------------------------------------
 # blending
 # ---------------------------------------------------------------------------
@@ -305,6 +362,45 @@ def test_backfill_under_side_uses_complement():
     p_over = float(out[0]["model_prob"])
     p_under = float(out[1]["model_prob"])
     assert p_over + p_under == pytest.approx(1.0)
+
+
+def test_backfill_surfaces_totals_standardized_edge_with_opposite_signs_by_side():
+    records = [
+        _rec("m4", 8.0, "OVER", _books(-140)),
+        _rec("m4", 8.0, "UNDER", _books(120)),
+        _rec("m4", 9.0, "OVER", _books(110)),
+        _rec("m4", 9.0, "UNDER", _books(-130)),
+    ]
+    over = _opportunity_row(market_id="m4", line=8.0, selection="AAA @ BBB Total OVER 8")
+    under = _opportunity_row(
+        market_id="m4", line=8.0, selection="AAA @ BBB Total UNDER 8",
+        price=120, decimal_price=2.2,
+    )
+    out = backfill_totals_probabilities([over, under], _norm_by_league(records))
+    over_row, under_row = out
+    assert over_row["totals_fair_total"] is not None
+    assert over_row["totals_projection_sigma"] > 0
+    assert over_row["totals_standardized_edge"] == pytest.approx(-under_row["totals_standardized_edge"])
+
+
+def test_backfill_omits_totals_diagnostic_for_team_totals():
+    row = _opportunity_row(
+        market_id="t1", market_type="TEAM_PROP", line=4.5,
+        selection="LAD Total Runs OVER 4.5",
+    )
+    records = [
+        _rec(
+            "t1", 4.5, "OVER", _books(-110),
+            market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+        ),
+        _rec(
+            "t1", 4.5, "UNDER", _books(-110),
+            market_type="TEAM_PROP", proposition="RUNS", team="LAD",
+        ),
+    ]
+    out = backfill_totals_probabilities([row], _norm_by_league(records))
+    assert "totals_fair_total" not in out[0]
+    assert "totals_standardized_edge" not in out[0]
 
 
 def test_backfill_preserves_existing_model_prob():
