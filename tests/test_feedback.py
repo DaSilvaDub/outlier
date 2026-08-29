@@ -1056,7 +1056,7 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     assert promotion["status"] == "NOT_READY"
     assert promotion["auto_promotion"] is False
     assert promotion["population_definition"] == (
-        "settled_positive_unit_pack_recommendations_v1"
+        "positive_unit_pack_recommendations_v1"
     )
     assert promotion["population"]["total_recommendations"] == 1
     assert promotion["population"]["settled_recommendations"] == 1
