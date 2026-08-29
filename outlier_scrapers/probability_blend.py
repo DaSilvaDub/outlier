@@ -241,8 +241,24 @@ def _evaluate_oos(
 
 
 def _apply_floor(fit: dict[str, Any], floor: float, holdout: dict[str, Any] | None) -> dict[str, Any]:
+    """Publish a weight the holdout actually backs, or floor it.
+
+    When the holdout split shows improvement, the published weight must be
+    the train-only fit that was scored against the holdout
+    (``holdout["trained_market_weight"]``) — never ``fit["market_weight"]``,
+    which is fit on every eligible row *including* the holdout slice. Using
+    the all-data fit here would leak the holdout labels into the very
+    number the holdout was supposed to validate, silently publishing a
+    weight that was never actually tested out-of-sample.
+    """
     if holdout is not None and holdout.get("improved"):
-        return fit
+        validated = float(holdout["trained_market_weight"])
+        return {
+            **fit,
+            "raw_market_weight": fit["market_weight"],
+            "market_weight": round(validated, 8),
+            "model_weight": round(1.0 - validated, 8),
+        }
     floored = max(float(fit["market_weight"]), floor)
     return {
         **fit,

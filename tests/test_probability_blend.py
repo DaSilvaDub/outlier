@@ -79,6 +79,76 @@ def test_fit_artifact_unlocks_below_floor_with_oos_improvement():
     assert artifact["global_holdout"] is not None
     assert artifact["global_holdout"]["improved"] is True
     assert artifact["global"]["market_weight"] < probability_blend.DEFAULT_MARKET_WEIGHT_FLOOR
+    # The published weight must be exactly the train-only weight that was
+    # scored against the holdout - not a fit refit on all rows (which would
+    # include the holdout's own labels). See test_apply_floor_* below.
+    assert artifact["global"]["market_weight"] == pytest.approx(
+        artifact["global_holdout"]["trained_market_weight"]
+    )
+
+
+def test_apply_floor_publishes_the_validated_trained_weight_not_the_all_data_fit():
+    """Regression for a holdout-leakage bug: once the holdout says a segment
+    beat the market, the published weight must be the train-only weight that
+    was actually scored against the holdout, not a fit refit on every
+    eligible row (including the holdout's own labels)."""
+    all_data_fit = {"market_weight": 0.9, "model_weight": 0.1, "n": 100, "brier_score": 0.2}
+    holdout = {"trained_market_weight": 0.3, "improved": True}
+    result = probability_blend._apply_floor(all_data_fit, 0.75, holdout)
+    assert result["market_weight"] == pytest.approx(0.3)
+    assert result["model_weight"] == pytest.approx(0.7)
+    assert result["raw_market_weight"] == pytest.approx(0.9)
+
+
+def test_apply_floor_still_floors_when_holdout_did_not_improve():
+    all_data_fit = {"market_weight": 0.2, "model_weight": 0.8, "n": 100, "brier_score": 0.2}
+    holdout = {"trained_market_weight": 0.1, "improved": False}
+    result = probability_blend._apply_floor(all_data_fit, 0.75, holdout)
+    assert result["market_weight"] == pytest.approx(0.75)
+    assert result["raw_market_weight"] == pytest.approx(0.2)
+
+
+def test_apply_floor_floors_when_holdout_is_none():
+    all_data_fit = {"market_weight": 0.2, "model_weight": 0.8, "n": 100, "brier_score": 0.2}
+    result = probability_blend._apply_floor(all_data_fit, 0.75, None)
+    assert result["market_weight"] == pytest.approx(0.75)
+
+
+def test_fit_artifact_published_weight_matches_trained_weight_with_noisy_data():
+    """End-to-end version of the same regression, with imperfect separation
+    so the all-data fit and the train-only fit are numerically distinct
+    (unlike the earlier perfectly-separated fixture, where both happen to be
+    the same degenerate value)."""
+    days = [f"2026-0{7 if d < 22 else 8}-{d:02d}T16:00:00+00:00" for d in range(1, 31)]
+    rows: list[dict] = []
+    for index, day in enumerate(days):
+        for offset in range(3):
+            # Independent model mostly right; market mostly wrong, but not
+            # perfectly separated - a handful of rows flip the other way so
+            # the in-sample optimum isn't a degenerate 0.0/1.0 corner.
+            flip = (index * 3 + offset) % 7 == 0
+            wins, losses = (1, 0) if flip else (0, 1)
+            row_batch = _rows(
+                market_type="PLAYER_PROP", wins=wins, losses=losses, captured_at=day
+            )
+            for row in row_batch:
+                row["event_starts_at"] = day.replace("T16:00:00", "T20:00:00")
+            rows += row_batch
+    artifact = probability_blend.fit_weight_artifact(
+        rows, min_samples=5, prior_strength=0, holdout_fraction=0.3,
+        generated_at="2026-09-01T00:00:00+00:00",
+    )
+    assert artifact["global_holdout"] is not None
+    if artifact["global_holdout"]["improved"]:
+        # This is the leakage regression, end to end: the published weight
+        # must equal the train-only weight the holdout actually scored, not
+        # a separate all-data fit (which would fold the holdout's own
+        # labels into the number the holdout was supposed to validate). The
+        # precise case where those two numbers differ is covered directly
+        # in test_apply_floor_publishes_the_validated_trained_weight_not_the_all_data_fit.
+        assert artifact["global"]["market_weight"] == pytest.approx(
+            artifact["global_holdout"]["trained_market_weight"]
+        )
 
 
 def test_fit_artifact_quarantines_corrupt_column_alignment_rows():
