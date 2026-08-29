@@ -2057,3 +2057,95 @@ def test_run_sqlite_cli_recover_kills_hung_processes_on_timeout(tmp_path, monkey
     assert result is False
     recover_mock.kill.assert_called_once()
     apply_mock.kill.assert_called_once()
+
+
+def _totals_row(
+    *, market_p: float, l10_p: float, result: str, edge: float, push_prob: float = 0.0
+) -> dict:
+    return {
+        "model_prob_source": feedback.totals_model.SOURCE_DEVIG,
+        "market_consensus_prob": market_p,
+        "recency_hit_prob": l10_p,
+        "win_loss_push": result,
+        "edge": edge,
+        "push_prob": push_prob,
+    }
+
+
+def test_totals_paired_oos_loss_ignores_non_totals_and_incomplete_rows():
+    rows = [
+        _totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02),
+        {**_totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02), "model_prob_source": "other"},
+        {**_totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02), "recency_hit_prob": None},
+        {**_totals_row(market_p=0.55, l10_p=0.60, result="PUSH", edge=0.02)},
+    ]
+    result = feedback.totals_paired_oos_loss(rows)
+    assert result["n"] == 1
+
+
+def test_totals_paired_oos_loss_detects_market_beating_l10():
+    # Market (0.8) is consistently right; L10 (0.2) is consistently wrong.
+    rows = [
+        _totals_row(market_p=0.8, l10_p=0.2, result="W", edge=0.01) for _ in range(40)
+    ]
+    result = feedback.totals_paired_oos_loss(rows)
+    assert result["n"] == 40
+    assert result["mean_paired_loss_diff"] > 0
+    assert result["market_better"] is True
+    assert result["model_better"] is False
+
+
+def test_totals_paired_oos_loss_detects_l10_beating_market():
+    # L10 (0.2) is consistently right (actual losses); market (0.8) is wrong.
+    rows = [
+        _totals_row(market_p=0.8, l10_p=0.2, result="L", edge=0.01) for _ in range(40)
+    ]
+    result = feedback.totals_paired_oos_loss(rows)
+    assert result["n"] == 40
+    assert result["mean_paired_loss_diff"] < 0
+    assert result["model_better"] is True
+    assert result["market_better"] is False
+
+
+def test_wilson_interval_bounds():
+    assert feedback._wilson_interval(0, 0) is None
+    lower, upper = feedback._wilson_interval(10, 10)
+    assert 0.0 < lower < upper <= 1.0
+    lower, upper = feedback._wilson_interval(5, 10)
+    assert lower < 0.5 < upper
+
+
+def test_totals_edge_bucket_report_buckets_by_signed_band_and_flags_insufficient_n():
+    rows = [_totals_row(market_p=0.55, l10_p=0.55, result="W", edge=0.005) for _ in range(5)]
+    report = feedback.totals_edge_bucket_report(rows)
+    bucket = next(b for b in report["buckets"] if b["side"] == "above_market" and b["band"] == "0-1pp")
+    assert bucket["n"] == 5
+    assert bucket["wins"] == 5
+    assert bucket["hit_rate"] == pytest.approx(1.0)
+    assert bucket["hit_rate_ci95"] is not None
+    # Fewer than 20 in the only populated bucket -> no monotonicity verdict.
+    assert report["monotonic_above_market"] is None
+
+
+def test_totals_edge_bucket_report_monotonic_verdict_with_enough_samples():
+    rows = []
+    # Increasing hit rate as edge band widens, 25 rows per band (>= min_n).
+    for band_edge, win_fraction in (
+        (0.005, 0.40),  # 0-1pp
+        (0.015, 0.55),  # 1-2pp
+        (0.025, 0.65),  # 2-3pp
+        (0.035, 0.75),  # 3-4pp
+        (0.045, 0.85),  # 4pp+
+    ):
+        wins = round(25 * win_fraction)
+        rows += [
+            _totals_row(market_p=0.5, l10_p=0.5, result="W", edge=band_edge)
+            for _ in range(wins)
+        ]
+        rows += [
+            _totals_row(market_p=0.5, l10_p=0.5, result="L", edge=band_edge)
+            for _ in range(25 - wins)
+        ]
+    report = feedback.totals_edge_bucket_report(rows)
+    assert report["monotonic_above_market"] is True
+    assert report["monotonic_below_market"] is None

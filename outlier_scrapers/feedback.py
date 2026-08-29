@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration
+from outlier_scrapers import drawdown, paths, probability_blend, stake_calibration, totals_model
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
@@ -104,6 +104,10 @@ MARKET_SNAPSHOT_FIELDS = [
     "pre_cap_units",
     "portfolio_units",
     "cap_reasons",
+    # Totals' only non-market signal (L10 hit rate at the line). Persisted so
+    # its out-of-sample predictive value can be scored against settlements
+    # instead of asserted from in-pack behavior alone.
+    "recency_hit_prob",
 ]
 
 DECISION_FIELDS = [
@@ -166,6 +170,7 @@ PROBABILITY_COLUMNS = {
     "market_consensus": "market_consensus_prob",
     "independent_model": "independent_model_prob",
     "final_blended": "final_blended_prob",
+    "totals_recency_l10": "recency_hit_prob",
 }
 
 # ``CREATE TABLE IF NOT EXISTS`` does not evolve an existing SQLite table.  The
@@ -219,6 +224,7 @@ MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
     "pre_cap_units": "REAL",
     "portfolio_units": "REAL",
     "cap_reasons": "TEXT",
+    "recency_hit_prob": "REAL",
     "created_at": "TEXT NOT NULL DEFAULT ''",
 }
 
@@ -318,6 +324,7 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "pre_cap_units": "ALTER TABLE market_snapshots ADD COLUMN pre_cap_units REAL",
         "portfolio_units": "ALTER TABLE market_snapshots ADD COLUMN portfolio_units REAL",
         "cap_reasons": "ALTER TABLE market_snapshots ADD COLUMN cap_reasons TEXT",
+        "recency_hit_prob": "ALTER TABLE market_snapshots ADD COLUMN recency_hit_prob REAL",
         "created_at": "ALTER TABLE market_snapshots ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
     },
     "decisions": {
@@ -659,6 +666,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 pre_cap_units REAL,
                 portfolio_units REAL,
                 cap_reasons TEXT,
+                recency_hit_prob REAL,
                 created_at TEXT NOT NULL
             );
 
@@ -1472,6 +1480,7 @@ def _snapshot_from_pack_row(
         )
 
     independent = _probability(row.get("independent_model_prob"), field="independent_model_prob")
+    recency_hit_prob = _probability(row.get("recency_hit_prob"), field="recency_hit_prob")
     price = _float(_coalesce(row.get("price"), row.get("best_price")), field="price")
     decimal_price = _float(row.get("decimal_price"), field="decimal_price")
     if decimal_price is None and price is not None:
@@ -1562,6 +1571,7 @@ def _snapshot_from_pack_row(
         "cap_reasons": _text(
             row.get("_cap_reasons") or (row.get("cap_reasons") if is_ultimate_alt else "")
         ),
+        "recency_hit_prob": recency_hit_prob,
     }
 
 
@@ -1669,11 +1679,11 @@ def capture_pack(
                     insight_component, movement_component, orf_component,
                     projection_feature_hash, projection_quality_flags, pack_path,
                     policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
-                    created_at
+                    recency_hit_prob, created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
@@ -1715,7 +1725,10 @@ def capture_pack(
                     movement_component = excluded.movement_component,
                     orf_component = excluded.orf_component,
                     projection_feature_hash = excluded.projection_feature_hash,
-                    projection_quality_flags = excluded.projection_quality_flags
+                    projection_quality_flags = excluded.projection_quality_flags,
+                    recency_hit_prob = COALESCE(
+                        excluded.recency_hit_prob, market_snapshots.recency_hit_prob
+                    )
                 WHERE NOT EXISTS (
                     SELECT 1 FROM decisions
                     WHERE decisions.snapshot_id = market_snapshots.snapshot_id
@@ -2447,7 +2460,7 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 s.time_before_game, s.market_type, s.model_prob_source, s.decimal_price,
                 s.implied_prob, s.board, s.selected, s.signal_flags,
                 s.hit_rate_component, s.insight_component,
-                s.movement_component, s.orf_component
+                s.movement_component, s.orf_component, s.recency_hit_prob
             FROM settlements t
             JOIN decisions d ON d.decision_id = t.decision_id
             JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
@@ -3580,6 +3593,154 @@ def _missing_edge_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+TOTALS_MODEL_PROB_SOURCES = frozenset(
+    {totals_model.SOURCE_DEVIG, totals_model.SOURCE_BLEND}
+)
+
+
+def _is_totals_row(row: dict[str, Any]) -> bool:
+    """True for a settled row priced by the totals ladder (game/team totals)."""
+    return _text(row.get("model_prob_source")) in TOTALS_MODEL_PROB_SOURCES
+
+
+def _wilson_interval(wins: int, n: int, *, z: float = 1.96) -> tuple[float, float] | None:
+    """95% Wilson score interval for a binomial hit rate; None when n == 0."""
+    if n <= 0:
+        return None
+    phat = wins / n
+    denominator = 1.0 + z * z / n
+    center = phat + z * z / (2.0 * n)
+    margin = z * math.sqrt((phat * (1.0 - phat) + z * z / (4.0 * n)) / n)
+    return ((center - margin) / denominator, (center + margin) / denominator)
+
+
+def totals_paired_oos_loss(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Paired Brier-loss comparison of the totals L10 signal against the market.
+
+    Totals never derive ``independent_model_prob`` (see ``totals_model.py`` —
+    it's explicitly blanked), so the generic market/independent comparison in
+    ``_probability_metrics`` never sees totals rows. This is the totals-only
+    equivalent: for each settled totals row with both a market consensus
+    probability and a captured L10 hit rate, compute
+    ``d_t = brier(l10) - brier(market)``. A negative mean d_t with a 95% CI
+    entirely below zero means the L10 signal beat the market out-of-sample on
+    this settled population; ``model_better``/``market_better`` are False
+    whenever the CI straddles zero (i.e. no verdict yet).
+    """
+    diffs: list[float] = []
+    for row in rows:
+        if not _is_totals_row(row):
+            continue
+        result = _text(row.get("win_loss_push")).upper()
+        if result not in {"W", "L"}:
+            continue
+        market_p = _scoring_probability(row, "market_consensus_prob")
+        l10_p = _scoring_probability(row, "recency_hit_prob")
+        if market_p is None or l10_p is None:
+            continue
+        actual = 1.0 if result == "W" else 0.0
+        diffs.append((l10_p - actual) ** 2 - (market_p - actual) ** 2)
+
+    n = len(diffs)
+    mean_diff = _mean(diffs)
+    ci95: tuple[float, float] | None = None
+    if n >= 2 and mean_diff is not None:
+        variance = sum((value - mean_diff) ** 2 for value in diffs) / (n - 1)
+        margin = 1.96 * math.sqrt(variance / n) if variance > 0 else 0.0
+        ci95 = (round(mean_diff - margin, 10), round(mean_diff + margin, 10))
+    return {
+        "n": n,
+        "mean_paired_loss_diff": round(mean_diff, 10) if mean_diff is not None else None,
+        "ci95": ci95,
+        "model_better": ci95 is not None and ci95[1] < 0.0,
+        "market_better": ci95 is not None and ci95[0] > 0.0,
+    }
+
+
+def _totals_edge_band(edge: Any) -> tuple[str, str] | None:
+    """(side, band) for a signed totals edge, in percentage-point bands.
+
+    ``side`` is ``above_market`` for edge >= 0 (the model favors the priced
+    side more than the market) and ``below_market`` otherwise. Bands are the
+    0-1/1-2/2-3/3-4/4+ percentage-point buckets from the totals audit.
+    """
+    value = _float(edge, field="edge")
+    if value is None:
+        return None
+    magnitude_pp = abs(value) * 100.0
+    if magnitude_pp < 1.0:
+        band = "0-1pp"
+    elif magnitude_pp < 2.0:
+        band = "1-2pp"
+    elif magnitude_pp < 3.0:
+        band = "2-3pp"
+    elif magnitude_pp < 4.0:
+        band = "3-4pp"
+    else:
+        band = "4pp+"
+    return ("above_market" if value >= 0.0 else "below_market", band)
+
+
+TOTALS_EDGE_BAND_ORDER = ["0-1pp", "1-2pp", "2-3pp", "3-4pp", "4pp+"]
+
+
+def totals_edge_bucket_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Bucket settled totals rows by signed edge and test hit-rate monotonicity.
+
+    The current ``MIN_EDGE_TOTALS`` gate (game_totals.py) assumes a larger
+    priced edge means a better bet. This buckets settled totals rows by
+    signed edge band and reports the realized hit rate (with a Wilson 95% CI)
+    per band, so that assumption can be checked against outcomes instead of
+    asserted.
+    """
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if not _is_totals_row(row):
+            continue
+        result = _text(row.get("win_loss_push")).upper()
+        if result not in {"W", "L"}:
+            continue
+        key = _totals_edge_band(row.get("edge"))
+        if key is None:
+            continue
+        groups[key].append(row)
+
+    buckets: list[dict[str, Any]] = []
+    for side in ("above_market", "below_market"):
+        for band in TOTALS_EDGE_BAND_ORDER:
+            group = groups.get((side, band), [])
+            wins = sum(1 for row in group if _text(row.get("win_loss_push")).upper() == "W")
+            n = len(group)
+            ci = _wilson_interval(wins, n)
+            buckets.append(
+                {
+                    "side": side,
+                    "band": band,
+                    "n": n,
+                    "wins": wins,
+                    "hit_rate": wins / n if n else None,
+                    "hit_rate_ci95": ci,
+                    "mean_edge": _mean(_float(row.get("edge"), field="edge") for row in group),
+                }
+            )
+
+    def _is_monotonic_nondecreasing(side: str, *, min_n: int = 20) -> bool | None:
+        rates = [
+            bucket["hit_rate"]
+            for bucket in buckets
+            if bucket["side"] == side and bucket["n"] >= min_n
+        ]
+        if len(rates) < 2:
+            return None
+        return all(later >= earlier for earlier, later in zip(rates, rates[1:]))
+
+    return {
+        "buckets": buckets,
+        "monotonic_above_market": _is_monotonic_nondecreasing("above_market"),
+        "monotonic_below_market": _is_monotonic_nondecreasing("below_market"),
+    }
+
+
 def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_REPORT_DIR) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3632,6 +3793,8 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
     missing_edge_diagnostics = _missing_edge_diagnostics(rows)
     ultimate_alt_release = ultimate_alt_shadow_release(rows)
     learned_multiplier_signal = learned_multiplier_promotion_signal(positive_unit_rows)
+    totals_paired_loss = totals_paired_oos_loss(rows)
+    totals_edge_buckets = totals_edge_bucket_report(rows)
 
     metric_fields = [
         "probability_source",
@@ -3693,8 +3856,25 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         ULTIMATE_ALT_SHADOW_FIELDS,
         [ultimate_alt_release["overall"], *ultimate_alt_release["by_type"]],
     )
+    _write_csv(
+        output_dir / "totals_edge_buckets.csv",
+        ["side", "band", "n", "wins", "hit_rate", "hit_rate_ci95", "mean_edge"],
+        totals_edge_buckets["buckets"],
+    )
     (output_dir / "learned_multiplier_promotion.json").write_text(
         json.dumps(learned_multiplier_signal, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "totals_oos_scoring.json").write_text(
+        json.dumps(
+            {
+                "paired_loss": totals_paired_loss,
+                "edge_buckets": totals_edge_buckets,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     (output_dir / "summary.json").write_text(
@@ -3706,6 +3886,11 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
                 "learned_multiplier_promotion": learned_multiplier_signal,
                 "ultimate_alt_shadow_release": ultimate_alt_release,
                 "missing_edge_diagnostics": missing_edge_diagnostics,
+                "totals_oos_paired_loss": totals_paired_loss,
+                "totals_oos_edge_monotonicity": {
+                    "monotonic_above_market": totals_edge_buckets["monotonic_above_market"],
+                    "monotonic_below_market": totals_edge_buckets["monotonic_below_market"],
+                },
             },
             indent=2,
             sort_keys=True,
