@@ -221,6 +221,26 @@ def test_index_game_total_carries_market_implied_diagnostic_with_bracketing_ladd
     assert low_entry["standardized_edge_diagnostic"] > high_entry["standardized_edge_diagnostic"]
 
 
+def test_index_game_total_diagnostic_is_mlb_only():
+    # Same bracketing ladder shape as the MLB test above, but for WNBA - the
+    # MLB-fit NB2 dispersion is meaningless at WNBA's points scale and must
+    # not be applied (regression: previously emitted e.g. sigma ~48 here).
+    norm = _game_norm(
+        [
+            _rec("w4", 160.0, "OVER", _books(-140)),
+            _rec("w4", 160.0, "UNDER", _books(120)),
+            _rec("w4", 161.0, "OVER", _books(110)),
+            _rec("w4", 161.0, "UNDER", _books(-130)),
+        ]
+    )
+    index = build_totals_prob_index(norm, league="WNBA")
+    for line in (160.0, 161.0):
+        entry = index["w4"][line]
+        assert "fair_total" not in entry
+        assert "projection_sigma" not in entry
+        assert "standardized_edge_diagnostic" not in entry
+
+
 def test_index_game_total_omits_diagnostic_without_bracketing_ladder():
     # A single quoted line can't interpolate a fair-total crossing.
     norm = _game_norm(_two_sided("m5", 8.5))

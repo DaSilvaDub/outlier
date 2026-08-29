@@ -82,12 +82,14 @@ def build_totals_prob_index(
     bracketing ladder for integer lines, None when underivable). Raw market_ids
     that split one logical market share the same line map.
 
-    Full-game GAMELINE totals also carry an audit-only distributional
+    Full-game MLB GAMELINE totals also carry an audit-only distributional
     diagnostic: ``fair_total`` (ladder-interpolated), ``projection_mean``/
     ``projection_sigma`` (a market-implied NB2 shape around it), and
     ``standardized_edge_diagnostic`` (sigma-units from that mean to the
     entry's line). None of these are independent forecasts and none feed
-    p_over, model_prob, or sizing.
+    p_over, model_prob, or sizing. MLB-only: the NB2 dispersion constant is
+    fit to MLB run-scoring scale and is meaningless for other leagues'
+    totals (e.g. WNBA points).
     """
     records = (games_norm or {}).get("records") or []
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -134,9 +136,16 @@ def build_totals_prob_index(
         # to measure against outcomes. It is not an independent forecast and
         # never touches p_over, model_prob, or sizing. Full-game GAMELINE
         # totals only — team totals are a different scale/distribution.
+        # MLB-only: the NB2 dispersion constant is fit to MLB's run-scoring
+        # scale (mean ~8-9), so applying it to another league (e.g. a WNBA
+        # points total) would emit a nonsense sigma/standardized-edge.
         fair_total_diagnostic: dict[str, Any] | None = None
         fair_total_distribution = None
-        if market_records and is_game_total_record(market_records[0]):
+        if (
+            league.strip().upper() == "MLB"
+            and market_records
+            and is_game_total_record(market_records[0])
+        ):
             fair_total, fair_flags = interpolate_fair_total(ladder_p)
             if fair_total is not None:
                 fair_total_distribution = mlb_game_total_runs_distribution(fair_total)
