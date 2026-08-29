@@ -43,7 +43,7 @@ This worktree is for development/tests only until explicitly merged.
 - Only flip `OUTLIER_PROMOTE_INDEPENDENT_SO=1` (or `auto_promote`) when readiness.ready
 - Refresh park factors from live Savant CSV when a stable endpoint is available
 - Keep learned stake multipliers shadow-neutral until calibration, uncertainty,
-  and drawdown activation is validated on the actual settled positive-unit
+  and drawdown activation is validated on the actual positive-unit
   recommendation population (not the broad eligible/non-play population).
   Portfolio caps remain enforced, and liquidity, projection-side-conflict, and
   predictive-signal gates remain active independently of this switch. The

@@ -4,6 +4,7 @@ $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
 $feedbackDb = Join-Path $repoRoot "calibration\feedback.sqlite3"
 $alertsDir = Join-Path $repoRoot "calibration\alerts"
 $statusPath = Join-Path $alertsDir "nightly_audit_status.json"
+$promotionReceipt = @{}
 
 function Invoke-CheckedPython {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -97,6 +98,7 @@ try {
     Write-Output "Nightly calibration audit completed."
 }
 catch {
-    Write-AuditStatus -Status "failed" -Message $_.Exception.Message
+    Write-AuditStatus -Status "failed" -Message $_.Exception.Message `
+        -LearnedMultiplierPromotion $promotionReceipt
     throw
 }
