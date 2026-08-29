@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from outlier_scrapers.pack import apply_shadow_projection

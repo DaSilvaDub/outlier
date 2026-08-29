@@ -1505,7 +1505,7 @@ def build_row(
                 elif digest == GAMELOG_SO_HASH and independent_projection_eligible(generated):
                     projection_flags.append("projection_independent_gamelog_so")
                 elif digest == WNBA_GAMELOG_HASH:
-                    projection_flags.append("projection_audit_wnba_minutes")
+                    projection_flags.append("projection_audit_wnba_gamelog")
                 elif digest == WNBA_MINUTES_HASH:
                     projection_flags.append("projection_audit_wnba_minutes")
                 elif not independent_projection_eligible(generated):

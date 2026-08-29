@@ -569,6 +569,26 @@ def test_wnba_combination_projection_sums_component_rates_but_stays_audit_only()
     assert independent_projection_eligible(record) is False
 
 
+def test_wnba_feature_rates_preserve_game_alignment_when_minutes_are_invalid():
+    from outlier_scrapers.projections import compute_wnba_player_features
+
+    features = compute_wnba_player_features(
+        [50.0, 30.0, 20.0, 10.0],
+        min_games=3,
+        recent_stats={
+            "points": [100.0, 15.0, 10.0, 5.0],
+            "rebounds": [99.0, 6.0, 4.0, 2.0],
+            "assists": [98.0, 3.0, 2.0, 1.0],
+        },
+    )
+
+    assert features is not None
+    assert features["projected_minutes"] == pytest.approx(20.0)
+    assert features["points_per_minute"] == pytest.approx(30.0 / 60.0)
+    assert features["rebounds_per_minute"] == pytest.approx(12.0 / 60.0)
+    assert features["assists_per_minute"] == pytest.approx(6.0 / 60.0)
+
+
 def test_wnba_gamelog_parser_reads_points_rebounds_and_assists_aliases():
     from outlier_scrapers.projections import fetch_wnba_athlete_gamelog
 

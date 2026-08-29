@@ -952,13 +952,21 @@ def compute_wnba_player_features(
     minute observation. Thin or misaligned samples fail closed. These features
     are audit-only until a market-family validation artifact is promoted.
     """
-    minutes_values = [
-        float(value) for value in recent_minutes if _float_stat(value) is not None
+    minute_entries = [_float_stat(value) for value in recent_minutes]
+    kept_indices = [
+        index
+        for index, minute in enumerate(minute_entries)
+        if minute is not None and 0.0 <= float(minute) <= 48.0
     ]
-    minutes_values = [value for value in minutes_values if 0.0 <= value <= 48.0]
-    if len(minutes_values) < min_games:
+    if len(kept_indices) < min_games:
         return None
-    kept_minutes = minutes_values[: max(0, max_games)]
+    kept_indices = kept_indices[: max(0, max_games)]
+    kept_minutes: list[float] = []
+    for index in kept_indices:
+        minute = minute_entries[index]
+        if minute is None:
+            continue
+        kept_minutes.append(float(minute))
     mean_minutes = sum(kept_minutes) / len(kept_minutes)
     features: dict[str, object] = {
         "projected_minutes": mean_minutes,
@@ -970,13 +978,18 @@ def compute_wnba_player_features(
             raw_values = recent_stats.get(stat_name)
             if raw_values is None:
                 continue
-            stat_values = [
-                float(value) for value in raw_values if _float_stat(value) is not None
-            ]
-            if len(stat_values) < len(kept_minutes):
-                continue
-            kept_stats = stat_values[: len(kept_minutes)]
-            if any(value < 0 for value in kept_stats):
+            stat_entries = list(raw_values)
+            kept_stats: list[float] = []
+            for index in kept_indices:
+                if index >= len(stat_entries):
+                    kept_stats = []
+                    break
+                stat_value = _float_stat(stat_entries[index])
+                if stat_value is None or float(stat_value) < 0:
+                    kept_stats = []
+                    break
+                kept_stats.append(float(stat_value))
+            if len(kept_stats) != len(kept_minutes):
                 continue
             features[f"{stat_name}_per_minute"] = sum(kept_stats) / sum(kept_minutes)
             features["feature_source"] = "wnba_espn_gamelog"
@@ -1062,12 +1075,10 @@ def fetch_wnba_athlete_gamelog(
             if index is not None:
                 stat_indices[stat_name] = index
                 break
-    if minutes_idx is None or set(stat_indices) != set(WNBA_GAMELOG_STAT_ALIASES):
+    if minutes_idx is None or not stat_indices:
         return [], {}
     minutes: list[float] = []
-    stats_by_name: dict[str, list[float]] = {
-        stat_name: [] for stat_name in WNBA_GAMELOG_STAT_ALIASES
-    }
+    stats_by_name: dict[str, list[float]] = {stat_name: [] for stat_name in stat_indices}
     season_types = payload.get("seasonTypes")
     if not isinstance(season_types, list):
         return [], {}
@@ -1247,7 +1258,10 @@ def wnba_points_projection_record(
 
     if _wnba_market_code(row) != "PTS":
         return None
-    return wnba_projection_record(row, features=features)
+    record = wnba_projection_record(row, features=features)
+    if record is None:
+        return None
+    return {**record, "feature_snapshot_hash": WNBA_MINUTES_HASH}
 
 
 def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:

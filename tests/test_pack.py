@@ -658,7 +658,7 @@ def test_wnba_rebounds_projection_fallback_is_audit_only(monkeypatch):
     assert row["independent_model_prob"] == ""
     assert row["projection_mean"] != ""
     assert row["projection_feature_hash"] == "wnba-gamelog-stat-rates-v2"
-    assert "projection_audit_wnba_minutes" in row["projection_quality_flags"]
+    assert "projection_audit_wnba_gamelog" in row["projection_quality_flags"]
 
 
 def test_gamelog_so_projection_sets_independent_model_prob():
