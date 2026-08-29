@@ -3594,7 +3594,18 @@ def _missing_edge_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 TOTALS_MODEL_PROB_SOURCES = frozenset(
-    {totals_model.SOURCE_DEVIG, totals_model.SOURCE_BLEND}
+    {
+        # totals_model.py's backfill path (rows Outlier itself never priced).
+        totals_model.SOURCE_DEVIG,
+        totals_model.SOURCE_BLEND,
+        # The specialized totals board's own devig (game_totals.py -> pack.py
+        # normalize_original): the canonical, actionable totals rows. Most
+        # settled totals rows carry these, not the backfill-path sources
+        # above — see game_totals.py:818-819 and pack.py:629.
+        "book_median",
+        "single_book",
+        "totals_model",
+    }
 )
 
 

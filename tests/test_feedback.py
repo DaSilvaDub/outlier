@@ -2072,6 +2072,23 @@ def _totals_row(
     }
 
 
+@pytest.mark.parametrize("source", ["book_median", "single_book", "totals_model"])
+def test_is_totals_row_recognizes_specialized_totals_board_sources(source):
+    # The specialized totals board (game_totals.py -> pack.py
+    # normalize_original) sets model_prob_source from devig_source
+    # ("book_median"/"single_book") or the "totals_model" fallback - never
+    # totals_model.SOURCE_DEVIG/SOURCE_BLEND, which only the backfill path
+    # (totals_model.backfill_totals_probabilities) uses. Most settled totals
+    # rows carry these specialized-board sources, so the OOS harness must
+    # recognize them too.
+    row = _totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02)
+    row["model_prob_source"] = source
+    result = feedback.totals_paired_oos_loss([row])
+    assert result["n"] == 1
+    buckets = feedback.totals_edge_bucket_report([row])
+    assert sum(bucket["n"] for bucket in buckets["buckets"]) == 1
+
+
 def test_totals_paired_oos_loss_ignores_non_totals_and_incomplete_rows():
     rows = [
         _totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02),
