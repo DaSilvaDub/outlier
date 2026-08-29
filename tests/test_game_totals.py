@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 from outlier_scrapers.game_totals import (
     MIN_EDGE_TOTALS,
+    SOFT_QUALITY_FLAGS,
     TOTAL_KIND_GAME,
     TOTAL_KIND_TEAM,
     _totals_models_diverge,
@@ -1245,3 +1246,80 @@ def test_fair_total_directional_divergence_flag():
         assert "FAIR_TOTAL_DIVERGENCE" in row["quality_flags"]
         assert "SOURCE_INTEGRITY_FLAG" in row["quality_flags"]
         assert row["actionable"] == "false"
+
+
+def test_candidate_quality_flags_do_not_become_source_integrity():
+    candidates, games_norm = _build_totals_fixture()
+    games_norm["context"] = {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}}
+    candidates[0]["data_quality_flags"] = "thin_liquidity;reverse_line_movement"
+    row = build_game_totals(
+        candidates, games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
+    )[0]
+    flags = row["quality_flags"]
+    assert "SOURCE_INTEGRITY_FLAG" not in flags.split(",")
+    assert "thin_liquidity" not in flags
+
+
+def test_candidate_source_integrity_flag_is_inherited():
+    candidates, games_norm = _build_totals_fixture()
+    games_norm["context"] = {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}}
+    candidates[0]["data_quality_flags"] = "SOURCE_INTEGRITY_FLAG;thin_liquidity"
+    row = build_game_totals(
+        candidates, games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
+    )[0]
+    assert "SOURCE_INTEGRITY_FLAG" in row["quality_flags"]
+
+
+def test_team_total_missing_independent_model_is_not_source_integrity():
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "context": {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}},
+        "records": [
+            _norm_record(
+                "m_team_sep",
+                3.5,
+                "OVER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -108}],
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="A",
+            ),
+            _norm_record(
+                "m_team_sep",
+                3.5,
+                "UNDER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -112}],
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="A",
+            ),
+            _norm_record(
+                "m_team_sep",
+                5.5,
+                "OVER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -112}],
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="A",
+            ),
+            _norm_record(
+                "m_team_sep",
+                5.5,
+                "UNDER",
+                [{"book": "DK", "odds": -110}, {"book": "FD", "odds": -108}],
+                market_type="TEAM_PROP",
+                proposition="RUNS",
+                team="A",
+            ),
+        ],
+    }
+    row = build_team_totals(
+        [], games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
+    )[0]
+    flags = [flag for flag in (row["quality_flags"] or "").split(",") if flag]
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" in flags
+    assert "SOURCE_INTEGRITY_FLAG" not in flags
+    assert "TEAM_TOTAL_FAIR_TOTAL_NO_SEPARATION" not in flags
+    assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" in SOFT_QUALITY_FLAGS
+    if row["actionable"] == "true":
+        assert row["recommended_units_pre_news"] not in ("", None)

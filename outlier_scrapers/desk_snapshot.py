@@ -227,14 +227,43 @@ def release_writer_lock(lock_dir: Path | None) -> None:
         _rmdir_lock(lock_dir)
 
 
+def _daily_owner_path(lock_dir: Path) -> Path:
+    return lock_dir / "owner.json"
+
+
+def _read_daily_owner(lock_dir: Path) -> dict[str, Any] | None:
+    path = _daily_owner_path(lock_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_daily_owner(lock_dir: Path, *, pid: int, depth: int) -> None:
+    _daily_owner_path(lock_dir).write_text(
+        json.dumps({"pid": pid, "depth": depth}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
     lock_dir = daily_lock_dir(pack_dir)
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
     for attempt in range(max(1, retries)):
         try:
             lock_dir.mkdir(exist_ok=False)
+            _write_daily_owner(lock_dir, pid=pid, depth=1)
             return lock_dir
         except FileExistsError:
+            owner = _read_daily_owner(lock_dir)
+            if owner is not None and owner.get("pid") == pid:
+                depth = int(owner.get("depth") or 1) + 1
+                _write_daily_owner(lock_dir, pid=pid, depth=depth)
+                return lock_dir
             time.sleep(0.05 * (attempt + 1))
     raise LockBusy("another daily job is in progress (packs/.daily_job_lock)")
 
@@ -242,10 +271,13 @@ def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
 def release_daily_lock(lock_dir: Path | None) -> None:
     if lock_dir is None:
         return
-    try:
-        lock_dir.rmdir()
-    except OSError:
-        pass
+    owner = _read_daily_owner(lock_dir)
+    if owner is not None and owner.get("pid") == os.getpid():
+        depth = int(owner.get("depth") or 1) - 1
+        if depth > 0:
+            _write_daily_owner(lock_dir, pid=os.getpid(), depth=depth)
+            return
+    _rmdir_lock(lock_dir)
 
 
 @contextmanager
@@ -511,7 +543,8 @@ def advance_desk_snapshot(
     if hold_locks:
         with fingerprint_locks(pack_dir, operation="desk_publish", now=now):
             return _run()
-    return _run()
+    with writer_lock_only(pack_dir, operation="desk_publish", now=now):
+        return _run()
 
 
 def write_latest_preview(pack_dir: Path, pass_name: str) -> Path | None:
@@ -679,9 +712,16 @@ def maybe_advance_desk(
     *,
     now: datetime | None = None,
     policy_path: Path | str | None = None,
+    hold_locks: bool = True,
 ) -> dict[str, Any] | None:
-    """Lock, maybe publish snapshot, project legacy + latest_preview."""
-    payload = advance_desk_snapshot(pack_dir, now=now, policy_path=policy_path)
+    """Lock, maybe publish snapshot, project legacy + latest_preview.
+
+    ``hold_locks=False`` is for callers that already hold ``.daily_job_lock``
+    (the daily job). Taking the same directory lock again deadlocks the snapshot.
+    """
+    payload = advance_desk_snapshot(
+        pack_dir, now=now, policy_path=policy_path, hold_locks=hold_locks
+    )
     if payload is None:
         return None
     with writer_lock_only(pack_dir, operation="project_legacy", now=now):

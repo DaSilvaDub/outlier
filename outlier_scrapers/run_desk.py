@@ -277,6 +277,7 @@ def orchestrate_desk(
     steps: Sequence[str] | None = None,
     force: bool = False,
     allow_local_synth: bool = False,
+    hold_locks: bool = True,
 ) -> int:
     load_environment()
     selected = PHASES if steps is None else steps
@@ -377,7 +378,7 @@ def orchestrate_desk(
     try:
         from outlier_scrapers import desk_snapshot, verdict_policy, verdict_store
 
-        snapshot = desk_snapshot.maybe_advance_desk(pack_dir)
+        snapshot = desk_snapshot.maybe_advance_desk(pack_dir, hold_locks=hold_locks)
         if snapshot is not None:
             status["desk_snapshot"] = {
                 "synthesis_source": snapshot.get("synthesis_source"),

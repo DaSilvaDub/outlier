@@ -466,3 +466,60 @@ def test_legacy_projection_and_latest_preview(tmp_path):
     )
     assert meta["authoritative"] is False
     assert meta["publication_id"] == pubs["A"]["publication_id"]
+
+
+def test_maybe_advance_desk_does_not_reacquire_held_daily_lock(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-29"
+    _write_pack(pack_dir)
+    daily = ds.acquire_daily_lock(pack_dir)
+    try:
+        payload = ds.maybe_advance_desk(
+            pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
+        )
+        assert payload is None
+        assert daily.exists()
+    finally:
+        ds.release_daily_lock(daily)
+
+
+def test_daily_lock_is_reentrant_for_same_process(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-29"
+    pack_dir.mkdir(parents=True)
+    first = ds.acquire_daily_lock(pack_dir)
+    nested = ds.acquire_daily_lock(pack_dir)
+    assert nested == first
+    assert first.exists()
+    ds.release_daily_lock(nested)
+    assert first.exists()
+    ds.release_daily_lock(first)
+    assert not first.exists()
+
+
+def test_maybe_advance_desk_publishes_while_daily_lock_held(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+    _publish_adb(pack_dir, index)
+    daily = ds.acquire_daily_lock(pack_dir)
+    try:
+        payload = ds.maybe_advance_desk(
+            pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
+        )
+    finally:
+        ds.release_daily_lock(daily)
+    assert payload is not None
+    assert (pack_dir / "verdicts" / ds.SNAPSHOT_NAME).is_file()
+    assert daily.exists() is False
+
+
+def test_publish_pass_while_daily_lock_held(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+    daily = ds.acquire_daily_lock(pack_dir)
+    try:
+        result = _publish_verdict(pack_dir, index, "A", 1.5)
+    finally:
+        ds.release_daily_lock(daily)
+    assert result.publication_id
+    assert not daily.exists()

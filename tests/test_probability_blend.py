@@ -208,6 +208,49 @@ def test_weight_artifact_round_trip(tmp_path):
     assert probability_blend.load_weight_artifact(output) == json.loads(output.read_text())
 
 
+def test_write_weight_artifact_retries_access_denied(tmp_path, monkeypatch):
+    import os
+    import time
+
+    artifact = {
+        "schema_version": probability_blend.SCHEMA_VERSION,
+        "status": "active",
+        "global": {"market_weight": 1.0, "n": 10},
+    }
+    output = tmp_path / "blend_weights.json"
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError(5, "Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+    written = probability_blend.write_weight_artifact(artifact, output)
+    assert written == output
+    assert output.exists()
+    assert calls["n"] == 3
+
+
+def test_write_weight_artifact_retries_then_raises(tmp_path, monkeypatch):
+    import os
+    import time
+
+    artifact = {"schema_version": probability_blend.SCHEMA_VERSION, "status": "active"}
+    output = tmp_path / "blend_weights.json"
+    monkeypatch.setattr(
+        os,
+        "replace",
+        lambda *_a, **_k: (_ for _ in ()).throw(PermissionError(5, "Access is denied")),
+    )
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+    with pytest.raises(PermissionError):
+        probability_blend.write_weight_artifact(artifact, output)
+
+
 @pytest.mark.parametrize(
     ("hours", "expected"),
     [(-0.1, "POST_START"), (0.5, "0_TO_1H"), (4, "1_TO_6H"),

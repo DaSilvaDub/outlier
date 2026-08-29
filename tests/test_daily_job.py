@@ -76,6 +76,38 @@ def test_daily_job_orchestrates_login_and_refresh(tmp_path):
         assert result == 0
 
 
+def test_daily_job_desk_does_not_reacquire_daily_lock(tmp_path, monkeypatch):
+    """daily_job already holds .daily_job_lock; nested desk publish must not take it again."""
+    _require_daily_job()
+    fake_pack = tmp_path / "packs" / "2026-08-29"
+    fake_pack.mkdir(parents=True)
+    (fake_pack / "briefing.md").write_text("SLATE", encoding="utf-8")
+    (fake_pack / "candidates.csv").write_text("market_id\nm1\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_desk(pack_dir, **kwargs):
+        captured["pack_dir"] = pack_dir
+        captured["kwargs"] = kwargs
+        (pack_dir / "reasoning_status.json").write_text(
+            json.dumps({"overall": "PARTIAL"}), encoding="utf-8"
+        )
+        return 0
+
+    monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda *_a, **_k: True)
+    monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
+    monkeypatch.setattr(daily_job, "run_pack", lambda *_a, **_k: fake_pack)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
+    monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda _pack, _data: None)
+    monkeypatch.setattr(daily_job, "refit_blend_weights", lambda *_a, **_k: {"status": "skipped"})
+    monkeypatch.setattr(daily_job.run_desk, "orchestrate_desk", fake_desk)
+
+    assert daily_job.main(["--leagues", "MLB"]) == 0
+    assert captured["pack_dir"] == fake_pack
+    assert captured["kwargs"].get("hold_locks") is False
+
+
 def test_otp_fetcher_redacts_code(caplog, tmp_path):
     _require_otp_fetcher()
     import logging

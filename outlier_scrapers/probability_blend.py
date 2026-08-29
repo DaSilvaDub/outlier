@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import Any, Iterable, Mapping
 from outlier_scrapers import paths
 
 SCHEMA_VERSION = 1
+_TRANSIENT_WINERRORS = {5, 32}
 DEFAULT_WEIGHTS_PATH = paths.PROJECT_ROOT / "calibration" / "blend_weights.json"
 DIMENSIONS = (
     "league",
@@ -365,12 +368,37 @@ def fit_weight_artifact(
     return artifact
 
 
+def _is_transient_replace_error(exc: OSError) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    if winerror in _TRANSIENT_WINERRORS:
+        return True
+    errno = getattr(exc, "errno", None)
+    if errno in _TRANSIENT_WINERRORS:
+        return True
+    return isinstance(exc, PermissionError)
+
+
+def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) -> None:
+    last_err: OSError | None = None
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as exc:
+            if not _is_transient_replace_error(exc) or attempt == retries - 1:
+                raise
+            last_err = exc
+            time.sleep(delay)
+    if last_err is not None:
+        raise last_err
+
+
 def write_weight_artifact(artifact: Mapping[str, Any], output_path: Path) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(f"{output_path.suffix}.tmp")
     temporary.write_text(json.dumps(dict(artifact), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(output_path)
+    _retry_replace(temporary, output_path)
     return output_path
 
 

@@ -361,6 +361,22 @@ def test_local_synthesize_includes_game_totals(desk_pack):
     assert "gm1" in text
 
 
+def test_orchestrate_desk_forwards_hold_locks(desk_pack, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_maybe_advance(pack_dir, **kwargs):
+        seen["pack_dir"] = pack_dir
+        seen["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(
+        "outlier_scrapers.desk_snapshot.maybe_advance_desk", fake_maybe_advance
+    )
+    run_desk.orchestrate_desk(desk_pack, steps=["E"], hold_locks=False)
+    assert seen["pack_dir"] == desk_pack
+    assert seen["kwargs"].get("hold_locks") is False
+
+
 def test_e_is_gated_when_required_inputs_are_missing(desk_pack, monkeypatch):
     called = False
 

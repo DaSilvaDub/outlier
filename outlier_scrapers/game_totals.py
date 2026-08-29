@@ -96,9 +96,17 @@ FULL_GAME_SCOPES = frozenset({"", "full_game", "game", "full"})
 # data. Unlike FAIR_TOTAL_SIDE_CONFLICT-style flags — which mean the pack's own
 # math disagrees with the side it picked, a correctness problem — these mean a
 # second signal disagrees with the market, which is lower conviction but not
-# necessarily wrong. They no longer hard-block ``actionable``; instead they
-# still surface in ``quality_flags`` for visibility and apply a sizing haircut.
-SOFT_QUALITY_FLAGS = frozenset({"totals_model_divergence", "MODEL_SATURATED"})
+# necessarily wrong. Missing an independent team-total model is the same class:
+# audit/shadow coverage, not a source-integrity failure. They no longer
+# hard-block ``actionable``; instead they still surface in ``quality_flags``
+# for visibility and apply a sizing haircut.
+SOFT_QUALITY_FLAGS = frozenset(
+    {
+        "totals_model_divergence",
+        "MODEL_SATURATED",
+        "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING",
+    }
+)
 SOFT_FLAG_UNITS_DISCOUNT = 0.5
 
 GAME_TOTALS_HEADER = [
@@ -626,7 +634,12 @@ def build_totals(
         events_dict = ((games_norm or {}).get("context") or {}).get("events") or {}
         if not events_dict or event_id not in events_dict:
             flags.append("UNINDEXED_SLATE_GAME")
-        if cand.get("data_quality_flags"):
+        cand_flags = [
+            token.strip()
+            for token in str(cand.get("data_quality_flags") or "").split(";")
+            if token.strip()
+        ]
+        if "SOURCE_INTEGRITY_FLAG" in cand_flags:
             flags.append("SOURCE_INTEGRITY_FLAG")
 
         ladder = build_market_ladder(market_records)
@@ -763,7 +776,6 @@ def build_totals(
         if total_kind == TOTAL_KIND_TEAM:
             if independent_win_prob is None:
                 flags.append("TEAM_TOTAL_INDEPENDENT_MODEL_MISSING")
-                flags.append("SOURCE_INTEGRITY_FLAG")
             elif implied_prob is not None and independent_win_prob <= implied_prob:
                 flags.append("TEAM_TOTAL_INDEPENDENT_MODEL_CONFLICT")
                 flags.append("SOURCE_INTEGRITY_FLAG")

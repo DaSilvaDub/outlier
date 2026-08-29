@@ -335,22 +335,20 @@ def _count_pack_rows(pack_dir: Path) -> int | None:
 
 
 def _acquire_writer_lock() -> Path | None:
+    from .desk_snapshot import LockBusy, acquire_daily_lock
+
     packs_dir = PROJECT_ROOT / "packs"
-    lock_dir = packs_dir / ".daily_job_lock"
     packs_dir.mkdir(parents=True, exist_ok=True)
     try:
-        lock_dir.mkdir(exist_ok=False)
-        return lock_dir
-    except FileExistsError:
+        return acquire_daily_lock(packs_dir / "_job")
+    except LockBusy:
         return None
 
 
 def _release_writer_lock(lock_dir: Path | None) -> None:
-    if lock_dir and lock_dir.exists():
-        try:
-            lock_dir.rmdir()
-        except Exception:
-            pass
+    from .desk_snapshot import release_daily_lock
+
+    release_daily_lock(lock_dir)
 
 
 def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:
@@ -437,11 +435,19 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
         try:
             if profile == "local":
                 desk_code = run_desk.orchestrate_desk(
-                    pack_dir, steps=["E"], force=False, allow_local_synth=True
+                    pack_dir,
+                    steps=["E"],
+                    force=False,
+                    allow_local_synth=True,
+                    hold_locks=False,
                 )
             else:
                 desk_code = run_desk.orchestrate_desk(
-                    pack_dir, steps=run_steps, force=False, allow_local_synth=True
+                    pack_dir,
+                    steps=run_steps,
+                    force=False,
+                    allow_local_synth=True,
+                    hold_locks=False,
                 )
             if desk_code != 0:
                 logger.warning("Desk completed with non-zero (may be partial/degraded).")
