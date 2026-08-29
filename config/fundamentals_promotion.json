@@ -1,0 +1,8 @@
+{
+  "mode": "shadow",
+  "min_eligible_games": 2000,
+  "model_version": "",
+  "promoted_by": "",
+  "promoted_at": "",
+  "note": "Set mode to 'live' only after the totals OOS harness (feedback.totals_paired_oos_loss) shows this model beating the market out-of-sample on calibration/team_strength.json's fitted population, and min_eligible_games (roughly one full season) is met. Live mode is not wired to sizing yet as of the Phase 4 infrastructure build — promoting this file alone does nothing until totals_model.py is wired to read it."
+}
