@@ -21,8 +21,9 @@ per-market coverage counts so future claims can be made from the dated artifact.
 3. `pack.index_projections()` joins by outcome identity and
    `apply_shadow_projection()` validates event, market, sport, line, and side.
 4. Audit-only feature hashes expose distribution summaries but do not populate
-   `independent_model_prob`, blended probability, edge, Kelly, units, or
-   actionability.
+   `independent_model_prob`, blended probability, edge, Kelly, or units. They
+   cannot promote a wager; the existing projection-conflict gate may still
+   demote a row when its selected side opposes the shadow mean.
 
 The previous WNBA adapter parsed only minutes and points, filtered out every
 other market before fetching, and used the audit-only
@@ -87,7 +88,8 @@ actionability gates.
   fetch per season/slate run.
 - Missing or malformed stats produce no projection for the affected market.
 - New WNBA hashes leave independent probability, blended probability, edge,
-  Kelly, units, and actionability unchanged.
+  Kelly, and units unchanged. They cannot increase actionability; the existing
+  projection-conflict gate may only demote a conflicting row.
 - Existing projection identity/date validation and projection-conflict behavior
   remain intact.
 - Focused projection and pack tests, Ruff, MyPy, and the broader offline test
