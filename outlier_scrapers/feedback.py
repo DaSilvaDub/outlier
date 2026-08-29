@@ -2503,7 +2503,7 @@ def fit_blend_weights(
     db_path: Path = DEFAULT_DB_PATH,
     output_path: Path = probability_blend.DEFAULT_WEIGHTS_PATH,
     *,
-    min_samples: int = 30,
+    min_samples: int = 200,
     prior_strength: float = 30.0,
 ) -> dict[str, Any]:
     """Fit a versioned blend artifact from pregame, settled ledger snapshots."""
@@ -3849,7 +3849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "fit-blend", help="Fit market/model weights from settled pregame snapshots."
     )
     blend_parser.add_argument("--output", type=Path, default=probability_blend.DEFAULT_WEIGHTS_PATH)
-    blend_parser.add_argument("--min-samples", type=int, default=30)
+    blend_parser.add_argument("--min-samples", type=int, default=200)
     blend_parser.add_argument("--prior-strength", type=float, default=30.0)
 
     stake_cal_parser = subparsers.add_parser(
@@ -3949,6 +3949,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "status": artifact["status"],
                         "model_version": artifact["model_version"],
                         "eligible_samples": artifact["eligible_samples"],
+                        "global_market_weight": artifact["global"].get("market_weight"),
+                        "global_holdout": artifact.get("global_holdout"),
                     },
                     sort_keys=True,
                 )
