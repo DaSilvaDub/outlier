@@ -42,7 +42,11 @@ This worktree is for development/tests only until explicitly merged.
 - Accumulate settled **v2** gamelog rows; re-run `so_eval --promotion-gate`
 - Only flip `OUTLIER_PROMOTE_INDEPENDENT_SO=1` (or `auto_promote`) when readiness.ready
 - Refresh park factors from live Savant CSV when a stable endpoint is available
-- Keep `config/portfolio_risk.json` in shadow until post-whitelist recalibration
+- Keep learned stake multipliers shadow-neutral until calibration, uncertainty,
+  and drawdown activation is validated on the actual settled positive-unit
+  recommendation population (not the broad eligible/non-play population).
+  Portfolio caps remain enforced, and liquidity, projection-side-conflict, and
+  predictive-signal gates remain active independently of this switch.
 - Full projection layer (hits allowed, totals, NRFI, channel C) remains plan-level
 
 ## Verify
