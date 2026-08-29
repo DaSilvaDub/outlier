@@ -271,7 +271,7 @@ def test_non_mlb_shadow_rows_preserve_input_cardinality_and_identity():
     assert {projection["status"] for projection in projections} == {"shadow_only"}
 
 
-def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
+def test_export_projections_writes_multimarket_wnba_artifact(tmp_path, monkeypatch):
     """WNBA gets its own <sport>_projections_latest.json, not an inline-only path."""
 
     from outlier_scrapers.paths import LeaguePaths
@@ -287,7 +287,7 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
     fake_paths.normalized.mkdir(parents=True, exist_ok=True)
     fake_paths.props_normalized_latest().write_text(
         json.dumps(
-            {
+                        {
                 "records": [
                     {
                         "sport": "WNBA",
@@ -310,9 +310,12 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
                         "event_id": "g1",
                         "market_id": "m2",
                         "outcome_id": "o2",
-                        "line": 8.5,
-                        "position": "OVER",
-                    },
+                            "line": 8.5,
+                            "position": "OVER",
+                            "sport_context": {
+                                "event_starts_at": "2026-08-25T00:30:00-04:00"
+                            },
+                        },
                 ]
             }
         ),
@@ -320,20 +323,36 @@ def test_export_projections_writes_wnba_points_artifact(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
     monkeypatch.setattr(
-        "outlier_scrapers.projections.get_wnba_points_features",
+        "outlier_scrapers.projections.get_wnba_player_features",
         lambda name, season, fetch_json=None, cache=None: {
             "projected_minutes": 32.0,
             "points_per_minute": 0.62,
+            "rebounds_per_minute": 0.25,
+            "assists_per_minute": 0.15,
         },
     )
 
     status = export_projections("WNBA")
-    assert status == {"status": "ok", "record_count": 1}
+    assert status == {"status": "ok", "record_count": 2}
     written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
     assert written["sport"] == "WNBA"
     assert written["date"] == "2026-08-25"
-    assert [record["row_id"] for record in written["projections"]] == ["o1"]
-    assert written["projections"][0]["feature_snapshot_hash"] == "wnba-minutes-ppm-v1"
+    assert [record["row_id"] for record in written["projections"]] == ["o1", "o2"]
+    assert written["projections"][0]["feature_snapshot_hash"] == "wnba-gamelog-stat-rates-v2"
+    assert written["coverage"] == {
+        "mode": "audit_only",
+        "supported_opportunities": 2,
+        "projected_opportunities": 2,
+        "by_market": {
+            "PTS": {"opportunities": 1, "projected": 1},
+            "REB": {"opportunities": 1, "projected": 1},
+            "AST": {"opportunities": 0, "projected": 0},
+            "PR": {"opportunities": 0, "projected": 0},
+            "PA": {"opportunities": 0, "projected": 0},
+            "RA": {"opportunities": 0, "projected": 0},
+            "PRA": {"opportunities": 0, "projected": 0},
+        },
+    }
 
 
 def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatch):
@@ -452,11 +471,13 @@ def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path,
     assert "o1" not in [record.get("row_id") for record in written["projections"]]
 
 
-def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(monkeypatch):
-    """Caching is per player, not per priced outcome, and only points rows fetch."""
+def test_wnba_projection_build_fetches_once_per_player_and_skips_unsupported_markets(
+    monkeypatch,
+):
+    """Caching is per player, not per outcome, across supported market families."""
 
     import outlier_scrapers.projections as projections_module
-    from outlier_scrapers.projections import build_wnba_points_projections
+    from outlier_scrapers.projections import build_wnba_projections
 
     resolved: list[str] = []
     gamelogs: list[str] = []
@@ -467,10 +488,14 @@ def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(m
 
     def fake_gamelog(athlete_id, *, season, fetch_json=None):
         gamelogs.append(str(athlete_id))
-        return [30.0, 31.0, 29.0], [18.0, 20.0, 16.0]
+        return [30.0, 31.0, 29.0], {
+            "points": [18.0, 20.0, 16.0],
+            "rebounds": [8.0, 7.0, 9.0],
+            "assists": [5.0, 6.0, 4.0],
+        }
 
     monkeypatch.setattr(projections_module, "resolve_wnba_athlete_id", fake_resolve)
-    monkeypatch.setattr(projections_module, "fetch_wnba_athlete_gamelog_stats", fake_gamelog)
+    monkeypatch.setattr(projections_module, "fetch_wnba_athlete_gamelog", fake_gamelog)
 
     rows = [
         {
@@ -491,15 +516,87 @@ def test_wnba_projection_build_fetches_once_per_player_and_skips_other_markets(m
             "line": 4.5,
             "position": "OVER",
         }
+    ] + [
+        {
+            "sport": "WNBA",
+            "market_type": "BLK",
+            "player": "D Player",
+            "outcome_id": "o10",
+            "line": 1.5,
+            "position": "OVER",
+        }
     ]
-    records = build_wnba_points_projections(rows, season=2026)
+    records = build_wnba_projections(rows, season=2026)
 
-    assert len(records) == 6  # every points row is projected
+    assert len(records) == 7
     assert {record["sport"] for record in records} == {"WNBA"}
-    # Six points rows, two distinct players: one network resolution and one
-    # game-log fetch each. The AST row never reaches the model at all.
-    assert len(resolved) == 2
-    assert len(gamelogs) == 2
-    assert "C Player" not in resolved
+    assert {record["market"] for record in records} == {"PTS", "AST"}
+    # Seven supported rows, three distinct players: one resolution and one
+    # gamelog fetch each. The unsupported BLK row never reaches the model.
+    assert len(resolved) == 3
+    assert len(gamelogs) == 3
+    assert "D Player" not in resolved
+
+
+def test_wnba_combination_projection_sums_component_rates_but_stays_audit_only():
+    from outlier_scrapers.projections import (
+        independent_projection_eligible,
+        wnba_projection_record,
+    )
+
+    features = {
+        "projected_minutes": 30.0,
+        "points_per_minute": 0.5,
+        "rebounds_per_minute": 0.2,
+        "assists_per_minute": 0.1,
+    }
+    base = {
+        "sport": "WNBA",
+        "player": "A Player",
+        "event_id": "g1",
+        "line": 20.5,
+        "position": "OVER",
+    }
+
+    record = wnba_projection_record(
+        {**base, "market": "PRA", "market_id": "m1", "outcome_id": "o1"},
+        features=features,
+    )
+
+    assert record is not None
+    assert record["market"] == "PRA"
+    assert record["distribution"]["mean"] == pytest.approx(24.0)
+    assert independent_projection_eligible(record) is False
+
+
+def test_wnba_gamelog_parser_reads_points_rebounds_and_assists_aliases():
+    from outlier_scrapers.projections import fetch_wnba_athlete_gamelog
+
+    payload = {
+        "names": ["minutes", "PTS", "totalRebounds", "AST"],
+        "seasonTypes": [
+            {
+                "categories": [
+                    {
+                        "events": [
+                            {"stats": ["31", "20", "9", "6"]},
+                            {"stats": ["29", "18", "7", "5"]},
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+
+    minutes, stats = fetch_wnba_athlete_gamelog(
+        "123", season=2026, fetch_json=lambda url: payload
+    )
+
+    assert minutes == [31.0, 29.0]
+    assert stats == {
+        "points": [20.0, 18.0],
+        "rebounds": [9.0, 7.0],
+        "assists": [6.0, 5.0],
+    }
 
 

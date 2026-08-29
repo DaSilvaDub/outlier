@@ -474,6 +474,65 @@ def test_player_projection_mean_against_selected_side_fails_closed():
     assert row["recommended_units_pre_news"] == ""
 
 
+def test_wnba_gamelog_projection_enriches_pack_but_stays_audit_only():
+    card = ev_card(
+        line=8.5,
+        market_type="PLAYER_PROP",
+        market="REB",
+        event_id="game-1",
+        player="Example Player",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    baseline = make_row(card, ev, sport="WNBA")
+    projection = {
+        "status": "eligible",
+        "sport": "WNBA",
+        "row_id": "o1",
+        "event_id": "game-1",
+        "market_id": "m1",
+        "market": "REB",
+        "line": 8.5,
+        "side": "OVER",
+        "feature_snapshot_hash": "wnba-gamelog-stat-rates-v2",
+        "distribution": {
+            "line": 8.5,
+            "side": "OVER",
+            "win_prob": 0.58,
+            "push_prob": 0.0,
+            "mean": 9.2,
+            "variance": 5.1,
+            "model_version": "projection-v1",
+        },
+    }
+
+    row = make_row(card, ev, sport="WNBA", projections={"o1": projection})
+
+    assert row["projection_mean"] == 9.2
+    assert row["projection_feature_hash"] == "wnba-gamelog-stat-rates-v2"
+    assert row["independent_model_prob"] == ""
+    assert row["independent_push_prob"] == ""
+    assert row["independent_edge_pct"] == ""
+    for field in (
+        "model_prob",
+        "market_consensus_prob",
+        "final_blended_prob",
+        "edge_pct",
+        "kelly_025_units",
+        "recommended_units_pre_news",
+        "actionable",
+    ):
+        assert row[field] == baseline[field]
+
+
 def test_active_learned_blend_updates_final_probability_and_sizing():
     card = ev_card(line=5.5, market_type="PLAYER_PROP", market="K", event_id="game-1")
     ev = [
@@ -562,6 +621,44 @@ def test_league_average_so_projection_is_audit_only(monkeypatch):
     assert row["projection_model_version"]
     assert row["projection_mean"] != ""
     assert "projection_audit_league_avg" in row["projection_quality_flags"]
+
+
+def test_wnba_rebounds_projection_fallback_is_audit_only(monkeypatch):
+    card = ev_card(
+        line=8.5,
+        market_type="REB",
+        market="REB",
+        market_raw="Rebounds",
+        player="Kamilla Cardoso",
+        team="CHI",
+        opponent="SEA",
+        matchup="CHI @ SEA",
+        event_id="game-1",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    monkeypatch.setattr(
+        "outlier_scrapers.projections.get_wnba_player_features",
+        lambda name, season, fetch_json=None, cache=None: {
+            "projected_minutes": 31.0,
+            "rebounds_per_minute": 0.32,
+        },
+    )
+
+    row = make_row(card, ev, sport="WNBA")
+
+    assert row["independent_model_prob"] == ""
+    assert row["projection_mean"] != ""
+    assert row["projection_feature_hash"] == "wnba-gamelog-stat-rates-v2"
+    assert "projection_audit_wnba_minutes" in row["projection_quality_flags"]
 
 
 def test_gamelog_so_projection_sets_independent_model_prob():

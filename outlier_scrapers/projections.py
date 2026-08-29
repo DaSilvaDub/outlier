@@ -240,8 +240,41 @@ STARTER_PROJECTED_BF = 22.0
 LEAGUE_STRIKEOUT_RATE = 0.225
 LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
 GAMELOG_SO_HASH = "so-starter-gamelog-v2"  # v2 = EB shrink + thin-sample soften
-WNBA_MINUTES_HASH = "wnba-minutes-ppm-v1"
-AUDIT_ONLY_PROJECTION_HASHES = frozenset({LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH})
+WNBA_MINUTES_HASH = "wnba-minutes-ppm-v1"  # legacy points-only scaffold
+WNBA_GAMELOG_HASH = "wnba-gamelog-stat-rates-v2"
+AUDIT_ONLY_PROJECTION_HASHES = frozenset(
+    {LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH, WNBA_GAMELOG_HASH}
+)
+WNBA_MARKET_COMPONENTS: dict[str, tuple[str, ...]] = {
+    "PTS": ("points",),
+    "REB": ("rebounds",),
+    "AST": ("assists",),
+    "PR": ("points", "rebounds"),
+    "PA": ("points", "assists"),
+    "RA": ("rebounds", "assists"),
+    "PRA": ("points", "rebounds", "assists"),
+}
+WNBA_MARKET_ALIASES = {
+    "POINT": "PTS",
+    "POINTS": "PTS",
+    "REBOUND": "REB",
+    "REBOUNDS": "REB",
+    "ASSIST": "AST",
+    "ASSISTS": "AST",
+    "POINTS_REBOUNDS": "PR",
+    "POINTSREBOUNDS": "PR",
+    "POINTS_ASSISTS": "PA",
+    "POINTSASSISTS": "PA",
+    "REBOUNDS_ASSISTS": "RA",
+    "REBOUNDSASSISTS": "RA",
+    "POINTS_REBOUNDS_ASSISTS": "PRA",
+    "POINTSREBOUNDSASSISTS": "PRA",
+}
+WNBA_GAMELOG_STAT_ALIASES: dict[str, tuple[str, ...]] = {
+    "points": ("points", "pts"),
+    "rebounds": ("rebounds", "totalrebounds", "reb", "rebs"),
+    "assists": ("assists", "ast"),
+}
 MLB_STATS_API_BASE = "https://statsapi.mlb.com/api/v1"
 ESPN_SEARCH_URL = "https://site.web.api.espn.com/apis/common/v3/search"
 ESPN_WNBA_GAMELOG_URL = (
@@ -331,7 +364,7 @@ HOME_PARK_K_FACTORS: dict[str, float] = {
 def independent_projection_eligible(projection: Mapping[str, object] | None) -> bool:
     """Audit-only digests must not fill independent_model_prob.
 
-    League-avg SO stubs and the WNBA minutes scaffold stay shadow/audit until
+    League-avg SO stubs and WNBA gamelog-rate scaffolds stay shadow/audit until
     calibrated. Other projection artifacts remain eligible.
     """
 
@@ -906,17 +939,18 @@ def apply_so_context_adjustments(
     return bf, rate
 
 
-def compute_wnba_minutes_features(
+def compute_wnba_player_features(
     recent_minutes: Iterable[float],
     *,
     min_games: int = 3,
     max_games: int = 10,
-    recent_points: Iterable[float] | None = None,
+    recent_stats: Mapping[str, Iterable[float]] | None = None,
 ) -> dict[str, object] | None:
-    """Derive a bounded minutes + points-per-minute projection from recent games.
+    """Derive bounded WNBA minutes and per-minute rates from aligned game logs.
 
-    Fail closed on thin samples. Used by the WNBA audit scaffold; does not
-    auto-promote into live Kelly until calibrated.
+    Every modeled stat must have one finite non-negative value per retained
+    minute observation. Thin or misaligned samples fail closed. These features
+    are audit-only until a market-family validation artifact is promoted.
     """
     minutes_values = [
         float(value) for value in recent_minutes if _float_stat(value) is not None
@@ -931,16 +965,40 @@ def compute_wnba_minutes_features(
         "games": len(kept_minutes),
         "feature_source": "wnba_minutes_recent",
     }
-    if recent_points is not None:
-        points_values = [
-            float(value) for value in recent_points if _float_stat(value) is not None
-        ]
-        points_values = [value for value in points_values if value >= 0]
-        kept_points = points_values[: len(kept_minutes)]
-        if len(kept_points) == len(kept_minutes) and sum(kept_minutes) > 0:
-            features["points_per_minute"] = sum(kept_points) / sum(kept_minutes)
+    if recent_stats is not None and sum(kept_minutes) > 0:
+        for stat_name in WNBA_GAMELOG_STAT_ALIASES:
+            raw_values = recent_stats.get(stat_name)
+            if raw_values is None:
+                continue
+            stat_values = [
+                float(value) for value in raw_values if _float_stat(value) is not None
+            ]
+            if len(stat_values) < len(kept_minutes):
+                continue
+            kept_stats = stat_values[: len(kept_minutes)]
+            if any(value < 0 for value in kept_stats):
+                continue
+            features[f"{stat_name}_per_minute"] = sum(kept_stats) / sum(kept_minutes)
             features["feature_source"] = "wnba_espn_gamelog"
     return features
+
+
+def compute_wnba_minutes_features(
+    recent_minutes: Iterable[float],
+    *,
+    min_games: int = 3,
+    max_games: int = 10,
+    recent_points: Iterable[float] | None = None,
+) -> dict[str, object] | None:
+    """Backward-compatible points-only wrapper for the v1 scaffold."""
+
+    stats = {"points": recent_points} if recent_points is not None else None
+    return compute_wnba_player_features(
+        recent_minutes,
+        min_games=min_games,
+        max_games=max_games,
+        recent_stats=stats,
+    )
 
 
 def resolve_wnba_athlete_id(
@@ -976,32 +1034,43 @@ def resolve_wnba_athlete_id(
     return None
 
 
-def fetch_wnba_athlete_gamelog_stats(
+def fetch_wnba_athlete_gamelog(
     athlete_id: str,
     *,
     season: int,
     fetch_json: Any | None = None,
-) -> tuple[list[float], list[float]]:
-    """Return (minutes, points) lists newest-first from ESPN gamelog."""
+) -> tuple[list[float], dict[str, list[float]]]:
+    """Return aligned minutes and base-stat lists newest-first from ESPN."""
     person_id = str(athlete_id).strip()
     if not person_id.isdigit():
-        return [], []
+        return [], {}
     url = f"{ESPN_WNBA_GAMELOG_URL}/{person_id}/gamelog?season={int(season)}"
     loader = fetch_json or _default_stats_fetch_json
     payload = loader(url)
     names = payload.get("names")
     if not isinstance(names, list):
-        return [], []
-    try:
-        minutes_idx = names.index("minutes")
-        points_idx = names.index("points")
-    except ValueError:
-        return [], []
+        return [], {}
+    normalized_names = {
+        re.sub(r"[^a-z0-9]", "", str(name).casefold()): index
+        for index, name in enumerate(names)
+    }
+    minutes_idx = normalized_names.get("minutes")
+    stat_indices: dict[str, int] = {}
+    for stat_name, aliases in WNBA_GAMELOG_STAT_ALIASES.items():
+        for alias in aliases:
+            index = normalized_names.get(re.sub(r"[^a-z0-9]", "", alias.casefold()))
+            if index is not None:
+                stat_indices[stat_name] = index
+                break
+    if minutes_idx is None or set(stat_indices) != set(WNBA_GAMELOG_STAT_ALIASES):
+        return [], {}
     minutes: list[float] = []
-    points: list[float] = []
+    stats_by_name: dict[str, list[float]] = {
+        stat_name: [] for stat_name in WNBA_GAMELOG_STAT_ALIASES
+    }
     season_types = payload.get("seasonTypes")
     if not isinstance(season_types, list):
-        return [], []
+        return [], {}
     for season_type in season_types:
         if not isinstance(season_type, Mapping):
             continue
@@ -1020,28 +1089,48 @@ def fetch_wnba_athlete_gamelog_stats(
                 stats = event.get("stats")
                 if not isinstance(stats, list):
                     continue
-                if max(minutes_idx, points_idx) >= len(stats):
+                required_indices = [minutes_idx, *stat_indices.values()]
+                if max(required_indices) >= len(stats):
                     continue
                 minute_value = _float_stat(stats[minutes_idx])
-                point_value = _float_stat(stats[points_idx])
-                if minute_value is None or point_value is None:
+                stat_values = {
+                    stat_name: _float_stat(stats[index])
+                    for stat_name, index in stat_indices.items()
+                }
+                if minute_value is None or any(value is None for value in stat_values.values()):
                     continue
                 minutes.append(minute_value)
-                points.append(point_value)
-    return minutes, points
+                for stat_name, value in stat_values.items():
+                    assert value is not None
+                    stats_by_name[stat_name].append(float(value))
+    return minutes, stats_by_name
+
+
+def fetch_wnba_athlete_gamelog_stats(
+    athlete_id: str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> tuple[list[float], list[float]]:
+    """Backward-compatible points-only view of the generalized gamelog."""
+
+    minutes, stats = fetch_wnba_athlete_gamelog(
+        athlete_id, season=season, fetch_json=fetch_json
+    )
+    return minutes, stats.get("points", [])
 
 
 _WNBA_FEATURE_CACHE: dict[str, dict[str, object] | None] = {}
 
 
-def get_wnba_points_features(
+def get_wnba_player_features(
     player_name: str,
     *,
     season: int,
     fetch_json: Any | None = None,
     cache: dict[str, dict[str, object] | None] | None = None,
 ) -> dict[str, object] | None:
-    """Fetch/cache WNBA minutes+PPM features for one player. Fail closed."""
+    """Fetch/cache WNBA minutes and base-stat rates for one player."""
     key = f"{season}:{_normalize_person_name(player_name)}"
     store = cache if cache is not None else _WNBA_FEATURE_CACHE
     if key in store:
@@ -1051,10 +1140,10 @@ def get_wnba_points_features(
         if not athlete_id:
             store[key] = None
             return None
-        minutes, points = fetch_wnba_athlete_gamelog_stats(
+        minutes, stats = fetch_wnba_athlete_gamelog(
             athlete_id, season=season, fetch_json=fetch_json
         )
-        features = compute_wnba_minutes_features(minutes, recent_points=points)
+        features = compute_wnba_player_features(minutes, recent_stats=stats)
         store[key] = features
         return features
     except (HTTPError, URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -1063,27 +1152,59 @@ def get_wnba_points_features(
         return None
 
 
-def wnba_points_projection_record(
+def get_wnba_points_features(
+    player_name: str,
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+    cache: dict[str, dict[str, object] | None] | None = None,
+) -> dict[str, object] | None:
+    """Backward-compatible alias for callers of the points-only scaffold."""
+
+    return get_wnba_player_features(
+        player_name, season=season, fetch_json=fetch_json, cache=cache
+    )
+
+
+def _wnba_market_code(row: Mapping[str, object]) -> str | None:
+    for field in ("market", "proposition", "market_type"):
+        raw = str(row.get(field) or "").upper().strip()
+        token = re.sub(r"[^A-Z0-9]+", "_", raw).strip("_")
+        compact = token.replace("_", "")
+        candidate = WNBA_MARKET_ALIASES.get(token, WNBA_MARKET_ALIASES.get(compact, token))
+        if candidate in WNBA_MARKET_COMPONENTS:
+            return candidate
+    return None
+
+
+def wnba_projection_record(
     row: Mapping[str, object],
     *,
     features: Mapping[str, object] | None,
 ) -> dict[str, object] | None:
-    """Shadow-only WNBA points scaffold from minutes * usage rate.
+    """Shadow-only WNBA stat projection from minutes times component rates.
 
     Returns None unless features are complete. Never writes league averages.
     Audit-only hash: does not fill independent_model_prob.
     """
     sport = str(row.get("sport") or row.get("league") or "").upper()
-    market = str(row.get("market_type") or row.get("market") or row.get("proposition") or "").upper()
     if sport != "WNBA":
         return None
-    if market not in {"PTS", "POINTS"} and "POINT" not in str(row.get("selection") or "").upper():
+    market = _wnba_market_code(row)
+    if market is None:
         return None
     if not isinstance(features, Mapping):
         return None
     minutes = _float_stat(features.get("projected_minutes"))
-    usage_rate = _float_stat(features.get("points_per_minute"))
-    if minutes is None or usage_rate is None or minutes <= 0 or usage_rate <= 0:
+    component_rates = [
+        _float_stat(features.get(f"{component}_per_minute"))
+        for component in WNBA_MARKET_COMPONENTS[market]
+    ]
+    if (
+        minutes is None
+        or minutes <= 0
+        or any(rate is None or rate < 0 for rate in component_rates)
+    ):
         return None
     line = row.get("line")
     side = str(row.get("headline_side") or row.get("position") or "").upper()
@@ -1097,9 +1218,11 @@ def wnba_points_projection_record(
         line_value = float(str(line).replace("+", ""))
     except (TypeError, ValueError):
         return None
-    mean_points = minutes * usage_rate
+    mean_stat = minutes * sum(float(rate) for rate in component_rates if rate is not None)
+    if mean_stat <= 0:
+        return None
     # Poisson-like discrete approximation via NB2 with light overdispersion.
-    distribution = negative_binomial_distribution(mean_points, dispersion=8.0)
+    distribution = negative_binomial_distribution(mean_stat, dispersion=8.0)
     record = distribution.to_record(line=line_value, side=side)
     return {
         "status": "eligible",
@@ -1107,11 +1230,24 @@ def wnba_points_projection_record(
         "row_id": row.get("outcome_id"),
         "event_id": row.get("event_id"),
         "market_id": row.get("market_id"),
+        "market": market,
         "line": line_value,
         "side": side,
-        "feature_snapshot_hash": WNBA_MINUTES_HASH,
+        "feature_snapshot_hash": WNBA_GAMELOG_HASH,
         "distribution": record,
     }
+
+
+def wnba_points_projection_record(
+    row: Mapping[str, object],
+    *,
+    features: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Backward-compatible points-only wrapper."""
+
+    if _wnba_market_code(row) != "PTS":
+        return None
+    return wnba_projection_record(row, features=features)
 
 
 def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
@@ -1210,16 +1346,16 @@ def build_mlb_so_projections(
     return records
 
 
-def build_wnba_points_projections(
+def build_wnba_projections(
     props_rows: Iterable[Mapping[str, object]],
     *,
     season: int,
     fetch_json: Any | None = None,
 ) -> list[dict[str, object]]:
-    """Compute shadow WNBA points projections for the points rows in a feed.
+    """Compute shadow WNBA projections for supported player-stat families.
 
     Feature lookups are cached per player so one slate costs one ESPN call per
-    player, not one per priced outcome. Rows that are not points markets never
+    player, not one per priced outcome. Unsupported market rows never
     trigger a fetch.
     """
 
@@ -1228,22 +1364,56 @@ def build_wnba_points_projections(
     for row in props_rows:
         if not isinstance(row, Mapping):
             continue
-        market = str(
-            row.get("market_type") or row.get("market") or row.get("proposition") or ""
-        ).upper()
-        selection = str(row.get("selection") or "").upper()
-        if market not in {"PTS", "POINTS"} and "POINT" not in selection:
+        if _wnba_market_code(row) is None:
             continue
         player = _player_name_from_row(row)
         if not player:
             continue
-        features = get_wnba_points_features(
+        features = get_wnba_player_features(
             player, season=season, fetch_json=fetch_json, cache=cache
         )
-        record = wnba_points_projection_record(row, features=features)
+        record = wnba_projection_record(row, features=features)
         if record is not None:
             records.append(record)
     return records
+
+
+def build_wnba_points_projections(
+    props_rows: Iterable[Mapping[str, object]],
+    *,
+    season: int,
+    fetch_json: Any | None = None,
+) -> list[dict[str, object]]:
+    """Backward-compatible points-only builder."""
+
+    points_rows = [row for row in props_rows if _wnba_market_code(row) == "PTS"]
+    return build_wnba_projections(points_rows, season=season, fetch_json=fetch_json)
+
+
+def summarize_wnba_projection_coverage(
+    props_rows: Iterable[Mapping[str, object]], records: Iterable[Mapping[str, object]]
+) -> dict[str, object]:
+    """Report supported-row shadow coverage by normalized WNBA market family."""
+
+    opportunities = {market: 0 for market in WNBA_MARKET_COMPONENTS}
+    projected = {market: 0 for market in WNBA_MARKET_COMPONENTS}
+    for row in props_rows:
+        market = _wnba_market_code(row)
+        if market is not None:
+            opportunities[market] += 1
+    for record in records:
+        market = str(record.get("market") or "")
+        if market in projected and record.get("status") == "eligible":
+            projected[market] += 1
+    return {
+        "mode": "audit_only",
+        "supported_opportunities": sum(opportunities.values()),
+        "projected_opportunities": sum(projected.values()),
+        "by_market": {
+            market: {"opportunities": opportunities[market], "projected": projected[market]}
+            for market in WNBA_MARKET_COMPONENTS
+        },
+    }
 
 
 def _projection_season(props_rows: Iterable[Mapping[str, object]]) -> int:
@@ -1371,16 +1541,18 @@ def export_projections(
         probable_by_team = load_probable_pitcher_lookup("MLB")
         records = build_mlb_so_projections(props_rows, probable_by_team)
     else:
-        records = build_wnba_points_projections(
+        records = build_wnba_projections(
             props_rows, season=_projection_season(props_rows)
         )
 
-    result = {
+    result: dict[str, object] = {
         "sport": sport,
         "date": artifact_date,
         "generated_at": datetime.now().astimezone().isoformat(),
         "projections": records,
     }
+    if sport == "WNBA":
+        result["coverage"] = summarize_wnba_projection_coverage(props_rows, records)
     out_path = paths_for_league.projections_latest()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

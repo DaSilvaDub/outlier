@@ -1473,23 +1473,26 @@ def build_row(
         from outlier_scrapers.projections import (
             GAMELOG_SO_HASH,
             LEAGUE_AVG_SO_HASH,
+            WNBA_GAMELOG_HASH,
             WNBA_MINUTES_HASH,
-            get_wnba_points_features,
+            get_wnba_player_features,
             independent_projection_eligible,
             mlb_so_projection_record,
-            wnba_points_projection_record,
+            wnba_projection_record,
         )
 
         generated = mlb_so_projection_record(row, probable_pitchers)
         if generated is None and str(row.get("sport") or "").upper() == "WNBA":
-            player_name = str(row.get("player") or "").strip()
+            player_name = str(
+                card.get("player") or ref.get("player") or row.get("player") or ""
+            ).strip()
             if player_name:
                 season = datetime.now().astimezone().year
                 as_of = str(row.get("as_of") or "")
                 if len(as_of) >= 4 and as_of[:4].isdigit():
                     season = int(as_of[:4])
-                features = get_wnba_points_features(player_name, season=season)
-                generated = wnba_points_projection_record(row, features=features)
+                features = get_wnba_player_features(player_name, season=season)
+                generated = wnba_projection_record(row, features=features)
         if generated:
             extra_flags = apply_shadow_projection(row, generated, headline_side)
             projection_flags = [*projection_flags, *extra_flags]
@@ -1501,6 +1504,8 @@ def build_row(
                     projection_flags.append("projection_audit_league_avg")
                 elif digest == GAMELOG_SO_HASH and independent_projection_eligible(generated):
                     projection_flags.append("projection_independent_gamelog_so")
+                elif digest == WNBA_GAMELOG_HASH:
+                    projection_flags.append("projection_audit_wnba_minutes")
                 elif digest == WNBA_MINUTES_HASH:
                     projection_flags.append("projection_audit_wnba_minutes")
                 elif not independent_projection_eligible(generated):
