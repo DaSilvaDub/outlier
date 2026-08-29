@@ -39,7 +39,7 @@ DEFAULT_LEARNED_MULTIPLIER_PROMOTION_PATH = (
 )
 SCHEMA_VERSION = 5
 
-LEARNED_MULTIPLIER_POPULATION = "settled_positive_unit_pack_recommendations_v1"
+LEARNED_MULTIPLIER_POPULATION = "positive_unit_pack_recommendations_v1"
 LEARNED_MULTIPLIER_PROMOTION_DEFAULTS: dict[str, Any] = {
     "schema_version": "1.0",
     "source_probability_column": "market_consensus_prob",
