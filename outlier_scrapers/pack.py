@@ -6,16 +6,12 @@ Transforms the pipeline's player + game triage cards into a daily betting pack
 Includes Tier 1 fixes: display dedup selection, player_id + push_prob, strict date,
 full round-robin+global-fill quota, candidate-scoped freshness, decisions.csv scaffold.
 
-This module is now a compatibility facade over the decomposed ``pack_*``
-modules (``pack_market``, ``pack_projections``, ``pack_sizing``,
-``pack_ranking``, ``pack_context``, ``pack_render``, ``pack_publish``,
-``pack_selection``). It re-exports their public and private names so existing
-``from outlier_scrapers.pack import X`` / ``outlier_scrapers.pack.X`` callers
-keep working, and it still owns the top-level orchestration entry points
-(``process_stream``, ``select_date``, ``_expected_pack_slate_date``,
-``build_pack_with_coverage``, ``build_pack``, ``main``) that call into those
-modules. New code should prefer importing directly from the ``pack_*``
-modules; callers should migrate off this facade over time.
+Compatibility import surface for the decomposed ``pack_*`` modules
+(``pack_market``, ``pack_projections``, ``pack_sizing``, ``pack_ranking``,
+``pack_context``, ``pack_render``, ``pack_publish``, ``pack_selection``).
+Owns the top-level orchestration entry points: ``process_stream``,
+``select_date``, ``_expected_pack_slate_date``, ``build_pack_with_coverage``,
+``build_pack``, ``main``.
 """
 
 from __future__ import annotations
@@ -97,11 +93,12 @@ from outlier_scrapers.pack_sizing import (
 )
 
 # --- pack_ranking: board ranking / quota fill ------------------------------
-from outlier_scrapers.pack_ranking import rank_rows
+from outlier_scrapers.pack_ranking import rank_rows, _round_robin_then_fill
 
 # --- pack_context: contextual enrichment -----------------------------------
 from outlier_scrapers.pack_context import (
     FEED_STATUS_FIELDS,
+    _INJURY_ANALYSIS_MAX_CHARS,
     build_event_starts,
     build_injuries,
     _injury_return_date,
@@ -147,16 +144,13 @@ from outlier_scrapers.pack_selection import (
     _freeze_t30_originals,
     _total_reconciliation_key,
     _reconcile_candidates_with_totals_board,
+    _blank_neutral_component,
     build_row,
 )
 
 logger = logging.getLogger(__name__)
 
-# Compatibility surface: every name below is re-exported so existing
-# ``from outlier_scrapers.pack import X`` / ``outlier_scrapers.pack.X``
-# callers keep working even though most of these now live in the pack_*
-# modules imported above. Lists every imported name explicitly (rather than
-# `import *`) so private/underscore-prefixed names keep resolving too.
+# Listed explicitly (not `import *`) so underscore-prefixed names re-export too.
 __all__ = [
     "os",
     "shutil",
@@ -221,7 +215,9 @@ __all__ = [
     "_load_learned_stake_runtime",
     "_apply_learned_stake_before_caps",
     "rank_rows",
+    "_round_robin_then_fill",
     "FEED_STATUS_FIELDS",
+    "_INJURY_ANALYSIS_MAX_CHARS",
     "build_event_starts",
     "build_injuries",
     "_injury_return_date",
@@ -255,9 +251,11 @@ __all__ = [
     "_freeze_t30_originals",
     "_total_reconciliation_key",
     "_reconcile_candidates_with_totals_board",
+    "_blank_neutral_component",
     "build_row",
     "process_stream",
     "select_date",
+    "_expected_pack_slate_date",
     "build_pack_with_coverage",
     "build_pack",
     "main",
