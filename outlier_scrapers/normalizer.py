@@ -441,6 +441,11 @@ def normalize_player_props(
         if config.league_id == "MLB":
             if market not in ALLOWED_MLB_PLAYER_PROPS:
                 continue
+
+        # Double-Double and Triple-Double are OVER-only milestone props; drop UNDER lines at generation
+        prop_str = str(outcome.get("proposition") or "").replace("_", "").replace("-", "").replace(" ", "").upper()
+        if (market in {"DD", "TD"} or prop_str in {"DOUBLEDOUBLE", "DD", "TRIPLEDOUBLE", "TD"}) and side == "UNDER":
+            continue
         books = _books_from_outcome(outcome)
 
         raw_opp_rank = stats.get("oppRank") or outcome.get("oppRank")

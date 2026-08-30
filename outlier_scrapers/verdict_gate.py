@@ -853,6 +853,10 @@ def _check_markets(record: Any, row: Any, policy: VerdictPolicy, add) -> None:
         add("side_restricted", "Doubles (2B) are UNDER-only.")
         return
 
+    if token in {"DD", "DOUBLEDOUBLE", "TD", "TRIPLEDOUBLE"} and _selection_side(record.selection) == "UNDER":
+        add("side_restricted", f"{token} is OVER-only.")
+        return
+
     if pack.is_longshot_price(record.price):
         add("longshot_price", f"price {record.price} is at or beyond +{pack.LONGSHOT_AMERICAN_PRICE}.")
 

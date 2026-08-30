@@ -143,15 +143,23 @@ def test_parse_hit_rates_filters_hr_under_and_slate(tmp_path: Path):
                 "matchup": "CLE @ CIN",
                 "sides": {"UNDER": _side("UNDER", 100.0, 100.0, 100.0)},
             },
+            {
+                "player": "DD Under Girl",
+                "market_label": "DD Under Girl - Double-Double",
+                "team": "NYY",
+                "matchup": "NYY @ PHI",
+                "sides": {"UNDER": _side("UNDER", 100.0, 100.0, 100.0)},
+            },
         ],
     )
     hit_full: dict[str, list] = {"MLB": [], "WNBA": []}
     opts = FilterOptions(allow_matchups=frozenset({"NYY @ PHI"}))
     stats = org.parse_hit_rates(hit_full, data_dirs=[data], filter_opts=opts)
-    assert stats["MLB"]["raw_l5_l10_l20"] == 3
+    assert stats["MLB"]["raw_l5_l10_l20"] == 4
     assert len(hit_full["MLB"]) == 1
     assert hit_full["MLB"][0]["player"] == "On Slate"
     assert stats["MLB"]["reject_reasons"]["hr_under_forbidden"] == 1
+    assert stats["MLB"]["reject_reasons"]["double_under_forbidden"] == 1
     assert stats["MLB"]["reject_reasons"]["off_slate_matchup"] == 1
 
 

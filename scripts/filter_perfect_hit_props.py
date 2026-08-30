@@ -37,6 +37,7 @@ from typing import Iterable
 
 HR_RE = re.compile(r"\bhome\s*runs?\b|\bhr\b", re.I)
 MILESTONE_RE = re.compile(r"\bto\s+record\b|\bmilestone\b", re.I)
+DOUBLE_UNDER_RE = re.compile(r"\bdouble\s*[-_ ]\s*double\b|\bdd\b|\btriple\s*[-_ ]\s*double\b|\btd\b", re.I)
 PROHIBITED_MARKETS_RE = re.compile(r"\bwalks?\s+allowed\b|\bhits?\s+allowed\b", re.I)
 MATCHUP_SPLIT_RE = re.compile(r"\s*@\s*|\s+vs\.?\s+", re.I)
 DOSSIER_NAME_RE = re.compile(r"_([a-z0-9]+)---([a-z0-9]+)\.md$", re.I)
@@ -49,6 +50,7 @@ class FilterOptions:
 
     drop_hr_under: bool = True
     drop_milestone_under: bool = True
+    drop_double_under: bool = True
     drop_prohibited_markets: bool = False  # optional; MLB generation whitelist is normalizer-owned
     require_team_in_matchup: bool = True
     side: str | None = None  # "OVER" | "UNDER" | None
@@ -135,6 +137,8 @@ def reject_reason(
         return "hr_under_forbidden"
     if opts.drop_milestone_under and MILESTONE_RE.search(market) and side == "UNDER":
         return "milestone_under_forbidden"
+    if opts.drop_double_under and DOUBLE_UNDER_RE.search(market) and side == "UNDER":
+        return "double_under_forbidden"
     if opts.allow_matchups is not None and matchup not in opts.allow_matchups:
         return f"off_slate_matchup:{matchup or '(blank)'}"
     if opts.require_team_in_matchup and not team_in_matchup(row.get("team") or "", matchup):
@@ -281,6 +285,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Drop milestone / 'To Record' UNDER lines (default: true)",
     )
     p.add_argument(
+        "--drop-double-under",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Drop Double-Double and Triple-Double UNDER lines (default: true)",
+    )
+    p.add_argument(
         "--require-team-in-matchup",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -300,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     opts = FilterOptions(
         drop_hr_under=args.drop_hr_under,
         drop_milestone_under=args.drop_milestone_under,
+        drop_double_under=args.drop_double_under,
         require_team_in_matchup=args.require_team_in_matchup,
         side=args.side,
         allow_matchups=frozenset(allow_set) if allow_set is not None else None,

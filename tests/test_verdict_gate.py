@@ -711,6 +711,26 @@ def test_2b_under_is_generation_prohibited(tmp_path):
     only_code(result, "prohibited_market")
 
 
+def test_side_restricted_double_double_under(tmp_path):
+    index = build_index(
+        tmp_path,
+        candidates=[
+            candidate_row(
+                sport="WNBA",
+                market_type="PLAYER_PROP",
+                market_label="DD",
+                selection="Player One Under 0.5",
+                line="0.5",
+            )
+        ],
+    )
+    result = gate(
+        parse_verdict(index, selection="Player One Under 0.5", line="0.5"),
+        index,
+    )
+    only_code(result, "side_restricted")
+
+
 # ---------------------------------------------------------------------------
 # PASS / STAND_DOWN exemptions
 # ---------------------------------------------------------------------------
