@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from outlier_scrapers import pack_index, runner_common as rc, verdict_report
-from outlier_scrapers.stage_result import ArtifactState
+from outlier_scrapers.stage_result import ArtifactState, FinalReportResolution
 
 SNAPSHOT_NAME = "desk_snapshot.json"
 HISTORY_NAME = "desk_snapshot_history.jsonl"
@@ -479,6 +479,102 @@ def desk_publication_ready(
         reason="e_usable" if e_usable else "fallback_no_e",
         upstream_state=upstream_state,
         e_state=e_state,
+    )
+
+
+def upstream_ready_for_e(
+    pack_dir: Path,
+    results: dict[str, Any] | None = None,
+    *,
+    policy_path: Path | str | None = None,
+) -> bool:
+    """Thin adapter over :func:`desk_publication_ready` for PR2's parallel runner.
+
+    E may run once A/D/B validate CURRENT against the live pack fingerprint --
+    purely a function of on-disk publication state, never of this run's own
+    :class:`~outlier_scrapers.stage_result.StageResult`\\ s. That means a
+    failed A/B/D execution *this run* still unlocks E as long as a prior,
+    still-valid CURRENT publication remains on disk (its failure stays visible
+    in status/components regardless), and a failed/absent C never blocks E at
+    all since C is not one of the required passes. ``results`` is accepted
+    (and otherwise unused) so callers can pass this run's StageResult map
+    without the adapter needing to inspect it.
+    """
+    del results  # gating is disk-state-based only; see docstring.
+    return desk_publication_ready(pack_dir, policy_path=policy_path).ready
+
+
+def validate_snapshot_for_final_report(pack_dir: Path) -> FinalReportResolution:
+    """Snapshot-first authority check for the final report (PR2).
+
+    ``desk_snapshot.json`` is validated against the *live* pack fingerprint
+    and against each pinned publication's own manifest/hash integrity via
+    :func:`runner_common.validate_publication` -- never against a pass-level
+    ``current.json`` pointer, so a coherent, still-valid snapshot is never
+    invalidated merely because a *newer* current-pointer exists elsewhere
+    (e.g. a phase re-ran after the snapshot advanced). Callers (run_desk)
+    layer the ``file``/``compatibility_artifact`` fields (claude_e.md,
+    manual_betting_report.md -- both non-authoritative rendered outputs of
+    the pinned publication) on top of this.
+    """
+    snapshot = read_desk_snapshot(pack_dir)
+    if snapshot is None:
+        return FinalReportResolution(state=ArtifactState.MISSING, authoritative=False, reason="no_snapshot")
+
+    identity = rc.load_pack_identity(pack_dir)
+    live_fp = identity.as_dict()
+    snapshot_fp = snapshot.get("pack_fingerprint") or {}
+    fp_ok = all(str(snapshot_fp.get(key) or "") == live_fp[key] for key in HASH_KEYS)
+    if not fp_ok:
+        return FinalReportResolution(
+            state=ArtifactState.STALE,
+            authoritative=False,
+            reason="snapshot_pack_fingerprint_mismatch",
+        )
+
+    publications = snapshot.get("publications") or {}
+    source = str(snapshot.get("synthesis_source") or "")
+
+    if source == verdict_report.SYNTHESIS_CLAUDE_E and publications.get("E"):
+        expected_upstream = {name: publications.get(name) for name in REQUIRED_PASSES}
+        validation = rc.validate_publication(
+            pack_dir, "E", str(publications["E"]), identity, expected_upstream=expected_upstream
+        )
+        if validation.state is ArtifactState.CURRENT:
+            return FinalReportResolution(
+                state=ArtifactState.CURRENT, authoritative=True, source=source, reason="snapshot_e_valid"
+            )
+        return FinalReportResolution(
+            state=validation.state,
+            authoritative=False,
+            source=source,
+            reason=f"snapshot_e_publication_invalid:{validation.reason}",
+        )
+
+    if source:
+        for name in REQUIRED_PASSES:
+            pub_id = publications.get(name)
+            if not pub_id:
+                return FinalReportResolution(
+                    state=ArtifactState.STALE,
+                    authoritative=False,
+                    source=source,
+                    reason=f"snapshot_pinned_publication_missing:{name}",
+                )
+            validation = rc.validate_publication(pack_dir, name, str(pub_id), identity)
+            if validation.state is not ArtifactState.CURRENT:
+                return FinalReportResolution(
+                    state=validation.state,
+                    authoritative=False,
+                    source=source,
+                    reason=f"snapshot_pinned_publication_invalid:{name}:{validation.reason}",
+                )
+        return FinalReportResolution(
+            state=ArtifactState.CURRENT, authoritative=True, source=source, reason="snapshot_fallback_valid"
+        )
+
+    return FinalReportResolution(
+        state=ArtifactState.INVALID, authoritative=False, reason="snapshot_missing_synthesis_source"
     )
 
 

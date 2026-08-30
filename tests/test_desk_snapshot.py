@@ -572,6 +572,106 @@ def test_maybe_advance_desk_publishes_while_daily_lock_held(tmp_path):
     assert daily.exists() is False
 
 
+def test_live_pack_hash_mismatch_invalidates_snapshot_authority(tmp_path):
+    """PR2: desk_snapshot.json is validated against the *live* pack fingerprint;
+    a mismatch (pack changed since the snapshot advanced) makes it non-authoritative."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+    pubs = _publish_adb(pack_dir, index)
+    _publish_e(pack_dir, index, pubs)
+    payload = ds.advance_desk_snapshot(
+        pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
+    )
+    assert payload is not None
+
+    resolution = ds.validate_snapshot_for_final_report(pack_dir)
+    assert resolution.authoritative is True
+
+    raw = (pack_dir / "candidates.csv").read_text(encoding="utf-8")
+    (pack_dir / "candidates.csv").write_text(raw.replace("4.2", "9.9"), encoding="utf-8")
+
+    resolution = ds.validate_snapshot_for_final_report(pack_dir)
+    assert resolution.authoritative is False
+    assert resolution.state is rc.ArtifactState.STALE
+    assert resolution.reason == "snapshot_pack_fingerprint_mismatch"
+
+
+def test_e_pinned_to_obsolete_upstream_is_rejected_as_authoritative(tmp_path):
+    """A snapshot pinning E to a publication whose own upstream_publication_ids
+    no longer match what's pinned in the snapshot is rejected."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+    pubs = _publish_adb(pack_dir, index)
+    _publish_e(pack_dir, index, pubs)
+    payload = ds.advance_desk_snapshot(
+        pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
+    )
+    assert payload is not None
+    assert payload["synthesis_source"] == "claude_e"
+
+    # Corrupt the snapshot to pin an upstream publication_id E never reconciled.
+    snapshot_path = pack_dir / "verdicts" / ds.SNAPSHOT_NAME
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot["publications"]["A"] = "obsolete-publication-id"
+    snapshot_path.write_text(json.dumps(snapshot, sort_keys=True) + "\n", encoding="utf-8")
+
+    resolution = ds.validate_snapshot_for_final_report(pack_dir)
+    assert resolution.authoritative is False
+    assert resolution.source == "claude_e"
+    assert "snapshot_e_publication_invalid" in resolution.reason
+
+
+def test_forced_same_request_republish_preserves_publication_identity(tmp_path):
+    """Forced re-publication of unchanged content/request hash must not mint
+    a new publication_id, even though the caller passed forced=True upstream."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+
+    first = _publish_verdict(pack_dir, index, "A", units=1.5)
+    second = _publish_verdict(pack_dir, index, "A", units=1.5)  # identical content, "forced" rerun
+
+    assert first.publication_id == second.publication_id
+    current = json.loads(
+        (pack_dir / "verdicts" / "A" / "current.json").read_text(encoding="utf-8")
+    )
+    assert current["publication_id"] == first.publication_id
+
+
+def test_in_process_parallel_publication_serialization(tmp_path):
+    """Two threads racing to publish (through the shared in-process RLock
+    wrapping fingerprint_locks/writer_lock_only) never interleave or corrupt
+    writes -- both publications end up fully intact and independently valid."""
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def publish(pass_name, units):
+        return _publish_verdict(pack_dir, index, pass_name, units)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fut_a = executor.submit(publish, "A", 1.5)
+        fut_d = executor.submit(publish, "D", 0.5)
+        result_a = fut_a.result()
+        result_d = fut_d.result()
+
+    assert result_a.publication_id
+    assert result_d.publication_id
+    for pass_name, result in (("A", result_a), ("D", result_d)):
+        manifest = json.loads((result.path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["pass"] == pass_name
+        verdict_doc = json.loads((result.path / "verdicts.json").read_text(encoding="utf-8"))
+        assert verdict_doc["pass"] == pass_name
+        current = json.loads(
+            (pack_dir / "verdicts" / pass_name / "current.json").read_text(encoding="utf-8")
+        )
+        assert current["publication_id"] == result.publication_id
+
+
 def test_publish_pass_while_daily_lock_held(tmp_path):
     pack_dir = tmp_path / "packs" / "2026-08-14"
     _write_pack(pack_dir)

@@ -2,23 +2,30 @@
 
 Entry point: python -m outlier_scrapers.run_desk
 
-Orchestrates A/B/C/D/E passes. C is the automated Prompt C style narrow research pass
-for injury and lineup context. Ties all findings to exact pack market_ids and quoted
-lines without altering them.
+Orchestrates A/B/C/D/E passes. A/B/C/D are independent and run concurrently
+(bounded thread pool); C is the automated Prompt C style narrow research pass
+for injury and lineup context. E reconciles the validated A/D/B publications
+(C optional) and runs only after they gate-check as CURRENT. Ties all findings
+to exact pack market_ids and quoted lines without altering them.
 
-Status uses components + final_report + manual_betting_report.md for the skill contract.
+`desk_snapshot.json` remains the sole authoritative final-report pointer;
+status uses components + final_report + manual_betting_report.md for the
+skill contract.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
+import dataclasses
 import json
 import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence, Any
+from types import ModuleType
+from typing import Any, Sequence
 
 from outlier_scrapers import (
     c_research,
@@ -31,10 +38,18 @@ from outlier_scrapers import (
 )
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
+from outlier_scrapers.stage_result import (
+    ArtifactState,
+    FinalReportResolution,
+    StageErrorCode,
+    StageExecutionState,
+    StageResult,
+)
 
 logger = logging.getLogger(__name__)
 
 PHASES = ("A", "B", "C", "D", "E")
+INDEPENDENT_PHASES = ("A", "B", "C", "D")
 PHASE_OUTPUTS = {
     "A": "chatgpt_a.md",
     "B": "gemini_b.md",
@@ -56,44 +71,117 @@ PHASE_RUNNERS = {
     "D": claude_reasoning.run_claude_d,
     "E": claude_synthesis.run_claude_e,
 }
+PHASE_MODULES: dict[str, ModuleType] = {
+    "A": reasoning,
+    "B": gemini_research,
+    "C": c_research,
+    "D": claude_reasoning,
+    "E": claude_synthesis,
+}
 SUCCESS_STATES = {"success", "cached", "forced-refresh"}
 STATUS_NAME = "reasoning_status.json"
+REQUIRED_UPSTREAM_PHASES = ("A", "D", "B")
+DEFAULT_MAX_WORKERS = 4
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _request_hash(path: Path) -> str:
-    if not path.exists():
-        return ""
-    try:
-        return rc.extract_yaml_request_hash(path.read_text(encoding="utf-8")) or ""
-    except OSError:
-        return ""
+def _stage_result(
+    phase: str,
+    *,
+    execution_state: StageExecutionState,
+    artifact_state: ArtifactState,
+    request_sha256: str = "",
+    publication_id: str | None = None,
+    error_code: StageErrorCode | None = None,
+    reason: str = "",
+    cache_hit: bool = False,
+    forced: bool = False,
+    used_local_fallback: bool = False,
+) -> StageResult:
+    return StageResult(
+        phase=phase,
+        execution_state=execution_state,
+        artifact_state=artifact_state,
+        output_file=PHASE_OUTPUTS.get(phase, ""),
+        request_sha256=request_sha256,
+        publication_id=publication_id,
+        error_code=error_code,
+        reason=reason,
+        cache_hit=cache_hit,
+        forced=forced,
+        used_local_fallback=used_local_fallback,
+    )
 
 
-def _restore_on_failure(path: Path, previous: bytes | None) -> None:
-    if previous is None:
-        path.unlink(missing_ok=True)
-        return
-    rc.atomic_write(path.parent, path.name, "", previous.decode("utf-8"))
+def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> StageResult:
+    """Run one desk phase, returning a typed :class:`StageResult`.
 
-
-def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, str]:
+    Caching and success are decided from PR1's authoritative publication
+    validation (``verdicts/<phase>/current.json`` + its manifest/hash
+    integrity against the live pack identity), never from legacy Markdown
+    file existence. A forced run always executes -- even when the resulting
+    publication/request hash is unchanged -- and is reported with
+    ``forced=True``/``cache_hit=False``, never collapsed into a cache hit.
+    """
     if phase not in PHASE_RUNNERS:
-        return {"status": "failed", "file": "", "request_sha256": ""}
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.FAILED,
+            artifact_state=ArtifactState.INVALID,
+            error_code=StageErrorCode.INTERNAL_ERROR,
+            reason=f"unknown phase {phase!r}",
+        )
 
-    output = pack_dir / PHASE_OUTPUTS[phase]
-    previous = output.read_bytes() if output.exists() else None
-    previous_hash = _request_hash(output)
+    module = PHASE_MODULES[phase]
+    identity = rc.load_pack_identity(pack_dir)
 
-    if force and not os.getenv(PHASE_KEYS[phase]):
-        return {
-            "status": "skipped-no-key",
-            "file": PHASE_OUTPUTS[phase],
-            "request_sha256": previous_hash,
-        }
+    try:
+        expected_hash = module.expected_request_sha256(pack_dir)
+    except rc.RunnerError as exc:
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.FAILED,
+            artifact_state=ArtifactState.MISSING,
+            error_code=StageErrorCode.MISSING_INPUT,
+            reason=str(exc),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Phase %s: failed computing expected request hash", phase)
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.FAILED,
+            artifact_state=ArtifactState.INVALID,
+            error_code=StageErrorCode.INTERNAL_ERROR,
+            reason=str(exc),
+        )
+
+    validation = rc.validate_current_publication(
+        pack_dir, phase, identity, expected_request_sha256=expected_hash
+    )
+
+    if not force and validation.current:
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.SUCCEEDED,
+            artifact_state=ArtifactState.CURRENT,
+            request_sha256=validation.request_sha256 or expected_hash,
+            publication_id=validation.publication_id,
+            cache_hit=True,
+        )
+
+    if not os.getenv(PHASE_KEYS[phase]):
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.SKIPPED,
+            artifact_state=validation.state,
+            request_sha256=expected_hash,
+            publication_id=validation.publication_id if validation.current else None,
+            error_code=StageErrorCode.NO_API_KEY,
+            reason="missing API key",
+        )
 
     try:
         exit_code = PHASE_RUNNERS[phase](
@@ -103,30 +191,104 @@ def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, s
         logger.exception("Phase %s failed", phase)
         exit_code = 1
 
-    if exit_code == 0 and not output.exists():
-        exit_code = 1
+    try:
+        post_expected_hash = module.expected_request_sha256(pack_dir)
+    except Exception:
+        post_expected_hash = expected_hash
 
-    if exit_code != 0:
-        _restore_on_failure(output, previous)
-        status = "skipped-no-key" if not os.getenv(PHASE_KEYS[phase]) else "failed"
-        return {
-            "status": status,
-            "file": PHASE_OUTPUTS[phase],
-            "request_sha256": _request_hash(output) or previous_hash,
-        }
+    post_validation = rc.validate_current_publication(
+        pack_dir, phase, identity, expected_request_sha256=post_expected_hash
+    )
 
-    current_hash = _request_hash(output)
-    if previous_hash and current_hash == previous_hash:
-        status = "cached"
-    elif force:
-        status = "forced-refresh"
+    if post_validation.current:
+        # The publication is authoritative and committed. A Markdown-render
+        # failure after that commit (or an opaque nonzero legacy exit code
+        # once the publication already validates) is a compatibility-artifact
+        # concern, not an execution failure.
+        markdown_ok = exit_code == 0 and (pack_dir / PHASE_OUTPUTS[phase]).exists()
+        return _stage_result(
+            phase,
+            execution_state=StageExecutionState.SUCCEEDED,
+            artifact_state=ArtifactState.CURRENT,
+            request_sha256=post_validation.request_sha256 or post_expected_hash,
+            publication_id=post_validation.publication_id,
+            forced=force,
+            error_code=None if markdown_ok else StageErrorCode.COMPATIBILITY_ARTIFACT_FAILED,
+            reason="" if markdown_ok else "legacy markdown render failed after publication commit",
+        )
+
+    if (
+        post_validation.state is ArtifactState.STALE
+        and post_validation.reason.startswith("pack_identity_mismatch")
+    ):
+        error_code = StageErrorCode.IDENTITY_MISMATCH
     else:
-        status = "success"
-    return {
-        "status": status,
-        "file": PHASE_OUTPUTS[phase],
-        "request_sha256": current_hash,
-    }
+        # Never parse log strings to guess a finer-grained code: an opaque
+        # nonzero legacy runner return code (or a publication that still
+        # fails to validate) maps deterministically to INTERNAL_ERROR.
+        error_code = StageErrorCode.INTERNAL_ERROR
+
+    return _stage_result(
+        phase,
+        execution_state=StageExecutionState.FAILED,
+        artifact_state=post_validation.state,
+        request_sha256=post_expected_hash,
+        error_code=error_code,
+        reason=post_validation.reason or f"phase runner exited {exit_code}",
+    )
+
+
+def run_independent_phases(
+    phases: Sequence[str],
+    pack_dir: Path,
+    *,
+    force: bool = False,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> dict[str, StageResult]:
+    """Run the requested A/B/C/D phases concurrently, bounded by ``max_workers``.
+
+    Phases are normalized/deduped and always returned in canonical A,B,C,D
+    order (not completion order). E is not independent and is rejected here.
+    One phase failing never cancels or blocks the others: every future is
+    gathered, and an uncaught worker exception becomes a FAILED StageResult
+    with error_code=INTERNAL_ERROR rather than propagating.
+    """
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+
+    requested = {step.upper() for step in phases}
+    unknown = requested - set(INDEPENDENT_PHASES)
+    if unknown:
+        raise ValueError(
+            "run_independent_phases only accepts A/B/C/D; got: "
+            + ",".join(sorted(unknown))
+        )
+    normalized = [p for p in INDEPENDENT_PHASES if p in requested]
+    if not normalized:
+        return {}
+
+    workers = max(1, min(max_workers, len(normalized)))
+    results: dict[str, StageResult] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_phase = {
+            executor.submit(run_phase, phase, pack_dir, force=force): phase
+            for phase in normalized
+        }
+        for future in concurrent.futures.as_completed(future_to_phase):
+            phase = future_to_phase[future]
+            try:
+                results[phase] = future.result()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Phase %s raised inside worker thread", phase)
+                results[phase] = _stage_result(
+                    phase,
+                    execution_state=StageExecutionState.FAILED,
+                    artifact_state=ArtifactState.INVALID,
+                    error_code=StageErrorCode.INTERNAL_ERROR,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+
+    return {phase: results[phase] for phase in normalized}
 
 
 def _game_totals_context(pack_dir: Path) -> str:
@@ -261,35 +423,21 @@ def write_status(pack_dir: Path, status: dict) -> None:
     _write_status(pack_dir, status)
 
 
-def _has_final_report(pack_dir: Path) -> tuple[bool, str, Path | None]:
-    e = pack_dir / PHASE_OUTPUTS["E"]
-    if e.exists():
-        return True, "claude_e", e
-    m = pack_dir / "manual_betting_report.md"
-    if m.exists():
-        return True, "local_synthesis", m
-    return False, "", None
-
-
-def orchestrate_desk(
-    pack_dir: Path,
-    *,
-    steps: Sequence[str] | None = None,
-    force: bool = False,
-    allow_local_synth: bool = False,
-    hold_locks: bool = True,
-) -> int:
-    load_environment()
+def validate_desk_request(steps: Sequence[str] | None) -> tuple[tuple[str, ...], str | None]:
+    """Validate requested steps against PHASES; return (normalized, error)."""
     selected = PHASES if steps is None else steps
     requested = tuple(step.upper() for step in selected)
     unknown = [step for step in requested if step not in PHASES]
     if unknown:
-        logger.error("Unknown desk phase(s): %s", ",".join(unknown))
-        return 1
+        return requested, f"Unknown desk phase(s): {','.join(unknown)}"
+    return requested, None
 
+
+def build_initial_status(pack_dir: Path) -> dict[str, Any]:
+    """Build the initial status payload (date, generated_at, game/team totals, ...)."""
     totals_bytes, totals_hash = rc.load_game_totals(pack_dir)
     team_totals_bytes, team_totals_hash = rc.load_team_totals(pack_dir)
-    status: dict[str, Any] = {
+    return {
         "date": pack_dir.name,
         "generated_at": _now_iso(),
         "overall": "running",
@@ -308,76 +456,52 @@ def orchestrate_desk(
         "notes": [],
     }
 
-    if not (pack_dir / "briefing.md").exists() or not (pack_dir / "candidates.csv").exists():
-        status["overall"] = "DATA_ONLY"
-        status["notes"].append("missing briefing.md or candidates.csv")
-        _write_status(pack_dir, status)
-        return 1
 
-    components: dict[str, dict[str, Any]] = {}
-    for phase in ("A", "B", "C", "D"):
-        if phase in requested:
-            components[phase] = run_phase(phase, pack_dir, force=force)
+def run_synthesis_phase(
+    pack_dir: Path,
+    results: dict[str, StageResult],
+    *,
+    force: bool = False,
+    allow_local_synth: bool = False,
+) -> StageResult:
+    """Run E sequentially, after every independent future has completed AND
+    the upstream readiness gate (validated CURRENT A/D/B; C optional) passes.
+    """
+    from outlier_scrapers import desk_snapshot
 
-    if "E" in requested:
-        required = ("briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md")
-        if all((pack_dir / name).exists() for name in required):
-            components["E"] = run_phase("E", pack_dir, force=force)
-            if (
-                allow_local_synth
-                and components["E"].get("status") not in SUCCESS_STATES
-            ):
-                try:
-                    content = local_synthesize_inputs(pack_dir)
-                    fm = "---\nmodel: local-synthesis-fallback\n---\n\n"
-                    rc.atomic_write(pack_dir, PHASE_OUTPUTS["E"], fm, content)
-                    components["E"]["status"] = "success"
-                    components["E"]["used_local_fallback"] = True
-                except Exception as ex:
-                    status["notes"].append(f"local concat failed: {ex}")
-        else:
-            components["E"] = {
-                "status": "gated-missing-input",
-                "file": PHASE_OUTPUTS["E"],
-                "request_sha256": "",
-            }
-            status["notes"].append("E inputs incomplete")
-
-    status["components"] = components
-
-    has_final, source, fpath = _has_final_report(pack_dir)
-    if not has_final and allow_local_synth:
-        try:
-            from outlier_scrapers import verdict_report
-
-            fpath = produce_manual_betting_report(pack_dir)
-            has_final = True
-            report_text = fpath.read_text(encoding="utf-8") if fpath else ""
-            source = verdict_report.read_synthesis_source(report_text) or "local_synthesis"
-            status["notes"].append("produced manual_betting_report.md via local synthesis")
-        except Exception as ex:
-            status["notes"].append(f"manual report synthesis failed: {ex}")
-
-    e_usable = (
-        components.get("E", {}).get("status") in SUCCESS_STATES
-        if "E" in requested
-        else (pack_dir / PHASE_OUTPUTS["E"]).exists()
-    )
-    required_usable = all(
-        (
-            components.get(phase, {}).get("status") in SUCCESS_STATES
-            if phase in requested
-            else (pack_dir / PHASE_OUTPUTS[phase]).exists()
+    if not desk_snapshot.upstream_ready_for_e(pack_dir, results):
+        return _stage_result(
+            "E",
+            execution_state=StageExecutionState.GATED,
+            artifact_state=ArtifactState.MISSING,
+            error_code=StageErrorCode.MISSING_INPUT,
+            reason="E inputs incomplete: A/D/B do not all validate as CURRENT",
         )
-        for phase in ("A", "B", "D")
-    )
 
-    if has_final and fpath:
-        status["final_report"] = {"source": source, "file": str(fpath.name)}
+    result = run_phase("E", pack_dir, force=force)
+    if allow_local_synth and result.execution_state is not StageExecutionState.SUCCEEDED:
+        try:
+            content = local_synthesize_inputs(pack_dir)
+            fm = "---\nmodel: local-synthesis-fallback\n---\n\n"
+            rc.atomic_write(pack_dir, PHASE_OUTPUTS["E"], fm, content)
+            result = dataclasses.replace(
+                result,
+                execution_state=StageExecutionState.SUCCEEDED,
+                used_local_fallback=True,
+            )
+        except Exception as ex:
+            logger.warning("local concat failed: %s", ex)
+    return result
 
+
+def advance_snapshot(
+    pack_dir: Path, status: dict[str, Any], *, hold_locks: bool = True
+) -> dict[str, Any] | None:
+    """Wrap ``desk_snapshot.maybe_advance_desk`` and populate status fields."""
+    from outlier_scrapers import desk_snapshot, verdict_policy, verdict_store
+
+    snapshot: dict[str, Any] | None = None
     try:
-        from outlier_scrapers import desk_snapshot, verdict_policy, verdict_store
-
         snapshot = desk_snapshot.maybe_advance_desk(pack_dir, hold_locks=hold_locks)
         if snapshot is not None:
             status["desk_snapshot"] = {
@@ -395,23 +519,127 @@ def orchestrate_desk(
         }
     except Exception as ex:
         status["notes"].append(f"desk snapshot skipped: {ex}")
+    return snapshot
+
+
+def resolve_final_report(pack_dir: Path) -> FinalReportResolution:
+    """Snapshot-first final-report resolution.
+
+    Delegates the fingerprint/pinned-publication authority check to
+    :func:`desk_snapshot.validate_snapshot_for_final_report` (reused, not
+    reimplemented) and layers the ``file``/``compatibility_artifact`` fields
+    on top. ``claude_e.md`` and ``manual_betting_report.md`` are treated as
+    non-authoritative rendered compatibility artifacts of the snapshot's
+    pinned publication -- never the source of truth themselves.
+    """
+    from outlier_scrapers import desk_snapshot, verdict_report
+
+    result = desk_snapshot.validate_snapshot_for_final_report(pack_dir)
+    if not result.authoritative:
+        return result
+
+    e_md = pack_dir / PHASE_OUTPUTS["E"]
+    manual_md = pack_dir / "manual_betting_report.md"
+    compatibility_artifact: Path | None = None
+    if result.source == verdict_report.SYNTHESIS_CLAUDE_E and e_md.exists():
+        compatibility_artifact = e_md
+    elif manual_md.exists():
+        compatibility_artifact = manual_md
+
+    return dataclasses.replace(
+        result,
+        file=pack_dir / "verdicts" / desk_snapshot.SNAPSHOT_NAME,
+        compatibility_artifact=compatibility_artifact,
+    )
+
+
+def compute_overall_state(
+    pack_dir: Path,
+    requested: Sequence[str],
+    results: dict[str, StageResult],
+    final_report: FinalReportResolution,
+) -> tuple[str, int]:
+    """FULL/PARTIAL/DATA_ONLY + exit code, from committed publications only."""
+    identity = rc.load_pack_identity(pack_dir)
+
+    def usable(phase: str) -> bool:
+        if phase in results:
+            return results[phase].execution_state is StageExecutionState.SUCCEEDED
+        return rc.validate_current_publication(pack_dir, phase, identity).current
+
+    e_usable = usable("E")
+    required_usable = all(usable(phase) for phase in REQUIRED_UPSTREAM_PHASES)
 
     if e_usable and required_usable:
-        status["overall"] = "FULL"
-        if not status["final_report"]:
-            status["final_report"] = {"source": "claude_e", "file": PHASE_OUTPUTS["E"]}
-        exit_code = 0
-    elif e_usable or has_final:
-        status["overall"] = "PARTIAL"
-        if not status["final_report"] and fpath:
-            status["final_report"] = {"source": source, "file": str(fpath.name)}
-        exit_code = 0
-    else:
-        status["overall"] = "DATA_ONLY"
-        exit_code = 1
+        return "FULL", 0
+    if e_usable or final_report.authoritative:
+        return "PARTIAL", 0
+    return "DATA_ONLY", 1
 
+
+def orchestrate_desk(
+    pack_dir: Path,
+    *,
+    steps: Sequence[str] | None = None,
+    force: bool = False,
+    allow_local_synth: bool = False,
+    hold_locks: bool = True,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> int:
+    load_environment()
+    requested, error = validate_desk_request(steps)
+    if error:
+        logger.error(error)
+        return 1
+
+    status = build_initial_status(pack_dir)
+
+    if not (pack_dir / "briefing.md").exists() or not (pack_dir / "candidates.csv").exists():
+        status["overall"] = "DATA_ONLY"
+        status["notes"].append("missing briefing.md or candidates.csv")
+        write_status(pack_dir, status)
+        return 1
+
+    independent_requested = [p for p in INDEPENDENT_PHASES if p in requested]
+    results: dict[str, StageResult] = run_independent_phases(
+        independent_requested, pack_dir, force=force, max_workers=max_workers
+    )
+
+    if "E" in requested:
+        results["E"] = run_synthesis_phase(
+            pack_dir, results, force=force, allow_local_synth=allow_local_synth
+        )
+        if results["E"].execution_state is StageExecutionState.GATED:
+            status["notes"].append("E inputs incomplete")
+
+    status["components"] = {
+        phase: result.as_status_dict() for phase, result in results.items()
+    }
+
+    advance_snapshot(pack_dir, status, hold_locks=hold_locks)
+    final_report = resolve_final_report(pack_dir)
+
+    if final_report.authoritative:
+        status["final_report"] = final_report.as_status_dict()
+    elif allow_local_synth:
+        try:
+            fpath = produce_manual_betting_report(pack_dir)
+            from outlier_scrapers import verdict_report
+
+            report_text = fpath.read_text(encoding="utf-8") if fpath else ""
+            source = verdict_report.read_synthesis_source(report_text) or "local_synthesis"
+            status["notes"].append("produced manual_betting_report.md via local synthesis")
+            status["final_report"] = {"source": source, "file": str(fpath.name)}
+        except Exception as ex:
+            status["notes"].append(f"manual report synthesis failed: {ex}")
+            status["final_report"] = final_report.as_status_dict()
+    else:
+        status["final_report"] = final_report.as_status_dict()
+
+    overall, exit_code = compute_overall_state(pack_dir, requested, results, final_report)
+    status["overall"] = overall
     status["generated_at"] = _now_iso()
-    _write_status(pack_dir, status)
+    write_status(pack_dir, status)
     return exit_code
 
 
@@ -437,7 +665,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Break packs/<date>/verdicts/.writer_lock only if the stale-lock rule allows.",
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=DEFAULT_MAX_WORKERS,
+        help="Max concurrent A/B/C/D workers (default: 4). Must be positive.",
+    )
     args = parser.parse_args(argv)
+
+    if args.max_workers < 1:
+        parser.error("--max-workers must be positive")
 
     steps = [s.strip().upper() for s in args.steps.split(",") if s.strip()]
     pack_dir = paths.PROJECT_ROOT / "packs" / args.date
@@ -459,6 +696,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         steps=steps,
         force=args.force,
         allow_local_synth=args.allow_local,
+        max_workers=args.max_workers,
     )
 
 
