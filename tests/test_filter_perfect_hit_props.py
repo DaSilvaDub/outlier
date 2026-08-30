@@ -47,6 +47,56 @@ def test_drop_hr_under():
     assert all(r["player"] != "A" for r in kept)
 
 
+def test_drop_double_under():
+    rows = [
+        {
+            "player": "A",
+            "market_label": "A - Double Double",
+            "side": "UNDER",
+            "line": "0.5",
+            "team": "LAS",
+            "matchup": "LAS @ SEA",
+        },
+        {
+            "player": "B",
+            "market_label": "B - Double-Double",
+            "side": "UNDER",
+            "line": "0.5",
+            "team": "LAS",
+            "matchup": "LAS @ SEA",
+        },
+        {
+            "player": "C",
+            "market_label": "C - Triple-Double",
+            "side": "UNDER",
+            "line": "0.5",
+            "team": "LAS",
+            "matchup": "LAS @ SEA",
+        },
+        {
+            "player": "D",
+            "market_label": "D - Double Double",
+            "side": "OVER",
+            "line": "0.5",
+            "team": "LAS",
+            "matchup": "LAS @ SEA",
+        },
+        {
+            "player": "E",
+            "market_label": "E - Points",
+            "side": "UNDER",
+            "line": "15.5",
+            "team": "SEA",
+            "matchup": "LAS @ SEA",
+        },
+    ]
+    opts = fphp.FilterOptions(allow_matchups=None)
+    kept, rejected, reasons = fphp.filter_rows(rows, opts)
+    assert len(kept) == 2
+    assert reasons["double_under_forbidden"] == 3
+    assert {r["player"] for r in kept} == {"D", "E"}
+
+
 def test_off_slate_matchup():
     rows = [
         {

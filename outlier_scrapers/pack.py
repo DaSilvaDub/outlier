@@ -1271,6 +1271,15 @@ def build_row(
             market_type = "GAMELINE"
     if is_excluded_market(market_token, market_type):
         return None
+    tok_check = (
+        str(market_token or market_type or proposition or "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .upper()
+    )
+    if tok_check in {"DD", "TD", "DOUBLEDOUBLE", "TRIPLEDOUBLE"} and headline_side == "UNDER":
+        return None
     scope = card.get("scope") or ref.get("scope")
     market_type_upper = str(market_type or "").upper()
     is_total_proposition = (

@@ -2416,6 +2416,15 @@ def test_non_excluded_markets_kept():
     assert make_row(ev_card(market="BBA", market_type="BBA"), []) is not None
 
 
+def test_double_double_under_dropped():
+    card_dd_under = ev_card(side="UNDER", market="DD", market_type="DD")
+    assert make_row(card_dd_under, []) is None
+    card_td_under = ev_card(side="UNDER", market="TD", market_type="TD")
+    assert make_row(card_td_under, []) is None
+    card_dd_over = ev_card(side="OVER", market="DD", market_type="DD")
+    assert make_row(card_dd_over, []) is not None
+
+
 def test_is_excluded_market():
     assert is_excluded_market("HR", None) is True
     assert is_excluded_market(None, "WALKS_ALLOWED") is True

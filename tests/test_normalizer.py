@@ -413,3 +413,75 @@ def test_doubles_are_dropped_not_under_only():
 
     assert rows == []
 
+
+def test_double_double_under_is_dropped():
+    dd_over = {
+        "outcome": {
+            "eventId": "e1",
+            "outcomeId": "o-dd-over",
+            "teamId": "10",
+            "oppTeamId": "20",
+            "position": "OVER",
+            "line": 0.5,
+            "marketLabel": "Cameron Brink - Double Double",
+            "proposition": "DOUBLE_DOUBLE",
+            "marketId": "m-dd",
+            "bestOdds": 110,
+            "books": [],
+            "bookOdds": {},
+        },
+        "stats": {},
+    }
+    dd_under = {
+        "outcome": {
+            "eventId": "e1",
+            "outcomeId": "o-dd-under",
+            "teamId": "10",
+            "oppTeamId": "20",
+            "position": "UNDER",
+            "line": 0.5,
+            "marketLabel": "Cameron Brink - Double Double",
+            "proposition": "DOUBLE_DOUBLE",
+            "marketId": "m-dd",
+            "bestOdds": -1100,
+            "books": [],
+            "bookOdds": {},
+        },
+        "stats": {},
+    }
+    td_under = {
+        "outcome": {
+            "eventId": "e1",
+            "outcomeId": "o-td-under",
+            "teamId": "10",
+            "oppTeamId": "20",
+            "position": "UNDER",
+            "line": 0.5,
+            "marketLabel": "Cameron Brink - Triple Double",
+            "proposition": "TRIPLE_DOUBLE",
+            "marketId": "m-td",
+            "bestOdds": -5000,
+            "books": [],
+            "bookOdds": {},
+        },
+        "stats": {},
+    }
+    schedule = {
+        "e1": {
+            "event_id": "e1",
+            "matchup": "LAS @ SEA",
+            "matchup_raw": "LAS @ SEA",
+            "away": "LAS",
+            "home": "SEA",
+            "away_team_id": "10",
+            "home_team_id": "20",
+            "starts_at": "2026-08-30T21:00:00+00:00",
+        }
+    }
+    rows = normalize_player_props(
+        {"props": [dd_over, dd_under, td_under]}, schedule, get_sport_config("WNBA")
+    )
+    assert len(rows) == 1
+    assert rows[0]["market"] == "DD"
+    assert rows[0]["position"] == "OVER"
+
