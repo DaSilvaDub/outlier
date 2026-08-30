@@ -1,4 +1,5 @@
 import csv
+import json
 
 import pytest
 import anthropic
@@ -150,6 +151,11 @@ def test_validation_missing_candidates(claude_env):
 
 def test_success_writes_file_and_asserts_api(claude_env, mock_anthropic):
     _, date_str, pack_dir = claude_env
+    expected_hash = claude_reasoning.expected_request_sha256(pack_dir)
+    config = claude_reasoning.provider_configuration()
+    assert config["provider"] == "anthropic"
+    assert config["effort"] == "high"
+    assert "key" not in json.dumps(config).lower()
     assert claude_reasoning.main(["--date", date_str]) == 0
     assert len(mock_anthropic) == 1
 
@@ -170,6 +176,7 @@ def test_success_writes_file_and_asserts_api(claude_env, mock_anthropic):
     text = out.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "request_sha256:" in text
+    assert f"request_sha256: {expected_hash}" in text
     # Body is the model's raw structured output, not prose.
     assert '"schema_version": "1.0"' in text
     assert '"pass": "D"' in text

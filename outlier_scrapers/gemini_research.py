@@ -91,6 +91,40 @@ def call_gemini(
     raise rc.RunnerError("Failed after maximum retries")
 
 
+def provider_configuration() -> dict[str, object]:
+    return {
+        "provider": "google_gemini",
+        "model": MODEL,
+        "grounding": GROUNDING,
+        "structured_kind": "verdict",
+    }
+
+
+def expected_request_sha256(pack_dir: Path) -> str:
+    briefing = rc.read_required_text(pack_dir / "briefing.md", "Briefing")
+    totals, game_hash, team_totals, team_hash = rc.load_all_totals(pack_dir)
+    _, candidates_hash = rc.validate_candidates(
+        pack_dir, allow_empty=rc.has_actionable_any_totals(totals, team_totals)
+    )
+    prompt_text = rc.read_required_text(
+        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
+    )
+    identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
+    return rc.compute_request_hash(
+        {
+            "model": MODEL,
+            "grounding": GROUNDING,
+            "role_block": pack.ROLE_BLOCK,
+            "prompt": prompt_text,
+            "briefing_hash": rc.sha256_text(briefing),
+            "candidates_hash": candidates_hash,
+            "game_totals_hash": game_hash,
+            "team_totals_hash": team_hash,
+            **rc.structured_request_fields(identity),
+        }
+    )
+
+
 def run_gemini_b(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None
 ) -> int:

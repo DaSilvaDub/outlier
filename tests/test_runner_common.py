@@ -2,6 +2,8 @@ import csv
 import hashlib
 import io
 import json
+import shutil
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 
 import pytest
@@ -446,6 +448,53 @@ def test_structured_request_fields_requires_pack_date():
         )
 
 
+def test_pack_identity_contract_is_immutable_and_supported_by_request_helpers():
+    identity = runner_common.PackIdentity(
+        pack_date="2026-08-25",
+        candidates_sha256="c" * 64,
+        game_totals_sha256="d" * 64,
+        team_totals_sha256="e" * 64,
+    )
+    assert runner_common.structured_request_fields(identity) == {
+        **identity.as_dict(),
+        "schema_version": "1.0",
+    }
+    assert "pack_date: 2026-08-25" in runner_common.build_pack_identity_block(identity)
+    with pytest.raises(FrozenInstanceError):
+        identity.pack_date = "2026-08-26"  # type: ignore[misc]
+    with pytest.raises(TypeError, match="cannot be mixed"):
+        runner_common.structured_request_fields(identity, pack_date="2026-08-25")
+    with pytest.raises(TypeError, match="cannot be mixed"):
+        runner_common.build_pack_identity_block(identity, candidates_sha256="c" * 64)
+
+
+def test_configuration_sha256_changes_for_config_but_not_secrets():
+    base = {
+        "provider": "openai",
+        "model": "test-model",
+        "max_output_tokens": 1000,
+        "api_key": "first-secret",
+        "nested": {"client_secret": "also-secret", "effort": "high"},
+    }
+    same = {
+        **base,
+        "api_key": "different-secret",
+        "nested": {"client_secret": "changed-secret", "effort": "high"},
+    }
+    changed = {**same, "max_output_tokens": 2000}
+    assert runner_common.configuration_sha256(base) == runner_common.configuration_sha256(same)
+    assert runner_common.configuration_sha256(base) != runner_common.configuration_sha256(changed)
+
+
+def test_current_git_sha_returns_none_on_git_failure(monkeypatch, tmp_path):
+    class Result:
+        returncode = 128
+        stdout = ""
+
+    monkeypatch.setattr(runner_common.subprocess, "run", lambda *args, **kwargs: Result())
+    assert runner_common.current_git_sha(tmp_path) is None
+
+
 def test_publication_id_covers_all_four_files():
     base = _artifacts()
     changed_md = _artifacts(report_fragment=b"# renderer fix\n")
@@ -514,6 +563,204 @@ def test_crash_before_pointer_swap_leaves_previous_current(tmp_path):
     assert not (parent / new_id).exists()
 
 
+def _publication_identity(pack_date="2026-08-25"):
+    return runner_common.PackIdentity(
+        pack_date=pack_date,
+        candidates_sha256="1" * 64,
+        game_totals_sha256="2" * 64,
+        team_totals_sha256="3" * 64,
+    )
+
+
+def _identity_artifacts(
+    identity,
+    *,
+    pass_name="A",
+    request_sha256="a" * 64,
+    verdict_pass=None,
+    verdict_request=None,
+    upstream=None,
+    report_fragment=b"# report\n",
+):
+    verdict_data = {
+        "schema_version": "1.0",
+        "pass": verdict_pass or pass_name,
+        **identity.as_dict(),
+        "request_sha256": verdict_request or request_sha256,
+        "verdicts": [],
+    }
+    if upstream is not None:
+        verdict_data["upstream_publication_ids"] = upstream
+    return runner_common.PassArtifacts(
+        pass_=pass_name,
+        request_sha256=request_sha256,
+        schema_version="1.0",
+        verdicts_json=json.dumps(verdict_data, sort_keys=True).encode("utf-8"),
+        violations_json=b"[]",
+        report_fragment=report_fragment,
+        status_fragment=b'{"envelope_present":true}',
+    )
+
+
+def test_validate_current_publication_missing_pointer(tmp_path):
+    result = runner_common.validate_current_publication(
+        tmp_path, "A", _publication_identity()
+    )
+    assert result.state == runner_common.ArtifactState.MISSING
+    assert result.reason == "current_pointer_missing"
+
+
+def test_validate_current_publication_rejects_malformed_pointer(tmp_path):
+    pointer = tmp_path / "verdicts" / "A" / "current.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text("{", encoding="utf-8")
+    result = runner_common.validate_current_publication(
+        tmp_path, "A", _publication_identity()
+    )
+    assert result.state == runner_common.ArtifactState.INVALID
+    assert result.reason == "current_pointer_malformed"
+
+
+def test_validate_current_publication_missing_target_directory(tmp_path):
+    pointer = tmp_path / "verdicts" / "A" / "current.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(
+        json.dumps({"publication_id": "f" * 64, "request_sha256": "a" * 64}),
+        encoding="utf-8",
+    )
+    result = runner_common.validate_current_publication(
+        tmp_path, "A", _publication_identity()
+    )
+    assert result.state == runner_common.ArtifactState.MISSING
+    assert result.reason == "publication_directory_missing"
+
+
+def test_validate_current_publication_is_current_and_exposes_identity(tmp_path):
+    identity = _publication_identity()
+    published = runner_common.publish_pass(tmp_path, _identity_artifacts(identity))
+    result = runner_common.validate_current_publication(
+        tmp_path, "A", identity, expected_request_sha256="a" * 64
+    )
+    assert result.state == runner_common.ArtifactState.CURRENT
+    assert result.current
+    assert result.publication_id == published.publication_id
+    assert result.request_sha256 == "a" * 64
+    assert result.path == published.path
+
+
+def test_validate_current_publication_marks_pack_or_request_changes_stale(tmp_path):
+    identity = _publication_identity()
+    runner_common.publish_pass(tmp_path, _identity_artifacts(identity))
+    stale_pack = runner_common.validate_current_publication(
+        tmp_path, "A", _publication_identity("2026-08-26")
+    )
+    stale_request = runner_common.validate_current_publication(
+        tmp_path, "A", identity, expected_request_sha256="b" * 64
+    )
+    assert stale_pack.state == runner_common.ArtifactState.STALE
+    assert stale_pack.reason == "pack_identity_mismatch:pack_date"
+    assert stale_request.state == runner_common.ArtifactState.STALE
+    assert stale_request.reason == "request_hash_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_prefix"),
+    [
+        ("remove_artifact", "publication_files_missing"),
+        ("tamper_artifact", "publication_file_hash_mismatch"),
+        ("tamper_manifest", "publication_file_hash_mismatch"),
+    ],
+)
+def test_validate_current_publication_checks_complete_tree_integrity(
+    tmp_path, mutation, reason_prefix
+):
+    identity = _publication_identity()
+    published = runner_common.publish_pass(tmp_path, _identity_artifacts(identity))
+    if mutation == "remove_artifact":
+        (published.path / "status_fragment.json").unlink()
+    elif mutation == "tamper_artifact":
+        (published.path / "report_fragment.md").write_text("tampered", encoding="utf-8")
+    else:
+        manifest = json.loads((published.path / "manifest.json").read_text(encoding="utf-8"))
+        manifest["files"]["verdicts.json"] = "0" * 64
+        (published.path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    result = runner_common.validate_current_publication(tmp_path, "A", identity)
+    assert result.state in {
+        runner_common.ArtifactState.MISSING,
+        runner_common.ArtifactState.INVALID,
+    }
+    assert result.reason.startswith(reason_prefix)
+
+
+def test_validate_current_publication_rejects_wrong_pass(tmp_path):
+    identity = _publication_identity()
+    runner_common.publish_pass(
+        tmp_path,
+        _identity_artifacts(identity, verdict_pass="D"),
+    )
+    result = runner_common.validate_current_publication(tmp_path, "A", identity)
+    assert result.state == runner_common.ArtifactState.INVALID
+    assert result.reason == "verdict_pass_mismatch"
+
+
+def test_validate_current_publication_rejects_inconsistent_request_hash(tmp_path):
+    identity = _publication_identity()
+    runner_common.publish_pass(
+        tmp_path,
+        _identity_artifacts(identity, verdict_request="b" * 64),
+    )
+    result = runner_common.validate_current_publication(tmp_path, "A", identity)
+    assert result.state == runner_common.ArtifactState.INVALID
+    assert result.reason == "verdict_request_hash_mismatch"
+
+
+def test_validate_current_publication_rejects_pointer_request_disagreement(tmp_path):
+    identity = _publication_identity()
+    runner_common.publish_pass(tmp_path, _identity_artifacts(identity))
+    pointer = tmp_path / "verdicts" / "A" / "current.json"
+    data = json.loads(pointer.read_text(encoding="utf-8"))
+    data["request_sha256"] = "b" * 64
+    pointer.write_text(json.dumps(data), encoding="utf-8")
+    result = runner_common.validate_current_publication(tmp_path, "A", identity)
+    assert result.state == runner_common.ArtifactState.INVALID
+    assert result.reason == "pointer_request_hash_mismatch"
+
+
+def test_validate_e_requires_exact_selected_upstream_ids(tmp_path):
+    identity = _publication_identity()
+    selected = {"A": "1" * 64, "D": "2" * 64, "B": "3" * 64, "C": None}
+    runner_common.publish_pass(
+        tmp_path,
+        _identity_artifacts(identity, pass_name="E", upstream=selected),
+    )
+    current = runner_common.validate_current_publication(
+        tmp_path, "E", identity, expected_upstream=selected
+    )
+    stale = runner_common.validate_current_publication(
+        tmp_path,
+        "E",
+        identity,
+        expected_upstream={**selected, "A": "4" * 64},
+    )
+    assert current.state == runner_common.ArtifactState.CURRENT
+    assert stale.state == runner_common.ArtifactState.STALE
+    assert stale.reason == "upstream_publication_mismatch:A"
+
+
+def test_validate_pinned_publication_does_not_follow_new_current_pointer(tmp_path):
+    identity = _publication_identity()
+    old = runner_common.publish_pass(tmp_path, _identity_artifacts(identity))
+    runner_common.publish_pass(
+        tmp_path,
+        _identity_artifacts(identity, report_fragment=b"# newer report\n"),
+    )
+    pinned = runner_common.validate_publication(
+        tmp_path, "A", old.publication_id, identity
+    )
+    assert pinned.state == runner_common.ArtifactState.CURRENT
+    assert pinned.publication_id == old.publication_id
+
+
 # ---------------------------------------------------------------------------
 # The envelope's declared pass must match the pass being published.
 # publish_verdict_pass needs no provider SDK, so this runs anywhere.
@@ -552,6 +799,49 @@ def _publishable_pack(tmp_path):
     with open(pack_dir / "game_totals.csv", "w", newline="", encoding="utf-8") as fh:
         csv.DictWriter(fh, fieldnames=GAME_TOTALS_HEADER).writeheader()
     return pack_dir
+
+
+def test_load_pack_identity_uses_pack_index_and_empty_total_hash(tmp_path):
+    pack_dir = _publishable_pack(tmp_path)
+    identity = runner_common.load_pack_identity(pack_dir)
+    _, expected_candidates = runner_common.validate_candidates(pack_dir, allow_empty=True)
+    assert identity.pack_date == "2026-08-14"
+    assert identity.candidates_sha256 == expected_candidates
+    assert identity.game_totals_sha256 == runner_common.sha256_bytes(
+        (pack_dir / "game_totals.csv").read_bytes()
+    )
+    assert identity.team_totals_sha256 == runner_common.empty_team_totals_hash()
+
+
+def test_copied_pack_keeps_hashes_but_uses_destination_pack_date(tmp_path):
+    original = _publishable_pack(tmp_path / "original")
+    copied = tmp_path / "copied" / "packs" / "2026-08-15"
+    shutil.copytree(original, copied)
+    first = runner_common.load_pack_identity(original)
+    second = runner_common.load_pack_identity(copied)
+    assert first.pack_date == "2026-08-14"
+    assert second.pack_date == "2026-08-15"
+    assert first.candidates_sha256 == second.candidates_sha256
+    assert first.game_totals_sha256 == second.game_totals_sha256
+    assert first.team_totals_sha256 == second.team_totals_sha256
+
+
+def test_create_run_context_is_utc_uuid_and_stable_for_nonsecret_config(
+    tmp_path, monkeypatch
+):
+    pack_dir = _publishable_pack(tmp_path)
+    monkeypatch.setattr(runner_common, "best_effort_git_sha", lambda repository=None: "f" * 40)
+    context = runner_common.create_run_context(
+        pack_dir,
+        {"provider": "test", "api_key": "never-hash-me"},
+        started_at=datetime(2026, 8, 14, 1, 2, 3),
+    )
+    assert len(context.run_id) == 36
+    assert context.started_at == datetime(2026, 8, 14, 1, 2, 3, tzinfo=timezone.utc)
+    assert context.git_sha == "f" * 40
+    assert context.configuration_sha256 == runner_common.configuration_sha256(
+        {"provider": "test", "api_key": "different-secret"}
+    )
 
 
 def _verdict_envelope_json(pack_dir, declared_pass: str) -> str:

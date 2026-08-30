@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,7 +23,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from outlier_scrapers import pack_index, verdict_report
+from outlier_scrapers import pack_index, runner_common as rc, verdict_report
+from outlier_scrapers.stage_result import ArtifactState
 
 SNAPSHOT_NAME = "desk_snapshot.json"
 HISTORY_NAME = "desk_snapshot_history.jsonl"
@@ -36,6 +38,7 @@ PREVIEW_BANNER = (
 )
 HASH_KEYS = ("candidates_sha256", "game_totals_sha256", "team_totals_sha256")
 REQUIRED_PASSES = ("A", "D", "B")
+_IN_PROCESS_PUBLICATION_LOCK = threading.RLock()
 
 
 class LockBusy(RuntimeError):
@@ -54,6 +57,8 @@ class DeskReadiness:
     e_publication_id: str | None
     e_usable: bool
     reason: str
+    upstream_state: ArtifactState = ArtifactState.MISSING
+    e_state: ArtifactState = ArtifactState.MISSING
 
 
 def _now() -> datetime:
@@ -289,15 +294,18 @@ def fingerprint_locks(
     stale_after: timedelta = STALE_LOCK_AFTER,
 ) -> Iterator[None]:
     """Acquire .daily_job_lock then .writer_lock; release in reverse."""
-    daily = acquire_daily_lock(pack_dir)
-    try:
-        writer = acquire_writer_lock(pack_dir, operation=operation, now=now, stale_after=stale_after)
+    with _IN_PROCESS_PUBLICATION_LOCK:
+        daily = acquire_daily_lock(pack_dir)
         try:
-            yield
+            writer = acquire_writer_lock(
+                pack_dir, operation=operation, now=now, stale_after=stale_after
+            )
+            try:
+                yield
+            finally:
+                release_writer_lock(writer)
         finally:
-            release_writer_lock(writer)
-    finally:
-        release_daily_lock(daily)
+            release_daily_lock(daily)
 
 
 @contextmanager
@@ -309,11 +317,14 @@ def writer_lock_only(
     stale_after: timedelta = STALE_LOCK_AFTER,
 ) -> Iterator[None]:
     """Acquire only .writer_lock (projection / retention — no live CSV reads)."""
-    writer = acquire_writer_lock(pack_dir, operation=operation, now=now, stale_after=stale_after)
-    try:
-        yield
-    finally:
-        release_writer_lock(writer)
+    with _IN_PROCESS_PUBLICATION_LOCK:
+        writer = acquire_writer_lock(
+            pack_dir, operation=operation, now=now, stale_after=stale_after
+        )
+        try:
+            yield
+        finally:
+            release_writer_lock(writer)
 
 
 def break_stale_lock(
@@ -383,21 +394,29 @@ def _fingerprint_matches(data: dict[str, Any], fingerprint: dict[str, str]) -> b
     return all(str(data.get(key) or "") == fingerprint[key] for key in HASH_KEYS)
 
 
+def _aggregate_artifact_state(states: Iterator[ArtifactState]) -> ArtifactState:
+    precedence = {
+        ArtifactState.CURRENT: 0,
+        ArtifactState.MISSING: 1,
+        ArtifactState.STALE: 2,
+        ArtifactState.INVALID: 3,
+    }
+    values = list(states)
+    if not values:
+        return ArtifactState.MISSING
+    return max(values, key=precedence.__getitem__)
+
+
 def _fresh_selected(
-    pack_dir: Path, fingerprint: dict[str, str]
-) -> dict[str, str | None]:
+    pack_dir: Path, identity: rc.PackIdentity
+) -> tuple[dict[str, str | None], dict[str, ArtifactState]]:
     selected: dict[str, str | None] = {}
+    states: dict[str, ArtifactState] = {}
     for name in (*REQUIRED_PASSES, "C"):
-        pub_id = _current_publication_id(pack_dir, name)
-        if not pub_id:
-            selected[name] = None
-            continue
-        data = _read_verdicts_json(pack_dir, name, pub_id)
-        if data is None or not _fingerprint_matches(data, fingerprint):
-            selected[name] = None
-            continue
-        selected[name] = pub_id
-    return selected
+        result = rc.validate_current_publication(pack_dir, name, identity)
+        states[name] = result.state
+        selected[name] = result.publication_id if result.current else None
+    return selected, states
 
 
 def _e_upstream_matches(upstream: dict[str, Any], selected: dict[str, str | None]) -> bool:
@@ -417,8 +436,16 @@ def desk_publication_ready(
     policy_path: Path | str | None = None,
 ) -> DeskReadiness:
     """Purpose-built gate. Never consults chatgpt_a.md / gemini_b.md flat files."""
-    fingerprint = live_fingerprint(pack_dir, policy_path=policy_path)
-    selected = _fresh_selected(pack_dir, fingerprint)
+    identity = rc.load_pack_identity(pack_dir)
+    fingerprint = {
+        "candidates_sha256": identity.candidates_sha256,
+        "game_totals_sha256": identity.game_totals_sha256,
+        "team_totals_sha256": identity.team_totals_sha256,
+    }
+    selected, states = _fresh_selected(pack_dir, identity)
+    upstream_state = _aggregate_artifact_state(
+        iter(states[name] for name in REQUIRED_PASSES)
+    )
     if any(not selected.get(name) for name in REQUIRED_PASSES):
         missing = [name for name in REQUIRED_PASSES if not selected.get(name)]
         return DeskReadiness(
@@ -428,15 +455,21 @@ def desk_publication_ready(
             e_publication_id=None,
             e_usable=False,
             reason=f"missing_or_stale:{','.join(missing)}",
+            upstream_state=upstream_state,
+            e_state=ArtifactState.MISSING,
         )
-    e_id = _current_publication_id(pack_dir, "E")
+    e_validation = rc.validate_current_publication(pack_dir, "E", identity)
+    e_id = e_validation.publication_id
+    e_state = e_validation.state
     e_usable = False
-    if e_id:
+    if e_validation.current and e_id:
         data = _read_verdicts_json(pack_dir, "E", e_id)
-        if data is not None and _fingerprint_matches(data, fingerprint):
+        if data is not None:
             upstream = data.get("upstream_publication_ids") or {}
             if isinstance(upstream, dict) and _e_upstream_matches(upstream, selected):
                 e_usable = True
+            else:
+                e_state = ArtifactState.STALE
     return DeskReadiness(
         ready=True,
         fingerprint=fingerprint,
@@ -444,6 +477,8 @@ def desk_publication_ready(
         e_publication_id=e_id if e_usable else None,
         e_usable=e_usable,
         reason="e_usable" if e_usable else "fallback_no_e",
+        upstream_state=upstream_state,
+        e_state=e_state,
     )
 
 

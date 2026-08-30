@@ -107,6 +107,11 @@ def test_missing_briefing_fails(c_env, mock_genai):
 
 def test_success_uses_grounding_and_authoritative_june28_inputs(c_env, mock_genai):
     date_str, pack_dir = c_env
+    expected_hash = c_research.expected_request_sha256(pack_dir)
+    config = c_research.provider_configuration()
+    assert config["provider"] == "google_gemini"
+    assert config["structured_kind"] == "finding"
+    assert "key" not in json.dumps(config).lower()
     assert c_research.main(["--date", date_str]) == 0
 
     models = mock_genai[0].models
@@ -128,6 +133,7 @@ def test_success_uses_grounding_and_authoritative_june28_inputs(c_env, mock_gena
     assert "briefing_sha256:" in output
     assert "candidates_sha256:" in output
     assert "request_sha256:" in output
+    assert f"request_sha256: {expected_hash}" in output
     assert VALID_OUTPUT in output
 
 

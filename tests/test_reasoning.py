@@ -156,6 +156,11 @@ def test_validation_bad_candidates_header(reasoning_env):
 
 def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_openai):
     _, date_str, pack_dir = reasoning_env
+    expected_hash = reasoning.expected_request_sha256(pack_dir)
+    config = reasoning.provider_configuration()
+    assert config["provider"] == "openai"
+    assert config["response_schema_version"] == verdicts.SCHEMA_VERSION
+    assert "key" not in json.dumps(config).lower()
 
     exit_code = reasoning.main(["--date", date_str])
     assert exit_code == 0
@@ -186,6 +191,7 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     content = out_file.read_text(encoding="utf-8")
     assert content.startswith("---\n")
     assert "request_sha256:" in content
+    assert reasoning.extract_yaml_request_hash(content) == expected_hash
     assert "game_totals_sha256:" in content
     # Body is the model's raw structured output, not prose.
     assert '"schema_version": "1.0"' in content

@@ -120,6 +120,11 @@ def test_validation_missing_briefing(gemini_env):
 
 def test_success_writes_file_and_grounding_enabled(gemini_env, mock_genai):
     _, date_str, pack_dir = gemini_env
+    expected_hash = gemini_research.expected_request_sha256(pack_dir)
+    config_definition = gemini_research.provider_configuration()
+    assert config_definition["provider"] == "google_gemini"
+    assert config_definition["grounding"] == "google_search"
+    assert "key" not in json.dumps(config_definition).lower()
     assert gemini_research.main(["--date", date_str]) == 0
     assert len(mock_genai) == 1
 
@@ -137,6 +142,7 @@ def test_success_writes_file_and_grounding_enabled(gemini_env, mock_genai):
     text = out.read_text(encoding="utf-8")
     assert text.startswith("---\n")
     assert "request_sha256:" in text
+    assert f"request_sha256: {expected_hash}" in text
     # Body is the model's raw structured output, not prose.
     assert '"schema_version": "1.0"' in text
     assert '"pass": "B"' in text

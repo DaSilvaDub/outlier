@@ -15,13 +15,17 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
+import time
+import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 from outlier_scrapers import pack, verdicts
+from outlier_scrapers.stage_result import ArtifactState
 
 GAME_TOTALS_NAME = "game_totals.csv"
 TEAM_TOTALS_NAME = "team_totals.csv"
@@ -34,12 +38,128 @@ class RunnerError(Exception):
     """Raised for any recoverable runner failure (-> exit code 1)."""
 
 
+@dataclass(frozen=True)
+class PackIdentity:
+    pack_date: str
+    candidates_sha256: str
+    game_totals_sha256: str
+    team_totals_sha256: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "pack_date": self.pack_date,
+            "candidates_sha256": self.candidates_sha256,
+            "game_totals_sha256": self.game_totals_sha256,
+            "team_totals_sha256": self.team_totals_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class RunContext:
+    run_id: str
+    started_at: datetime
+    git_sha: str | None
+    configuration_sha256: str
+    pack_identity: PackIdentity
+
+
+@dataclass(frozen=True)
+class PublicationValidation:
+    state: ArtifactState
+    reason: str
+    publication_id: str | None = None
+    request_sha256: str = ""
+    path: Path | None = None
+
+    @property
+    def current(self) -> bool:
+        return self.state is ArtifactState.CURRENT
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def sha256_text(text: str) -> str:
     return sha256_bytes(text.encode("utf-8"))
+
+
+def _is_secret_key(key: object) -> bool:
+    lowered = str(key).lower()
+    return lowered in {"key", "secret", "token", "password", "credential"} or lowered.endswith(
+        ("_key", "_secret", "_token", "_password", "_credential")
+    )
+
+
+def _without_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _without_secrets(item)
+            for key, item in value.items()
+            if not _is_secret_key(key)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_secrets(item) for item in value]
+    return value
+
+
+def configuration_sha256(configuration: dict[str, Any]) -> str:
+    return compute_request_hash(_without_secrets(configuration))
+
+
+def current_git_sha(repository: Path | None = None) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def best_effort_git_sha(repository: Path | None = None) -> str | None:
+    return current_git_sha(repository)
+
+
+def load_pack_identity(pack_dir: Path) -> PackIdentity:
+    totals_bytes, game_hash, team_totals_bytes, team_hash = load_all_totals(pack_dir)
+    _, candidates_hash = validate_candidates(
+        pack_dir,
+        allow_empty=has_actionable_any_totals(totals_bytes, team_totals_bytes),
+    )
+    return PackIdentity(
+        pack_date=pack_dir.name,
+        candidates_sha256=candidates_hash,
+        game_totals_sha256=game_hash,
+        team_totals_sha256=team_hash,
+    )
+
+
+def create_run_context(
+    pack_dir: Path,
+    configuration: dict[str, Any],
+    *,
+    started_at: datetime | None = None,
+) -> RunContext:
+    when = started_at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    else:
+        when = when.astimezone(timezone.utc)
+    return RunContext(
+        run_id=str(uuid.uuid4()),
+        started_at=when,
+        git_sha=best_effort_git_sha(),
+        configuration_sha256=configuration_sha256(configuration),
+        pack_identity=load_pack_identity(pack_dir),
+    )
 
 
 def empty_game_totals_hash() -> str:
@@ -242,12 +362,36 @@ def filter_candidates_for_ai(raw_bytes: bytes) -> bytes:
     return out_io.getvalue().encode("utf-8-sig")
 
 
-def build_pack_identity_block(
+def _coerce_pack_identity(
+    identity: PackIdentity | None,
     *,
-    pack_date: str,
-    candidates_sha256: str,
-    game_totals_sha256: str,
-    team_totals_sha256: str,
+    pack_date: str | None,
+    candidates_sha256: str | None,
+    game_totals_sha256: str | None,
+    team_totals_sha256: str | None,
+) -> PackIdentity:
+    raw = (pack_date, candidates_sha256, game_totals_sha256, team_totals_sha256)
+    if identity is not None:
+        if any(value is not None for value in raw):
+            raise TypeError("PackIdentity and individual identity fields cannot be mixed")
+        return identity
+    if any(value is None for value in raw):
+        raise TypeError("pack_date and all pack identity hashes are required")
+    return PackIdentity(
+        pack_date=str(pack_date),
+        candidates_sha256=str(candidates_sha256),
+        game_totals_sha256=str(game_totals_sha256),
+        team_totals_sha256=str(team_totals_sha256),
+    )
+
+
+def build_pack_identity_block(
+    identity: PackIdentity | None = None,
+    *,
+    pack_date: str | None = None,
+    candidates_sha256: str | None = None,
+    game_totals_sha256: str | None = None,
+    team_totals_sha256: str | None = None,
 ) -> str:
     """The identity header every pass echoes back in its envelope.
 
@@ -256,12 +400,19 @@ def build_pack_identity_block(
     shown these values cannot emit a valid envelope. Every runner sends this
     block; the prompts refer to it by the ``PACK IDENTITY`` label.
     """
+    resolved = _coerce_pack_identity(
+        identity,
+        pack_date=pack_date,
+        candidates_sha256=candidates_sha256,
+        game_totals_sha256=game_totals_sha256,
+        team_totals_sha256=team_totals_sha256,
+    )
     return (
         "===== PACK IDENTITY =====\n"
-        f"pack_date: {pack_date}\n"
-        f"candidates_sha256: {candidates_sha256}\n"
-        f"game_totals_sha256: {game_totals_sha256}\n"
-        f"team_totals_sha256: {team_totals_sha256}\n"
+        f"pack_date: {resolved.pack_date}\n"
+        f"candidates_sha256: {resolved.candidates_sha256}\n"
+        f"game_totals_sha256: {resolved.game_totals_sha256}\n"
+        f"team_totals_sha256: {resolved.team_totals_sha256}\n"
     )
 
 
@@ -390,6 +541,222 @@ class PublishResult:
     wrote: bool
 
 
+def _validation(
+    state: ArtifactState,
+    reason: str,
+    *,
+    publication_id: str | None = None,
+    request_sha256: str = "",
+    path: Path | None = None,
+) -> PublicationValidation:
+    return PublicationValidation(
+        state=state,
+        reason=reason,
+        publication_id=publication_id,
+        request_sha256=request_sha256,
+        path=path,
+    )
+
+
+def validate_publication(
+    pack_dir: Path,
+    pass_name: str,
+    publication_id: str,
+    identity: PackIdentity,
+    *,
+    expected_request_sha256: str | None = None,
+    expected_upstream: dict[str, str | None] | None = None,
+) -> PublicationValidation:
+    path = pack_dir / "verdicts" / pass_name / publication_id
+    if not path.is_dir():
+        return _validation(
+            ArtifactState.MISSING,
+            "publication_directory_missing",
+            publication_id=publication_id,
+            path=path,
+        )
+    required = (*PUBLICATION_FILES, "manifest.json")
+    missing = [name for name in required if not (path / name).is_file()]
+    if missing:
+        return _validation(
+            ArtifactState.MISSING,
+            "publication_files_missing:" + ",".join(missing),
+            publication_id=publication_id,
+            path=path,
+        )
+    try:
+        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _validation(
+            ArtifactState.INVALID,
+            "publication_manifest_malformed",
+            publication_id=publication_id,
+            path=path,
+        )
+    request_hash = str(manifest.get("request_sha256") or "")
+    if str(manifest.get("pass") or "") != pass_name:
+        return _validation(
+            ArtifactState.INVALID,
+            "manifest_pass_mismatch",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    file_hashes = manifest.get("files")
+    if not isinstance(file_hashes, dict):
+        return _validation(
+            ArtifactState.INVALID,
+            "publication_manifest_malformed",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    for name in PUBLICATION_FILES:
+        try:
+            actual = sha256_bytes((path / name).read_bytes())
+        except OSError:
+            return _validation(
+                ArtifactState.MISSING,
+                f"publication_files_missing:{name}",
+                publication_id=publication_id,
+                request_sha256=request_hash,
+                path=path,
+            )
+        if str(file_hashes.get(name) or "") != actual:
+            return _validation(
+                ArtifactState.INVALID,
+                f"publication_file_hash_mismatch:{name}",
+                publication_id=publication_id,
+                request_sha256=request_hash,
+                path=path,
+            )
+    if recompute_publication_id(path) != publication_id:
+        return _validation(
+            ArtifactState.INVALID,
+            "publication_id_mismatch",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    try:
+        document = json.loads((path / "verdicts.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _validation(
+            ArtifactState.INVALID,
+            "verdict_document_malformed",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    if not isinstance(document, dict):
+        return _validation(
+            ArtifactState.INVALID,
+            "verdict_document_malformed",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    if str(document.get("pass") or "") != pass_name:
+        return _validation(
+            ArtifactState.INVALID,
+            "verdict_pass_mismatch",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    if str(document.get("request_sha256") or "") != request_hash:
+        return _validation(
+            ArtifactState.INVALID,
+            "verdict_request_hash_mismatch",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    for key, expected in identity.as_dict().items():
+        if str(document.get(key) or "") != expected:
+            return _validation(
+                ArtifactState.STALE,
+                f"pack_identity_mismatch:{key}",
+                publication_id=publication_id,
+                request_sha256=request_hash,
+                path=path,
+            )
+    if expected_request_sha256 is not None and request_hash != expected_request_sha256:
+        return _validation(
+            ArtifactState.STALE,
+            "request_hash_mismatch",
+            publication_id=publication_id,
+            request_sha256=request_hash,
+            path=path,
+        )
+    if expected_upstream is not None:
+        upstream = document.get("upstream_publication_ids")
+        if not isinstance(upstream, dict):
+            return _validation(
+                ArtifactState.INVALID,
+                "upstream_publications_missing",
+                publication_id=publication_id,
+                request_sha256=request_hash,
+                path=path,
+            )
+        for name, expected in expected_upstream.items():
+            if str(upstream.get(name) or "") != str(expected or ""):
+                return _validation(
+                    ArtifactState.STALE,
+                    f"upstream_publication_mismatch:{name}",
+                    publication_id=publication_id,
+                    request_sha256=request_hash,
+                    path=path,
+                )
+    return _validation(
+        ArtifactState.CURRENT,
+        "current",
+        publication_id=publication_id,
+        request_sha256=request_hash,
+        path=path,
+    )
+
+
+def validate_current_publication(
+    pack_dir: Path,
+    pass_name: str,
+    identity: PackIdentity,
+    *,
+    expected_request_sha256: str | None = None,
+    expected_upstream: dict[str, str | None] | None = None,
+) -> PublicationValidation:
+    pointer = pack_dir / "verdicts" / pass_name / "current.json"
+    if not pointer.is_file():
+        return _validation(ArtifactState.MISSING, "current_pointer_missing")
+    try:
+        data = json.loads(pointer.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _validation(ArtifactState.INVALID, "current_pointer_malformed")
+    if not isinstance(data, dict):
+        return _validation(ArtifactState.INVALID, "current_pointer_malformed")
+    publication_id = str(data.get("publication_id") or "")
+    pointer_request = str(data.get("request_sha256") or "")
+    if not publication_id:
+        return _validation(ArtifactState.INVALID, "current_pointer_malformed")
+    result = validate_publication(
+        pack_dir,
+        pass_name,
+        publication_id,
+        identity,
+        expected_request_sha256=expected_request_sha256,
+        expected_upstream=expected_upstream,
+    )
+    if result.request_sha256 and pointer_request != result.request_sha256:
+        return _validation(
+            ArtifactState.INVALID,
+            "pointer_request_hash_mismatch",
+            publication_id=publication_id,
+            request_sha256=result.request_sha256,
+            path=result.path,
+        )
+    return result
+
+
 def request_structured(kind: str) -> StructuredRequest:
     """Schema + version a runner hands to a provider before the Markdown stage."""
     return StructuredRequest(
@@ -492,11 +859,12 @@ def build_repair_block(violations: Sequence[Any]) -> str:
 
 
 def structured_request_fields(
+    identity: PackIdentity | None = None,
     *,
-    pack_date: str,
-    candidates_sha256: str,
-    game_totals_sha256: str,
-    team_totals_sha256: str,
+    pack_date: str | None = None,
+    candidates_sha256: str | None = None,
+    game_totals_sha256: str | None = None,
+    team_totals_sha256: str | None = None,
     schema_version: str | None = None,
 ) -> dict[str, str]:
     """Keys that must join every structured-output request hash.
@@ -508,11 +876,15 @@ def structured_request_fields(
     envelope stamped with the old date that the pack-date gate then rejects.
     Making it required means a runner cannot silently omit it.
     """
+    resolved = _coerce_pack_identity(
+        identity,
+        pack_date=pack_date,
+        candidates_sha256=candidates_sha256,
+        game_totals_sha256=game_totals_sha256,
+        team_totals_sha256=team_totals_sha256,
+    )
     return {
-        "pack_date": pack_date,
-        "candidates_sha256": candidates_sha256,
-        "game_totals_sha256": game_totals_sha256,
-        "team_totals_sha256": team_totals_sha256,
+        **resolved.as_dict(),
         "schema_version": schema_version or verdicts.SCHEMA_VERSION,
     }
 
@@ -649,7 +1021,14 @@ def publish_pass(
         staging.mkdir()
         try:
             _write_publication_tree(staging, artifacts)
-            os.replace(staging, dest)
+            for attempt in range(4):
+                try:
+                    os.replace(staging, dest)
+                    break
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
             wrote = True
         except Exception as exc:
             if staging.exists():

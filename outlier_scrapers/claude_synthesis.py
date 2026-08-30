@@ -140,6 +140,45 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
     return text
 
 
+def provider_configuration() -> dict[str, object]:
+    return {
+        "provider": "anthropic",
+        "model": MODEL,
+        "effort": EFFORT,
+        "thinking": "adaptive",
+        "structured_kind": "reconciliation",
+    }
+
+
+def expected_request_sha256(pack_dir: Path) -> str:
+    inputs = gather_inputs(pack_dir)
+    upstream = gather_upstream(pack_dir)
+    prompt_text = rc.read_required_text(
+        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
+    )
+    totals, game_hash, team_totals, team_hash = rc.load_all_totals(pack_dir)
+    _, candidates_hash = rc.validate_candidates(
+        pack_dir, allow_empty=rc.has_actionable_any_totals(totals, team_totals)
+    )
+    upstream_ids = {
+        name: upstream[name].publication_id if name in upstream else None
+        for name in (*REQUIRED_UPSTREAM, *OPTIONAL_UPSTREAM)
+    }
+    identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
+    return rc.compute_request_hash(
+        {
+            "model": MODEL,
+            "effort": EFFORT,
+            "thinking": "adaptive",
+            "role_block": pack.ROLE_BLOCK,
+            "prompt": prompt_text,
+            "input_hashes": {label: rc.sha256_text(text) for label, text in inputs.items()},
+            "upstream_publication_ids": upstream_ids,
+            **rc.structured_request_fields(identity),
+        }
+    )
+
+
 def run_claude_e(
     pack_dir: Path, *, force: bool = False, refresh_if_stale: bool = False, client=None
 ) -> int:

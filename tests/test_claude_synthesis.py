@@ -283,6 +283,11 @@ def test_missing_briefing_fails(synth_env):
 def test_success_shows_upstream_envelopes_not_markdown(synth_env, mock_anthropic):
     _, date_str, pack_dir = synth_env
     pubs = _publish_upstream(pack_dir)
+    expected_hash = claude_synthesis.expected_request_sha256(pack_dir)
+    config = claude_synthesis.provider_configuration()
+    assert config["provider"] == "anthropic"
+    assert config["effort"] == "high"
+    assert "key" not in json.dumps(config).lower()
     # Prose left on disk must NOT be what E is shown.
     (pack_dir / "chatgpt_a.md").write_text("A PROSE OUTPUT", encoding="utf-8")
 
@@ -301,7 +306,7 @@ def test_success_shows_upstream_envelopes_not_markdown(synth_env, mock_anthropic
 
     out = pack_dir / "claude_e.md"
     assert out.exists()
-    assert "request_sha256:" in out.read_text(encoding="utf-8")
+    assert f"request_sha256: {expected_hash}" in out.read_text(encoding="utf-8")
 
 
 def test_optional_c_included_when_published(synth_env, mock_anthropic):

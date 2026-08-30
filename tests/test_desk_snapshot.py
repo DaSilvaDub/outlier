@@ -93,7 +93,7 @@ def _publish_verdict(pack_dir, index, pass_name, units=1.0):
         pack_dir,
         json.dumps(_verdict_envelope(index, pass_name, units)),
         pass_=pass_name,
-        request_sha256=pass_name * 16 + str(units),
+        request_sha256=rc.sha256_text(f"{pass_name}:{units}"),
         candidates_sha256=index.candidates_sha256,
         game_totals_sha256=index.game_totals_sha256,
         team_totals_sha256=index.team_totals_sha256,
@@ -153,12 +153,38 @@ def _publish_e(pack_dir, index, pubs):
     return rc.publish_reconciliation_pass(
         pack_dir,
         json.dumps(env),
-        request_sha256="E" * 32,
+        request_sha256=rc.sha256_text("E:reconciliation"),
         candidates_sha256=index.candidates_sha256,
         game_totals_sha256=index.game_totals_sha256,
         team_totals_sha256=index.team_totals_sha256,
         model="fake",
     )
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        ((rc.ArtifactState.CURRENT,), rc.ArtifactState.CURRENT),
+        (
+            (rc.ArtifactState.CURRENT, rc.ArtifactState.MISSING),
+            rc.ArtifactState.MISSING,
+        ),
+        (
+            (rc.ArtifactState.MISSING, rc.ArtifactState.STALE),
+            rc.ArtifactState.STALE,
+        ),
+        (
+            (
+                rc.ArtifactState.MISSING,
+                rc.ArtifactState.STALE,
+                rc.ArtifactState.INVALID,
+            ),
+            rc.ArtifactState.INVALID,
+        ),
+    ],
+)
+def test_artifact_state_aggregate_precedence(states, expected):
+    assert ds._aggregate_artifact_state(iter(states)) is expected
 
 
 def test_snapshot_from_e_pins_e_own_id_and_upstream(tmp_path):
@@ -176,6 +202,11 @@ def test_snapshot_from_e_pins_e_own_id_and_upstream(tmp_path):
     assert payload["publications"]["A"] == pubs["A"]["publication_id"]
     assert payload["publications"]["D"] == pubs["D"]["publication_id"]
     assert payload["publications"]["B"] == pubs["B"]["publication_id"]
+    readiness = ds.desk_publication_ready(
+        pack_dir, policy_path=tmp_path / "no-policy.json"
+    )
+    assert readiness.upstream_state is rc.ArtifactState.CURRENT
+    assert readiness.e_state is rc.ArtifactState.CURRENT
     e_data = json.loads((e_result.path / "verdicts.json").read_text(encoding="utf-8"))
     assert "E" not in e_data["upstream_publication_ids"]
 
@@ -204,6 +235,11 @@ def test_fallback_snapshot_when_e_missing(tmp_path):
     assert payload["publications"]["A"] == pubs["A"]["publication_id"]
     assert payload["publications"]["D"] == pubs["D"]["publication_id"]
     assert payload["publications"]["B"] == pubs["B"]["publication_id"]
+    readiness = ds.desk_publication_ready(
+        pack_dir, policy_path=tmp_path / "no-policy.json"
+    )
+    assert readiness.upstream_state is rc.ArtifactState.CURRENT
+    assert readiness.e_state is rc.ArtifactState.MISSING
     fallback = verdict_report.compute_no_e_fallback(
         pack_dir, policy_path=tmp_path / "no-policy.json"
     )
@@ -219,6 +255,8 @@ def test_flat_files_alone_are_not_ready(tmp_path):
     (pack_dir / "claude_d.md").write_text("old D\n", encoding="utf-8")
     ready = ds.desk_publication_ready(pack_dir, policy_path=tmp_path / "no-policy.json")
     assert ready.ready is False
+    assert ready.upstream_state is rc.ArtifactState.MISSING
+    assert ready.e_state is rc.ArtifactState.MISSING
     assert ds.advance_desk_snapshot(
         pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
     ) is None
@@ -239,6 +277,7 @@ def test_stale_fingerprint_blocks_then_republish_advances(tmp_path):
     _publish_verdict(pack_dir, index2, "A", units=1.5)
     ready = ds.desk_publication_ready(pack_dir, policy_path=tmp_path / "no-policy.json")
     assert ready.ready is False
+    assert ready.upstream_state is rc.ArtifactState.STALE
     assert "B" in ready.reason or "D" in ready.reason
     unchanged = ds.read_desk_snapshot(pack_dir)
     assert unchanged is not None
@@ -266,6 +305,11 @@ def test_e_rejected_when_a_rerun_without_pack_change(tmp_path):
     assert first is not None
     assert first["synthesis_source"] == "claude_e"
     _publish_verdict(pack_dir, index, "A", units=1.0)
+    ready = ds.desk_publication_ready(pack_dir, policy_path=tmp_path / "no-policy.json")
+    assert ready.ready is True
+    assert ready.upstream_state is rc.ArtifactState.CURRENT
+    assert ready.e_state is rc.ArtifactState.STALE
+    assert ready.e_usable is False
     second = ds.advance_desk_snapshot(
         pack_dir, policy_path=tmp_path / "no-policy.json", hold_locks=False
     )
@@ -274,6 +318,22 @@ def test_e_rejected_when_a_rerun_without_pack_change(tmp_path):
     assert second["publications"]["E"] is None
     assert second["publications"]["A"] != first["publications"]["A"]
     assert second["publications"]["B"] == first["publications"]["B"]
+
+
+def test_invalid_required_publication_dominates_upstream_state(tmp_path):
+    pack_dir = tmp_path / "packs" / "2026-08-14"
+    _write_pack(pack_dir)
+    index = _index(pack_dir, tmp_path)
+    _publish_adb(pack_dir, index)
+    pointer = pack_dir / "verdicts" / "A" / "current.json"
+    pointer.write_text("{not json", encoding="utf-8")
+
+    ready = ds.desk_publication_ready(pack_dir, policy_path=tmp_path / "no-policy.json")
+
+    assert ready.ready is False
+    assert ready.selected["A"] is None
+    assert ready.upstream_state is rc.ArtifactState.INVALID
+    assert ready.e_state is rc.ArtifactState.MISSING
 
 
 def test_commit_then_history_crash_ordering(tmp_path):

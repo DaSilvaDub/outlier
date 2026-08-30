@@ -187,6 +187,37 @@ def _publish_pass_a(
     rc.publish_pass(pack_dir, artifacts)
 
 
+def provider_configuration() -> dict[str, object]:
+    return {
+        "provider": "openai",
+        "model": MODEL,
+        "reasoning_effort": EFFORT,
+        "response_schema_version": verdicts.SCHEMA_VERSION,
+    }
+
+
+def expected_request_sha256(pack_dir: Path) -> str:
+    totals_bytes, game_hash, team_totals_bytes, team_hash = rc.load_all_totals(pack_dir)
+    _, candidates_hash = rc.validate_candidates(
+        pack_dir,
+        allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
+    )
+    prompt_text = rc.read_required_text(paths.PROJECT_ROOT / "prompts" / "A.md", "Prompt file")
+    identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
+    return rc.compute_request_hash(
+        {
+            "model": MODEL,
+            "reasoning": {"effort": EFFORT},
+            "role_block": pack.ROLE_BLOCK,
+            "prompt": prompt_text,
+            "candidates_hash": candidates_hash,
+            "game_totals_hash": game_hash,
+            "team_totals_hash": team_hash,
+            **rc.structured_request_fields(identity),
+        }
+    )
+
+
 def run_reasoning(
     pack_dir: Path,
     *,
