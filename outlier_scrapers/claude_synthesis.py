@@ -17,13 +17,12 @@ from typing import Sequence
 
 from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
-from outlier_scrapers.models import CLAUDE_MODEL
+from outlier_scrapers.models import PASS_E_CONFIG
 from outlier_scrapers import runner_common as rc
 
 logger = logging.getLogger(__name__)
 
-MODEL = CLAUDE_MODEL
-EFFORT = "high"
+CONFIG = PASS_E_CONFIG
 MAX_TOKENS = 8192
 OUT_NAME = "claude_e.md"
 PROMPT_FILE = "E.md"
@@ -58,11 +57,29 @@ def gather_inputs(pack_dir: Path) -> dict[str, str]:
     return collected
 
 
-def gather_upstream(pack_dir: Path) -> dict[str, rc.PublishedEnvelope]:
+def _published_identity_matches(document: rc.PublishedEnvelope, identity: rc.PackIdentity) -> bool:
+    try:
+        payload = json.loads(document.envelope_json)
+    except json.JSONDecodeError:
+        return False
+    return (
+        payload.get("pack_date") == identity.pack_date
+        and payload.get("candidates_sha256") == identity.candidates_sha256
+        and payload.get("game_totals_sha256") == identity.game_totals_sha256
+        and payload.get("team_totals_sha256") == identity.team_totals_sha256
+    )
+
+
+def gather_upstream(
+    pack_dir: Path, identity: rc.PackIdentity
+) -> dict[str, rc.PublishedEnvelope]:
     """Return the current published envelope for each upstream pass.
 
     A/D/B must all be published; E reconciles them and cannot run against a
-    partial desk. C is included when present.
+    partial desk. C is included when present. Every selected publication must
+    also carry the pack's *current* identity: candidates.csv (or a totals
+    file) edited after A/B/D published leaves those publications stale, and E
+    must not reconcile against them silently.
     """
     documents = rc.load_current_publication_documents(pack_dir)
     missing = [name for name in REQUIRED_UPSTREAM if name not in documents]
@@ -76,6 +93,12 @@ def gather_upstream(pack_dir: Path) -> dict[str, rc.PublishedEnvelope]:
     for name in OPTIONAL_UPSTREAM:
         if name in documents:
             selected[name] = documents[name]
+    stale = [name for name, doc in selected.items() if not _published_identity_matches(doc, identity)]
+    if stale:
+        raise rc.RunnerError(
+            "Pass E upstream publications are stale for this pack: "
+            f"{', '.join(stale)}. Re-run those passes against the current pack."
+        )
     return selected
 
 
@@ -106,11 +129,14 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
-        client = anthropic.Anthropic(timeout=600.0, max_retries=1)
+        # As in claude_reasoning.py: the Anthropic SDK owns transport-level
+        # retries itself, so CONFIG just supplies the client's construction
+        # values rather than feeding a provider_executor loop.
+        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=CONFIG.max_attempts)
     structured = rc.request_structured("reconciliation")
     try:
         with client.messages.stream(
-            model=MODEL,
+            model=CONFIG.model,
             max_tokens=MAX_TOKENS,
             system="\n".join(role_block),
             messages=[{"role": "user", "content": user_content}],
@@ -143,38 +169,36 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
 def provider_configuration() -> dict[str, object]:
     return {
         "provider": "anthropic",
-        "model": MODEL,
-        "effort": EFFORT,
-        "thinking": "adaptive",
+        "model": CONFIG.model,
+        "effort": CONFIG.request_extra["effort"],
+        "thinking": CONFIG.request_extra["thinking"],
         "structured_kind": "reconciliation",
     }
 
 
 def expected_request_sha256(pack_dir: Path) -> str:
     inputs = gather_inputs(pack_dir)
-    upstream = gather_upstream(pack_dir)
-    prompt_text = rc.read_required_text(
-        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
-    )
     totals, game_hash, team_totals, team_hash = rc.load_all_totals(pack_dir)
     _, candidates_hash = rc.validate_candidates(
         pack_dir, allow_empty=rc.has_actionable_any_totals(totals, team_totals)
+    )
+    pack_identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
+    upstream = gather_upstream(pack_dir, pack_identity)
+    prompt_text = rc.read_required_text(
+        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
     )
     upstream_ids = {
         name: upstream[name].publication_id if name in upstream else None
         for name in (*REQUIRED_UPSTREAM, *OPTIONAL_UPSTREAM)
     }
-    identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {
-            "model": MODEL,
-            "effort": EFFORT,
-            "thinking": "adaptive",
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "input_hashes": {label: rc.sha256_text(text) for label, text in inputs.items()},
             "upstream_publication_ids": upstream_ids,
-            **rc.structured_request_fields(identity),
+            **rc.structured_request_fields(pack_identity),
         }
     )
 
@@ -192,7 +216,6 @@ def run_claude_e(
                 return 0
 
         inputs = gather_inputs(pack_dir)
-        upstream = gather_upstream(pack_dir)
         prompt_text = rc.read_required_text(
             paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
         )
@@ -203,6 +226,10 @@ def run_claude_e(
             pack_dir,
             allow_empty=rc.has_actionable_any_totals(totals_bytes, team_totals_bytes),
         )
+        pack_identity = rc.PackIdentity(
+            pack_dir.name, candidates_sha256, game_totals_sha256, team_totals_sha256
+        )
+        upstream = gather_upstream(pack_dir, pack_identity)
 
         input_hashes = {label: rc.sha256_text(text) for label, text in inputs.items()}
         # Upstream identity is the publication_id, not a hash of prose: a forced
@@ -217,19 +244,12 @@ def run_claude_e(
         }
         request_sha256 = rc.compute_request_hash(
             {
-                "model": MODEL,
-                "effort": EFFORT,
-                "thinking": "adaptive",
+                **CONFIG.request_fields(),
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "input_hashes": input_hashes,
                 "upstream_publication_ids": upstream_publication_ids,
-                **rc.structured_request_fields(
-                    pack_date=pack_dir.name,
-                    candidates_sha256=candidates_sha256,
-                    game_totals_sha256=game_totals_sha256,
-                    team_totals_sha256=team_totals_sha256,
-                ),
+                **rc.structured_request_fields(pack_identity),
             }
         )
 
@@ -263,13 +283,13 @@ def run_claude_e(
             candidates_sha256=candidates_sha256,
             game_totals_sha256=game_totals_sha256,
             team_totals_sha256=team_totals_sha256,
-            model=MODEL,
+            model=CONFIG.model,
         )
 
         front_matter = (
             "---\n"
-            f"model: {MODEL}\n"
-            f"effort: {EFFORT}\n"
+            f"model: {CONFIG.model}\n"
+            f"effort: {CONFIG.request_extra['effort']}\n"
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"inputs: {','.join(sorted(inputs))}\n"
             f"request_sha256: {request_sha256}\n"

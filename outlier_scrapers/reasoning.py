@@ -7,17 +7,16 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
-import time
 
-from outlier_scrapers import pack, pack_index, paths, verdicts
+from outlier_scrapers import pack, pack_index, paths, provider_executor, verdicts
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
+from outlier_scrapers.models import PASS_A_CONFIG
 from outlier_scrapers.verdict_gate import VerdictPolicy, load_verdict_policy, validate_envelope
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-5.5"
-EFFORT = "xhigh"
+CONFIG = PASS_A_CONFIG
 
 
 class ReasoningError(Exception):
@@ -40,6 +39,54 @@ def extract_yaml_request_hash(content: str) -> str | None:
     return None
 
 
+def _call_openai_responses_api_once(
+    client,
+    prompt_text: str,
+    role_block: list[str],
+    full_prompt: str,
+) -> str:
+    """Issue exactly one Responses API attempt. Retries are the caller's job."""
+    import openai
+
+    structured = rc.request_structured("verdict")
+    try:
+        response = client.responses.create(
+            model=CONFIG.model,
+            reasoning={"effort": CONFIG.request_extra["reasoning_effort"]},
+            max_output_tokens=32_000,
+            store=False,
+            instructions="\n".join(role_block),
+            input=[{"role": "user", "content": full_prompt}],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "outlier_verdicts",
+                    "schema": structured.schema,
+                    "strict": True,
+                }
+            },
+        )
+    except openai.RateLimitError as e:
+        req_id = getattr(e, "request_id", None)
+        status = getattr(e, "status_code", None)
+        raise provider_executor.ProviderCallError(
+            f"API call failed: type={type(e).__name__} status={status} request_id={req_id}",
+            retryable=True,
+        ) from e
+    except openai.APIError as e:
+        req_id = getattr(e, "request_id", None)
+        status = getattr(e, "status_code", None)
+        raise ReasoningError(
+            f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
+        ) from e
+    except Exception as e:
+        raise ReasoningError(f"API call failed: type={type(e).__name__}") from e
+
+    if not response.output_text or not response.output_text.strip():
+        raise ReasoningError("Received empty or whitespace-only response from API")
+    return response.output_text
+
+
 def call_openai_responses_api(
     prompt_text: str,
     role_block: list[str],
@@ -55,56 +102,24 @@ def call_openai_responses_api(
         load_environment()
         if not os.getenv("OPENAI_API_KEY"):
             raise ReasoningError("OPENAI_API_KEY is not set.")
-        client = openai.OpenAI(timeout=600.0, max_retries=10)
+        # provider_executor now owns retries; the SDK's own retry loop would
+        # otherwise stack with it (up to max_attempts * sdk_retries calls).
+        client = openai.OpenAI(timeout=CONFIG.timeout_seconds, max_retries=0)
 
     data_block = rc.build_reasoning_data_block(
         raw_csv_bytes, totals_bytes, team_totals_bytes
     )
     full_prompt = prompt_text + "\n\n" + identity_block + "\nData:\n" + data_block
-    structured = rc.request_structured("verdict")
 
-    max_custom_retries = 10
-    for attempt in range(max_custom_retries):
-        try:
-            response = client.responses.create(
-                model=MODEL,
-                reasoning={"effort": EFFORT},
-                max_output_tokens=32_000,
-                store=False,
-                instructions="\n".join(role_block),
-                input=[{"role": "user", "content": full_prompt}],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "outlier_verdicts",
-                        "schema": structured.schema,
-                        "strict": True,
-                    }
-                },
-            )
-            if not response.output_text or not response.output_text.strip():
-                raise ReasoningError("Received empty or whitespace-only response from API")
-            return response.output_text
-        except openai.RateLimitError as e:
-            if attempt < max_custom_retries - 1:
-                logger.warning("OpenAI API rate limited, retrying in 30s...")
-                time.sleep(30)
-                continue
-            req_id = getattr(e, "request_id", None)
-            status = getattr(e, "status_code", None)
-            raise ReasoningError(
-                f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
-            )
-        except openai.APIError as e:
-            req_id = getattr(e, "request_id", None)
-            status = getattr(e, "status_code", None)
-            raise ReasoningError(
-                f"API call failed: type={type(e).__name__} status={status} request_id={req_id}"
-            )
-        except Exception as e:
-            raise ReasoningError(f"API call failed: type={type(e).__name__}")
-
-    raise ReasoningError("Failed after maximum retries")
+    try:
+        return provider_executor.execute_with_retry(
+            lambda: _call_openai_responses_api_once(client, prompt_text, role_block, full_prompt),
+            max_attempts=CONFIG.max_attempts,
+            base_delay_seconds=CONFIG.base_delay_seconds,
+            max_delay_seconds=CONFIG.max_delay_seconds,
+        )
+    except provider_executor.ProviderCallError as e:
+        raise ReasoningError(str(e)) from e
 
 
 def _report_fragment(envelope: verdicts.VerdictEnvelope) -> bytes:
@@ -175,7 +190,7 @@ def _publish_pass_a(
         verdicts_json=rc.write_envelope(
             parsed.envelope,
             request_sha256=request_sha256,
-            model=MODEL,
+            model=CONFIG.model,
             candidates_sha256=candidates_sha256,
             game_totals_sha256=game_totals_sha256,
             team_totals_sha256=team_totals_sha256,
@@ -189,9 +204,9 @@ def _publish_pass_a(
 
 def provider_configuration() -> dict[str, object]:
     return {
-        "provider": "openai",
-        "model": MODEL,
-        "reasoning_effort": EFFORT,
+        "provider": CONFIG.provider,
+        "model": CONFIG.model,
+        "reasoning_effort": CONFIG.request_extra["reasoning_effort"],
         "response_schema_version": verdicts.SCHEMA_VERSION,
     }
 
@@ -206,8 +221,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {
-            "model": MODEL,
-            "reasoning": {"effort": EFFORT},
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "candidates_hash": candidates_hash,
@@ -251,8 +265,7 @@ def run_reasoning(
         prompt_text = prompt_file.read_text(encoding="utf-8")
 
         request_data = {
-            "model": MODEL,
-            "reasoning": {"effort": EFFORT},
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "candidates_hash": candidates_sha256,
@@ -305,8 +318,8 @@ def run_reasoning(
 
         front_matter = (
             "---\n"
-            f"model: {MODEL}\n"
-            f"effort: {EFFORT}\n"
+            f"model: {CONFIG.model}\n"
+            f"effort: {CONFIG.request_extra['reasoning_effort']}\n"
             f"timestamp: {utc_timestamp}\n"
             f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"

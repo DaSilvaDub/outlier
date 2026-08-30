@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 
 import pytest
@@ -167,9 +168,9 @@ def test_reasoning_success_writes_file_and_asserts_api(reasoning_env, mock_opena
     assert len(mock_openai) == 1
 
     client = mock_openai[0]
-    # Check client timeout and retries
+    # Check client timeout; retries are now owned by provider_executor, not the SDK.
     assert client.client_kwargs.get("timeout") == 600.0
-    assert client.client_kwargs.get("max_retries") == 10
+    assert client.client_kwargs.get("max_retries") == 0
 
     api = client.responses
     assert api.called
@@ -388,7 +389,7 @@ def test_refresh_if_stale_reruns_when_model_mismatches(reasoning_env, mock_opena
     assert reasoning.main(["--date", date_str]) == 0
     assert len(mock_openai) == 1
 
-    monkeypatch.setattr(reasoning, "MODEL", "gpt-9.9")
+    monkeypatch.setattr(reasoning, "CONFIG", dataclasses.replace(reasoning.CONFIG, model="gpt-9.9"))
 
     exit_code = reasoning.run_reasoning(pack_dir, refresh_if_stale=True)
     assert exit_code == 0
@@ -421,7 +422,9 @@ def test_refresh_if_stale_reruns_when_effort_mismatches(reasoning_env, mock_open
     assert reasoning.main(["--date", date_str]) == 0
     assert len(mock_openai) == 1
 
-    monkeypatch.setattr(reasoning, "EFFORT", "low")
+    monkeypatch.setattr(
+        reasoning, "CONFIG", dataclasses.replace(reasoning.CONFIG, request_extra={"reasoning_effort": "low"})
+    )
 
     exit_code = reasoning.run_reasoning(pack_dir, refresh_if_stale=True)
     assert exit_code == 0

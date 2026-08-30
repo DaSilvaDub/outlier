@@ -17,13 +17,12 @@ from typing import Sequence
 
 from outlier_scrapers import pack, paths
 from outlier_scrapers.environment import load_environment
-from outlier_scrapers.models import CLAUDE_MODEL
+from outlier_scrapers.models import PASS_D_CONFIG
 from outlier_scrapers import runner_common as rc
 
 logger = logging.getLogger(__name__)
 
-MODEL = CLAUDE_MODEL
-EFFORT = "high"
+CONFIG = PASS_D_CONFIG
 MAX_TOKENS = 8192
 OUT_NAME = "claude_d.md"
 PROMPT_FILE = "D.md"
@@ -44,7 +43,10 @@ def call_claude(
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
-        client = anthropic.Anthropic(timeout=600.0, max_retries=1)
+        # Retries are the Anthropic SDK's own transport-level policy here --
+        # there is no hand-rolled sleep loop to move into provider_executor,
+        # so CONFIG just supplies the values the client is constructed with.
+        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=CONFIG.max_attempts)
 
     data_block = rc.build_reasoning_data_block(
         raw_csv_bytes, totals_bytes, team_totals_bytes
@@ -53,7 +55,7 @@ def call_claude(
     structured = rc.request_structured("verdict")
     try:
         with client.messages.stream(
-            model=MODEL,
+            model=CONFIG.model,
             max_tokens=MAX_TOKENS,
             system="\n".join(role_block),
             messages=[{"role": "user", "content": full_prompt}],
@@ -85,9 +87,9 @@ def call_claude(
 def provider_configuration() -> dict[str, object]:
     return {
         "provider": "anthropic",
-        "model": MODEL,
-        "effort": EFFORT,
-        "thinking": "adaptive",
+        "model": CONFIG.model,
+        "effort": CONFIG.request_extra["effort"],
+        "thinking": CONFIG.request_extra["thinking"],
         "structured_kind": "verdict",
     }
 
@@ -103,9 +105,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {
-            "model": MODEL,
-            "effort": EFFORT,
-            "thinking": "adaptive",
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "candidates_hash": candidates_hash,
@@ -141,9 +141,7 @@ def run_claude_d(
 
         request_sha256 = rc.compute_request_hash(
             {
-                "model": MODEL,
-                "effort": EFFORT,
-                "thinking": "adaptive",
+                **CONFIG.request_fields(),
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "candidates_hash": candidates_sha256,
@@ -188,13 +186,13 @@ def run_claude_d(
             candidates_sha256=candidates_sha256,
             game_totals_sha256=game_totals_sha256,
             team_totals_sha256=team_totals_sha256,
-            model=MODEL,
+            model=CONFIG.model,
         )
 
         front_matter = (
             "---\n"
-            f"model: {MODEL}\n"
-            f"effort: {EFFORT}\n"
+            f"model: {CONFIG.model}\n"
+            f"effort: {CONFIG.request_extra['effort']}\n"
             f"timestamp: {datetime.now(timezone.utc).isoformat()}\n"
             f"candidates_sha256: {candidates_sha256}\n"
             f"game_totals_sha256: {game_totals_sha256}\n"
