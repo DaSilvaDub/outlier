@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -85,32 +86,64 @@ class ApiResponse:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Bounded exponential backoff with jitter for OutlierApiClient.fetch_json.
+
+    Replaces the old linear ``sleep(0.5 * attempt)`` with the same shape used
+    by provider_executor: delay doubles each attempt from ``base_delay_seconds``,
+    capped at ``max_delay_seconds``, with +/-50% jitter.
+    """
+
+    max_retries: int = 5
+    timeout_seconds: int = 60
+    base_delay_seconds: float = 0.5
+    max_delay_seconds: float = 8.0
+
+    def delay_for(self, attempt: int, *, rng: Callable[[], float] = random.random) -> float:
+        delay = min(self.max_delay_seconds, self.base_delay_seconds * (2 ** (attempt - 1)))
+        return delay * (0.5 + rng() / 2)
+
+
 class OutlierApiClient:
     def __init__(
         self,
         *,
         storage_state: dict[str, Any] | None = None,
         opener: Callable[..., Any] = urlopen,
-        max_retries: int = 5,
-        timeout: int = 60,
+        retry_policy: RetryPolicy | None = None,
+        max_retries: int | None = None,
+        timeout: int | None = None,
         base_url: str = API_BASE_URL,
     ) -> None:
         self.storage_state = storage_state if storage_state is not None else load_storage_state()
         self.opener = opener
-        self.max_retries = max_retries
-        self.timeout = timeout
+        default_policy = RetryPolicy()
+        self.retry_policy = retry_policy or RetryPolicy(
+            max_retries=max_retries if max_retries is not None else default_policy.max_retries,
+            timeout_seconds=timeout if timeout is not None else default_policy.timeout_seconds,
+        )
         self.base_url = base_url.rstrip("/")
+
+    @property
+    def max_retries(self) -> int:
+        return self.retry_policy.max_retries
+
+    @property
+    def timeout(self) -> int:
+        return self.retry_policy.timeout_seconds
 
     def url_for(self, path: str) -> str:
         return path if path.startswith("http") else f"{self.base_url}{path}"
 
     def fetch_json(self, path: str) -> dict[str, Any]:
         url = self.url_for(path)
+        policy = self.retry_policy
         last_error: Exception | None = None
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, policy.max_retries + 1):
             request = Request(url, headers=build_api_headers(self.storage_state))
             try:
-                with self.opener(request, timeout=self.timeout) as response:
+                with self.opener(request, timeout=policy.timeout_seconds) as response:
                     body = response.read()
                     if body[:2] == b"\x1f\x8b":
                         body = gzip.decompress(body)
@@ -122,14 +155,14 @@ class OutlierApiClient:
                 last_error = exc
                 if exc.code == 401:
                     raise AuthRequiredError(_safe_http_error_message(exc, url)) from exc
-                if exc.code not in RETRYABLE_STATUS_CODES or attempt >= self.max_retries:
+                if exc.code not in RETRYABLE_STATUS_CODES or attempt >= policy.max_retries:
                     raise OutlierApiError(_safe_http_error_message(exc, url)) from exc
-                time.sleep(0.5 * attempt)
+                time.sleep(policy.delay_for(attempt))
             except (URLError, OSError) as exc:
                 last_error = exc
-                if attempt >= self.max_retries:
+                if attempt >= policy.max_retries:
                     raise OutlierApiError(f"Network error for {url}: {exc}") from exc
-                time.sleep(0.5 * attempt)
+                time.sleep(policy.delay_for(attempt))
         if last_error:
             raise OutlierApiError(f"Failed to fetch {url}: {last_error}") from last_error
         raise OutlierApiError(f"Failed to fetch {url}")

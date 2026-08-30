@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 
 import pytest
@@ -240,7 +241,9 @@ def test_refresh_if_stale_reruns_on_candidates_change(claude_env, mock_anthropic
 def test_refresh_if_stale_reruns_on_model_change(claude_env, mock_anthropic, monkeypatch):
     _, date_str, pack_dir = claude_env
     assert claude_reasoning.main(["--date", date_str]) == 0
-    monkeypatch.setattr(claude_reasoning, "MODEL", "claude-test-9")
+    monkeypatch.setattr(
+        claude_reasoning, "CONFIG", dataclasses.replace(claude_reasoning.CONFIG, model="claude-test-9")
+    )
     assert claude_reasoning.run_claude_d(pack_dir, refresh_if_stale=True) == 0
     assert len(mock_anthropic) == 2
 

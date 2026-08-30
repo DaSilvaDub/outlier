@@ -13,29 +13,60 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
-import time
 
-from outlier_scrapers import pack, paths
+from outlier_scrapers import pack, paths, provider_executor
 from outlier_scrapers.environment import load_environment
-from outlier_scrapers.models import GEMINI_MODEL
+from outlier_scrapers.models import PASS_B_CONFIG, ProviderConfig
 from outlier_scrapers import runner_common as rc
 
 logger = logging.getLogger(__name__)
 
-MODEL = GEMINI_MODEL
+CONFIG = PASS_B_CONFIG
+MODEL = CONFIG.model
 MAX_TOKENS = 32_000
 GROUNDING = "google_search"
 OUT_NAME = "gemini_b.md"
 PROMPT_FILE = "B.md"
 
 
-def call_gemini(
+def _is_rate_limited(exc: BaseException) -> bool:
+    return "429" in str(exc) or "Too Many Requests" in str(exc)
+
+
+def _generate_once(model: str, full_prompt: str, config, client) -> str:
+    """Issue exactly one Gemini generate_content attempt.
+
+    Network-transient failures (rate limiting) are reported as retryable to
+    the caller's executor. Everything else -- including a structured-config
+    rejection -- propagates unchanged: that is a capability fallback the
+    caller handles by rebuilding ``config``, not a network retry.
+    """
+    try:
+        response = client.models.generate_content(model=model, contents=full_prompt, config=config)
+    except Exception as e:
+        if _is_rate_limited(e):
+            raise provider_executor.ProviderCallError(str(e), retryable=True) from e
+        raise
+    text = getattr(response, "text", None) or ""
+    if not text.strip():
+        raise rc.RunnerError("Received empty or whitespace-only response from API")
+    return text
+
+
+def call_gemini_with_config(
     prompt_text: str,
     role_block: list[str],
     briefing_text: str,
+    config_policy: ProviderConfig,
     client=None,
     schema: dict | None = None,
 ) -> str:
+    """Gemini's low-level grounded-call transport, parameterized by execution policy.
+
+    Shared by Prompt B and Prompt C: same model, same capability-fallback and
+    network-retry mechanics, but each pass supplies its own ``ProviderConfig``
+    so their retry budgets don't have to match.
+    """
     from google import genai
 
     from outlier_scrapers import gemini_structured
@@ -53,16 +84,17 @@ def call_gemini(
         max_output_tokens=MAX_TOKENS,
         schema=schema,
     )
-    max_retries = 10
-    for attempt in range(max_retries):
+
+    while True:
         try:
-            response = client.models.generate_content(
-                model=MODEL, contents=full_prompt, config=config
+            return provider_executor.execute_with_retry(
+                lambda: _generate_once(config_policy.model, full_prompt, config, client),
+                max_attempts=config_policy.max_attempts,
+                base_delay_seconds=config_policy.base_delay_seconds,
+                max_delay_seconds=config_policy.max_delay_seconds,
             )
-            text = getattr(response, "text", None) or ""
-            if not text.strip():
-                raise rc.RunnerError("Received empty or whitespace-only response from API")
-            return text
+        except provider_executor.ProviderCallError as e:
+            raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}") from e
         except rc.RunnerError:
             raise
         except Exception as e:
@@ -81,14 +113,19 @@ def call_gemini(
                     schema=None,
                 )
                 continue
-            if "429" in str(e) or "Too Many Requests" in str(e):
-                if attempt < max_retries - 1:
-                    logger.warning(f"Gemini API rate limited, retrying in {2 ** attempt}s...")
-                    time.sleep(2 ** attempt)
-                    continue
-            raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}")
+            raise rc.RunnerError(f"API call failed: type={type(e).__name__} {str(e)}") from e
 
-    raise rc.RunnerError("Failed after maximum retries")
+
+def call_gemini(
+    prompt_text: str,
+    role_block: list[str],
+    briefing_text: str,
+    client=None,
+    schema: dict | None = None,
+) -> str:
+    return call_gemini_with_config(
+        prompt_text, role_block, briefing_text, CONFIG, client=client, schema=schema
+    )
 
 
 def provider_configuration() -> dict[str, object]:
@@ -112,8 +149,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {
-            "model": MODEL,
-            "grounding": GROUNDING,
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "briefing_hash": rc.sha256_text(briefing),
@@ -152,8 +188,7 @@ def run_gemini_b(
 
         request_sha256 = rc.compute_request_hash(
             {
-                "model": MODEL,
-                "grounding": GROUNDING,
+                **CONFIG.request_fields(),
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,

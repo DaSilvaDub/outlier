@@ -3,7 +3,7 @@ import io
 import json
 from urllib.error import HTTPError
 
-from outlier_scrapers.api import AuthRequiredError, OutlierApiClient, OutlierApiError
+from outlier_scrapers.api import AuthRequiredError, OutlierApiClient, OutlierApiError, RetryPolicy
 from outlier_scrapers.auth import (
     build_api_headers,
     is_props_url,
@@ -205,6 +205,42 @@ def test_fetch_json_non_retryable_status_not_retried():
     else:
         raise AssertionError("Expected OutlierApiError")
     assert calls["count"] == 1
+
+
+def test_retry_policy_is_preferred_over_individual_kwargs(monkeypatch):
+    monkeypatch.setattr("outlier_scrapers.api.time.sleep", lambda _: None)
+    calls = {"count": 0}
+
+    def opener(request, timeout):
+        calls["count"] += 1
+        assert timeout == 42
+        if calls["count"] == 1:
+            raise HTTPError(
+                request.full_url, 500, "server error", hdrs=None, fp=io.BytesIO(b"{}")
+            )
+        return FakeResponse(b'{"ok": true}')
+
+    client = OutlierApiClient(
+        storage_state=storage_state(),
+        opener=opener,
+        retry_policy=RetryPolicy(max_retries=2, timeout_seconds=42),
+        max_retries=99,  # ignored: retry_policy takes precedence
+    )
+    assert client.max_retries == 2
+    assert client.timeout == 42
+    assert client.fetch_json("/test") == {"ok": True}
+    assert calls["count"] == 2
+
+
+def test_retry_policy_delay_is_bounded_exponential_with_jitter():
+    policy = RetryPolicy(base_delay_seconds=1.0, max_delay_seconds=3.0)
+    d1 = policy.delay_for(1, rng=lambda: 1.0)
+    d2 = policy.delay_for(2, rng=lambda: 1.0)
+    d3 = policy.delay_for(5, rng=lambda: 1.0)  # would be 16 uncapped -> capped at 3.0
+    assert d1 == 1.0
+    assert d2 == 2.0
+    assert d3 == 3.0
+    assert policy.delay_for(1, rng=lambda: 0.0) == 0.5  # 50% jitter floor
 
 
 def test_is_props_url_is_league_parameterized():

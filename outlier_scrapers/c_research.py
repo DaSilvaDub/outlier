@@ -22,11 +22,13 @@ from dateutil import parser as date_parser
 
 from outlier_scrapers import gemini_research, pack, pack_index, paths, verdicts
 from outlier_scrapers import runner_common as rc
+from outlier_scrapers.models import PASS_C_CONFIG
 from outlier_scrapers.verdict_gate import VerdictPolicy, load_verdict_policy, validate_envelope
 
 logger = logging.getLogger(__name__)
 
-MODEL = gemini_research.MODEL
+CONFIG = PASS_C_CONFIG
+MODEL = CONFIG.model
 GROUNDING = gemini_research.GROUNDING
 OUT_NAME = "chatgpt_c.md"
 PROMPT_FILE = "C.md"
@@ -46,8 +48,15 @@ REQUIRED_FIELDS = {
 
 
 def call_gemini(prompt_text: str, role_block: list[str], research_input: str, client=None) -> str:
-    """Reuse Prompt B's grounded Gemini call and custom 429 backoff."""
-    return gemini_research.call_gemini(prompt_text, role_block, research_input, client=client)
+    """Reuse Prompt B's low-level Gemini transport under Prompt C's own execution policy.
+
+    C stays a factual/research pass, not an orchestration client of B: it goes
+    through the shared provider executor with its own ``ProviderConfig``
+    (``CONFIG``, above) rather than inheriting B's retry loop.
+    """
+    return gemini_research.call_gemini_with_config(
+        prompt_text, role_block, research_input, CONFIG, client=client
+    )
 
 
 def _market_index(
@@ -310,8 +319,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {
-            "model": MODEL,
-            "grounding": GROUNDING,
+            **CONFIG.request_fields(),
             "role_block": pack.ROLE_BLOCK,
             "prompt": prompt_text,
             "briefing_hash": rc.sha256_text(briefing),
@@ -351,8 +359,7 @@ def run_c_research(
 
         request_sha256 = rc.compute_request_hash(
             {
-                "model": MODEL,
-                "grounding": GROUNDING,
+                **CONFIG.request_fields(),
                 "role_block": pack.ROLE_BLOCK,
                 "prompt": prompt_text,
                 "briefing_hash": briefing_sha256,
