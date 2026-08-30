@@ -1057,17 +1057,15 @@ def test_settlement_computes_clv_pnl_and_all_requested_reports(tmp_path):
     )
     assert promotion["status"] == "NOT_READY"
     assert promotion["auto_promotion"] is False
-    assert promotion["population_definition"] == (
-        "positive_unit_pack_recommendations_v1"
-    )
+    assert promotion["population_definition"] == ("positive_unit_pack_recommendations_v1")
     assert promotion["population"]["total_recommendations"] == 1
     assert promotion["population"]["settled_recommendations"] == 1
     assert "minimum_settled_recommendations" in promotion["failed_gates"]
     summary = json.loads((report_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["learned_multiplier_promotion"] == promotion
-    assert "## Learned-multiplier promotion signal" in (
-        report_dir / "report.md"
-    ).read_text(encoding="utf-8")
+    assert "## Learned-multiplier promotion signal" in (report_dir / "report.md").read_text(
+        encoding="utf-8"
+    )
     models = _read_csv(report_dir / "model_performance.csv")
     a_bet = next(row for row in models if row["model"] == "A" and row["verdict"] == "BET")
     assert float(a_bet["recommendation_accuracy"]) == pytest.approx(1.0)
@@ -1767,13 +1765,15 @@ def test_recompute_settlement_clv_batches_distinct_close_lookup(tmp_path, monkey
         conn.set_trace_callback(statements.append)
         return conn
 
+    def boom_per_row(*_args, **_kwargs):
+        raise AssertionError("per-settlement close lookup must not be used")
+
     monkeypatch.setattr(feedback, "_connect", traced_connect)
+    monkeypatch.setattr("outlier_scrapers.feedback_settlement._connect", traced_connect)
+    monkeypatch.setattr(feedback, "find_distinct_closing_snapshot", boom_per_row)
     monkeypatch.setattr(
-        feedback,
-        "find_distinct_closing_snapshot",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("per-settlement close lookup must not be used")
-        ),
+        "outlier_scrapers.feedback_settlement.find_distinct_closing_snapshot",
+        boom_per_row,
     )
 
     summary = feedback.recompute_settlement_clv(db_path)
@@ -1785,19 +1785,35 @@ def test_recompute_settlement_clv_batches_distinct_close_lookup(tmp_path, monkey
 def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(tmp_path):
     db_path = tmp_path / "feedback.sqlite3"
     _seed_settled_row(
-        db_path, suffix="played", play=True, board="A", settled_days_ago=200,
+        db_path,
+        suffix="played",
+        play=True,
+        board="A",
+        settled_days_ago=200,
         closing_matches_take=False,
     )
     _seed_settled_row(
-        db_path, suffix="flagged", play=False, board="A_FLAGGED", settled_days_ago=200,
+        db_path,
+        suffix="flagged",
+        play=False,
+        board="A_FLAGGED",
+        settled_days_ago=200,
         closing_matches_take=False,
     )
     _seed_settled_row(
-        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        db_path,
+        suffix="stale",
+        play=False,
+        board="B",
+        settled_days_ago=200,
         closing_matches_take=False,
     )
     _seed_settled_row(
-        db_path, suffix="recent", play=False, board="B", settled_days_ago=1,
+        db_path,
+        suffix="recent",
+        play=False,
+        board="B",
+        settled_days_ago=1,
         closing_matches_take=False,
     )
 
@@ -1845,7 +1861,11 @@ def test_apply_retention_policy_slims_only_settled_never_played_unflagged_rows(t
 def test_apply_retention_policy_dry_run_reports_without_changing_anything(tmp_path):
     db_path = tmp_path / "feedback.sqlite3"
     _seed_settled_row(
-        db_path, suffix="stale", play=False, board="B", settled_days_ago=200,
+        db_path,
+        suffix="stale",
+        play=False,
+        board="B",
+        settled_days_ago=200,
         closing_matches_take=False,
     )
 
@@ -1913,9 +1933,7 @@ def test_apply_retention_policy_preserves_fitter_eligibility(tmp_path):
     conn.close()
 
     def eligible_samples() -> tuple[int, int]:
-        blend = feedback.fit_blend_weights(
-            db_path, tmp_path / "blend.json", min_samples=1
-        )
+        blend = feedback.fit_blend_weights(db_path, tmp_path / "blend.json", min_samples=1)
         stake = feedback.fit_stake_calibration_from_db(
             db_path, tmp_path / "stake.json", min_samples=1
         )
@@ -1929,8 +1947,7 @@ def test_apply_retention_policy_preserves_fitter_eligibility(tmp_path):
 
     after = eligible_samples()
     assert after == before, (
-        "retention must not shrink fitter-eligible sample counts: "
-        f"before={before}, after={after}"
+        f"retention must not shrink fitter-eligible sample counts: before={before}, after={after}"
     )
 
 
@@ -2050,9 +2067,7 @@ def test_run_sqlite_cli_recover_kills_hung_processes_on_timeout(tmp_path, monkey
     queue = [recover_mock, apply_mock]
     monkeypatch.setattr(feedback.subprocess, "Popen", lambda *a, **k: queue.pop(0))
 
-    result = feedback._run_sqlite_cli_recover(
-        tmp_path / "corrupted.db", tmp_path / "temp.db"
-    )
+    result = feedback._run_sqlite_cli_recover(tmp_path / "corrupted.db", tmp_path / "temp.db")
 
     assert result is False
     recover_mock.kill.assert_called_once()
@@ -2092,7 +2107,10 @@ def test_is_totals_row_recognizes_specialized_totals_board_sources(source):
 def test_totals_paired_oos_loss_ignores_non_totals_and_incomplete_rows():
     rows = [
         _totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02),
-        {**_totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02), "model_prob_source": "other"},
+        {
+            **_totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02),
+            "model_prob_source": "other",
+        },
         {**_totals_row(market_p=0.55, l10_p=0.60, result="W", edge=0.02), "recency_hit_prob": None},
         {**_totals_row(market_p=0.55, l10_p=0.60, result="PUSH", edge=0.02)},
     ]
@@ -2102,9 +2120,7 @@ def test_totals_paired_oos_loss_ignores_non_totals_and_incomplete_rows():
 
 def test_totals_paired_oos_loss_detects_market_beating_l10():
     # Market (0.8) is consistently right; L10 (0.2) is consistently wrong.
-    rows = [
-        _totals_row(market_p=0.8, l10_p=0.2, result="W", edge=0.01) for _ in range(40)
-    ]
+    rows = [_totals_row(market_p=0.8, l10_p=0.2, result="W", edge=0.01) for _ in range(40)]
     result = feedback.totals_paired_oos_loss(rows)
     assert result["n"] == 40
     assert result["mean_paired_loss_diff"] > 0
@@ -2114,9 +2130,7 @@ def test_totals_paired_oos_loss_detects_market_beating_l10():
 
 def test_totals_paired_oos_loss_detects_l10_beating_market():
     # L10 (0.2) is consistently right (actual losses); market (0.8) is wrong.
-    rows = [
-        _totals_row(market_p=0.8, l10_p=0.2, result="L", edge=0.01) for _ in range(40)
-    ]
+    rows = [_totals_row(market_p=0.8, l10_p=0.2, result="L", edge=0.01) for _ in range(40)]
     result = feedback.totals_paired_oos_loss(rows)
     assert result["n"] == 40
     assert result["mean_paired_loss_diff"] < 0
@@ -2135,7 +2149,9 @@ def test_wilson_interval_bounds():
 def test_totals_edge_bucket_report_buckets_by_signed_band_and_flags_insufficient_n():
     rows = [_totals_row(market_p=0.55, l10_p=0.55, result="W", edge=0.005) for _ in range(5)]
     report = feedback.totals_edge_bucket_report(rows)
-    bucket = next(b for b in report["buckets"] if b["side"] == "above_market" and b["band"] == "0-1pp")
+    bucket = next(
+        b for b in report["buckets"] if b["side"] == "above_market" and b["band"] == "0-1pp"
+    )
     assert bucket["n"] == 5
     assert bucket["wins"] == 5
     assert bucket["hit_rate"] == pytest.approx(1.0)
@@ -2156,8 +2172,7 @@ def test_totals_edge_bucket_report_monotonic_verdict_with_enough_samples():
     ):
         wins = round(25 * win_fraction)
         rows += [
-            _totals_row(market_p=0.5, l10_p=0.5, result="W", edge=band_edge)
-            for _ in range(wins)
+            _totals_row(market_p=0.5, l10_p=0.5, result="W", edge=band_edge) for _ in range(wins)
         ]
         rows += [
             _totals_row(market_p=0.5, l10_p=0.5, result="L", edge=band_edge)
