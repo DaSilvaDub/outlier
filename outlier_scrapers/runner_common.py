@@ -699,8 +699,8 @@ def validate_publication(
                 request_sha256=request_hash,
                 path=path,
             )
-        for name, expected in expected_upstream.items():
-            if str(upstream.get(name) or "") != str(expected or ""):
+        for name, expected_publication_id in expected_upstream.items():
+            if str(upstream.get(name) or "") != str(expected_publication_id or ""):
                 return _validation(
                     ArtifactState.STALE,
                     f"upstream_publication_mismatch:{name}",
