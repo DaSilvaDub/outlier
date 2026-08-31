@@ -194,6 +194,63 @@ def provider_configuration() -> dict[str, object]:
     }
 
 
+def chunk_upstream_envelopes(
+    upstream: dict[str, rc.PublishedEnvelope],
+    outcome_to_event: dict[str, str],
+    chunk_size: int = 50
+) -> list[dict[str, rc.PublishedEnvelope]]:
+    import json
+    parsed_upstream = {}
+    all_outcomes = set()
+    for name, doc in upstream.items():
+        data = json.loads(doc.envelope_json)
+        parsed_upstream[name] = data
+        records = data.get("verdicts", []) if "verdicts" in data else data.get("findings", [])
+        for rec in records:
+            if "outcome_id" in rec:
+                all_outcomes.add(rec["outcome_id"])
+                
+    event_to_outcomes = {}
+    for outcome in all_outcomes:
+        event_id = outcome_to_event.get(outcome, "UNKNOWN")
+        event_to_outcomes.setdefault(event_id, set()).add(outcome)
+        
+    chunks = []
+    current_chunk_outcomes = set()
+    current_size = 0
+    for event_id, outcomes in event_to_outcomes.items():
+        if current_size + len(outcomes) > chunk_size and current_size > 0:
+            chunks.append(current_chunk_outcomes)
+            current_chunk_outcomes = set()
+            current_size = 0
+        current_chunk_outcomes.update(outcomes)
+        current_size += len(outcomes)
+    if current_chunk_outcomes:
+        chunks.append(current_chunk_outcomes)
+        
+    chunked_upstreams = []
+    for chunk_outcomes in chunks:
+        chunk_dict = {}
+        for name, doc in upstream.items():
+            data = parsed_upstream[name]
+            chunk_data = dict(data)
+            if "verdicts" in data:
+                chunk_data["verdicts"] = [r for r in data["verdicts"] if r.get("outcome_id") in chunk_outcomes]
+            elif "findings" in data:
+                chunk_data["findings"] = [r for r in data["findings"] if r.get("outcome_id") in chunk_outcomes]
+            chunk_doc = rc.PublishedEnvelope(
+                pass_=doc.pass_,
+                publication_id=doc.publication_id,
+                envelope_json=json.dumps(chunk_data)
+            )
+            chunk_dict[name] = chunk_doc
+        chunked_upstreams.append(chunk_dict)
+        
+    if not chunked_upstreams:
+        chunked_upstreams.append(upstream)
+    return chunked_upstreams
+
+
 def expected_request_sha256(pack_dir: Path) -> str:
     inputs = gather_inputs(pack_dir)
     totals, game_hash, team_totals, team_hash = rc.load_all_totals(pack_dir)
@@ -288,8 +345,46 @@ def run_claude_e(
             + json.dumps(upstream_publication_ids, sort_keys=True)
             + "\n"
         )
-        user_content = build_user_content(prompt_text, inputs, extra=identity, upstream=upstream)
-        output_text = call_claude(user_content, pack.ROLE_BLOCK, client=client)
+        
+        import csv
+        import io
+        import concurrent.futures
+
+        outcome_to_event = {}
+        if _candidates_bytes:
+            reader = csv.DictReader(io.StringIO(_candidates_bytes.decode("utf-8")))
+            if reader.fieldnames and "outcome_id" in reader.fieldnames and "event_id" in reader.fieldnames:
+                outcome_to_event = {row["outcome_id"]: row["event_id"] for row in reader}
+
+        chunked_upstreams = chunk_upstream_envelopes(upstream, outcome_to_event, chunk_size=30)
+        logger.info("Processing %d chunks for Phase E...", len(chunked_upstreams))
+
+        def process_chunk(chunk_upstream: dict[str, rc.PublishedEnvelope]) -> str:
+            user_content = build_user_content(prompt_text, inputs, extra=identity, upstream=chunk_upstream)
+            return call_claude(user_content, pack.ROLE_BLOCK, client=client)
+
+        chunk_outputs = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(process_chunk, c) for c in chunked_upstreams]
+            for f in futures:
+                chunk_outputs.append(f.result())
+
+        merged_envelope = None
+        for chunk_output in chunk_outputs:
+            chunk_data = json.loads(chunk_output)
+            if merged_envelope is None:
+                merged_envelope = chunk_data
+            else:
+                merged_envelope.setdefault("reconciliations", []).extend(chunk_data.get("reconciliations", []))
+                merged_envelope.setdefault("slate_notes", []).extend(chunk_data.get("slate_notes", []))
+                merged_envelope.setdefault("needs", []).extend(chunk_data.get("needs", []))
+
+        if merged_envelope:
+            merged_envelope["slate_notes"] = list(dict.fromkeys(merged_envelope.get("slate_notes", [])))
+            merged_envelope["needs"] = list(dict.fromkeys(merged_envelope.get("needs", [])))
+
+        output_text = json.dumps(merged_envelope, indent=2) if merged_envelope else "{}"
+
         rc.publish_reconciliation_pass(
             pack_dir,
             output_text,
@@ -316,6 +411,8 @@ def run_claude_e(
         logger.error(str(e))
         return 1
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         logger.error("Unexpected runner error: %s", type(e).__name__)
         return 1
 
