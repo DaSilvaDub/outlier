@@ -529,6 +529,9 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from outlier_scrapers.database import init_db
+
+    init_db()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Daily Outlier Orchestration Job")
     parser.add_argument("--date", help="Specific target date (YYYY-MM-DD)")
