@@ -11,6 +11,7 @@ Analyze one independent Desk 1 master prompt. Generic reports never satisfy or p
 
 - Proceed only when the user explicitly asks in the current turn to analyze or run a generic/master prompt. Prompt creation alone does not authorize reasoning.
 - Use the current session's native model for a single-agent request. Invoke the multi-provider CLI runner only when the user asks for automatic or cross-agent processing in the current turn. Never call the A-E desk or `run_desk` as part of this skill.
+- When the user specifies "only use your reasoning model" or asks the current agent directly to evaluate the prompts, use the **Manual single-agent fallback** workflow below rather than the multi-provider CLI runner.
 - Do not run the pipeline merely to refresh an existing prompt.
 
 ## Automatic CLI workflow
