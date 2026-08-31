@@ -155,9 +155,7 @@ def _seed_league_data(root, league: str) -> None:
                 "records": [
                     {
                         "event_id": "EP",
-                        "sport_context": {
-                            "event_starts_at": "2099-07-07T23:10:00+00:00"
-                        },
+                        "sport_context": {"event_starts_at": "2099-07-07T23:10:00+00:00"},
                     }
                 ],
             }
@@ -201,9 +199,7 @@ def mlb_wnba_e2e_pack(monkeypatch, tmp_path):
     for league in ("MLB", "WNBA"):
         _seed_league_data(tmp_path / "data" / league, league)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
-    health_by_league = {
-        league: _healthy_feed_health() for league in ("MLB", "WNBA")
-    }
+    health_by_league = {league: _healthy_feed_health() for league in ("MLB", "WNBA")}
 
     rows, target, games_norm, coverage = pack.build_pack_with_coverage(
         ["MLB", "WNBA"],
@@ -369,9 +365,7 @@ def test_orchestrate_desk_forwards_hold_locks(desk_pack, monkeypatch):
         seen["kwargs"] = kwargs
         return None
 
-    monkeypatch.setattr(
-        "outlier_scrapers.desk_snapshot.maybe_advance_desk", fake_maybe_advance
-    )
+    monkeypatch.setattr("outlier_scrapers.desk_snapshot.maybe_advance_desk", fake_maybe_advance)
     run_desk.orchestrate_desk(desk_pack, steps=["E"], hold_locks=False)
     assert seen["pack_dir"] == desk_pack
     assert seen["kwargs"].get("hold_locks") is False
@@ -416,3 +410,50 @@ def test_mlb_wnba_e2e_pipeline(mlb_wnba_e2e_pack):
     assert status["final_report"] == {"source": "claude_e", "file": "claude_e.md"}
     assert status["game_totals"]["present"] is True
     assert status["game_totals"]["file"] == "game_totals.csv"
+
+
+def test_execute_phase_returns_stage_result(desk_pack, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    def run(pack_dir, **kwargs):
+        _write_output(pack_dir, "chatgpt_c.md", "fresh")
+        return 0
+
+    monkeypatch.setitem(run_desk.PHASE_RUNNERS, "C", run)
+    result = run_desk.execute_phase("C", desk_pack, force=True)
+    payload = result.as_status_dict()
+    assert result.execution_state.value == "succeeded"
+    assert result.artifact_state.value == "current"
+    assert result.forced is True
+    assert payload["status"] == "forced-refresh"
+    assert payload["execution_state"] == "succeeded"
+
+
+def test_run_phase_forced_rerun_and_stale_hash(desk_pack, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    _write_output(desk_pack, "chatgpt_c.md", "old")
+
+    def run(pack_dir, *, force, refresh_if_stale):
+        assert force is True
+        assert refresh_if_stale is False
+        _write_output(pack_dir, "chatgpt_c.md", "new")
+        return 0
+
+    monkeypatch.setitem(run_desk.PHASE_RUNNERS, "C", run)
+    payload = run_desk.run_phase("C", desk_pack, force=True)
+    assert payload["status"] == "forced-refresh"
+    assert payload["request_sha256"] == "new"
+    assert payload["forced"] is True
+
+
+def test_orchestrate_desk_does_not_reacquire_lock_when_hold_locks_false(desk_pack, monkeypatch):
+    seen = []
+
+    def fake_maybe_advance(pack_dir, **kwargs):
+        seen.append(kwargs.get("hold_locks"))
+        return None
+
+    monkeypatch.setattr("outlier_scrapers.desk_snapshot.maybe_advance_desk", fake_maybe_advance)
+    run_desk.orchestrate_desk(desk_pack, steps=["E"], hold_locks=False)
+    run_desk.orchestrate_desk(desk_pack, steps=["E"], hold_locks=False)
+    assert seen == [False, False]

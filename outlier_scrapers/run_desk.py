@@ -31,6 +31,12 @@ from outlier_scrapers import (
 )
 from outlier_scrapers import runner_common as rc
 from outlier_scrapers.environment import load_environment
+from outlier_scrapers.stage_result import (
+    ArtifactState,
+    StageErrorCode,
+    StageExecutionState,
+    StageResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,25 +86,40 @@ def _restore_on_failure(path: Path, previous: bytes | None) -> None:
     rc.atomic_write(path.parent, path.name, "", previous.decode("utf-8"))
 
 
-def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, str]:
+def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, Any]:
+    result = execute_phase(phase, pack_dir, force=force)
+    return result.as_status_dict()
+
+
+def execute_phase(phase: str, pack_dir: Path, *, force: bool = False) -> StageResult:
     if phase not in PHASE_RUNNERS:
-        return {"status": "failed", "file": "", "request_sha256": ""}
+        return StageResult(
+            phase=phase,
+            execution_state=StageExecutionState.FAILED,
+            artifact_state=ArtifactState.MISSING,
+            output_file="",
+            error_code=StageErrorCode.INTERNAL_ERROR,
+            reason="unknown phase",
+        )
 
     output = pack_dir / PHASE_OUTPUTS[phase]
     previous = output.read_bytes() if output.exists() else None
     previous_hash = _request_hash(output)
+    output_name = PHASE_OUTPUTS[phase]
 
     if force and not os.getenv(PHASE_KEYS[phase]):
-        return {
-            "status": "skipped-no-key",
-            "file": PHASE_OUTPUTS[phase],
-            "request_sha256": previous_hash,
-        }
+        return StageResult(
+            phase=phase,
+            execution_state=StageExecutionState.SKIPPED,
+            artifact_state=ArtifactState.CURRENT if previous is not None else ArtifactState.MISSING,
+            output_file=output_name,
+            request_sha256=previous_hash,
+            forced=force,
+            reason="missing api key",
+        )
 
     try:
-        exit_code = PHASE_RUNNERS[phase](
-            pack_dir, force=force, refresh_if_stale=not force
-        )
+        exit_code = PHASE_RUNNERS[phase](pack_dir, force=force, refresh_if_stale=not force)
     except Exception:
         logger.exception("Phase %s failed", phase)
         exit_code = 1
@@ -108,25 +129,31 @@ def run_phase(phase: str, pack_dir: Path, *, force: bool = False) -> dict[str, s
 
     if exit_code != 0:
         _restore_on_failure(output, previous)
-        status = "skipped-no-key" if not os.getenv(PHASE_KEYS[phase]) else "failed"
-        return {
-            "status": status,
-            "file": PHASE_OUTPUTS[phase],
-            "request_sha256": _request_hash(output) or previous_hash,
-        }
+        missing_key = not os.getenv(PHASE_KEYS[phase])
+        return StageResult(
+            phase=phase,
+            execution_state=StageExecutionState.SKIPPED
+            if missing_key
+            else StageExecutionState.FAILED,
+            artifact_state=ArtifactState.CURRENT if output.exists() else ArtifactState.MISSING,
+            output_file=output_name,
+            request_sha256=_request_hash(output) or previous_hash,
+            error_code=None if missing_key else StageErrorCode.INTERNAL_ERROR,
+            reason="missing api key" if missing_key else "phase runner failed",
+            forced=force,
+        )
 
     current_hash = _request_hash(output)
-    if previous_hash and current_hash == previous_hash:
-        status = "cached"
-    elif force:
-        status = "forced-refresh"
-    else:
-        status = "success"
-    return {
-        "status": status,
-        "file": PHASE_OUTPUTS[phase],
-        "request_sha256": current_hash,
-    }
+    cache_hit = bool(previous_hash and current_hash == previous_hash)
+    return StageResult(
+        phase=phase,
+        execution_state=StageExecutionState.SUCCEEDED,
+        artifact_state=ArtifactState.CURRENT,
+        output_file=output_name,
+        request_sha256=current_hash,
+        cache_hit=cache_hit,
+        forced=force,
+    )
 
 
 def _game_totals_context(pack_dir: Path) -> str:
@@ -161,9 +188,7 @@ def local_synthesize_inputs(pack_dir: Path) -> str:
         parts.append(totals_ctx)
     c = pack_dir / "chatgpt_c.md"
     if c.exists():
-        parts.append(
-            "\n\n===== CHATGPT_C (optional) =====\n" + c.read_text(encoding="utf-8")
-        )
+        parts.append("\n\n===== CHATGPT_C (optional) =====\n" + c.read_text(encoding="utf-8"))
     return (
         "---\nmodel: local-synthesis-fallback\n"
         f"timestamp: {_now_iso()}\n---\n\n"
@@ -323,10 +348,7 @@ def orchestrate_desk(
         required = ("briefing.md", "chatgpt_a.md", "gemini_b.md", "claude_d.md")
         if all((pack_dir / name).exists() for name in required):
             components["E"] = run_phase("E", pack_dir, force=force)
-            if (
-                allow_local_synth
-                and components["E"].get("status") not in SUCCESS_STATES
-            ):
+            if allow_local_synth and components["E"].get("status") not in SUCCESS_STATES:
                 try:
                     content = local_synthesize_inputs(pack_dir)
                     fm = "---\nmodel: local-synthesis-fallback\n---\n\n"
@@ -336,11 +358,13 @@ def orchestrate_desk(
                 except Exception as ex:
                     status["notes"].append(f"local concat failed: {ex}")
         else:
-            components["E"] = {
-                "status": "gated-missing-input",
-                "file": PHASE_OUTPUTS["E"],
-                "request_sha256": "",
-            }
+            components["E"] = StageResult(
+                phase="E",
+                execution_state=StageExecutionState.GATED,
+                artifact_state=ArtifactState.MISSING,
+                output_file=PHASE_OUTPUTS["E"],
+                reason="E inputs incomplete",
+            ).as_status_dict()
             status["notes"].append("E inputs incomplete")
 
     status["components"] = components
@@ -419,7 +443,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="AI Research Desk orchestrator (A/B/C/D/E).")
     parser.add_argument("--date", default=datetime.now().astimezone().strftime("%Y-%m-%d"))
-    parser.add_argument("--force", action="store_true", help="Force re-run of steps (bypass hash check).")
+    parser.add_argument(
+        "--force", action="store_true", help="Force re-run of steps (bypass hash check)."
+    )
     parser.add_argument(
         "--steps",
         default=",".join(PHASES),
@@ -452,7 +478,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     if not (pack_dir / "candidates.csv").exists() and not (pack_dir / "briefing.md").exists():
-        logger.warning("Pack for %s missing candidates.csv or briefing.md. Produce the pack first.", args.date)
+        logger.warning(
+            "Pack for %s missing candidates.csv or briefing.md. Produce the pack first.", args.date
+        )
 
     return orchestrate_desk(
         pack_dir,

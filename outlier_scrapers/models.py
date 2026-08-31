@@ -99,10 +99,8 @@ PASS_C_CONFIG = ProviderConfig(
     request_extra={"grounding": "google_search"},
 )
 
-# Pass D (Claude, pack-only verdict pass). The Anthropic SDK already retries
-# transient transport failures itself (see ``timeout``/``max_retries`` on the
-# client); there is no hand-rolled sleep loop to extract, so max_attempts
-# here feeds the SDK's own retry count rather than provider_executor.
+# Pass D (Claude, pack-only verdict pass). Same retry owner as A: SDK
+# max_retries=0 and provider_executor.execute_with_retry.
 PASS_D_CONFIG = ProviderConfig(
     provider="anthropic",
     model=CLAUDE_MODEL,
@@ -111,8 +109,8 @@ PASS_D_CONFIG = ProviderConfig(
     request_extra={"effort": "high", "thinking": "adaptive"},
 )
 
-# Pass E (Claude, reconciliation). Same execution policy shape as D; kept as
-# its own config object since D and E should not have to share it either.
+# Pass E (Claude, reconciliation). Same retry owner as D/A; kept as its own
+# config object since D and E should not have to share it either.
 PASS_E_CONFIG = ProviderConfig(
     provider="anthropic",
     model=CLAUDE_MODEL,

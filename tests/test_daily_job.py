@@ -43,19 +43,31 @@ def _require_otp_fetcher():
 @pytest.fixture(autouse=True)
 def _disable_live_result_collection(monkeypatch):
     if daily_job is not None:
+        daily_job.run_explicit_refresh.last_results = []
         monkeypatch.setattr(
             daily_job.results,
             "collect_and_import",
             lambda *_args, **_kwargs: {"settlement_rows": 0, "updated_count": 0},
         )
         monkeypatch.setattr(
-            daily_job, "maintain_feedback_ledger",
+            daily_job,
+            "maintain_feedback_ledger",
             lambda *_args, **_kwargs: {"status": "skipped", "reason": "test"},
         )
         monkeypatch.setattr(
-            daily_job, "persist_desk_feedback",
+            daily_job,
+            "persist_desk_feedback",
             lambda *_args, **_kwargs: {"status": "skipped", "reason": "test"},
         )
+
+
+def test_locked_pipeline_is_a_coordinator():
+    _require_daily_job()
+    assert hasattr(daily_job, "_run_pre_pack_maintenance")
+    assert hasattr(daily_job, "_ensure_authenticated")
+    assert hasattr(daily_job, "_run_refresh_and_health")
+    assert hasattr(daily_job, "_run_pack_and_desk")
+    assert hasattr(daily_job, "_finalize_run")
 
 
 def test_daily_job_orchestrates_login_and_refresh(tmp_path):
@@ -220,9 +232,7 @@ def test_daily_job_orchestrates_reasoning(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda *args, **kwargs: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr(
-        "outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l"
-    )
+    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_writer_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
@@ -254,9 +264,7 @@ def test_daily_job_reasoning_failure_returns_1(monkeypatch, tmp_path):
     monkeypatch.setattr("outlier_scrapers.daily_job.run_pack", lambda *args, **kwargs: fake_pack)
     monkeypatch.setattr("outlier_scrapers.daily_job.orchestrate_login", lambda _leagues: True)
     monkeypatch.setattr("outlier_scrapers.daily_job.perform_auth_check", lambda _: True)
-    monkeypatch.setattr(
-        "outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l"
-    )
+    monkeypatch.setattr("outlier_scrapers.daily_job._acquire_writer_lock", lambda: tmp_path / ".l")
     monkeypatch.setattr("outlier_scrapers.daily_job._release_writer_lock", lambda lock_dir: None)
     monkeypatch.setattr("outlier_scrapers.daily_job._atomic_write_manifest", lambda p, d: None)
 
@@ -277,9 +285,7 @@ def _run_daily_job_with_desk_status(tmp_path, monkeypatch, overall: str) -> int:
     (fake_pack / "briefing.md").write_text("SLATE", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(
-        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
-    )
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -478,9 +484,7 @@ def test_writer_lock_precedes_mutations_and_spans_manifest(tmp_path, monkeypatch
     (fake_pack / "candidates.csv").write_text("market_id,line\n", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
-    monkeypatch.setattr(
-        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
-    )
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock)
     monkeypatch.setattr(
         daily_job,
         "_release_writer_lock",
@@ -504,9 +508,7 @@ def test_writer_lock_precedes_mutations_and_spans_manifest(tmp_path, monkeypatch
         "run_explicit_refresh",
         lambda *_args, **_kwargs: calls.append("refresh") or True,
     )
-    monkeypatch.setattr(
-        daily_job, "check_freshness", lambda *_args: calls.append("health") or True
-    )
+    monkeypatch.setattr(daily_job, "check_freshness", lambda *_args: calls.append("health") or True)
     monkeypatch.setattr(
         daily_job, "run_pack", lambda *_args, **_kwargs: calls.append("pack") or fake_pack
     )
@@ -536,9 +538,7 @@ def test_early_pipeline_failure_still_releases_writer_lock(tmp_path, monkeypatch
     calls = []
     lock = tmp_path / ".daily_job_lock"
     monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
-    monkeypatch.setattr(
-        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
-    )
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock)
     monkeypatch.setattr(
         daily_job,
         "_release_writer_lock",
@@ -562,9 +562,7 @@ def test_daily_job_skips_desk_for_empty_pack(tmp_path, monkeypatch):
     (fake_pack / "briefing.md").write_text("No pregame candidates", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(
-        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
-    )
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -614,9 +612,7 @@ def test_daily_job_runs_desk_for_actionable_totals_only(tmp_path, monkeypatch):
     (fake_pack / "briefing.md").write_text("Totals only", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(
-        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
-    )
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -661,9 +657,7 @@ def test_daily_job_runs_desk_for_actionable_team_totals_only(tmp_path, monkeypat
     (fake_pack / "briefing.md").write_text("Team totals only", encoding="utf-8")
 
     monkeypatch.setattr(daily_job, "perform_auth_check", lambda _leagues: True)
-    monkeypatch.setattr(
-        daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True
-    )
+    monkeypatch.setattr(daily_job, "run_explicit_refresh", lambda _leagues, **_kwargs: True)
     monkeypatch.setattr(daily_job, "check_freshness", lambda _leagues: True)
     monkeypatch.setattr(daily_job, "run_pack", lambda *_args, **_kwargs: fake_pack)
     monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
@@ -691,9 +685,7 @@ def test_t30_only_runs_under_daily_writer_lock(tmp_path, monkeypatch):
     pack_dir = tmp_path / "pack"
     feedback_db = tmp_path / "feedback.sqlite3"
     monkeypatch.setattr(daily_job, "load_environment", lambda: calls.append("environment"))
-    monkeypatch.setattr(
-        daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock
-    )
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: calls.append("lock") or lock)
     monkeypatch.setattr(
         daily_job,
         "_release_writer_lock",
@@ -783,8 +775,19 @@ def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(daily_job.feedback, "recompute_settlement_clv", lambda path: calls.append(("clv", path)) or {"corrected": 2})
-    monkeypatch.setattr(daily_job.feedback, "apply_retention_policy", lambda path, *, cutoff_days: calls.append(("retention", path, cutoff_days)) or daily_job.feedback.RetentionStats(3, 3, 10, 5))
+    monkeypatch.setattr(
+        daily_job.feedback,
+        "recompute_settlement_clv",
+        lambda path: calls.append(("clv", path)) or {"corrected": 2},
+    )
+    monkeypatch.setattr(
+        daily_job.feedback,
+        "apply_retention_policy",
+        lambda path, *, cutoff_days: (
+            calls.append(("retention", path, cutoff_days))
+            or daily_job.feedback.RetentionStats(3, 3, 10, 5)
+        ),
+    )
     stats = _REAL_MAINTAIN_FEEDBACK_LEDGER(db, cutoff_days=120)
     assert calls == [("clv", db), ("retention", db, 120)]
     assert stats["status"] == "ok"
@@ -795,8 +798,16 @@ def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
 def test_maintain_feedback_ledger_isolates_failures(tmp_path, monkeypatch):
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
-    monkeypatch.setattr(daily_job.feedback, "recompute_settlement_clv", lambda _path: (_ for _ in ()).throw(daily_job.feedback.FeedbackError("bad close")))
-    monkeypatch.setattr(daily_job.feedback, "apply_retention_policy", lambda _path, *, cutoff_days: daily_job.feedback.RetentionStats(cutoff_days, 0, 0, 0))
+    monkeypatch.setattr(
+        daily_job.feedback,
+        "recompute_settlement_clv",
+        lambda _path: (_ for _ in ()).throw(daily_job.feedback.FeedbackError("bad close")),
+    )
+    monkeypatch.setattr(
+        daily_job.feedback,
+        "apply_retention_policy",
+        lambda _path, *, cutoff_days: daily_job.feedback.RetentionStats(cutoff_days, 0, 0, 0),
+    )
     stats = _REAL_MAINTAIN_FEEDBACK_LEDGER(db)
     assert stats["status"] == "partial"
     assert stats["clv"]["status"] == "failed"
@@ -817,7 +828,13 @@ def test_persist_desk_feedback_is_nonfatal(tmp_path, monkeypatch):
     (pack_dir / "verdicts" / "desk_snapshot.json").write_text("{}", encoding="utf-8")
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
-    monkeypatch.setattr(daily_job.verdict_store, "persist_desk_snapshot", lambda *_args: (_ for _ in ()).throw(daily_job.verdict_store.VerdictPersistenceError("ambiguous")))
+    monkeypatch.setattr(
+        daily_job.verdict_store,
+        "persist_desk_snapshot",
+        lambda *_args: (_ for _ in ()).throw(
+            daily_job.verdict_store.VerdictPersistenceError("ambiguous")
+        ),
+    )
     stats = _REAL_PERSIST_DESK_FEEDBACK(pack_dir, db)
     assert stats["status"] == "failed"
     assert "ambiguous" in stats["error"]

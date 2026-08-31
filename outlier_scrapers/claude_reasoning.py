@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import pack, paths
+from outlier_scrapers import pack, paths, provider_executor
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import PASS_D_CONFIG
 from outlier_scrapers import runner_common as rc
@@ -43,15 +43,25 @@ def call_claude(
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
-        # Retries are the Anthropic SDK's own transport-level policy here --
-        # there is no hand-rolled sleep loop to move into provider_executor,
-        # so CONFIG just supplies the values the client is constructed with.
-        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=CONFIG.max_attempts)
+        # provider_executor owns retries; the SDK loop would stack with it.
+        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=0)
 
-    data_block = rc.build_reasoning_data_block(
-        raw_csv_bytes, totals_bytes, team_totals_bytes
-    )
+    data_block = rc.build_reasoning_data_block(raw_csv_bytes, totals_bytes, team_totals_bytes)
     full_prompt = prompt_text + "\n\n" + identity_block + "\nData:\n" + data_block
+    try:
+        return provider_executor.execute_with_retry(
+            lambda: _call_claude_once(client, role_block, full_prompt),
+            max_attempts=CONFIG.max_attempts,
+            base_delay_seconds=CONFIG.base_delay_seconds,
+            max_delay_seconds=CONFIG.max_delay_seconds,
+        )
+    except provider_executor.ProviderCallError as e:
+        raise rc.RunnerError(str(e)) from e
+
+
+def _call_claude_once(client, role_block: list[str], full_prompt: str) -> str:
+    import anthropic
+
     structured = rc.request_structured("verdict")
     try:
         with client.messages.stream(
@@ -63,6 +73,12 @@ def call_claude(
             tool_choice={"type": "tool", "name": "emit_verdicts"},
         ) as stream:
             message = stream.get_final_message()
+    except anthropic.RateLimitError as e:
+        raise provider_executor.ProviderCallError(
+            f"API call failed: type={type(e).__name__} status={getattr(e, 'status_code', None)} "
+            f"request_id={getattr(e, 'request_id', None)}",
+            retryable=True,
+        ) from e
     except anthropic.APIError as e:
         error_body = e.response.text if hasattr(e, "response") else str(e)
         raise rc.RunnerError(
@@ -76,7 +92,10 @@ def call_claude(
     if getattr(message, "stop_reason", None) == "refusal":
         raise rc.RunnerError("Claude refused the request (stop_reason=refusal).")
     for block in message.content:
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "emit_verdicts":
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "emit_verdicts"
+        ):
             return json.dumps(getattr(block, "input", {}))
     text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
     if not text.strip():
@@ -99,9 +118,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     _, candidates_hash = rc.validate_candidates(
         pack_dir, allow_empty=rc.has_actionable_any_totals(totals, team_totals)
     )
-    prompt_text = rc.read_required_text(
-        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
-    )
+    prompt_text = rc.read_required_text(paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file")
     identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     return rc.compute_request_hash(
         {

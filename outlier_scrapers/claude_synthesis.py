@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from outlier_scrapers import pack, paths
+from outlier_scrapers import pack, paths, provider_executor
 from outlier_scrapers.environment import load_environment
 from outlier_scrapers.models import PASS_E_CONFIG
 from outlier_scrapers import runner_common as rc
@@ -70,9 +70,7 @@ def _published_identity_matches(document: rc.PublishedEnvelope, identity: rc.Pac
     )
 
 
-def gather_upstream(
-    pack_dir: Path, identity: rc.PackIdentity
-) -> dict[str, rc.PublishedEnvelope]:
+def gather_upstream(pack_dir: Path, identity: rc.PackIdentity) -> dict[str, rc.PublishedEnvelope]:
     """Return the current published envelope for each upstream pass.
 
     A/D/B must all be published; E reconciles them and cannot run against a
@@ -93,7 +91,9 @@ def gather_upstream(
     for name in OPTIONAL_UPSTREAM:
         if name in documents:
             selected[name] = documents[name]
-    stale = [name for name, doc in selected.items() if not _published_identity_matches(doc, identity)]
+    stale = [
+        name for name, doc in selected.items() if not _published_identity_matches(doc, identity)
+    ]
     if stale:
         raise rc.RunnerError(
             "Pass E upstream publications are stale for this pack: "
@@ -129,10 +129,22 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
         load_environment()
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise rc.RunnerError("ANTHROPIC_API_KEY is not set.")
-        # As in claude_reasoning.py: the Anthropic SDK owns transport-level
-        # retries itself, so CONFIG just supplies the client's construction
-        # values rather than feeding a provider_executor loop.
-        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=CONFIG.max_attempts)
+        # provider_executor owns retries; the SDK loop would stack with it.
+        client = anthropic.Anthropic(timeout=CONFIG.timeout_seconds, max_retries=0)
+    try:
+        return provider_executor.execute_with_retry(
+            lambda: _call_claude_once(client, role_block, user_content),
+            max_attempts=CONFIG.max_attempts,
+            base_delay_seconds=CONFIG.base_delay_seconds,
+            max_delay_seconds=CONFIG.max_delay_seconds,
+        )
+    except provider_executor.ProviderCallError as e:
+        raise rc.RunnerError(str(e)) from e
+
+
+def _call_claude_once(client, role_block: list[str], user_content: str) -> str:
+    import anthropic
+
     structured = rc.request_structured("reconciliation")
     try:
         with client.messages.stream(
@@ -144,6 +156,12 @@ def call_claude(user_content: str, role_block: list[str], client=None) -> str:
             tool_choice={"type": "tool", "name": "emit_reconciliations"},
         ) as stream:
             message = stream.get_final_message()
+    except anthropic.RateLimitError as e:
+        raise provider_executor.ProviderCallError(
+            f"API call failed: type={type(e).__name__} status={getattr(e, 'status_code', None)} "
+            f"request_id={getattr(e, 'request_id', None)}",
+            retryable=True,
+        ) from e
     except anthropic.APIError as e:
         raise rc.RunnerError(
             f"API call failed: type={type(e).__name__} "
@@ -184,9 +202,7 @@ def expected_request_sha256(pack_dir: Path) -> str:
     )
     pack_identity = rc.PackIdentity(pack_dir.name, candidates_hash, game_hash, team_hash)
     upstream = gather_upstream(pack_dir, pack_identity)
-    prompt_text = rc.read_required_text(
-        paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file"
-    )
+    prompt_text = rc.read_required_text(paths.PROJECT_ROOT / "prompts" / PROMPT_FILE, "Prompt file")
     upstream_ids = {
         name: upstream[name].publication_id if name in upstream else None
         for name in (*REQUIRED_UPSTREAM, *OPTIONAL_UPSTREAM)
@@ -272,9 +288,7 @@ def run_claude_e(
             + json.dumps(upstream_publication_ids, sort_keys=True)
             + "\n"
         )
-        user_content = build_user_content(
-            prompt_text, inputs, extra=identity, upstream=upstream
-        )
+        user_content = build_user_content(prompt_text, inputs, extra=identity, upstream=upstream)
         output_text = call_claude(user_content, pack.ROLE_BLOCK, client=client)
         rc.publish_reconciliation_pass(
             pack_dir,

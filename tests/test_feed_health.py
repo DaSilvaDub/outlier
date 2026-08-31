@@ -189,9 +189,7 @@ def test_stale_future_malformed_and_missing_sources_fail_closed(
     assert not safe
     assert any(f"props_status is {expected_status}" in reason for reason in reasons)
     assert any(
-        failure["feed"] == "props"
-        and failure["id_type"] == "global"
-        and failure["id"] == "*"
+        failure["feed"] == "props" and failure["id_type"] == "global" and failure["id"] == "*"
         for failure in payload["failed_ids"]
     )
 
@@ -340,9 +338,7 @@ def test_games_insights_injuries_and_cards_aggregate_independently(
         ("insights", "event-b"),
     ]
     props_event_b = feed_health.matching_failures(payload, "props", {"event_id": "event-b"})
-    assert [(item["feed"], item["id"]) for item in props_event_b] == [
-        ("injuries", "event-b")
-    ]
+    assert [(item["feed"], item["id"]) for item in props_event_b] == [("injuries", "event-b")]
 
 
 def test_card_coverage_ignores_upstream_market_to_filtered_card_ratio(
@@ -500,9 +496,7 @@ def test_line_movement_legacy_error_rows_remain_scoped_without_final_id_list(
     payload = feed_health.build_feed_health("MLB", now=NOW, write=False)
 
     assert feed_health.validate_feed_health(payload) == (True, [])
-    assert feed_health.matching_failures(
-        payload, "props", {"market_id": "legacy-market"}
-    ) == [
+    assert feed_health.matching_failures(payload, "props", {"market_id": "legacy-market"}) == [
         {
             "feed": "line_movement",
             "stream": "props",
@@ -696,3 +690,51 @@ def test_is_feed_health_safe_combines_global_gate_and_row_matching() -> None:
     assert feed_health.is_feed_health_safe(payload)
     assert feed_health.is_feed_health_safe(payload, "props", {"market_id": "good-market"})
     assert not feed_health.is_feed_health_safe(payload, "props", {"market_id": "bad-market"})
+
+
+def test_structured_refresh_failure_overrides_file_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from outlier_scrapers.refresh_plan import RefreshTaskResult
+
+    _seed_healthy(tmp_path, monkeypatch)
+    payload = feed_health.build_feed_health(
+        "MLB",
+        now=NOW,
+        write=False,
+        task_results=[
+            RefreshTaskResult(
+                name="props",
+                league="MLB",
+                ok=False,
+                exit_code=1,
+                error="props export exploded",
+            )
+        ],
+    )
+    assert payload["props_status"] == "error"
+    reasons = [item["reason"] for item in payload["failed_ids"] if item["feed"] == "props"]
+    assert "props export exploded" in reasons
+
+
+def test_structured_refresh_success_does_not_fail_closed_on_missing_status_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from outlier_scrapers.refresh_plan import RefreshTaskResult
+
+    paths = _seed_healthy(tmp_path, monkeypatch)
+    (paths.reports / "props_export_status_latest.json").unlink()
+    payload = feed_health.build_feed_health(
+        "MLB",
+        now=NOW,
+        write=False,
+        task_results=[
+            RefreshTaskResult(
+                name="props",
+                league="MLB",
+                ok=True,
+                exit_code=0,
+            )
+        ],
+    )
+    assert payload["props_status"] == "ok"

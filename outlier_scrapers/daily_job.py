@@ -4,7 +4,6 @@ import argparse
 import csv
 import json
 import logging
-import os
 import sqlite3
 import subprocess
 import sys
@@ -17,13 +16,15 @@ from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
 from .environment import load_environment
 from .paths import otp_status_file, PROJECT_ROOT
 from .otp_fetcher import fetch_and_write_otp
-from . import refresh
 from . import pack
 from . import feedback
 from . import probability_blend
 from . import feed_health
+from . import pack_manifest
+from . import refresh_plan
 from . import results
 from . import run_desk
+from . import run_state
 from . import runner_common as rc
 from . import t30_reprice
 from . import verdict_store
@@ -108,36 +109,24 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
 
 def run_explicit_refresh(leagues: list[str], target_date: str | None = None) -> bool:
     logger.info("Starting explicitly ordered refresh pipeline.")
-    for league in leagues:
-        args = ["--league", league]
-        if target_date:
-            args.extend(["--date", target_date])
-        steps = [
-            ("--props", "props"),
-            ("--insights", "insights"),
-            ("--games", "games"),
-            ("--probable-pitchers", "probable pitchers"),
-            ("--projections", "independent projections"),
-            ("--line-movement", "props line-movement"),
-            ("--game-line-movement", "game line-movement"),
-            ("--cards", "cards"),
-            ("--game-cards", "game cards"),
-        ]
-        for flag, name in steps:
-            logger.info(f"Running {name} for {league}...")
-            exit_code = refresh.main(args + [flag])
-            if exit_code != 0:
-                logger.error(f"Failed at step: {name} for {league}")
-                return False
-    return True
+    results = refresh_plan.execute_refresh(leagues, target_date=target_date)
+    run_explicit_refresh.last_results = results  # type: ignore[attr-defined]
+    return refresh_plan.all_required_ok(results)
+
+
+run_explicit_refresh.last_results = []  # type: ignore[attr-defined]
 
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     logger.info("Checking unified feed health before building pack...")
+    task_results = getattr(run_explicit_refresh, "last_results", []) or []
     all_safe = True
     for league in leagues:
         try:
-            health = feed_health.build_feed_health(league, now=now, write=True)
+            health_kwargs = {"now": now, "write": True}
+            if task_results:
+                health_kwargs["task_results"] = task_results
+            health = feed_health.build_feed_health(league, **health_kwargs)
             safe, reasons = feed_health.validate_feed_health(health)
         except Exception as exc:
             logger.error("%s feed-health evaluation failed: %s", league, exc)
@@ -156,7 +145,9 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     return all_safe
 
 
-def run_pack(leagues: list[str], target_date: str | None = None, feedback_db: Path | None = None) -> Path | None:
+def run_pack(
+    leagues: list[str], target_date: str | None = None, feedback_db: Path | None = None
+) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
     if target_date:
@@ -296,7 +287,9 @@ def maintain_feedback_ledger(
     else:
         result["retention"] = {"status": "skipped", "reason": "disabled"}
     attempted = int(recompute_clv) + int(run_retention)
-    result["status"] = "failed" if failures == attempted and attempted else ("partial" if failures else "ok")
+    result["status"] = (
+        "failed" if failures == attempted and attempted else ("partial" if failures else "ok")
+    )
     return result
 
 
@@ -311,7 +304,12 @@ def persist_desk_feedback(pack_dir: Path, db_path: Path | None = None) -> dict:
     except (OSError, sqlite3.Error, verdict_store.VerdictPersistenceError, ValueError) as exc:
         logger.error("Desk feedback projection failed closed (continuing): %s", exc)
         return {"status": "failed", "error": str(exc)[:300]}
-    return {"status": "ok", "publications": stats.publications, "records": stats.records, "decisions_updated": stats.decisions_updated}
+    return {
+        "status": "ok",
+        "publications": stats.publications,
+        "records": stats.records,
+        "decisions_updated": stats.decisions_updated,
+    }
 
 
 def _count_pack_rows(pack_dir: Path) -> int | None:
@@ -352,14 +350,12 @@ def _release_writer_lock(lock_dir: Path | None) -> None:
 
 
 def _atomic_write_manifest(pack_dir: Path, data: dict) -> None:
-    mpath = pack_dir / "manifest.json"
-    tmp = mpath.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, default=str), encoding="utf-8")
-    os.replace(tmp, mpath)
-    logger.info("Wrote %s", mpath)
+    pack_manifest.write_manifest(pack_dir, data)
 
 
-def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
+def _run_pre_pack_maintenance(
+    args: argparse.Namespace, leagues: list[str]
+) -> tuple[int | None, dict, dict, dict, dict]:
     result_collection = {"status": "skipped"}
     if not args.skip_result_collection:
         result_collection = collect_completed_results(
@@ -381,7 +377,7 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
     if not args.skip_settlement_ingest:
         imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
         if imported is None:
-            return 1
+            return 1, result_collection, settlement_stats, {}, {}
         settlement_stats = imported
 
     feedback_maintenance = {"status": "skipped", "reason": "disabled"}
@@ -396,99 +392,140 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
     blend_refit = {"status": "skipped"}
     if not args.skip_blend_refit:
         blend_refit = refit_blend_weights(args.feedback_db)
+    return None, result_collection, settlement_stats, feedback_maintenance, blend_refit
 
-    if not perform_auth_check(leagues):
-        if not orchestrate_login(leagues):
-            logger.error("Authentication failed. Aborting pipeline.")
-            return 1
 
-    if not run_explicit_refresh(leagues, target_date=args.date):
+def _ensure_authenticated(leagues: list[str]) -> bool:
+    if perform_auth_check(leagues):
+        return True
+    if orchestrate_login(leagues):
+        return True
+    logger.error("Authentication failed. Aborting pipeline.")
+    return False
+
+
+def _run_refresh_and_health(leagues: list[str], target_date: str | None) -> bool:
+    run_explicit_refresh.last_results = []  # type: ignore[attr-defined]
+    if not run_explicit_refresh(leagues, target_date=target_date):
         logger.error("Refresh pipeline failed. Aborting.")
-        return 1
-
+        return False
     if not check_freshness(leagues):
         logger.error("Feed-health check failed. Aborting pipeline before pack build.")
-        return 1
+        return False
+    return True
 
+
+def _desk_steps_for_profile(profile: str) -> list[str]:
+    if profile == "openai":
+        return ["A"]
+    if profile == "full":
+        return ["A", "B", "C", "D", "E"]
+    return ["E"]
+
+
+def _run_pack_and_desk(
+    args: argparse.Namespace, leagues: list[str]
+) -> tuple[Path | None, str, int | None]:
     pack_dir = run_pack(leagues, target_date=args.date, feedback_db=args.feedback_db)
     if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
-        return 1
+        return None, args.analysis_profile, None
 
     profile = args.analysis_profile
     if args.run_reasoning and profile == "local":
         profile = "openai"
 
     pack_rows = _count_pack_rows(pack_dir)
-    empty_pack = pack_rows == 0
-    if empty_pack:
+    if pack_rows == 0:
         logger.warning("Pack is empty after safety filters; skipping all analysis desk passes.")
+        return pack_dir, profile, pack_rows
 
-    run_steps = []
-    if profile == "openai":
-        run_steps = ["A"]
-    elif profile == "full":
-        run_steps = ["A", "B", "C", "D", "E"]
+    run_steps = _desk_steps_for_profile(profile)
+    logger.info("Running analysis desk (profile=%s)...", profile)
+    try:
+        desk_code = run_desk.orchestrate_desk(
+            pack_dir,
+            steps=run_steps,
+            force=False,
+            allow_local_synth=True,
+            hold_locks=False,
+        )
+        if desk_code != 0:
+            logger.warning("Desk completed with non-zero (may be partial/degraded).")
+    except Exception as exc:
+        logger.error("Desk orchestration error: %s", exc)
+    return pack_dir, profile, pack_rows
 
-    if not empty_pack and (run_steps or profile == "local"):
-        logger.info("Running analysis desk (profile=%s)...", profile)
-        try:
-            if profile == "local":
-                desk_code = run_desk.orchestrate_desk(
-                    pack_dir,
-                    steps=["E"],
-                    force=False,
-                    allow_local_synth=True,
-                    hold_locks=False,
-                )
-            else:
-                desk_code = run_desk.orchestrate_desk(
-                    pack_dir,
-                    steps=run_steps,
-                    force=False,
-                    allow_local_synth=True,
-                    hold_locks=False,
-                )
-            if desk_code != 0:
-                logger.warning("Desk completed with non-zero (may be partial/degraded).")
-        except Exception as exc:
-            logger.error("Desk orchestration error: %s", exc)
 
-    # Always project an authoritative snapshot when one exists. The desk may
-    # have been run separately from this daily job, and waiting for another
-    # paid desk invocation would strand its verdicts outside the ledger.
+def _finalize_run(
+    pack_dir: Path,
+    args: argparse.Namespace,
+    leagues: list[str],
+    profile: str,
+    pack_rows: int | None,
+    settlement_stats: dict,
+    result_collection: dict,
+    blend_refit: dict,
+    feedback_maintenance: dict,
+) -> int:
     desk_feedback = persist_desk_feedback(pack_dir, args.feedback_db)
-
     status_path = pack_dir / "reasoning_status.json"
-    overall = "ok" if empty_pack else "degraded"
-    if not empty_pack and status_path.exists():
+    overall = "ok" if pack_rows == 0 else "degraded"
+    if pack_rows != 0 and status_path.exists():
         try:
             status_payload = json.loads(status_path.read_text(encoding="utf-8"))
             overall = status_payload.get("overall", "ok")
         except Exception:
             overall = "degraded"
 
-    manifest = {
-        "run_id": f"{pack_dir.name}-{int(time.time())}",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "leagues": leagues,
-        "profile": profile,
-        "overall": overall,
-        "pack_rows": pack_rows,
-        "status_file": str(status_path) if status_path.exists() else None,
-        "settlement_ingest": settlement_stats,
-        "result_collection": result_collection,
-        "blend_refit": blend_refit,
-        "feedback_maintenance": feedback_maintenance,
-        "desk_feedback": desk_feedback,
-    }
+    manifest = pack_manifest.build_manifest_v2(
+        pack_dir,
+        run_id=f"{pack_dir.name}-{int(time.time())}",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        leagues=leagues,
+        profile=profile,
+        overall=overall,
+        pack_rows=pack_rows,
+        extra={
+            "settlement_ingest": settlement_stats,
+            "result_collection": result_collection,
+            "blend_refit": blend_refit,
+            "feedback_maintenance": feedback_maintenance,
+            "desk_feedback": desk_feedback,
+        },
+    )
     _atomic_write_manifest(pack_dir, manifest)
-
-    final_code = 0 if str(overall).lower() in SUCCESS_OVERALL_STATUSES else 1
+    final_code = run_state.exit_code_for_overall(overall)
     logger.info(
         "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall
     )
     return final_code
+
+
+def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
+    early, result_collection, settlement_stats, feedback_maintenance, blend_refit = (
+        _run_pre_pack_maintenance(args, leagues)
+    )
+    if early is not None:
+        return early
+    if not _ensure_authenticated(leagues):
+        return 1
+    if not _run_refresh_and_health(leagues, args.date):
+        return 1
+    pack_dir, profile, pack_rows = _run_pack_and_desk(args, leagues)
+    if pack_dir is None:
+        return 1
+    return _finalize_run(
+        pack_dir,
+        args,
+        leagues,
+        profile,
+        pack_rows,
+        settlement_stats,
+        result_collection,
+        blend_refit,
+        feedback_maintenance,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -526,10 +563,27 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Explicit diagnostic escape hatch; normal daily runs import pending results.",
     )
-    parser.add_argument("--skip-feedback-maintenance", action="store_true", help="Skip all automatic feedback-ledger maintenance.")
-    parser.add_argument("--skip-clv-recompute", action="store_true", help="Skip settlement CLV repair during maintenance.")
-    parser.add_argument("--skip-feedback-retention", action="store_true", help="Skip feedback-ledger retention during maintenance.")
-    parser.add_argument("--feedback-retention-days", type=int, default=90, help="Retention cutoff in days (default: 90).")
+    parser.add_argument(
+        "--skip-feedback-maintenance",
+        action="store_true",
+        help="Skip all automatic feedback-ledger maintenance.",
+    )
+    parser.add_argument(
+        "--skip-clv-recompute",
+        action="store_true",
+        help="Skip settlement CLV repair during maintenance.",
+    )
+    parser.add_argument(
+        "--skip-feedback-retention",
+        action="store_true",
+        help="Skip feedback-ledger retention during maintenance.",
+    )
+    parser.add_argument(
+        "--feedback-retention-days",
+        type=int,
+        default=90,
+        help="Retention cutoff in days (default: 90).",
+    )
     parser.add_argument(
         "--t30-reprice-only",
         action="store_true",

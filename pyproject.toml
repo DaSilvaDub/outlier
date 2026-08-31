@@ -24,6 +24,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "uses_enforce_mode: marks tests that test portfolio enforce mode directly",
+    "provider: tests that import OpenAI/Anthropic/Gemini SDKs at collection time",
 ]
 
 [tool.ruff]

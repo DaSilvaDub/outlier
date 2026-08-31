@@ -4,10 +4,10 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from .paths import LeaguePaths, league_paths
 
@@ -35,6 +35,16 @@ SERIALIZED_KEYS = (
     "schema_version",
 )
 STATUS_VALUES = {"ok", "partial", "stale", "missing", "error"}
+
+
+class _RefreshTaskResult(Protocol):
+    name: str
+    league: str
+    ok: bool
+    error: str
+    skipped: bool
+
+
 STREAM_VALUES = {"props", "games", "all"}
 ID_TYPES = {"market_id", "outcome_id", "event_id", "player_id", "global"}
 
@@ -46,6 +56,15 @@ _STATUS_TO_FEED = {
     "line_movement_status": "line_movement",
     "game_line_movement_status": "game_line_movement",
     "cards_status": "cards",
+}
+_TASK_TO_LANE = {
+    "props": ("props", "props"),
+    "games": ("games", "games"),
+    "insights": ("insights", "props"),
+    "line_movement": ("line_movement", "props"),
+    "game_line_movement": ("game_line_movement", "games"),
+    "cards": ("cards", "props"),
+    "game_cards": ("cards", "games"),
 }
 _STATUS_RANK = {"ok": 0, "partial": 1, "stale": 2, "missing": 3, "error": 4}
 
@@ -171,7 +190,9 @@ def _inspect_pair(
         if error:
             state = "missing" if error == "missing" else "error"
             states.append(state)
-            failures.append(_failure(feed, stream, "global", "*", f"{label} file {error}: {path.name}"))
+            failures.append(
+                _failure(feed, stream, "global", "*", f"{label} file {error}: {path.name}")
+            )
             continue
 
         assert payload is not None
@@ -179,14 +200,18 @@ def _inspect_pair(
             generated_at = _parse_timestamp(payload.get("generated_at"))
         except (TypeError, ValueError, OverflowError) as exc:
             states.append("error")
-            failures.append(_failure(feed, stream, "global", "*", f"{label} generated_at invalid: {exc}"))
+            failures.append(
+                _failure(feed, stream, "global", "*", f"{label} generated_at invalid: {exc}")
+            )
             continue
 
         age_seconds = (now - generated_at.astimezone(now.tzinfo)).total_seconds()
         if age_seconds < -MAX_FUTURE_SECONDS:
             states.append("error")
             failures.append(
-                _failure(feed, stream, "global", "*", f"{label} generated_at exceeds future tolerance")
+                _failure(
+                    feed, stream, "global", "*", f"{label} generated_at exceeds future tolerance"
+                )
             )
             continue
 
@@ -219,6 +244,71 @@ def _inspect_pair(
         failures=_dedupe_failures(failures),
         ages=ages,
     )
+
+
+def _overlay_task_result(
+    inspection: _Inspection,
+    result: _RefreshTaskResult,
+    *,
+    feed: str,
+    stream: str,
+) -> _Inspection:
+    """Prefer a structured producer result over inferring success from files."""
+
+    if result.skipped:
+        return inspection
+    if result.ok:
+        failures = [
+            item for item in inspection.failures if not item["reason"].startswith("status file ")
+        ]
+        status_payload = inspection.status_payload
+        state = inspection.state
+        if status_payload is None:
+            status_payload = {"status": "ok"}
+            if any("source age" in item["reason"] for item in failures):
+                state = "stale"
+            elif any(item["reason"].startswith("artifact file ") for item in failures):
+                state = inspection.state
+            else:
+                state = "ok"
+        return replace(
+            inspection,
+            status_payload=status_payload,
+            state=state,
+            failures=_dedupe_failures(failures),
+        )
+    status_payload = dict(inspection.status_payload or {})
+    status_payload["status"] = "error"
+    status_payload["error"] = result.error or "refresh task failed"
+    return replace(
+        inspection,
+        status_payload=status_payload,
+        state="error",
+        failures=_dedupe_failures(inspection.failures),
+    )
+
+
+def _inspections_with_task_results(
+    inspections: dict[str, _Inspection],
+    task_results: Sequence[_RefreshTaskResult] | None,
+    league: str,
+) -> dict[str, _Inspection]:
+    if not task_results:
+        return inspections
+    updated = dict(inspections)
+    token = league.strip().upper()
+    for result in task_results:
+        if result.league.strip().upper() != token:
+            continue
+        lane = _TASK_TO_LANE.get(result.name)
+        if lane is None:
+            continue
+        feed, stream = lane
+        key = result.name if result.name in updated else feed
+        if key not in updated:
+            continue
+        updated[key] = _overlay_task_result(updated[key], result, feed=feed, stream=stream)
+    return updated
 
 
 def _producer_state(status_payload: Mapping[str, Any] | None) -> str:
@@ -380,7 +470,9 @@ def _component(
                 _producer_failure(inspection.status_payload, feed=feed, stream=stream, state=state)
             )
     elif state != "ok":
-        failures.append(_producer_failure(inspection.status_payload, feed=feed, stream=stream, state=state))
+        failures.append(
+            _producer_failure(inspection.status_payload, feed=feed, stream=stream, state=state)
+        )
     return _Component(
         status=_combine_status(inspection.state, state),
         coverage=max(0.0, min(100.0, float(coverage))),
@@ -429,9 +521,7 @@ def _games_step_component(
     relevant_rows = [row for row in rows if str(row.get("step") or "").strip().lower() in steps]
     recognized_steps = {"matchup", "markets", "insights", "injuries"}
     unknown_rows = [
-        row
-        for row in rows
-        if str(row.get("step") or "").strip().lower() not in recognized_steps
+        row for row in rows if str(row.get("step") or "").strip().lower() not in recognized_steps
     ]
     failures = _failures_from_rows(
         relevant_rows,
@@ -455,9 +545,7 @@ def _games_step_component(
     coverage = _coverage_from_pairs(payload, count_pairs)
     raw_state = _producer_state(payload)
     has_step_contract = bool(rows) or any(
-        _number((payload or {}).get(key)) is not None
-        for pair in count_pairs
-        for key in pair
+        _number((payload or {}).get(key)) is not None for pair in count_pairs for key in pair
     )
 
     if raw_state in {"missing", "stale", "error"}:
@@ -616,6 +704,7 @@ def build_feed_health(
     league: str,
     now: datetime | None = None,
     write: bool = True,
+    task_results: Sequence[_RefreshTaskResult] | None = None,
 ) -> dict[str, Any]:
     """Build the v1 unified feed-health snapshot for one league.
 
@@ -679,6 +768,26 @@ def build_feed_health(
         stream="games",
         now=reference_now,
     )
+    overlaid = _inspections_with_task_results(
+        {
+            "props": props_inspection,
+            "games": games_inspection,
+            "insights": insights_inspection,
+            "line_movement": line_movement_inspection,
+            "game_line_movement": game_line_movement_inspection,
+            "cards": player_cards_inspection,
+            "game_cards": game_cards_inspection,
+        },
+        task_results,
+        league,
+    )
+    props_inspection = overlaid["props"]
+    games_inspection = overlaid["games"]
+    insights_inspection = overlaid["insights"]
+    line_movement_inspection = overlaid["line_movement"]
+    game_line_movement_inspection = overlaid["game_line_movement"]
+    player_cards_inspection = overlaid["cards"]
+    game_cards_inspection = overlaid["game_cards"]
 
     props = _props_component(props_inspection)
     games = _games_step_component(
@@ -838,11 +947,7 @@ def validate_feed_health(payload: Any) -> tuple[bool, list[str]]:
             reasons.append(f"{field} is {status}")
         elif status == "partial" and isinstance(raw_failures, list):
             feed = _STATUS_TO_FEED[field]
-            feed_failures = [
-                failure
-                for failure in valid_failures
-                if failure.get("feed") == feed
-            ]
+            feed_failures = [failure for failure in valid_failures if failure.get("feed") == feed]
             if not feed_failures:
                 reasons.append(f"{field} is partial without scoped IDs")
             elif any(
@@ -852,9 +957,7 @@ def validate_feed_health(payload: Any) -> tuple[bool, list[str]]:
                 reasons.append(f"{field} is partial with an unscoped failure")
 
     if coverage is not None and coverage < MIN_SAFE_COVERAGE_PCT:
-        reasons.append(
-            f"coverage_pct {coverage:.2f} is below {MIN_SAFE_COVERAGE_PCT:.0f}"
-        )
+        reasons.append(f"coverage_pct {coverage:.2f} is below {MIN_SAFE_COVERAGE_PCT:.0f}")
     return not reasons, reasons
 
 
@@ -871,7 +974,9 @@ def _row_values(row: Mapping[str, Any], id_type: str) -> set[str]:
     return values
 
 
-def matching_failures(payload: Any, stream: str, row: Mapping[str, Any] | None) -> list[dict[str, str]]:
+def matching_failures(
+    payload: Any, stream: str, row: Mapping[str, Any] | None
+) -> list[dict[str, str]]:
     """Return deterministic failures applicable to a candidate row.
 
     ``props`` and ``games`` are the serialized stream names. Common player/game
