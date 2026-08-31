@@ -15,6 +15,9 @@ Use this skill when the user wants to run the daily betting pipeline but bypasse
 Execute the pipeline in data-only mode to generate the briefing and candidates data:
 `python -m outlier_scrapers.daily_job --analysis-profile local`
 
+> [!TIP]
+> **Handling Off-Slate / Hiatus Leagues**: If a sport has no games scheduled for today (e.g., WNBA mid-season break or off-season), specify only active leagues via `--leagues <ACTIVE_LEAGUES>` (e.g., `--leagues MLB`). This prevents `projections.py` date-mismatch errors and stale feed-health rejections caused by sportsbooks posting advance lines for future dates.
+
 > [!NOTE]
 > This pipeline typically takes around **20 minutes** to complete, largely due to the MLB line-movement scraper. Set a long timer (e.g., 300-600 seconds) and do not kill the process if it appears stuck on line-movement.
 
