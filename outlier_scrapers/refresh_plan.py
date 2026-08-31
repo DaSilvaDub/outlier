@@ -120,22 +120,46 @@ def execute_refresh(
     runner: RefreshRunner | None = None,
     tasks: Sequence[RefreshTask] | None = None,
 ) -> list[RefreshTaskResult]:
-    """Run the DAG sequentially, fail-fast like the old inner loop.
-
-    Dependencies only decide order. The first required failure skips remaining
-    tasks in that league *and* does not start later leagues.
+    """Run the DAG concurrently across leagues and independent tasks.
+    
+    Independent tasks (e.g. games and props) run simultaneously.
+    If a task fails, subsequent tasks for that league are skipped,
+    but independent leagues continue.
     """
+
+    import concurrent.futures
 
     run = runner or refresh.main
     plan = ordered_tasks(tasks)
-    results: list[RefreshTaskResult] = []
-    abort_remaining_leagues = False
-    for league in leagues:
-        failed = abort_remaining_leagues
-        for task in plan:
-            if failed:
-                results.append(
-                    RefreshTaskResult(
+    
+    pending_nodes = {(league, task) for league in leagues for task in plan}
+    running_futures: dict[concurrent.futures.Future[RefreshTaskResult], tuple[str, RefreshTask]] = {}
+    completed_results: dict[tuple[str, str], RefreshTaskResult] = {}
+    
+    failed_leagues: set[str] = set()
+    
+    # 16 workers allows a full slate of independent tasks across 2 leagues to run at once.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        while pending_nodes or running_futures:
+            ready_to_submit = []
+            for league, task in pending_nodes:
+                if league in failed_leagues:
+                    ready_to_submit.append((league, task))
+                    continue
+                
+                deps_ready = True
+                for dep_name in task.depends_on:
+                    if (league, dep_name) not in completed_results:
+                        deps_ready = False
+                        break
+                if deps_ready:
+                    ready_to_submit.append((league, task))
+                    
+            for league, task in ready_to_submit:
+                pending_nodes.remove((league, task))
+                
+                if league in failed_leagues:
+                    res = RefreshTaskResult(
                         name=task.name,
                         league=league,
                         ok=False,
@@ -144,36 +168,55 @@ def execute_refresh(
                         skipped=True,
                         flag=task.flag,
                     )
+                    completed_results[(league, task.name)] = res
+                    continue
+                    
+                def _do_work(l=league, t=task) -> RefreshTaskResult:
+                    argv = ["--league", l, t.flag]
+                    if target_date:
+                        argv.extend(["--date", target_date])
+                    logger.info("Running %s for %s...", t.name.replace("_", " "), l)
+                    started = _utc_now()
+                    try:
+                        exit_code = int(run(argv))
+                        error = "" if exit_code == 0 else f"refresh {t.name} exited {exit_code}"
+                    except Exception as exc:
+                        exit_code = 1
+                        error = str(exc)[:300]
+                    finished = _utc_now()
+                    return RefreshTaskResult(
+                        name=t.name,
+                        league=l,
+                        ok=exit_code == 0,
+                        exit_code=exit_code,
+                        error=error,
+                        skipped=False,
+                        flag=t.flag,
+                        started_at=started,
+                        finished_at=finished,
+                    )
+                
+                future = executor.submit(_do_work)
+                running_futures[future] = (league, task)
+            
+            if running_futures:
+                done, _ = concurrent.futures.wait(
+                    running_futures.keys(),
+                    return_when=concurrent.futures.FIRST_COMPLETED
                 )
-                continue
-            argv = ["--league", league, task.flag]
-            if target_date:
-                argv.extend(["--date", target_date])
-            logger.info("Running %s for %s...", task.name.replace("_", " "), league)
-            started = _utc_now()
-            try:
-                exit_code = int(run(argv))
-                error = "" if exit_code == 0 else f"refresh {task.name} exited {exit_code}"
-            except Exception as exc:
-                exit_code = 1
-                error = str(exc)[:300]
-            finished = _utc_now()
-            ok = exit_code == 0
-            if not ok:
-                logger.error("Failed at step: %s for %s", task.name.replace("_", " "), league)
-                failed = True
-                abort_remaining_leagues = True
-            results.append(
-                RefreshTaskResult(
-                    name=task.name,
-                    league=league,
-                    ok=ok,
-                    exit_code=exit_code,
-                    error=error,
-                    skipped=False,
-                    flag=task.flag,
-                    started_at=started,
-                    finished_at=finished,
-                )
-            )
-    return results
+                
+                for fut in done:
+                    league, task = running_futures.pop(fut)
+                    res = fut.result()
+                    completed_results[(league, task.name)] = res
+                    if not res.ok:
+                        logger.error("Failed at step: %s for %s", task.name.replace("_", " "), league)
+                        failed_leagues.add(league)
+
+    # Return results in a stable order (original sequential iteration order)
+    final_results = []
+    for league in leagues:
+        for task in plan:
+            final_results.append(completed_results[(league, task.name)])
+            
+    return final_results
