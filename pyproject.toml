@@ -8,6 +8,7 @@ dependencies = [
     "anthropic>=0.112.0,<1",
     "google-genai>=2.10.0,<3",
     "python-dateutil>=2.9,<3",
+    "structlog>=24.1.0",
 ]
 
 [project.optional-dependencies]

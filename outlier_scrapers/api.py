@@ -10,8 +10,20 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import structlog
+
 from .auth import build_api_headers, load_storage_state
 from .redaction import shape_summary
+
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()
+    ],
+    logger_factory=structlog.stdlib.LoggerFactory(),
+)
+logger = structlog.get_logger("outlier_scrapers.api")
 
 # Provenance: fetch/retry behavior adapted from
 # C:\Users\dasil\Dev\GitHub\nba-props-pipeline\scrapers\outlier\Props_outlier_improved.py
@@ -140,11 +152,18 @@ class OutlierApiClient:
         url = self.url_for(path)
         policy = self.retry_policy
         last_error: Exception | None = None
+        
         for attempt in range(1, policy.max_retries + 1):
             request = Request(url, headers=build_api_headers(self.storage_state))
+            start_time = time.monotonic()
+            
             try:
                 with self.opener(request, timeout=policy.timeout_seconds) as response:
                     body = response.read()
+                    
+                    latency_ms = (time.monotonic() - start_time) * 1000
+                    logger.info("api_request", url=url, attempt=attempt, status_code=response.getcode(), latency_ms=latency_ms, throttled=False)
+                    
                     if body[:2] == b"\x1f\x8b":
                         body = gzip.decompress(body)
                     payload = json.loads(body.decode("utf-8"), strict=False)
@@ -153,6 +172,11 @@ class OutlierApiClient:
                     raise OutlierApiError(f"Unexpected non-object payload for {url}")
             except HTTPError as exc:
                 last_error = exc
+                
+                latency_ms = (time.monotonic() - start_time) * 1000
+                is_throttled = exc.code in (429, 403)
+                logger.warning("api_request", url=url, attempt=attempt, status_code=exc.code, latency_ms=latency_ms, throttled=is_throttled, error=str(exc))
+                
                 if exc.code == 401:
                     raise AuthRequiredError(_safe_http_error_message(exc, url)) from exc
                 if exc.code not in RETRYABLE_STATUS_CODES or attempt >= policy.max_retries:
@@ -160,6 +184,10 @@ class OutlierApiClient:
                 time.sleep(policy.delay_for(attempt))
             except (URLError, OSError) as exc:
                 last_error = exc
+                
+                latency_ms = (time.monotonic() - start_time) * 1000
+                logger.warning("api_request", url=url, attempt=attempt, status_code=0, latency_ms=latency_ms, throttled=False, error=str(exc))
+                
                 if attempt >= policy.max_retries:
                     raise OutlierApiError(f"Network error for {url}: {exc}") from exc
                 time.sleep(policy.delay_for(attempt))
