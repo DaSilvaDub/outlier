@@ -7,9 +7,8 @@ on:
     branches: [ "master" ]
 
 jobs:
-  test:
+  core:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
 
@@ -19,11 +18,43 @@ jobs:
         python-version: "3.11"
         cache: "pip"
 
-    - name: Install dependencies
+    - name: Install frozen dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -r requirements.lock
+        pip install -e .
 
-    - name: Run pytest
+    - name: Run core tests
       run: |
-        pytest
+        pytest -q \
+          --ignore=tests/test_reasoning.py \
+          --ignore=tests/test_claude_reasoning.py \
+          --ignore=tests/test_claude_synthesis.py \
+          --ignore=tests/test_gemini_research.py \
+          --ignore=tests/test_c_research.py
+
+  provider:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: "pip"
+
+    - name: Install frozen dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.lock
+        pip install -e .
+
+    - name: Run provider tests
+      run: |
+        pytest -q \
+          tests/test_reasoning.py \
+          tests/test_claude_reasoning.py \
+          tests/test_claude_synthesis.py \
+          tests/test_gemini_research.py \
+          tests/test_c_research.py
