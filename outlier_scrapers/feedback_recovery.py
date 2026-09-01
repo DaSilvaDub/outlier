@@ -186,20 +186,32 @@ def _salvage_rows_directly(
             logger.warning("Could not scan %s (schema/page corruption): %s", table, exc)
             skipped += 1
             return rows, skipped
-        resume_from = 0
+        resume_from: int | None = None
         stride = 1
         consecutive_failures = 0
         while consecutive_failures <= _MAX_SALVAGE_SKIPS:
             try:
-                cursor = conn.execute(
-                    f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
-                    f"FROM {table} WHERE rowid >= ? ORDER BY rowid",
-                    (resume_from,),
-                )
+                if resume_from is None:
+                    # An unfiltered scan enters at the leftmost leaf; a
+                    # `rowid >= ?` seek has to descend through the interior
+                    # cells instead. When those cells are the damaged part --
+                    # as in a wrecked root page -- the plain scan still
+                    # returns rows the seek cannot reach, so always start
+                    # with it and only seek to resume.
+                    cursor = conn.execute(
+                        f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
+                        f"FROM {table}"
+                    )
+                else:
+                    cursor = conn.execute(
+                        f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
+                        f"FROM {table} WHERE rowid >= ? ORDER BY rowid",
+                        (resume_from,),
+                    )
             except sqlite3.DatabaseError:
                 skipped += 1
                 consecutive_failures += 1
-                resume_from += stride
+                resume_from = (resume_from or 0) + stride
                 stride *= 2
                 continue
             exhausted = False
@@ -220,7 +232,7 @@ def _salvage_rows_directly(
                 break
             if last_rowid is None:
                 consecutive_failures += 1
-                resume_from += stride
+                resume_from = (resume_from or 0) + stride
                 stride *= 2
             else:
                 consecutive_failures = 0
