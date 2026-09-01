@@ -1,6 +1,6 @@
 # Handoff Summary
 
-**Last Product Commit SHA**: 5bb99cf981b37763f79534bf5a668cfc7e91617d
+**Last Product Commit SHA**: 51de2790c99faa575f19af5c737dc4f0b16d5bd7
 
 **Pull Request**: https://github.com/DaSilvaDub/outlier/pull/143
 
@@ -10,6 +10,9 @@
 - `outlier_scrapers/utils.py`
 - `outlier_scrapers/pack_publish.py`
 - `outlier_scrapers/runner_common.py`
+- `outlier_scrapers/claude_synthesis.py`
+- `outlier_scrapers/daily_job.py`
+- `outlier_scrapers/feed_health.py`
 - `tests/test_pack.py`
 - `tests/test_storage.py`
 
@@ -22,12 +25,14 @@
   raising after retry exhaustion instead of silently losing output.
 - Added regression coverage for lossless round trips, transaction rollback, canonical
   `candidates.csv` publication, retry success, and fail-closed retry exhaustion.
+- Repaired repository-wide MyPy/Pyright failures exposed by the first hosted typecheck run.
 
 **Validation**:
 - Focused storage/pack/identity lane: 266 passed.
 - Broad offline suite with provider credentials blank and live reasoning modules excluded:
   1,389 passed, 2 skipped.
-- Changed-file MyPy, Ruff, and `git diff --check`: clean.
+- Repository-wide MyPy and Pyright: clean.
+- Changed-file Ruff and `git diff --check`: clean.
 - Known pytest atexit-only Windows temp cleanup warning: `[WinError 5]`; pytest exited 0.
 
 **Next Steps**:
