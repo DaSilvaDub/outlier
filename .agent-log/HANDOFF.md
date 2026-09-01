@@ -1,8 +1,10 @@
 # Handoff Summary
 
-**Last Product Commit SHA**: 51de2790c99faa575f19af5c737dc4f0b16d5bd7
+**Last Product Commit SHA**: d39682cc09ecde0a3795339b815fe5441ee79957
 
-**Pull Request**: https://github.com/DaSilvaDub/outlier/pull/143
+**Pull Requests**:
+- Merged storage slice: https://github.com/DaSilvaDub/outlier/pull/143
+- Open hosted-gate follow-up: https://github.com/DaSilvaDub/outlier/pull/144
 
 **Files Touched**:
 - `outlier_scrapers/database.py`
@@ -26,6 +28,7 @@
 - Added regression coverage for lossless round trips, transaction rollback, canonical
   `candidates.csv` publication, retry success, and fail-closed retry exhaustion.
 - Repaired repository-wide MyPy/Pyright failures exposed by the first hosted typecheck run.
+- Narrowed filesystem retries to Windows sharing violations so deterministic errors fail fast.
 
 **Validation**:
 - Focused storage/pack/identity lane: 266 passed.
@@ -36,6 +39,6 @@
 - Known pytest atexit-only Windows temp cleanup warning: `[WinError 5]`; pytest exited 0.
 
 **Next Steps**:
-- Review and merge PR #143 after hosted checks pass.
+- Review and merge PR #144 after hosted checks pass.
 - Treat the legacy `feedback_db.py` SQLite-to-SQLAlchemy rewrite as a separate phase; it
   spans capture, settlement, recovery, reporting, retention, and promotion consumers.
