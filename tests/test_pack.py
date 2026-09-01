@@ -1923,6 +1923,53 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert len(dossiers) >= 2
 
 
+def test_build_pack_with_coverage_skips_a_confirmed_empty_slate_league(tmp_path, monkeypatch):
+    """One out-of-season league must not block the other league's whole pack.
+
+    build_pack_with_coverage's own per-league re-check has to apply the same
+    empty-slate leniency as the earlier gates -- otherwise a caller that
+    doesn't pre-supply feed_health_by_league (or a league missing from it)
+    still aborts the entire multi-league build.
+    """
+
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    _league_fixture(tmp_path / "data" / "MLB", "MLB")
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+
+    def fake_build_feed_health(league, **_kwargs):
+        health = _healthy_feed_health()
+        health["_league"] = league
+        return health
+
+    monkeypatch.setattr("outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health)
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.validate_feed_health",
+        lambda health: (False, ["games_status is stale"])
+        if health.get("_league") == "WNBA"
+        else (True, []),
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.league_has_confirmed_empty_slate",
+        lambda league, **_kwargs: league == "WNBA",
+    )
+
+    rows, target, games_norm, coverage = build_pack_with_coverage(["MLB", "WNBA"], None, 15, 10)
+
+    assert {r["sport"] for r in rows} == {"MLB"}
+    assert "WNBA" not in coverage
+    assert "WNBA" not in games_norm
+    assert coverage["MLB"]["emitted"] > 0
+
+
 def test_build_pack_rejects_projection_artifact_for_wrong_slate(tmp_path, monkeypatch):
     def fake_lp(lg):
         root = tmp_path / "data" / lg.upper()
@@ -2391,6 +2438,45 @@ def test_standalone_pack_health_gate_fails_closed(monkeypatch):
     monkeypatch.setattr(
         "outlier_scrapers.pack.feed_health.build_feed_health",
         lambda _league, **_kwargs: unsafe,
+    )
+
+    with pytest.raises(RuntimeError, match="MLB feed health unsafe"):
+        build_feed_health_by_league(["MLB"])
+
+
+def test_standalone_pack_health_gate_accepts_a_confirmed_empty_slate(monkeypatch):
+    """An out-of-season league must not abort pack building for every league.
+
+    build_feed_health_by_league is the gate pack.main() hits first; it has to
+    apply the same empty-slate leniency as daily_job.check_freshness, or a
+    league that's out of season fails every daily pack build forever.
+    """
+    unsafe = _healthy_feed_health()
+    unsafe["games_status"] = "stale"
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.build_feed_health",
+        lambda _league, **_kwargs: unsafe,
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: True,
+    )
+
+    health_by_league = build_feed_health_by_league(["WNBA"])
+
+    assert health_by_league == {"WNBA": unsafe}
+
+
+def test_standalone_pack_health_gate_still_fails_closed_without_confirmation(monkeypatch):
+    unsafe = _healthy_feed_health()
+    unsafe["props_status"] = "missing"
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.build_feed_health",
+        lambda _league, **_kwargs: unsafe,
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: False,
     )
 
     with pytest.raises(RuntimeError, match="MLB feed health unsafe"):
