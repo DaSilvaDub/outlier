@@ -1886,6 +1886,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         feed_health_by_league={"MLB": _healthy_feed_health(), "WNBA": _healthy_feed_health()},
         projection_records=projection_records,
     )
+    assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "opportunities.csv").exists()
     projection_lines = (out_dir / "projections.jsonl").read_text().splitlines()
     assert len(projection_lines) == 2

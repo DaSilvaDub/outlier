@@ -1,8 +1,7 @@
 import os
-from typing import Any
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATABASE_URL = os.environ.get(
     "OUTLIER_DATABASE_URL", 
@@ -17,7 +16,8 @@ except Exception:
     engine = create_engine("sqlite:///:memory:", echo=False)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 class ExtractionPayload(Base):
     """
@@ -94,6 +94,24 @@ class PackTotal(Base):
     board = Column(String)
     recommended_units_pre_news = Column(Float)
     actionable = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PackArtifact(Base):
+    """Lossless database mirror of a canonical pack artifact.
+
+    Pack schemas evolve frequently, so storing the complete row dictionaries is
+    safer than projecting them into a partial relational model. The immutable
+    files in ``packs/<date>`` remain the publication and hashing authority.
+    """
+
+    __tablename__ = "pack_artifacts"
+    __table_args__ = (UniqueConstraint("pack_date", "stream", name="uq_pack_artifact"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    pack_date = Column(String, index=True, nullable=False)
+    stream = Column(String, index=True, nullable=False)
+    payload = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class VerdictRecord(Base):

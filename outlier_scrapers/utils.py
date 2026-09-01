@@ -7,6 +7,9 @@ and event scheduling to reduce code duplication and break circular dependencies.
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -87,13 +90,70 @@ def _summary_stat_for_team(rec: dict[str, Any]) -> tuple[dict[str, Any] | None, 
     return None, "AMBIGUOUS_STATS_SIDE"
 
 
-def _write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict[str, Any]]) -> None:
-    """Write an iterable of dictionaries to a CSV file, creating parents if needed."""
+def _replace_with_retry(
+    source: Path,
+    destination: Path,
+    *,
+    retries: int,
+    delay: float,
+) -> None:
+    """Atomically replace ``destination``, retrying transient Windows file locks."""
+    if retries < 1:
+        raise ValueError("retries must be at least 1")
+    for attempt in range(retries):
+        try:
+            source.replace(destination)
+            return
+        except OSError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(delay)
+
+
+def _write_csv(
+    path: Path,
+    fieldnames: Sequence[str],
+    rows: Iterable[dict[str, Any]],
+    retries: int = 5,
+    delay: float = 0.2,
+) -> None:
+    """Atomically write CSV and fail closed if a cloud-sync lock never clears."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.stem}_tmp_", suffix=".csv"
+    )
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(tmp_fd, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        _replace_with_retry(tmp_path, path, retries=retries, delay=delay)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def safe_write_text(path: Path, content: str, retries: int = 5, delay: float = 0.2) -> None:
+    """Atomically write text and fail closed if a cloud-sync lock never clears."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.stem}_tmp_", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        _replace_with_retry(tmp_path, path, retries=retries, delay=delay)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _american_to_decimal(american: Any) -> float | None:
