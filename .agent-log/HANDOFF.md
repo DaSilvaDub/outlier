@@ -1,44 +1,29 @@
 # Handoff Summary
 
-**Last Product Commit SHA**: d39682cc09ecde0a3795339b815fe5441ee79957
-
-**Pull Requests**:
-- Merged storage slice: https://github.com/DaSilvaDub/outlier/pull/143
-- Open hosted-gate follow-up: https://github.com/DaSilvaDub/outlier/pull/144
+**Last Commit SHA**: 0b9585ee8cb5693b9bf1f34da1b448549044fd07
 
 **Files Touched**:
-- `outlier_scrapers/database.py`
-- `outlier_scrapers/storage.py`
-- `outlier_scrapers/utils.py`
-- `outlier_scrapers/pack_publish.py`
-- `outlier_scrapers/runner_common.py`
-- `outlier_scrapers/claude_synthesis.py`
-- `outlier_scrapers/daily_job.py`
-- `outlier_scrapers/feed_health.py`
-- `tests/test_pack.py`
-- `tests/test_storage.py`
+- No product-code files were edited.
+- Runtime-only local database created: `data/outlier-pipeline.sqlite3`.
 
-**What Was Done**:
-- Restored canonical pack CSVs as the immutable publication and hashing authority.
-- Added a lossless `pack_artifacts` SQLAlchemy mirror for candidates, opportunities,
-  game totals, team totals, and decisions, replaced in one database transaction.
-- Preserved compatibility reads for rows written by the earlier partial relational migration.
-- Made CSV and text artifact writes atomic, retrying transient Windows/OneDrive locks and
-  raising after retry exhaustion instead of silently losing output.
-- Added regression coverage for lossless round trips, transaction rollback, canonical
-  `candidates.csv` publication, retry success, and fail-closed retry exhaustion.
-- Repaired repository-wide MyPy/Pyright failures exposed by the first hosted typecheck run.
-- Narrowed filesystem retries to Windows sharing violations so deterministic errors fail fast.
-
-**Validation**:
-- Focused storage/pack/identity lane: 266 passed.
-- Broad offline suite with provider credentials blank and live reasoning modules excluded:
-  1,389 passed, 2 skipped.
-- Repository-wide MyPy and Pyright: clean.
-- Changed-file Ruff and `git diff --check`: clean.
-- Known pytest atexit-only Windows temp cleanup warning: `[WinError 5]`; pytest exited 0.
+**Pipeline Run (2026-09-01)**:
+- Canonical sync passed with `REPORT STATUS: OK` and `RUN-NONCE: fcf06540a045472d`.
+- Standard local pipeline exited 1. The feedback SQLite ledger reported
+  `database disk image is malformed`; concurrent extraction writes then failed
+  because the Postgres fallback uses per-connection in-memory SQLite.
+- Retried with file-backed `OUTLIER_DATABASE_URL` and skipped the already-broken
+  feedback collection/maintenance steps. MLB games (6,857), MLB props (511),
+  MLB insights (3,048), and WNBA props (516) refreshed successfully, but MLB and
+  WNBA projections exported zero records, so the refresh DAG still exited 1.
+- A saved-feed pack fallback failed closed because MLB feed health was unsafe:
+  oldest source age 21.63h and stale props, line movement, game-line movement,
+  and cards inputs. No `packs/2026-09-01` publication was created.
+- Paid reasoning/desk providers were not invoked.
 
 **Next Steps**:
-- Review and merge PR #144 after hosted checks pass.
-- Treat the legacy `feedback_db.py` SQLite-to-SQLAlchemy rewrite as a separate phase; it
-  spans capture, settlement, recovery, reporting, retention, and promotion consumers.
+- Repair or safely recover `calibration/feedback.sqlite3` before normal result
+  collection, CLV maintenance, retention, or blend refitting.
+- Fix the local extraction-storage fallback so concurrent workers share a
+  file-backed initialized database when Postgres is unavailable.
+- Investigate zero-record projections and stale MLB line/card stages, then rerun
+  the standard local pipeline without bypassing pack feed-health gates.
