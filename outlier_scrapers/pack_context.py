@@ -6,6 +6,7 @@ row-selection or sizing logic lives here.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from outlier_scrapers import feed_health
@@ -213,6 +214,15 @@ def build_feed_health_by_league(leagues: Sequence[str]) -> dict[str, dict[str, A
         health = feed_health.build_feed_health(league, write=True)
         safe, reasons = feed_health.validate_feed_health(health)
         if not safe:
-            raise RuntimeError(f"{league} feed health unsafe: {'; '.join(reasons)}")
+            # An out-of-season league is unsafe by this gate's own math every
+            # single day (see league_has_confirmed_empty_slate), and this is
+            # the first gate pack.main() hits -- raising here fails the
+            # entire multi-league pack build, not just the empty league.
+            if feed_health.league_has_confirmed_empty_slate(
+                league, now=datetime.now(timezone.utc)
+            ):
+                pass
+            else:
+                raise RuntimeError(f"{league} feed health unsafe: {'; '.join(reasons)}")
         health_by_league[league] = health
     return health_by_league
