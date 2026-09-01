@@ -1,5 +1,6 @@
 import json
 import math
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -686,3 +687,74 @@ def test_wnba_gamelog_parser_reads_points_rebounds_and_assists_aliases():
     }
 
 
+
+
+def _props_file(tmp_path, monkeypatch, *, generated_at: str, slate_date: str):
+    from outlier_scrapers.paths import LeaguePaths
+
+    fake_paths = LeaguePaths(
+        league="WNBA",
+        root=tmp_path,
+        raw=tmp_path / "raw",
+        normalized=tmp_path / "normalized",
+        reports=tmp_path / "reports",
+    )
+    fake_paths.ensure()
+    payload = {
+        "generated_at": generated_at,
+        "league": "WNBA",
+        "record_count": 1,
+        "records": [
+            {
+                "league": "WNBA",
+                "event_id": "e1",
+                "player": "Someone",
+                "market": "PTS",
+                "line": "10.5",
+                "event_starts_at": f"{slate_date}T23:00:00+00:00",
+            }
+        ],
+    }
+    fake_paths.props_normalized_latest().write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
+    return fake_paths
+
+
+def test_export_projections_skips_a_current_feed_with_no_slate_on_the_target_date(
+    tmp_path, monkeypatch
+):
+    """No games today is not a failure.
+
+    The WNBA feed refreshes fine out of season and carries only future
+    playoff dates. Treating that as an error aborts the whole refresh DAG and
+    blocks the MLB pack, which is what happened on 2026-09-01.
+    """
+    now = datetime.now().astimezone()
+    _props_file(
+        tmp_path,
+        monkeypatch,
+        generated_at=now.isoformat(),
+        slate_date=(now.date() + timedelta(days=16)).isoformat(),
+    )
+
+    status = export_projections("WNBA", target_date=now.date().isoformat())
+
+    assert status["status"] == "skipped"
+    assert status["record_count"] == 0
+    assert "slate" in status["reason"]
+
+
+def test_export_projections_still_errors_when_the_props_feed_is_stale(tmp_path, monkeypatch):
+    """The stale-feed guard is the thing that catches a broken producer."""
+    now = datetime.now().astimezone()
+    _props_file(
+        tmp_path,
+        monkeypatch,
+        generated_at=(now - timedelta(hours=30)).isoformat(),
+        slate_date=(now.date() - timedelta(days=1)).isoformat(),
+    )
+
+    status = export_projections("WNBA", target_date=now.date().isoformat())
+
+    assert status["status"] == "error"
+    assert status["record_count"] == 0

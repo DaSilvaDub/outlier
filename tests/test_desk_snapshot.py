@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -583,3 +585,67 @@ def test_publish_pass_while_daily_lock_held(tmp_path):
         ds.release_daily_lock(daily)
     assert result.publication_id
     assert not daily.exists()
+
+
+def test_daily_lock_is_reclaimed_when_the_directory_has_no_owner(tmp_path, monkeypatch):
+    """An ownerless lock directory cannot belong to a live job.
+
+    A crashed or interrupted run -- or a directory removal the filesystem
+    refused -- leaves `.daily_job_lock` behind with no owner.json. Nothing
+    can then release it, because release compares against the current pid, so
+    every later daily run fails with "another daily job running" forever.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    # Older than the grace period that protects a lock mid-acquisition.
+    stale = time.time() - ds.DAILY_LOCK_OWNERLESS_GRACE.total_seconds() - 5
+    os.utime(stranded, (stale, stale))
+
+    acquired = ds.acquire_daily_lock(pack_dir)
+    try:
+        assert acquired == stranded
+        assert ds._read_daily_owner(acquired)["pid"] == os.getpid()
+    finally:
+        ds.release_daily_lock(acquired)
+    assert not stranded.exists()
+
+
+def test_daily_lock_is_reclaimed_from_a_dead_owner(tmp_path, monkeypatch):
+    """The daily lock is pid-scoped, so a dead owner can never release it."""
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    ds._write_daily_owner(stranded, pid=os.getpid() + 1, depth=1)
+    monkeypatch.setattr(ds, "_pid_is_running", lambda pid: False)
+
+    acquired = ds.acquire_daily_lock(pack_dir)
+    try:
+        assert ds._read_daily_owner(acquired)["pid"] == os.getpid()
+    finally:
+        ds.release_daily_lock(acquired)
+
+
+def test_daily_lock_is_not_stolen_from_a_live_owner(tmp_path, monkeypatch):
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    ds._write_daily_owner(stranded, pid=os.getpid() + 1, depth=1)
+    monkeypatch.setattr(ds, "_pid_is_running", lambda pid: True)
+
+    with pytest.raises(ds.LockBusy):
+        ds.acquire_daily_lock(pack_dir, retries=1)
+
+
+def test_daily_lock_is_not_stolen_while_the_owner_is_still_being_written(tmp_path):
+    """mkdir and owner.json are not atomic together; a just-created lock is fresh."""
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+
+    with pytest.raises(ds.LockBusy):
+        ds.acquire_daily_lock(pack_dir, retries=1)

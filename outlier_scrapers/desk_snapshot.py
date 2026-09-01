@@ -32,6 +32,9 @@ WRITER_LOCK_NAME = ".writer_lock"
 DAILY_LOCK_NAME = ".daily_job_lock"
 HISTORY_KEEP = 20
 STALE_LOCK_AFTER = timedelta(minutes=30)
+# mkdir and the owner file are two steps, so a lock with no owner yet may
+# simply be mid-acquisition. Past this grace it is abandoned, not young.
+DAILY_LOCK_OWNERLESS_GRACE = timedelta(seconds=30)
 DEFAULT_RETENTION_AGE = timedelta(days=7)
 PREVIEW_BANNER = (
     "NON-AUTHORITATIVE latest_preview — desk_snapshot.json is the source of truth."
@@ -254,6 +257,25 @@ def _write_daily_owner(lock_dir: Path, *, pid: int, depth: int) -> None:
     )
 
 
+def _daily_lock_is_abandoned(lock_dir: Path, owner: dict[str, Any] | None) -> bool:
+    """Whether a held daily lock can no longer belong to a live job.
+
+    This lock is pid-scoped -- ``release_daily_lock`` only removes it for the
+    owning process -- so a holder that died takes it to the grave, and every
+    later daily run fails with "another daily job running" until someone
+    deletes the directory by hand. Two states are recoverable: an owner whose
+    process is gone, and a directory with no owner at all (a crash between
+    ``mkdir`` and the owner write, or a removal the filesystem refused).
+    """
+    if owner is None:
+        return _now() - _dir_mtime(lock_dir) >= DAILY_LOCK_OWNERLESS_GRACE
+    try:
+        owner_pid = int(owner.get("pid") or 0)
+    except (TypeError, ValueError):
+        return True
+    return not _pid_is_running(owner_pid)
+
+
 def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
     lock_dir = daily_lock_dir(pack_dir)
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +291,9 @@ def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
                 depth = int(owner.get("depth") or 1) + 1
                 _write_daily_owner(lock_dir, pid=pid, depth=depth)
                 return lock_dir
+            if _daily_lock_is_abandoned(lock_dir, owner):
+                _rmdir_lock(lock_dir)
+                continue
             time.sleep(0.05 * (attempt + 1))
     raise LockBusy("another daily job is in progress (packs/.daily_job_lock)")
 
