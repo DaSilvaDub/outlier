@@ -709,6 +709,46 @@ def _paths_for(league: str) -> LeaguePaths:
     return league_paths(league)
 
 
+def league_has_confirmed_empty_slate(league: str, *, now: datetime) -> bool:
+    """Whether the games producer's own current-run status confirms zero
+    scheduled events for this league today.
+
+    games.py deliberately preserves the last real games_normalized_latest.json
+    snapshot rather than overwrite it with an empty one on a zero-event day
+    (see ``_should_preserve_previous_latest``), so that *artifact*'s age keeps
+    growing for as long as the league has nothing scheduled -- indefinitely,
+    for an out-of-season league. Reading that age as staleness cascades into
+    the games/insights/injuries components and their coverage math, failing
+    the safety gate every single day for a producer that is working exactly
+    as designed.
+
+    The producer's own status file, written fresh on every run regardless of
+    whether it found games, is the trustworthy signal instead. It is trusted
+    here only when it is itself fresh: a stale or missing status proves the
+    check hasn't run recently, not that today is empty.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    paths = _paths_for(league)
+    payload, error = _read_object(paths.reports / "games_status_latest.json")
+    if error or payload is None:
+        return False
+    if payload.get("status") != "ok":
+        return False
+    if _number(payload.get("target_event_count")) != 0:
+        return False
+    try:
+        generated_at = _parse_timestamp(payload.get("generated_at"))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    age_seconds = (now - generated_at.astimezone(now.tzinfo)).total_seconds()
+    future_tolerance_seconds = MAX_FUTURE_SECONDS
+    if age_seconds < -future_tolerance_seconds:
+        return False
+    age_hours = max(0.0, age_seconds / 3600.0)
+    return age_hours <= MAX_SOURCE_AGE_HOURS
+
+
 def build_feed_health(
     league: str,
     now: datetime | None = None,

@@ -433,6 +433,11 @@ def test_check_freshness_rejects_unsafe_unified_health(monkeypatch, field, value
     monkeypatch.setattr(
         daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
     )
+    monkeypatch.setattr(
+        daily_job.feed_health,
+        "league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: False,
+    )
 
     assert not daily_job.check_freshness(["MLB"])
 
@@ -446,6 +451,47 @@ def test_check_freshness_rejects_malformed_source(monkeypatch):
     monkeypatch.setattr(daily_job.feed_health, "build_feed_health", fail)
 
     assert not daily_job.check_freshness(["MLB"])
+
+
+def test_check_freshness_accepts_a_league_with_a_confirmed_empty_slate(monkeypatch):
+    """An out-of-season league flagging unsafe must not abort the whole run.
+
+    games.py preserves the last real games_normalized_latest.json on a
+    zero-event day rather than overwrite it with an empty one, so its age
+    grows without bound for a league that legitimately has nothing scheduled.
+    That alone must not fail the daily gate -- but a leaguethat DOES have a
+    slate and is genuinely unhealthy still must.
+    """
+    _require_daily_job()
+    health = _healthy_feed_health()
+    health["games_status"] = "stale"
+    health["coverage_pct"] = 85.71
+    monkeypatch.setattr(
+        daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        daily_job.feed_health, "league_has_confirmed_empty_slate", lambda _league, **_kwargs: True
+    )
+
+    assert daily_job.check_freshness(["WNBA"])
+
+
+def test_check_freshness_still_rejects_unsafe_health_without_a_confirmed_empty_slate(
+    monkeypatch,
+):
+    _require_daily_job()
+    health = _healthy_feed_health()
+    health["games_status"] = "stale"
+    monkeypatch.setattr(
+        daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        daily_job.feed_health,
+        "league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: False,
+    )
+
+    assert not daily_job.check_freshness(["WNBA"])
 
 
 def test_writer_lock_conflict_prevents_every_pipeline_mutation(monkeypatch):
