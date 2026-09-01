@@ -1,15 +1,23 @@
-# Session Handoff
+# Handoff Summary
 
-## Last Commit
-3a987e3136d5545a7f36663e165fc47ec55986a7
+**Last Commit SHA**: a7b2aad9ab928e4d98188c6c7f50c998de48b86f
 
-## PR
-https://github.com/DaSilvaDub/outlier/pull/140
+**Files Touched**: 
+- outlier_scrapers/database.py
+- outlier_scrapers/storage.py
+- outlier_scrapers/props.py
+- outlier_scrapers/runner_common.py
+- outlier_scrapers/pack_publish.py
+- outlier_scrapers/line_movement.py
+- tests/test_pack.py
 
-## Files Touched
-- `outlier_scrapers/claude_synthesis.py`: Added `chunk_upstream_envelopes` to partition upstream records into chunks of 30, strictly grouped by `event_id` to ensure Claude evaluates same-game correlation without breaking context boundaries. Replaced single `call_claude` call with a threaded MapReduce execution model that aggregates the resulting `ReconciliationEnvelope`s into a single output file.
+**What was done**: 
+- Intercepted reads/writes for games_normalized_latest.json and props_normalized_latest.json directly routing to PostgreSQL via storage.py.
+- Shifted candidates.csv storage away from files to PostgreSQL.
+- Disabled disk writes for candidates.csv in pack_publish.py.
+- Adjusted validation logic (runner_common.py) and test suites (test_pack.py) to gracefully fallback to legacy CSVs while preventing [WinError 32] via direct Postgres queries.
 
-## Next Steps
-- The MapReduce Phase E chunking optimization is successfully implemented and passing all tests!
-- The pipeline should now linearly scale and easily accommodate the projected 5x volume target.
-- The next agent should refer to the remaining tasks on the `pipeline_analysis.md` roadmap.
+**Next Steps**: 
+- Migrate the remaining CSV files (game_totals.csv, team_totals.csv, decisions.csv, opportunities.csv) in write_pack to PostgreSQL.
+- Perform the final migration step: Rewrite the legacy SQLite integration in feedback_db.py to use SQLAlchemy / Postgres directly.
+
