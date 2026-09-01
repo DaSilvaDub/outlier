@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from outlier_scrapers.props import enrich_schedule_for_props
 
 
@@ -139,3 +142,39 @@ def test_props_status_persists_schedule_event_fetch_denominator(tmp_path, monkey
         )
     )
     assert persisted == status
+
+
+def test_export_props_writes_normalized_latest_file(tmp_path, monkeypatch):
+    """The `_latest.json` file is what feed health, line movement and projections read.
+
+    A database mirror does not replace it: nothing in the pipeline reads the
+    mirror back, so dropping this write silently freezes every downstream
+    consumer on the previous slate.
+    """
+    from outlier_scrapers import paths as paths_module
+    from outlier_scrapers import props as props_module
+    from outlier_scrapers import storage as storage_module
+
+    monkeypatch.setattr(paths_module, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage_module, "save_extraction", lambda *a, **k: None)
+    monkeypatch.setattr(
+        props_module,
+        "build_normalized_payload",
+        lambda **kwargs: {"date": "2026-09-01", "record_count": 2, "records": [{}, {}]},
+    )
+
+    class Client:
+        def fetch_schedule(self, league):
+            return {"events": []}
+
+        def fetch_player_props(self, league):
+            return {"props": []}
+
+        def url_for(self, path):
+            return f"https://example.invalid{path}"
+
+    status = props_module.export_props_for_league(Client(), "MLB")
+
+    normalized_latest = Path(status["normalized_latest"])
+    assert normalized_latest.exists(), "status reports a file the exporter never wrote"
+    assert json.loads(normalized_latest.read_text(encoding="utf-8"))["record_count"] == 2

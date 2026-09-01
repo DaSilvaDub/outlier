@@ -58,7 +58,14 @@ REFRESH_TASKS: tuple[RefreshTask, ...] = (
     RefreshTask(name="insights", flag="--insights"),
     RefreshTask(name="games", flag="--games"),
     RefreshTask(name="probable_pitchers", flag="--probable-pitchers", depends_on=("games",)),
-    RefreshTask(name="projections", flag="--projections"),
+    # Projections read props_normalized_latest() and the probable-pitcher
+    # lookup. Without these edges they run alongside their producers and
+    # project the previous slate, which fails the slate-date check.
+    RefreshTask(
+        name="projections",
+        flag="--projections",
+        depends_on=("props", "probable_pitchers"),
+    ),
     RefreshTask(name="line_movement", flag="--line-movement", depends_on=("props",)),
     RefreshTask(
         name="game_line_movement",

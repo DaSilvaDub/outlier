@@ -2181,3 +2181,154 @@ def test_totals_edge_bucket_report_monotonic_verdict_with_enough_samples():
     report = feedback.totals_edge_bucket_report(rows)
     assert report["monotonic_above_market"] is True
     assert report["monotonic_below_market"] is None
+
+
+def _corrupt_child_pointers(db_path: Path, table: str, cell_count: int = 3) -> None:
+    """Point a few interior-page child pointers past the end of the file.
+
+    This reproduces the exact signature the production ledger failed with
+    ("Tree N page N cell N: invalid page number ..."): one subtree of the
+    table b-tree becomes unreadable while every other subtree stays intact.
+    """
+    import struct
+
+    conn = sqlite3.connect(db_path)
+    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+    root = conn.execute(
+        "SELECT rootpage FROM sqlite_schema WHERE name = ?", (table,)
+    ).fetchone()[0]
+    conn.close()
+
+    data = bytearray(db_path.read_bytes())
+    offset = (root - 1) * page_size
+    assert data[offset] == 0x05, "expected a table-interior root page to corrupt"
+    cells = struct.unpack(">H", data[offset + 3 : offset + 5])[0]
+    first = cells // 2
+    for index in range(first, min(first + cell_count, cells)):
+        pointer = struct.unpack(">H", data[offset + 12 + 2 * index : offset + 14 + 2 * index])[0]
+        struct.pack_into(">I", data, offset + pointer, page_count + 9000 + index)
+    db_path.write_bytes(bytes(data))
+
+
+def test_recover_corrupted_database_resumes_past_a_damaged_subtree(tmp_path):
+    """A damaged page must cost its own rows, not every row that follows it.
+
+    A single sequential SELECT gives up at the first unreadable page, which on
+    a real ledger discarded the overwhelming majority of still-readable rows.
+    Recovery has to seek back into the table below the damaged subtree and
+    keep going.
+    """
+    total = 4000
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(source_db)
+    conn = sqlite3.connect(source_db)
+    conn.executemany(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                f"s{index:06d}",
+                "2026-01-01T00:00:00+00:00",
+                "MLB",
+                f"e{index}",
+                f"m{index}",
+                f"o{index}",
+                "selection" + "x" * 120,
+                "1",
+                "1",
+                "BOOK",
+                "2026-01-01T01:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            for index in range(total)
+        ],
+    )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+    conn.close()
+
+    corrupted_path = tmp_path / "feedback.sqlite3.corrupted"
+    corrupted_path.write_bytes(source_db.read_bytes())
+    _corrupt_child_pointers(corrupted_path, "market_snapshots")
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(corrupted_path, output_path)
+
+    assert stats.market_snapshots >= int(total * 0.9), (
+        f"only {stats.market_snapshots} of {total} rows survived; recovery stopped "
+        "at the damaged subtree instead of resuming past it"
+    )
+    assert stats.market_snapshots < total, "the damaged subtree's own rows are not recoverable"
+
+    conn = sqlite3.connect(output_path)
+    tail = conn.execute(
+        "SELECT COUNT(*) FROM market_snapshots WHERE snapshot_id > 's003500'"
+    ).fetchone()[0]
+    conn.close()
+    assert tail > 0, "no rows from beyond the damaged subtree were recovered"
+
+
+def test_recover_corrupted_database_does_not_emit_orphaned_decisions(tmp_path):
+    """A salvaged ledger has to satisfy the ledger's own identity invariant.
+
+    Corruption loses snapshots and the decisions that referenced them
+    independently, so a straight copy produces decisions pointing at snapshots
+    that no longer exist. `_validate_decision_snapshot_identities` then fails
+    closed on every later run -- result collection, CLV recompute, retention
+    and blend refit all refuse to start.
+    """
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(source_db)
+    conn = sqlite3.connect(source_db)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('kept', '2026-01-01T00:00:00+00:00', 'MLB', 'e1', 'm1', 'o1',
+                  'sel', '1', '1', 'B', '2026-01-01T01:00:00+00:00',
+                  '2026-01-01T00:00:00+00:00')
+        """
+    )
+    for decision_id, snapshot_id in (("d-kept", "kept"), ("d-orphan", "lost-to-corruption")):
+        conn.execute(
+            """
+            INSERT INTO decisions (decision_id, snapshot_id, created_at, updated_at)
+            VALUES (?, ?, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            """,
+            (decision_id, snapshot_id),
+        )
+    conn.execute(
+        """
+        INSERT INTO settlements (
+            settlement_id, decision_id, snapshot_id, event_id, market_id,
+            win_loss_push, settled_at
+        ) VALUES ('s-orphan', 'gone', 'lost-to-corruption', 'e1', 'm1', 'W',
+                  '2026-01-02T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+    conn.close()
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(source_db, output_path)
+
+    assert stats.decisions == 1, "the orphaned decision must not be carried over"
+
+    conn = sqlite3.connect(output_path)
+    feedback._validate_decision_snapshot_identities(conn)  # must not raise
+    assert conn.execute("SELECT decision_id FROM decisions").fetchall() == [("d-kept",)]
+    # A settlement is worth keeping for its own result and P&L; only the
+    # references that no longer resolve are dropped.
+    settlement = conn.execute(
+        "SELECT decision_id, snapshot_id, win_loss_push FROM settlements"
+    ).fetchall()
+    conn.close()
+    assert settlement == [(None, None, "W")]

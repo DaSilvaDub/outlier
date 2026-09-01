@@ -186,20 +186,32 @@ def _salvage_rows_directly(
             logger.warning("Could not scan %s (schema/page corruption): %s", table, exc)
             skipped += 1
             return rows, skipped
-        resume_from = 0
+        resume_from: int | None = None
         stride = 1
         consecutive_failures = 0
         while consecutive_failures <= _MAX_SALVAGE_SKIPS:
             try:
-                cursor = conn.execute(
-                    f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
-                    f"FROM {table} WHERE rowid >= ? ORDER BY rowid",
-                    (resume_from,),
-                )
+                if resume_from is None:
+                    # An unfiltered scan enters at the leftmost leaf; a
+                    # `rowid >= ?` seek has to descend through the interior
+                    # cells instead. When those cells are the damaged part --
+                    # as in a wrecked root page -- the plain scan still
+                    # returns rows the seek cannot reach, so always start
+                    # with it and only seek to resume.
+                    cursor = conn.execute(
+                        f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
+                        f"FROM {table}"
+                    )
+                else:
+                    cursor = conn.execute(
+                        f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
+                        f"FROM {table} WHERE rowid >= ? ORDER BY rowid",
+                        (resume_from,),
+                    )
             except sqlite3.DatabaseError:
                 skipped += 1
                 consecutive_failures += 1
-                resume_from += stride
+                resume_from = (resume_from or 0) + stride
                 stride *= 2
                 continue
             exhausted = False
@@ -220,7 +232,7 @@ def _salvage_rows_directly(
                 break
             if last_rowid is None:
                 consecutive_failures += 1
-                resume_from += stride
+                resume_from = (resume_from or 0) + stride
                 stride *= 2
             else:
                 consecutive_failures = 0
@@ -317,8 +329,17 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
         "settlements": 0,
     }
     try:
-        conn.execute("PRAGMA foreign_keys = OFF")
+        # Enforced, not disabled: corruption drops a parent row and its
+        # children independently, so a straight copy yields decisions and
+        # memberships pointing at snapshots that no longer exist. The ledger
+        # rejects exactly that on its next run
+        # (``_validate_decision_snapshot_identities``), which would leave the
+        # "recovered" database unusable for result collection, CLV recompute,
+        # retention and blend refitting alike.
+        conn.execute("PRAGMA foreign_keys = ON")
         now = _utc_now()
+        recovered_snapshots: set[str] = set()
+        recovered_decisions: set[str] = set()
         for row in salvaged["market_snapshots"]:
             if _insert_recovered_row(
                 conn,
@@ -328,7 +349,14 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 extra={"created_at": row.get("created_at") or now},
             ):
                 inserted["market_snapshots"] += 1
+                recovered_snapshots.add(str(row.get("snapshot_id")))
         for row in salvaged["pack_snapshot_memberships"]:
+            if str(row.get("snapshot_id")) not in recovered_snapshots:
+                logger.warning(
+                    "Skipping pack membership for unrecovered snapshot %r",
+                    row.get("snapshot_id"),
+                )
+                continue
             if _insert_recovered_row(
                 conn,
                 "pack_snapshot_memberships",
@@ -338,6 +366,13 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
             ):
                 inserted["pack_snapshot_memberships"] += 1
         for row in salvaged["decisions"]:
+            if str(row.get("snapshot_id")) not in recovered_snapshots:
+                logger.warning(
+                    "Skipping decision %r for unrecovered snapshot %r",
+                    row.get("decision_id"),
+                    row.get("snapshot_id"),
+                )
+                continue
             if _insert_recovered_row(
                 conn,
                 "decisions",
@@ -349,13 +384,22 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 },
             ):
                 inserted["decisions"] += 1
+                recovered_decisions.add(str(row.get("decision_id")))
         for row in salvaged["settlements"]:
+            # Both settlement references are nullable, and the row still
+            # carries its own event, result and P&L, so a settlement outlives
+            # a lost parent -- unlinked rather than discarded.
+            settlement = dict(row)
+            if str(settlement.get("decision_id")) not in recovered_decisions:
+                settlement["decision_id"] = None
+            if str(settlement.get("snapshot_id")) not in recovered_snapshots:
+                settlement["snapshot_id"] = None
             if _insert_recovered_row(
                 conn,
                 "settlements",
                 SETTLEMENT_FIELDS,
-                row,
-                extra={"settled_at": row.get("settled_at") or now},
+                settlement,
+                extra={"settled_at": settlement.get("settled_at") or now},
             ):
                 inserted["settlements"] += 1
         conn.commit()

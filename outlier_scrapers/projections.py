@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 
 from outlier_scrapers.utils import _local_date
@@ -1532,6 +1532,51 @@ def _row_slate_date(row: Mapping[str, object]) -> str | None:
     return _local_date(str(starts_at) if starts_at else None)
 
 
+def _feed_is_current_with_no_slate(
+    props_payload: Mapping[str, object],
+    props_rows: Sequence[Mapping[str, object]],
+    target_date: date | str | None,
+) -> bool:
+    """Whether a freshly exported props feed simply has no games that day.
+
+    Out of season, or between rounds, the feed refreshes normally and carries
+    only future slate dates. That is not a producer failure, and reporting it
+    as one aborts the whole refresh DAG -- taking the other league's pack down
+    with it. A *stale* feed carrying the wrong dates is still an error, which
+    is the case this must not swallow, so freshness is judged by the same
+    ``generated_at`` rule the line-movement stage uses.
+    """
+    if target_date is None:
+        return False
+    raw_target = target_date.isoformat() if isinstance(target_date, date) else str(target_date)
+    try:
+        target_iso = date.fromisoformat(raw_target).isoformat()
+    except ValueError:
+        return False
+
+    payload_date = props_payload.get("date")
+    if payload_date not in (None, ""):
+        try:
+            if date.fromisoformat(str(payload_date)).isoformat() == target_iso:
+                return False
+        except ValueError:
+            return False
+
+    slate_dates = {
+        slate
+        for row in props_rows
+        if isinstance(row, Mapping) and (slate := _row_slate_date(row))
+    }
+    if not slate_dates or target_iso in slate_dates:
+        return False
+
+    from .line_movement import _props_freshness
+
+    return not _props_freshness(
+        dict(props_payload), now=datetime.now().astimezone()
+    ).is_stale
+
+
 def _projection_slate_date(
     props_payload: Mapping[str, object],
     props_rows: Iterable[Mapping[str, object]],
@@ -1615,6 +1660,12 @@ def export_projections(
     props_rows = props_payload.get("records") if isinstance(props_payload, Mapping) else None
     if not isinstance(props_rows, list):
         props_rows = []
+    if _feed_is_current_with_no_slate(props_payload, props_rows, target_date):
+        return {
+            "status": "skipped",
+            "reason": f"props feed is current but has no {sport} slate on {target_date}",
+            "record_count": 0,
+        }
     try:
         artifact_date = _projection_slate_date(props_payload, props_rows, target_date)
     except ValueError as exc:

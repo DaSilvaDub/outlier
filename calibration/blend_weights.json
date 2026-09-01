@@ -1,106 +1,60 @@
 {
   "dimensions": {
-    "data_quality_tier": {
-      "HIGH": {
-        "brier_score": 0.2517742815,
-        "market_weight": 0.79959177,
-        "model_weight": 0.20040823,
-        "n": 118,
-        "raw_market_weight": 0.8940006
-      },
-      "LOW": {
-        "brier_score": 0.2367882501,
-        "market_weight": 0.24876138,
-        "model_weight": 0.75123862,
-        "n": 111,
-        "raw_market_weight": 0.20025084
-      },
-      "MEDIUM": {
-        "brier_score": 0.2301127348,
-        "market_weight": 0.12353376,
-        "model_weight": 0.87646624,
-        "n": 74,
-        "raw_market_weight": 0.0
-      }
-    },
+    "data_quality_tier": {},
     "league": {
       "MLB": {
-        "brier_score": 0.2416200814,
-        "market_weight": 0.30448426,
-        "model_weight": 0.69551574,
-        "n": 280,
-        "raw_market_weight": 0.2912236
+        "brier_score": 0.2399155225,
+        "holdout": {
+          "blended_brier": 0.2458624357,
+          "improved": true,
+          "market_only_brier": 0.2492940532,
+          "n_holdout": 50,
+          "n_train": 202,
+          "trained_market_weight": 0.27947694
+        },
+        "market_weight": 0.29585575,
+        "model_weight": 0.70414425,
+        "n": 252,
+        "raw_market_weight": 0.27048018
       }
     },
-    "market_type": {
-      "SO": {
-        "brier_score": 0.2487563516,
-        "market_weight": 0.12553846,
-        "model_weight": 0.87446154,
-        "n": 208,
-        "raw_market_weight": 0.08187809
-      },
-      "TEAM_PROP": {
-        "brier_score": 0.235006867,
-        "market_weight": 0.76930811,
-        "model_weight": 0.23069189,
-        "n": 71,
-        "raw_market_weight": 0.91341701
-      }
-    },
-    "odds_range": {
-      "+101_TO_+149": {
-        "brier_score": 0.2438779213,
-        "market_weight": 0.63888343,
-        "model_weight": 0.36111657,
-        "n": 102,
-        "raw_market_weight": 0.70083433
-      },
-      "-120_TO_-101": {
-        "brier_score": 0.2545181123,
-        "market_weight": 0.56024071,
-        "model_weight": 0.43975929,
-        "n": 82,
-        "raw_market_weight": 0.60852986
-      },
-      "-199_TO_-121": {
-        "brier_score": 0.237485418,
-        "market_weight": 0.10278009,
-        "model_weight": 0.89721991,
-        "n": 95,
-        "raw_market_weight": 0.0
-      }
-    },
+    "market_type": {},
+    "odds_range": {},
     "time_before_game": {
-      "1_TO_6H": {
-        "brier_score": 0.2438745872,
-        "market_weight": 0.36119851,
-        "model_weight": 0.63880149,
-        "n": 49,
-        "raw_market_weight": 0.32014635
-      },
       "6_TO_24H": {
-        "brier_score": 0.2452487006,
-        "market_weight": 0.57845903,
-        "model_weight": 0.42154097,
-        "n": 239,
-        "raw_market_weight": 0.59731367
+        "brier_score": 0.2438232112,
+        "holdout": null,
+        "market_weight": 0.71059391,
+        "model_weight": 0.28940609,
+        "n": 211,
+        "raw_market_weight": 0.59019824
       }
     }
   },
-  "eligible_samples": 303,
-  "generated_at": "2026-08-29T16:30:52.980638+00:00",
+  "eligible_samples": 275,
+  "generated_at": "2026-09-01T13:16:22.374622+00:00",
   "global": {
-    "brier_score": 0.2434580941,
-    "market_weight": 0.42825037,
-    "model_weight": 0.57174963,
-    "n": 303
+    "brier_score": 0.242140276,
+    "market_weight": 0.43343773,
+    "model_weight": 0.56656227,
+    "n": 275,
+    "raw_market_weight": 0.41642577
   },
-  "min_samples": 30,
-  "model_version": "blend-brier-v1-6d034c589d0a",
+  "global_holdout": {
+    "blended_brier": 0.2434599024,
+    "improved": true,
+    "market_only_brier": 0.2462814058,
+    "n_holdout": 55,
+    "n_train": 220,
+    "trained_market_weight": 0.43343773
+  },
+  "holdout_fraction": 0.2,
+  "market_weight_floor": 0.75,
+  "min_samples": 200,
+  "model_version": "blend-brier-v1-4576bb3a3d9a",
   "objective": "brier_score",
   "prior_strength": 30.0,
   "schema_version": 1,
   "status": "active",
-  "trained_through": "2026-08-28T06:54:57.128950-04:00"
+  "trained_through": "2026-08-27T19:27:00.988680-04:00"
 }
