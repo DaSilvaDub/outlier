@@ -1,23 +1,36 @@
 # Handoff Summary
 
-**Last Commit SHA**: a7b2aad9ab928e4d98188c6c7f50c998de48b86f
+**Last Product Commit SHA**: 5bb99cf981b37763f79534bf5a668cfc7e91617d
 
-**Files Touched**: 
-- outlier_scrapers/database.py
-- outlier_scrapers/storage.py
-- outlier_scrapers/props.py
-- outlier_scrapers/runner_common.py
-- outlier_scrapers/pack_publish.py
-- outlier_scrapers/line_movement.py
-- tests/test_pack.py
+**Pull Request**: https://github.com/DaSilvaDub/outlier/pull/143
 
-**What was done**: 
-- Intercepted reads/writes for games_normalized_latest.json and props_normalized_latest.json directly routing to PostgreSQL via storage.py.
-- Shifted candidates.csv storage away from files to PostgreSQL.
-- Disabled disk writes for candidates.csv in pack_publish.py.
-- Adjusted validation logic (runner_common.py) and test suites (test_pack.py) to gracefully fallback to legacy CSVs while preventing [WinError 32] via direct Postgres queries.
+**Files Touched**:
+- `outlier_scrapers/database.py`
+- `outlier_scrapers/storage.py`
+- `outlier_scrapers/utils.py`
+- `outlier_scrapers/pack_publish.py`
+- `outlier_scrapers/runner_common.py`
+- `tests/test_pack.py`
+- `tests/test_storage.py`
 
-**Next Steps**: 
-- Migrate the remaining CSV files (game_totals.csv, team_totals.csv, decisions.csv, opportunities.csv) in write_pack to PostgreSQL.
-- Perform the final migration step: Rewrite the legacy SQLite integration in feedback_db.py to use SQLAlchemy / Postgres directly.
+**What Was Done**:
+- Restored canonical pack CSVs as the immutable publication and hashing authority.
+- Added a lossless `pack_artifacts` SQLAlchemy mirror for candidates, opportunities,
+  game totals, team totals, and decisions, replaced in one database transaction.
+- Preserved compatibility reads for rows written by the earlier partial relational migration.
+- Made CSV and text artifact writes atomic, retrying transient Windows/OneDrive locks and
+  raising after retry exhaustion instead of silently losing output.
+- Added regression coverage for lossless round trips, transaction rollback, canonical
+  `candidates.csv` publication, retry success, and fail-closed retry exhaustion.
 
+**Validation**:
+- Focused storage/pack/identity lane: 266 passed.
+- Broad offline suite with provider credentials blank and live reasoning modules excluded:
+  1,389 passed, 2 skipped.
+- Changed-file MyPy, Ruff, and `git diff --check`: clean.
+- Known pytest atexit-only Windows temp cleanup warning: `[WinError 5]`; pytest exited 0.
+
+**Next Steps**:
+- Review and merge PR #143 after hosted checks pass.
+- Treat the legacy `feedback_db.py` SQLite-to-SQLAlchemy rewrite as a separate phase; it
+  spans capture, settlement, recovery, reporting, retention, and promotion consumers.
