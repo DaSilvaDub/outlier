@@ -119,6 +119,7 @@ run_explicit_refresh.last_results = []  # type: ignore[attr-defined]
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     logger.info("Checking unified feed health before building pack...")
+    reference_now = now or datetime.now(timezone.utc)
     task_results: list[refresh_plan.RefreshTaskResult] = (
         getattr(run_explicit_refresh, "last_results", []) or []
     )
@@ -140,6 +141,21 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
             all_safe = False
             continue
         if not safe:
+            # An out-of-season league is unsafe by this gate's own math every
+            # single day: games.py preserves the last real games snapshot on
+            # a zero-event day instead of overwriting it with an empty one,
+            # so that artifact's age -- and everything derived from it --
+            # never clears on its own. The producer's own fresh status is the
+            # authoritative "nothing scheduled today" signal; only that, not
+            # the stale-artifact symptom, makes this non-fatal.
+            if feed_health.league_has_confirmed_empty_slate(league, now=reference_now):
+                logger.info(
+                    "%s feed health flagged unsafe (%s) but the league has no scheduled "
+                    "games today; treating as non-fatal.",
+                    league,
+                    "; ".join(reasons),
+                )
+                continue
             logger.error("%s feed health is unsafe: %s", league, "; ".join(reasons))
             all_safe = False
         else:
