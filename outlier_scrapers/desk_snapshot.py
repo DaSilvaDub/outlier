@@ -293,6 +293,13 @@ def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
                 return lock_dir
             if _daily_lock_is_abandoned(lock_dir, owner):
                 _rmdir_lock(lock_dir)
+                if lock_dir.exists():
+                    # Windows refuses rmdir while a sync or AV filter holds the
+                    # directory, and _rmdir_lock swallows that. Abandonment is
+                    # already established, so claim the directory in place
+                    # rather than retrying a removal that will keep failing.
+                    _write_daily_owner(lock_dir, pid=pid, depth=1)
+                    return lock_dir
                 continue
             time.sleep(0.05 * (attempt + 1))
     raise LockBusy("another daily job is in progress (packs/.daily_job_lock)")

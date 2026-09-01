@@ -649,3 +649,27 @@ def test_daily_lock_is_not_stolen_while_the_owner_is_still_being_written(tmp_pat
 
     with pytest.raises(ds.LockBusy):
         ds.acquire_daily_lock(pack_dir, retries=1)
+
+
+def test_daily_lock_is_claimed_in_place_when_the_directory_cannot_be_removed(
+    tmp_path, monkeypatch
+):
+    """Windows refuses rmdir while a sync or AV filter holds the directory.
+
+    `_rmdir_lock` swallows that error, so the abandoned directory survives and
+    every retry hits FileExistsError again. Since abandonment is already
+    established, taking ownership of the directory in place is what actually
+    unblocks the run.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    stale = time.time() - ds.DAILY_LOCK_OWNERLESS_GRACE.total_seconds() - 5
+    os.utime(stranded, (stale, stale))
+    monkeypatch.setattr(ds, "_rmdir_lock", lambda lock_dir: None)
+
+    acquired = ds.acquire_daily_lock(pack_dir)
+
+    assert acquired == stranded
+    assert ds._read_daily_owner(acquired) == {"pid": os.getpid(), "depth": 1}
