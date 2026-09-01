@@ -104,7 +104,9 @@ def _replace_with_retry(
         try:
             source.replace(destination)
             return
-        except OSError:
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in {32, 33}:
+                raise
             if attempt == retries - 1:
                 raise
             time.sleep(delay)

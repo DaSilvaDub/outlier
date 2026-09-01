@@ -13,6 +13,12 @@ from outlier_scrapers.database import Base, PackArtifact
 from outlier_scrapers.utils import _write_csv, safe_write_text
 
 
+def _sharing_violation() -> PermissionError:
+    error = PermissionError(13, "sharing violation")
+    error.winerror = 32
+    return error
+
+
 @pytest.fixture
 def isolated_storage(monkeypatch):
     engine = create_engine(
@@ -113,7 +119,7 @@ def test_safe_write_text_retries_transient_replace_lock(tmp_path, monkeypatch):
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise PermissionError(32, "sharing violation")
+            raise _sharing_violation()
         return original_replace(source, target)
 
     monkeypatch.setattr(Path, "replace", flaky_replace)
@@ -128,8 +134,12 @@ def test_write_csv_fails_closed_and_preserves_previous_file(tmp_path, monkeypatc
     destination = tmp_path / "artifact.csv"
     destination.write_text("old\n", encoding="utf-8")
 
+    attempts = 0
+
     def locked_replace(source, target):
-        raise PermissionError(32, "sharing violation")
+        nonlocal attempts
+        attempts += 1
+        raise _sharing_violation()
 
     monkeypatch.setattr(Path, "replace", locked_replace)
 
@@ -143,4 +153,22 @@ def test_write_csv_fails_closed_and_preserves_previous_file(tmp_path, monkeypatc
         )
 
     assert destination.read_text(encoding="utf-8") == "old\n"
+    assert attempts == 2
     assert list(tmp_path.glob(".artifact_tmp_*.csv")) == []
+
+
+def test_safe_write_text_does_not_retry_non_sharing_errors(tmp_path, monkeypatch):
+    destination = tmp_path / "artifact.md"
+    attempts = 0
+
+    def denied_replace(source, target):
+        nonlocal attempts
+        attempts += 1
+        raise PermissionError(13, "access denied")
+
+    monkeypatch.setattr(Path, "replace", denied_replace)
+
+    with pytest.raises(PermissionError):
+        safe_write_text(destination, "new", retries=5, delay=0)
+
+    assert attempts == 1
