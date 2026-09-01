@@ -32,6 +32,11 @@ class RecoverStats:
     used_sqlite_cli: bool
 
 
+# How many consecutive blind resume attempts to make before accepting that the
+# rest of the table is unreachable. The stride doubles each time, so this
+# clears any damaged region a real file can contain long before it is spent.
+_MAX_SALVAGE_SKIPS = 64
+
 _RECOVERY_TABLE_ORDER = (
     "market_snapshots",
     "pack_snapshot_memberships",
@@ -135,12 +140,20 @@ def _open_for_salvage(source_path: Path) -> sqlite3.Connection:
 def _salvage_rows_directly(
     source_path: Path, table: str, fields: list[str]
 ) -> tuple[list[dict[str, Any]], int]:
-    """Read every row sqlite3 will still hand back before hitting corruption.
+    """Read every row sqlite3 will still hand back, resuming past damage.
 
     ``sqlite3`` raises ``DatabaseError`` once a cursor walks into a damaged
-    page; rows already yielded up to that point are real and worth keeping,
-    so the table is read one row at a time and the scan stops there instead
-    of discarding everything already recovered.
+    page. A single sequential ``SELECT`` therefore surrenders the whole
+    remainder of the table at the first bad page -- on the production ledger
+    that meant 253 of ~148,000 rows.
+
+    Corruption is almost always local to one subtree, so after a failure the
+    scan re-enters the table with a ``rowid`` seek past the rows it already
+    has. That descends the b-tree again through different interior cells and
+    picks up everything below the damaged branch. When even the seek fails,
+    the resume point advances by a doubling stride until it clears the
+    damaged region or the attempts are exhausted, which also guarantees
+    termination.
     """
     if table not in _RECOVERY_TABLE_ORDER:
         raise FeedbackError(f"Unsupported recovery table: {table!r}")
@@ -165,20 +178,54 @@ def _salvage_rows_directly(
             select_fields = [field for field in fields if field in existing_columns]
             if not select_fields:
                 return rows, skipped
-            cursor = conn.execute(f"SELECT {', '.join(select_fields)} FROM {table}")
+            # A probe read: it fails the same way a corrupt schema page or a
+            # missing rowid (WITHOUT ROWID table) would, and lets the resume
+            # loop below assume both are usable.
+            conn.execute(f"SELECT rowid, {', '.join(select_fields)} FROM {table} LIMIT 0")
         except sqlite3.Error as exc:
             logger.warning("Could not scan %s (schema/page corruption): %s", table, exc)
             skipped += 1
             return rows, skipped
-        while True:
+        resume_from = 0
+        stride = 1
+        consecutive_failures = 0
+        while consecutive_failures <= _MAX_SALVAGE_SKIPS:
             try:
-                row = cursor.fetchone()
+                cursor = conn.execute(
+                    f"SELECT rowid AS _salvage_rowid, {', '.join(select_fields)} "
+                    f"FROM {table} WHERE rowid >= ? ORDER BY rowid",
+                    (resume_from,),
+                )
             except sqlite3.DatabaseError:
                 skipped += 1
+                consecutive_failures += 1
+                resume_from += stride
+                stride *= 2
+                continue
+            exhausted = False
+            last_rowid: int | None = None
+            while True:
+                try:
+                    row = cursor.fetchone()
+                except sqlite3.DatabaseError:
+                    skipped += 1
+                    break
+                if row is None:
+                    exhausted = True
+                    break
+                record = dict(row)
+                last_rowid = record.pop("_salvage_rowid")
+                rows.append(record)
+            if exhausted:
                 break
-            if row is None:
-                break
-            rows.append(dict(row))
+            if last_rowid is None:
+                consecutive_failures += 1
+                resume_from += stride
+                stride *= 2
+            else:
+                consecutive_failures = 0
+                resume_from = last_rowid + 1
+                stride = 1
     finally:
         conn.close()
     return rows, skipped

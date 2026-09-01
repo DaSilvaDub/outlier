@@ -1887,6 +1887,7 @@ def test_end_to_end(tmp_path, monkeypatch):
         projection_records=projection_records,
     )
     assert (out_dir / "candidates.csv").exists()
+    assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "opportunities.csv").exists()
     projection_lines = (out_dir / "projections.jsonl").read_text().splitlines()
     assert len(projection_lines) == 2
