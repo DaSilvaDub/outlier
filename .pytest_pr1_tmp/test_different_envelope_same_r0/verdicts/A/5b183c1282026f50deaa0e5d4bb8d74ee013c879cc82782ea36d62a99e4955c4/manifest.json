@@ -1,0 +1,11 @@
+{
+  "files": {
+    "report_fragment.md": "65218387fa0167b0372ffe045f74c26b313c59c85fcff5f095667bf70146be1e",
+    "status_fragment.json": "1a5e10f9072a68986f6183a8e44d93099a73a621aa5e9cfa2dff5a7bff4a2d24",
+    "verdicts.json": "46c1f33a5603f803d371318ad7fe210bcbf3f3deda4c480a0cdcc31a40963cf7",
+    "violations.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "pass": "A",
+  "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "schema_version": "1.0"
+}

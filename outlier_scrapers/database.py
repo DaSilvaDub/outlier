@@ -1,6 +1,8 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON, UniqueConstraint
+from pathlib import Path
+
+from sqlalchemy import create_engine, event, Column, Integer, String, Float, DateTime, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATABASE_URL = os.environ.get(
@@ -8,12 +10,48 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres:postgres@localhost:5432/outlier"
 )
 
-# Attempt to connect to Postgres, fallback to SQLite for local tests
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FALLBACK_SQLITE_PATH = Path(
+    os.environ.get("OUTLIER_SQLITE_FALLBACK_PATH")
+    or PROJECT_ROOT / "data" / "outlier-pipeline.sqlite3"
+)
+
+
+def _create_fallback_engine():
+    """Build the local SQLite engine used when Postgres is unreachable.
+
+    File-backed rather than ``:memory:`` on purpose. An in-memory SQLite
+    database is private to a single connection, so every pooled connection --
+    and every one of the pipeline's concurrent extraction workers -- would get
+    its own empty database and silently lose the others' writes. WAL plus a
+    generous busy timeout is what lets those writers actually share the file.
+    """
+    FALLBACK_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fallback = create_engine(
+        f"sqlite:///{FALLBACK_SQLITE_PATH}",
+        echo=False,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+
+    @event.listens_for(fallback, "connect")
+    def _apply_sqlite_pragmas(dbapi_connection, _connection_record):  # pragma: no cover - driver hook
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
+
+    return fallback
+
+
+# Attempt to connect to Postgres, fallback to a shared local SQLite file.
 try:
     engine = create_engine(DATABASE_URL, echo=False)
     engine.connect().close()
 except Exception:
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    engine = _create_fallback_engine()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 class Base(DeclarativeBase):

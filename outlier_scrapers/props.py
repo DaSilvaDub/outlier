@@ -10,6 +10,7 @@ from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
 from .normalizer import build_normalized_payload
 from .paths import league_paths
 from .registry import get_sport_config, supported_leagues
+from .utils import safe_write_text
 
 
 MAX_SCHEDULE_EVENT_FETCHES = 50
@@ -141,9 +142,16 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
     )
     normalized_latest = paths.normalized / f"{config.league_id.lower()}_props_latest.json"
     normalized_archive = paths.timestamped(paths.normalized, "props")
-    from outlier_scrapers.storage import save_extraction
-    save_extraction(config.league_id, "props", "latest", normalized)
+    # The file is the contract: feed_health, line_movement and projections all
+    # read props_normalized_latest() off disk. safe_write_text writes via a
+    # temp file + retrying replace, which is what made the plain open() write
+    # fail under OneDrive locks ([WinError 32]) in the first place.
+    safe_write_text(normalized_latest, json.dumps(normalized, indent=2, ensure_ascii=False))
     write_json(normalized_archive, normalized)
+    # Best-effort database mirror; never the authority for this payload.
+    from outlier_scrapers.storage import save_extraction
+
+    save_extraction(config.league_id, "props", "latest", normalized)
 
     status = {
         "league": config.league_id,
