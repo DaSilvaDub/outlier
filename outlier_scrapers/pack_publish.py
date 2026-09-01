@@ -660,10 +660,8 @@ def write_pack(
         json.dump(sidecar, f, indent=2)
     # --- END PORTFOLIO RISK ALLOCATION ---
 
-    with open(out_dir / "candidates.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CANDIDATES_HEADER, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+    from outlier_scrapers.storage import save_candidates
+    save_candidates(out_dir.name, rows)
 
     _freeze_t30_originals(
         out_dir,

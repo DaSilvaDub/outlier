@@ -446,24 +446,29 @@ def extract_yaml_request_hash(content: str) -> str | None:
 
 
 def validate_candidates(pack_dir: Path, *, allow_empty: bool = False) -> tuple[bytes, str]:
-    """Validate candidates.csv exists and has the canonical header.
+    """Validate candidates exist either in Postgres or candidates.csv.
 
     At least one unlocked candidate is required unless an actionable totals
     board explicitly enables the header-only state.
     Also re-applies the lock filter in case events started since pack build."""
-    candidates_file = pack_dir / "candidates.csv"
-    if not candidates_file.exists():
-        raise RunnerError(f"Candidates file {candidates_file} does not exist.")
-
-    with open(candidates_file, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if header != pack.CANDIDATES_HEADER:
-            raise RunnerError("candidates.csv header does not match pack.CANDIDATES_HEADER")
-
-    with open(candidates_file, "r", encoding="utf-8") as f:
-        dict_reader = csv.DictReader(f)
-        rows = list(dict_reader)
+    from outlier_scrapers.storage import load_candidates
+    rows = load_candidates(pack_dir.name)
+    
+    if not rows:
+        candidates_file = pack_dir / "candidates.csv"
+        if not candidates_file.exists():
+            if not allow_empty:
+                raise RunnerError(f"Candidates file {candidates_file} does not exist and no DB records found.")
+        else:
+            with open(candidates_file, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header != pack.CANDIDATES_HEADER:
+                    raise RunnerError("candidates.csv header does not match pack.CANDIDATES_HEADER")
+        
+            with open(candidates_file, "r", encoding="utf-8") as f:
+                dict_reader = csv.DictReader(f)
+                rows = list(dict_reader)
 
     kept, locked = pack.drop_locked_events(rows, now=datetime.now().astimezone())
     if locked:

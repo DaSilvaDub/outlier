@@ -24,11 +24,17 @@ def load_extraction(league: str, data_type: str, date_str: str) -> dict[str, Any
     ).order_by(ExtractionPayload.id.desc()).first()
     return record.payload if record else None
 
-def save_candidates(pack_date: str, sport: str, rows: list[dict[str, Any]]) -> None:
+def save_candidates(pack_date: str, rows: list[dict[str, Any]]) -> None:
     db = next(get_db())
-    db.query(PackCandidate).filter_by(pack_date=pack_date, sport=sport).delete()
+    db.query(PackCandidate).filter_by(pack_date=pack_date).delete()
     candidates = []
     for row in rows:
+        sport = row.get("sport") or "UNKNOWN"
+        def _float_or_none(val: Any) -> float | None:
+            if val in (None, ""):
+                return None
+            return float(val)
+        
         candidates.append(PackCandidate(
             pack_date=pack_date,
             sport=sport,
@@ -40,26 +46,29 @@ def save_candidates(pack_date: str, sport: str, rows: list[dict[str, Any]]) -> N
             line=str(row.get("line")) if row.get("line") is not None else None,
             price=row.get("price"),
             book=row.get("book"),
-            market_consensus_prob=row.get("market_consensus_prob"),
-            independent_model_prob=row.get("independent_model_prob"),
-            final_blended_prob=row.get("final_blended_prob"),
-            push_prob=row.get("push_prob"),
-            edge=row.get("edge"),
+            market_consensus_prob=_float_or_none(row.get("market_consensus_prob")),
+            independent_model_prob=_float_or_none(row.get("independent_model_prob")),
+            final_blended_prob=_float_or_none(row.get("final_blended_prob")),
+            push_prob=_float_or_none(row.get("push_prob")),
+            edge=_float_or_none(row.get("edge")),
             data_quality_flags=row.get("data_quality_flags"),
             data_quality_tier=row.get("data_quality_tier"),
-            event_starts_at=row.get("event_starts_at"),
+            event_starts_at=row.get("_event_starts_at") or row.get("event_starts_at"),
             market_type=row.get("market_type"),
-            decimal_price=row.get("decimal_price"),
+            decimal_price=_float_or_none(row.get("decimal_price")),
             board=row.get("board"),
-            recommended_units_pre_news=row.get("recommended_units_pre_news"),
+            recommended_units_pre_news=_float_or_none(row.get("recommended_units_pre_news")),
             actionable=str(row.get("actionable")) if row.get("actionable") is not None else None,
         ))
     db.bulk_save_objects(candidates)
     db.commit()
 
-def load_candidates(pack_date: str, sport: str) -> list[dict[str, Any]]:
+def load_candidates(pack_date: str, sport: str | None = None) -> list[dict[str, Any]]:
     db = next(get_db())
-    records = db.query(PackCandidate).filter_by(pack_date=pack_date, sport=sport).all()
+    query = db.query(PackCandidate).filter_by(pack_date=pack_date)
+    if sport:
+        query = query.filter_by(sport=sport)
+    records = query.all()
     rows = []
     for record in records:
         rows.append({

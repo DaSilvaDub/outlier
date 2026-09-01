@@ -141,7 +141,8 @@ def export_props_for_league(client: OutlierApiClient, league: str) -> dict[str, 
     )
     normalized_latest = paths.normalized / f"{config.league_id.lower()}_props_latest.json"
     normalized_archive = paths.timestamped(paths.normalized, "props")
-    write_json(normalized_latest, normalized)
+    from outlier_scrapers.storage import save_extraction
+    save_extraction(config.league_id, "props", "latest", normalized)
     write_json(normalized_archive, normalized)
 
     status = {
