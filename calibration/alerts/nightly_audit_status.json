@@ -1,0 +1,8 @@
+﻿{
+    "status":  "failed",
+    "timestamp_utc":  "2026-09-01T03:59:38.4831548Z",
+    "message":  "python -m outlier_scrapers.feedback --db C:\\Users\\dasil\\Dev\\GitHub\\outlier\\calibration\\feedback.sqlite3 recompute-clv failed with exit code 1",
+    "learned_multiplier_promotion":  {
+
+                                     }
+}
