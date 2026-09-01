@@ -667,15 +667,55 @@ equal the set of books carrying prices — so this is not a parsing miss. **The 
 established**; candidates include line-posting timing, account entitlement, or per-book availability
 windows. It is not diagnosed here and should not be guessed at.
 
+**Follow-up survey (8 captures across 7 slates, 2026-09-01):** the sharp books did not reappear in
+any capture, and a second capture of 2026-09-05 reproduced 12 books exactly. The original 20-book
+reading has not replicated once and is treated as unreliable.
+
+| slate | days to kickoff | games | books | prices/game | sharp |
+|---|---|---|---|---|---|
+| 2026-09-04 | 3 | 5 | 12 | 859 | NONE |
+| 2026-09-05 | 4 | 30 | 12 | 628 | NONE |
+| 2026-09-05 (2nd capture) | 4 | 30 | 12 | 630 | NONE |
+| 2026-09-06 | 5 | 3 | 11 | 613 | NONE |
+| 2026-09-11 | 10 | 2 | 8 | 43 | NONE |
+| 2026-09-12 | 11 | 42 | 9 | 10 | NONE |
+| 2026-09-19 | 18 | 6 | 7 | 24 | NONE |
+| 2026-09-26 | 25 | 3 | 1 | 22 | NONE |
+
+### 14.2c The operating window: coverage collapses beyond ~5 days
+
+Per-slate book *totals* badly overstate usable coverage, in the same way the slate-count did in
+§14.2b. Moneyline coverage per **game** (median books/game):
+
+| slate | days out | games | median ML books/game | games below the 3-book consensus floor |
+|---|---|---|---|---|
+| 2026-09-04 | 3 | 5 | 12 | 0 |
+| 2026-09-05 | 4 | 30 | 12 | 0 |
+| 2026-09-06 | 5 | 3 | 11 | 0 |
+| 2026-09-11 | 10 | 2 | 8 | 1 of 2 |
+| 2026-09-12 | 11 | 42 | **1** | **36 of 42** |
+| 2026-09-19 | 18 | 6 | 2 | 4 of 6 |
+| 2026-09-26 | 25 | 3 | 1 | 3 of 3 |
+
+2026-09-12 reports 9 distinct books at slate level while its *median game* has one — the books
+concentrate on a few marquee games. Every game has *some* moneyline, so a naive "is it priced?"
+check passes on all 42 while 36 are unusable.
+
+**Operating rule: generate slate reports within ~5 days of kickoff.** Beyond that the market is not
+posted and `min_books_for_consensus = 3` correctly rejects most of the slate. This is a property of
+the market, not a defect to engineer around — a 25-day-out line from one book is not a market
+consensus and must never be devigged as though it were.
+
 Consequences, all already implemented:
 
 * The sharp-anchor devig in §3.3 is downgraded from a design assumption to a **conditional rule with
   an explicit fallback chain** and a `no_sharp_anchor` flag.
-* `cfb-analytics coverage` records books-per-capture and sharp-book presence for every ingest, so
-  the question is settled by accumulated measurement.
-* Outlier remains the **primary live market source** — 12 books, ~19k prices for a 30-game slate is
-  ample for consensus devig — but the CLV benchmark may have to be the best available price rather
-  than Pinnacle's close. CFBD `/lines` remains the historical-backfill source; Outlier has no history.
+* `cfb-analytics coverage` records books-per-capture, days-to-kickoff, prices/game and sharp-book
+  presence for every ingest, so the question stays settled by accumulated measurement.
+* Outlier remains the **primary live market source** inside the operating window — 12 books and
+  ~19k prices for a 30-game slate is ample for consensus devig — but **CLV must be measured against
+  best-available price, not a Pinnacle close**, unless sharp books reappear. CFBD `/lines` remains
+  the historical-backfill source; Outlier carries no history.
 
 Gameline propositions observed: `MONEYLINE`, `SPREAD`, `TOTAL` (ingested), plus
 `MONEYLINE_THREE_WAY`, `DOUBLE_RESULT`, `WINNING_MARGIN` (out of scope, skipped).
