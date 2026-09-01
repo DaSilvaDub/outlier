@@ -2271,3 +2271,64 @@ def test_recover_corrupted_database_resumes_past_a_damaged_subtree(tmp_path):
     ).fetchone()[0]
     conn.close()
     assert tail > 0, "no rows from beyond the damaged subtree were recovered"
+
+
+def test_recover_corrupted_database_does_not_emit_orphaned_decisions(tmp_path):
+    """A salvaged ledger has to satisfy the ledger's own identity invariant.
+
+    Corruption loses snapshots and the decisions that referenced them
+    independently, so a straight copy produces decisions pointing at snapshots
+    that no longer exist. `_validate_decision_snapshot_identities` then fails
+    closed on every later run -- result collection, CLV recompute, retention
+    and blend refit all refuse to start.
+    """
+    source_db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(source_db)
+    conn = sqlite3.connect(source_db)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, event_starts_at, created_at
+        ) VALUES ('kept', '2026-01-01T00:00:00+00:00', 'MLB', 'e1', 'm1', 'o1',
+                  'sel', '1', '1', 'B', '2026-01-01T01:00:00+00:00',
+                  '2026-01-01T00:00:00+00:00')
+        """
+    )
+    for decision_id, snapshot_id in (("d-kept", "kept"), ("d-orphan", "lost-to-corruption")):
+        conn.execute(
+            """
+            INSERT INTO decisions (decision_id, snapshot_id, created_at, updated_at)
+            VALUES (?, ?, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+            """,
+            (decision_id, snapshot_id),
+        )
+    conn.execute(
+        """
+        INSERT INTO settlements (
+            settlement_id, decision_id, snapshot_id, event_id, market_id,
+            win_loss_push, settled_at
+        ) VALUES ('s-orphan', 'gone', 'lost-to-corruption', 'e1', 'm1', 'W',
+                  '2026-01-02T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(FULL)")
+    conn.close()
+
+    output_path = tmp_path / "feedback.recovered.sqlite3"
+    stats = feedback.recover_corrupted_database(source_db, output_path)
+
+    assert stats.decisions == 1, "the orphaned decision must not be carried over"
+
+    conn = sqlite3.connect(output_path)
+    feedback._validate_decision_snapshot_identities(conn)  # must not raise
+    assert conn.execute("SELECT decision_id FROM decisions").fetchall() == [("d-kept",)]
+    # A settlement is worth keeping for its own result and P&L; only the
+    # references that no longer resolve are dropped.
+    settlement = conn.execute(
+        "SELECT decision_id, snapshot_id, win_loss_push FROM settlements"
+    ).fetchall()
+    conn.close()
+    assert settlement == [(None, None, "W")]

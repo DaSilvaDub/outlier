@@ -89,3 +89,18 @@ def test_execute_refresh_passes_date_and_league() -> None:
     results = execute_refresh(["WNBA"], target_date="2026-08-29", runner=runner, tasks=tasks)
     assert results[0].ok is True
     assert seen == [["--league", "WNBA", "--props", "--date", "2026-08-29"]]
+
+
+def test_projections_depend_on_the_feeds_they_read() -> None:
+    """Projections read props_normalized_latest() and the probable-pitcher lookup.
+
+    Declared with no dependencies they run concurrently with the producers, so
+    they read the previous slate's props and fail the slate-date check with
+    zero records -- which is what aborted the 2026-09-01 refresh.
+    """
+    from outlier_scrapers.refresh_plan import TASK_BY_NAME
+
+    assert set(TASK_BY_NAME["projections"].depends_on) >= {"props", "probable_pitchers"}
+    names = [task.name for task in ordered_tasks()]
+    assert names.index("props") < names.index("projections")
+    assert names.index("probable_pitchers") < names.index("projections")

@@ -329,8 +329,17 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
         "settlements": 0,
     }
     try:
-        conn.execute("PRAGMA foreign_keys = OFF")
+        # Enforced, not disabled: corruption drops a parent row and its
+        # children independently, so a straight copy yields decisions and
+        # memberships pointing at snapshots that no longer exist. The ledger
+        # rejects exactly that on its next run
+        # (``_validate_decision_snapshot_identities``), which would leave the
+        # "recovered" database unusable for result collection, CLV recompute,
+        # retention and blend refitting alike.
+        conn.execute("PRAGMA foreign_keys = ON")
         now = _utc_now()
+        recovered_snapshots: set[str] = set()
+        recovered_decisions: set[str] = set()
         for row in salvaged["market_snapshots"]:
             if _insert_recovered_row(
                 conn,
@@ -340,7 +349,14 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 extra={"created_at": row.get("created_at") or now},
             ):
                 inserted["market_snapshots"] += 1
+                recovered_snapshots.add(str(row.get("snapshot_id")))
         for row in salvaged["pack_snapshot_memberships"]:
+            if str(row.get("snapshot_id")) not in recovered_snapshots:
+                logger.warning(
+                    "Skipping pack membership for unrecovered snapshot %r",
+                    row.get("snapshot_id"),
+                )
+                continue
             if _insert_recovered_row(
                 conn,
                 "pack_snapshot_memberships",
@@ -350,6 +366,13 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
             ):
                 inserted["pack_snapshot_memberships"] += 1
         for row in salvaged["decisions"]:
+            if str(row.get("snapshot_id")) not in recovered_snapshots:
+                logger.warning(
+                    "Skipping decision %r for unrecovered snapshot %r",
+                    row.get("decision_id"),
+                    row.get("snapshot_id"),
+                )
+                continue
             if _insert_recovered_row(
                 conn,
                 "decisions",
@@ -361,13 +384,22 @@ def recover_corrupted_database(corrupted_path: Path, output_path: Path) -> Recov
                 },
             ):
                 inserted["decisions"] += 1
+                recovered_decisions.add(str(row.get("decision_id")))
         for row in salvaged["settlements"]:
+            # Both settlement references are nullable, and the row still
+            # carries its own event, result and P&L, so a settlement outlives
+            # a lost parent -- unlinked rather than discarded.
+            settlement = dict(row)
+            if str(settlement.get("decision_id")) not in recovered_decisions:
+                settlement["decision_id"] = None
+            if str(settlement.get("snapshot_id")) not in recovered_snapshots:
+                settlement["snapshot_id"] = None
             if _insert_recovered_row(
                 conn,
                 "settlements",
                 SETTLEMENT_FIELDS,
-                row,
-                extra={"settled_at": row.get("settled_at") or now},
+                settlement,
+                extra={"settled_at": settlement.get("settled_at") or now},
             ):
                 inserted["settlements"] += 1
         conn.commit()
