@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from outlier_scrapers.database import (
     ExtractionPayload,
@@ -48,7 +48,7 @@ def load_extraction(league: str, data_type: str, date_str: str) -> dict[str, Any
             .order_by(ExtractionPayload.id.desc())
             .first()
         )
-        return dict(record.payload) if record else None
+        return dict(cast(dict[str, Any], record.payload)) if record else None
 
 
 def _copy_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -174,7 +174,7 @@ def _load_legacy_totals(
         game_totals: list[dict[str, Any]] = []
         team_totals: list[dict[str, Any]] = []
         for record in records:
-            row = {
+            row: dict[str, Any] = {
                 "sport": record.sport,
                 "event_id": record.event_id,
                 "market_id": record.market_id,
@@ -196,8 +196,9 @@ def _load_legacy_totals(
                 "recommended_units_pre_news": record.recommended_units_pre_news,
                 "actionable": record.actionable,
             }
-            if record.team_id:
-                row["team_id"] = record.team_id
+            team_id = cast(str | None, record.team_id)
+            if team_id:
+                row["team_id"] = team_id
                 team_totals.append(row)
             else:
                 game_totals.append(row)

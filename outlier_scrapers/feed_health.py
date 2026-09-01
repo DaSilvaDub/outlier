@@ -38,11 +38,20 @@ STATUS_VALUES = {"ok", "partial", "stale", "missing", "error"}
 
 
 class _RefreshTaskResult(Protocol):
-    name: str
-    league: str
-    ok: bool
-    error: str
-    skipped: bool
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def league(self) -> str: ...
+
+    @property
+    def ok(self) -> bool: ...
+
+    @property
+    def error(self) -> str: ...
+
+    @property
+    def skipped(self) -> bool: ...
 
 
 STREAM_VALUES = {"props", "games", "all"}

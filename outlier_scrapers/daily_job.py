@@ -119,14 +119,21 @@ run_explicit_refresh.last_results = []  # type: ignore[attr-defined]
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     logger.info("Checking unified feed health before building pack...")
-    task_results = getattr(run_explicit_refresh, "last_results", []) or []
+    task_results: list[refresh_plan.RefreshTaskResult] = (
+        getattr(run_explicit_refresh, "last_results", []) or []
+    )
     all_safe = True
     for league in leagues:
         try:
-            health_kwargs = {"now": now, "write": True}
             if task_results:
-                health_kwargs["task_results"] = task_results
-            health = feed_health.build_feed_health(league, **health_kwargs)
+                health = feed_health.build_feed_health(
+                    league,
+                    now=now,
+                    write=True,
+                    task_results=task_results,
+                )
+            else:
+                health = feed_health.build_feed_health(league, now=now, write=True)
             safe, reasons = feed_health.validate_feed_health(health)
         except Exception as exc:
             logger.error("%s feed-health evaluation failed: %s", league, exc)
