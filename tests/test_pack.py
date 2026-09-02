@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from outlier_scrapers import paths as P
+from outlier_scrapers import pack
 from outlier_scrapers.pack import (
     CANDIDATES_HEADER,
     _apply_learned_stake_before_caps,
@@ -1968,6 +1969,80 @@ def test_build_pack_with_coverage_skips_a_confirmed_empty_slate_league(tmp_path,
     assert "WNBA" not in coverage
     assert "WNBA" not in games_norm
     assert coverage["MLB"]["emitted"] > 0
+
+
+def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(
+    tmp_path, monkeypatch
+):
+    """A skipped league's frozen projection artifact must not abort the pack.
+
+    build_pack_with_coverage skips a confirmed-empty-slate league before ever
+    reading its projections, but main() separately calls
+    load_projection_records(leagues, target_date) across every REQUESTED
+    league regardless of which ones were actually processed. WNBA's
+    projections file is never rewritten on an empty day (export_projections
+    treats that as skipped, not an update), so it stays dated for whatever
+    slate last actually ran -- and validating it against today's pack slate
+    raised exactly the failure seen on the real 2026-09-01 run.
+    """
+
+    def fake_lp(lg):
+        root = tmp_path / "data" / lg.upper()
+        return P.LeaguePaths(
+            league=lg.upper(),
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        )
+
+    _league_fixture(tmp_path / "data" / "MLB", "MLB")
+    wnba_normalized = tmp_path / "data" / "WNBA" / "normalized"
+    wnba_normalized.mkdir(parents=True, exist_ok=True)
+    (wnba_normalized / "wnba_projections_latest.json").write_text(
+        json.dumps({"date": "2026-08-30", "generated_at": "PROJ", "projections": []})
+    )
+    monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
+    monkeypatch.setattr("outlier_scrapers.pack_projections.paths.league_paths", fake_lp)
+    monkeypatch.setattr("outlier_scrapers.pack_publish.paths.league_paths", fake_lp)
+
+    def fake_build_feed_health(league, **_kwargs):
+        health = _healthy_feed_health()
+        health["_league"] = league
+        return health
+
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.build_feed_health", fake_build_feed_health
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.validate_feed_health",
+        lambda health: (False, ["games_status is stale"])
+        if health.get("_league") == "WNBA"
+        else (True, []),
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack_context.feed_health.league_has_confirmed_empty_slate",
+        lambda league, **_kwargs: league == "WNBA",
+    )
+    monkeypatch.setattr("outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health)
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.validate_feed_health",
+        lambda health: (False, ["games_status is stale"])
+        if health.get("_league") == "WNBA"
+        else (True, []),
+    )
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.league_has_confirmed_empty_slate",
+        lambda league, **_kwargs: league == "WNBA",
+    )
+
+    out_dir = pack.main(["--leagues", "MLB,WNBA", "--no-feedback-ledger"])
+
+    assert (out_dir / "candidates.csv").exists()
+    with open(out_dir / "candidates.csv", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows, "MLB must still have produced candidate rows"
+    assert {row["sport"] for row in rows} == {"MLB"}
 
 
 def test_build_pack_rejects_projection_artifact_for_wrong_slate(tmp_path, monkeypatch):

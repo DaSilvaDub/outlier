@@ -580,7 +580,13 @@ def main(argv: Sequence[str] | None = None) -> Path:
         **build_kwargs,
     )
     props_norm_by_league = load_props_norm_by_league(leagues)
-    projection_records = load_projection_records(leagues, target_date)
+    # A league build_pack_with_coverage skipped for a confirmed empty slate
+    # never got its rows built, and its projections artifact was never
+    # rewritten for today either (export_projections treats that day as
+    # skipped, not an update) -- so it is still dated for whatever slate last
+    # actually ran. games_norm only has entries for leagues that WERE
+    # processed, so it is also the authoritative "what to validate" set here.
+    projection_records = load_projection_records(list(games_norm), target_date)
     freshness = build_freshness_section(leagues, feed_health_by_league)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:
