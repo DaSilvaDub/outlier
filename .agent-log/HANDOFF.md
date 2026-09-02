@@ -2,6 +2,22 @@
 
 **Branch / PR**: `claude/fix-this-bd82a2` -> https://github.com/DaSilvaDub/outlier/pull/145
 
+**Canonical Rerun Attempt (2026-09-01, head `18dc909`)**:
+- Canonical sync passed after preserving the pre-existing blend timestamp:
+  `REPORT STATUS: OK`, `RUN-NONCE: 693baeadbbbd4a7f`.
+- Ran the local MLB/WNBA pipeline with file-backed extraction storage and with
+  result collection / feedback maintenance skipped. Paid reasoning stayed off.
+- Refresh exported MLB games 6,794, props 474, insights 3,210, projections 472,
+  line movement 58/29 markets, game line movement 270, probable pitchers 15,
+  cards 29, and game cards 898. WNBA props exported 516; its empty-slate
+  projections were correctly skipped under the newly merged gate fix.
+- The run exited 1 before pack build. Unified feed health rejected MLB because
+  insights age was 6.338h (>6h), and rejected WNBA for stale inputs and 85.71%
+  coverage. The existing 45-row `PARTIAL` pack predates this attempt and was not
+  overwritten or attributed to it.
+- Removed the empty stale `packs/.daily_job_lock` left by the abort and restored
+  the pre-rerun `calibration/blend_weights.json` timestamp exactly.
+
 **Pipeline Run (2026-09-01)**:
 - Canonical sync passed: `REPORT STATUS: OK`, `RUN-NONCE: 266ff636751b4850`, head `9fb67a9`.
 - `packs/2026-09-01` **published** (`EXIT=0`, profile `local`, leagues `MLB`,
