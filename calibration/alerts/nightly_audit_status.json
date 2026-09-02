@@ -1,8 +1,21 @@
 ﻿{
-    "status":  "failed",
-    "timestamp_utc":  "2026-09-01T03:59:38.4831548Z",
-    "message":  "python -m outlier_scrapers.feedback --db C:\\Users\\dasil\\Dev\\GitHub\\outlier\\calibration\\feedback.sqlite3 recompute-clv failed with exit code 1",
+    "status":  "ok",
+    "timestamp_utc":  "2026-09-02T04:04:36.1258791Z",
+    "message":  "Nightly calibration audit completed.",
     "learned_multiplier_promotion":  {
-
+                                         "status":  "NOT_READY",
+                                         "failed_gates":  [
+                                                              "minimum_settled_recommendations",
+                                                              "minimum_observation_days",
+                                                              "minimum_settlement_rate",
+                                                              "minimum_probability_coverage",
+                                                              "maximum_absolute_calibration_gap",
+                                                              "positive_roi",
+                                                              "minimum_price_coverage",
+                                                              "minimum_clv_coverage",
+                                                              "minimum_mean_price_clv",
+                                                              "required_sport_depth"
+                                                          ],
+                                         "ready_for_manual_promotion_review":  false
                                      }
 }
