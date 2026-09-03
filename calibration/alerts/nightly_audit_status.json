@@ -1,6 +1,6 @@
 ﻿{
     "status":  "ok",
-    "timestamp_utc":  "2026-09-02T04:04:36.1258791Z",
+    "timestamp_utc":  "2026-09-03T04:02:59.8544621Z",
     "message":  "Nightly calibration audit completed.",
     "learned_multiplier_promotion":  {
                                          "status":  "NOT_READY",
@@ -8,10 +8,7 @@
                                                               "minimum_settled_recommendations",
                                                               "minimum_observation_days",
                                                               "minimum_settlement_rate",
-                                                              "minimum_probability_coverage",
                                                               "maximum_absolute_calibration_gap",
-                                                              "positive_roi",
-                                                              "minimum_price_coverage",
                                                               "minimum_clv_coverage",
                                                               "minimum_mean_price_clv",
                                                               "required_sport_depth"
