@@ -1,6 +1,6 @@
 {
-  "artifact_fingerprint": "be7835ea721b",
-  "artifact_version": "stake-cal-v1-be7835ea721b",
+  "artifact_fingerprint": "27b7ffc6e74f",
+  "artifact_version": "stake-cal-v1-27b7ffc6e74f",
   "confidence_level": 0.8,
   "dimensions": {
     "data_quality_tier": {
@@ -378,7 +378,7 @@
     }
   },
   "eligible_samples": 17492,
-  "generated_at": "2026-09-03T04:02:25.496906+00:00",
+  "generated_at": "2026-09-04T04:05:22.011167+00:00",
   "global": {
     "losses": 7776.0,
     "n": 17492,
@@ -398,6 +398,6 @@
   "source_probability_column": "market_consensus_prob",
   "status": "active",
   "trained_through": "2026-09-01T09:37:25.961798-04:00",
-  "training_cutoff": "2026-09-03T04:01:55.363802+00:00",
+  "training_cutoff": "2026-09-04T04:04:45.440787+00:00",
   "uncertainty_method": "wilson_one_sided"
 }
