@@ -1,5 +1,17 @@
 # Handoff Summary
 
+**Pipeline Run (2026-09-05)**:
+- **Last Commit SHA**: `34136fd`
+- **Files Touched**: `.agent-log/HANDOFF.md`
+- **Session Work**:
+  1. Ran Step 0 canonical multi-ent verification: `REPORT STATUS: OK`, `RUN-NONCE: 009ebcc35873432f`.
+  2. Executed local daily pipeline: `python -m outlier_scrapers.daily_job --analysis-profile local` with paid reasoning strictly OFF (`exit=0`, `profile=local`, `overall=PARTIAL`).
+  3. Automatic result collection: 300 settlements updated, 1,018 CLV records corrected during feedback maintenance.
+  4. Captured 795 feedback snapshots and 795 decisions in `calibration/feedback.sqlite3`.
+  5. Published pack `packs/2026-09-05` with 33 candidate rows and written `manifest.json`.
+  6. Executed `python scripts/organize_today_run2.py` to organize replace-exports and generated 4 Master Prompts to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+- **Next Steps**: Awaiting user instruction or prompt review.
+
 **Branch / PR**: `chore/nightly-calibration-2026-09-05` -> https://github.com/DaSilvaDub/outlier/pull/150
 - **Last Commit SHA**: `558ddb4` (`chore(calibration): nightly model recalibration for 2026-09-05`)
 - **Files Touched**: `calibration/alerts/nightly_audit_status.json`, `calibration/blend_weights.json`, `calibration/stake_calibration.json`
