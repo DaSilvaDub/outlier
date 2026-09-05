@@ -48,7 +48,7 @@
     }
   },
   "eligible_samples": 327,
-  "generated_at": "2026-09-04T04:47:18.499616+00:00",
+  "generated_at": "2026-09-05T04:46:17.630178+00:00",
   "global": {
     "brier_score": 0.2429134197,
     "market_weight": 0.46211211,
