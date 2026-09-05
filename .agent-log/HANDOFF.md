@@ -1,5 +1,16 @@
 # Handoff Summary
 
+**Branch / PR**: `feat/playable-props-export-and-audit-skill` -> https://github.com/DaSilvaDub/outlier/pull/149
+- **Last Commit SHA**: `9cff252` (`feat(skills): add Playable Props export and Post-Game Slate Accuracy Audit to export-manual-outlier-packs`)
+- **Files Touched**: `.agents/skills/export-manual-outlier-packs/SKILL.md`
+- **Session Work**:
+  1. Ran the complete local daily pipeline for 2026-09-04 with paid reasoning strictly OFF (`EXIT=0`, 29 candidates, 770 decisions, `PARTIAL`).
+  2. Synthesized and organized candidate prompts and datasets to Desktop and Google Drive.
+  3. Extracted consolidated `playable_props.md` and `playable_props.csv` directly into `today` export folders.
+  4. Executed live/post-game accuracy audit querying official MLB Stats API boxscores (`hydrate=boxscore,linescore`): 4/8 (50.0%) Strikeouts hit, with Board `A_FLAGGED` going 2/3 (66.7%) and hitting top edge dog Andre Pallante U2.5 @ +134.
+  5. Codified both workflows into `export-manual-outlier-packs` skill via PR #149.
+- **Next Steps**: Merge PR #149 to master; run next daily pipeline tomorrow morning for the 2026-09-05 slate.
+
 **Branch / PR**: `claude/fix-this-bd82a2` -> https://github.com/DaSilvaDub/outlier/pull/145
 
 **Canonical Rerun Attempt (2026-09-01, head `18dc909`)**:
