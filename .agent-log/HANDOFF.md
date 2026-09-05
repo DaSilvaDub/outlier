@@ -1,5 +1,21 @@
 # Handoff Summary
 
+**Branch / PR**: `chore/nightly-calibration-2026-09-05` -> https://github.com/DaSilvaDub/outlier/pull/150
+- **Last Commit SHA**: `558ddb4` (`chore(calibration): nightly model recalibration for 2026-09-05`)
+- **Files Touched**: `calibration/alerts/nightly_audit_status.json`, `calibration/blend_weights.json`, `calibration/stake_calibration.json`
+- **Session Work**:
+  1. Ran Step 0 canonical multi-ent verification: `REPORT STATUS: OK`, `RUN-NONCE: cd6eedb445d04908`.
+  2. Executed `python -m outlier_scrapers.feedback report`: verified math metrics across 24,782 settlements / 150,581 decisions.
+     - PLAY class returned +4.87u (+2.00% ROI, +3.87% CLV).
+     - Stand-down filter successfully avoided -2,074.36u in negative EV churn.
+     - Whitelisted Pitcher Strikeouts (SO) delivered +72.68% ROI (+7.99u).
+  3. Re-tuned probability blend weights via `fit-blend`: Holdout Brier score improved from 0.2533 to 0.2463 (327 eligible samples, status `active`).
+  4. Updated stake shrinkage calibration via `fit-stake-calibration`: 17,605 eligible samples fitted, shrunk reliability factor 1.00586 (status `active`).
+  5. Verified portfolio replay via `replay-portfolio` across 2026-07-01 to 2026-12-31 without constraint breaches.
+  6. Verified 80 offline tests in `test_stake_calibration.py`, `test_feedback.py`, and `test_feedback_decomposition.py` pass cleanly.
+  7. Opened PR #150 on branch `chore/nightly-calibration-2026-09-05`.
+- **Next Steps**: Merge PR #150 into master; merge PR #149 into master.
+
 **Branch / PR**: `feat/playable-props-export-and-audit-skill` -> https://github.com/DaSilvaDub/outlier/pull/149
 - **Last Commit SHA**: `9cff252` (`feat(skills): add Playable Props export and Post-Game Slate Accuracy Audit to export-manual-outlier-packs`)
 - **Files Touched**: `.agents/skills/export-manual-outlier-packs/SKILL.md`
