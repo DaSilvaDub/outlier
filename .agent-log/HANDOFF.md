@@ -1,5 +1,36 @@
 # Handoff Summary
 
+**Automated Debug & Code-Health Review (2026-09-06)**:
+- **Last Commit SHA**: `c32820a`
+- **Branch / PR**: `claude/inspiring-fermat-3yokgm` -> https://github.com/DaSilvaDub/outlier/pull/152
+- **Files Touched**: `scripts/organize_today_run2.py`, `scripts/diagnose_so_gamelog_calibration.py`, `outlier_scrapers/refresh_plan.py`, `tests/test_organize_today_run2.py`, `tests/test_totals_model.py`
+- **Session Work**:
+  1. Step 0 canonical `report-sync.ps1` could NOT run: this was an unattended Linux
+     scheduled session with no `pwsh` and no access to the Windows checkout, so the
+     `.claude` PowerShell hooks were inert. Findings below are from the freshly cloned
+     tree at `81263f2` and should be re-confirmed against a canonical sync run.
+  2. Found and fixed silent export data loss: `organize_today_run2.safe_copy` swallowed
+     the final `OSError` with a bare `pass`, so a cloud-sync lock left the Desktop /
+     Drive `today` folder short a file while the run still reported success. It now
+     prints a WARNING to stderr and stays non-fatal. Added a regression test that was
+     verified to fail pre-fix.
+  3. Cleared the three pre-existing ruff errors previously logged here as untouched
+     (E741 in `refresh_plan.execute_refresh`, two unused imports). Zero behaviour change.
+  4. Reviewed the post-`753d470` fix set (feed-health empty-slate leniency, projections
+     skip, daily-lock reclaim, feedback salvage, `clear_derived_pack_outputs`) and found
+     no defects; the MLB whitelist, `DERIVED_PACK_OUTPUTS`/`verdicts` and desk-verdict
+     invariants all hold in code.
+  5. Paid reasoning / the AI Research Desk were NOT invoked at any point.
+- **Environment limits**: PyPI egress is blocked by this sandbox's policy, so
+  `sqlalchemy`, `openai`, `anthropic` and `google-genai` were uninstallable. 29 test
+  modules do not collect locally; the remaining subset ran 682 passed / 37 skipped with
+  the failure count unchanged from baseline (all missing-SDK import errors). `ruff` is
+  clean; local `mypy` 1.19.1 reports 3 narrowing false positives that CI's `mypy` 2.3.1
+  does not (CI on `81263f2`: "Success: no issues found in 87 source files").
+- **Next Steps**: Review and merge PR #152. Re-run `report-sync.ps1` on the canonical
+  Windows checkout before trusting any branch/worktree conclusions from this session.
+  Consider pinning `mypy` in `requirements.txt` so local and CI type checks agree.
+
 **Outlier Skill Atlas (2026-09-06)**:
 - **Last Content Commit SHA**: `0f37c7f`
 - **Branch / PR**: `feat/skill-atlas` -> https://github.com/DaSilvaDub/outlier/pull/151
