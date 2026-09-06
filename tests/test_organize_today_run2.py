@@ -266,3 +266,29 @@ def test_organize_replace_export_no_stale_leftovers(tmp_path: Path):
     assert not any(r["player"] == "HA" for r in hit_rows)
     assert any(r["player"] == "Only" for r in hit_rows)
     assert any(r["player"] == "TB" for r in hit_rows)
+
+
+def test_safe_copy_reports_a_copy_it_had_to_give_up_on(tmp_path, monkeypatch, capsys):
+    """A locked file must not abort the export, but it must not vanish silently.
+
+    ``safe_copy`` exhausts its retries and then swallows the failure so one
+    cloud-sync lock cannot take the whole run down. Without a message the run
+    reports success while the Desktop / Drive ``today`` folder is short a file.
+    """
+    src = tmp_path / "briefing.md"
+    src.write_text("payload", encoding="utf-8")
+    dst = tmp_path / "out" / "briefing.md"
+
+    def _always_locked(*_args, **_kwargs):
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(org.shutil, "copy2", _always_locked)
+    monkeypatch.setattr(org.shutil, "copyfile", _always_locked)
+    monkeypatch.setattr(org.time, "sleep", lambda _seconds: None)
+
+    org.safe_copy(src, dst, retries=2, delay=0)
+
+    assert not dst.exists()
+    err = capsys.readouterr().err
+    assert "briefing.md" in err
+    assert "WARNING" in err

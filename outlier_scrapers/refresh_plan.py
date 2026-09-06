@@ -178,11 +178,11 @@ def execute_refresh(
                     completed_results[(league, task.name)] = res
                     continue
                     
-                def _do_work(l=league, t=task) -> RefreshTaskResult:
-                    argv = ["--league", l, t.flag]
+                def _do_work(lg=league, t=task) -> RefreshTaskResult:
+                    argv = ["--league", lg, t.flag]
                     if target_date:
                         argv.extend(["--date", target_date])
-                    logger.info("Running %s for %s...", t.name.replace("_", " "), l)
+                    logger.info("Running %s for %s...", t.name.replace("_", " "), lg)
                     started = _utc_now()
                     try:
                         exit_code = int(run(argv))
@@ -193,7 +193,7 @@ def execute_refresh(
                     finished = _utc_now()
                     return RefreshTaskResult(
                         name=t.name,
-                        league=l,
+                        league=lg,
                         ok=exit_code == 0,
                         exit_code=exit_code,
                         error=error,
