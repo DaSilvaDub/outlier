@@ -673,3 +673,73 @@ def test_daily_lock_is_claimed_in_place_when_the_directory_cannot_be_removed(
 
     assert acquired == stranded
     assert ds._read_daily_owner(acquired) == {"pid": os.getpid(), "depth": 1}
+
+
+def test_a_second_breaker_cannot_steal_the_lock_the_first_just_claimed(tmp_path, monkeypatch):
+    """Breaking an abandoned lock must be one step, not rmdir-then-mkdir.
+
+    Two runs that read the same dead owner both conclude the lock is
+    abandoned. Under the old remove-and-recreate break they would both act on
+    that conclusion and both end up holding the lock -- two daily jobs writing
+    the same pack and ledger at once. Only the first claim may win.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    monkeypatch.setattr(ds, "_pid_is_running", lambda pid: pid not in (dead_pid,))
+
+    # Both processes read the lock before either acts on what it read.
+    seen_by_first = ds._read_daily_owner(stranded)
+    seen_by_second = ds._read_daily_owner(stranded)
+
+    assert ds._claim_abandoned_daily_lock(stranded, seen_by_first, pid=4101) is True
+    assert ds._claim_abandoned_daily_lock(stranded, seen_by_second, pid=4102) is False
+    assert ds._read_daily_owner(stranded)["pid"] == 4101
+
+
+def test_a_stale_break_decision_cannot_destroy_a_live_lock(tmp_path, monkeypatch):
+    """The lock can be released and legitimately re-taken mid-decision.
+
+    Breaking used to be ``rmdir`` then ``mkdir``. A run that had already
+    concluded "abandoned" went ahead and removed the directory -- by then
+    holding a *live* owner that took the lock in the gap -- and then created
+    its own, so two daily jobs wrote the same pack and ledger at once. The
+    stale conclusion must be re-checked against the lock before it is acted
+    on, and this run must come away empty-handed.
+
+    The first read returns what the run saw before the re-take; every later
+    read sees what is actually on disk.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    lock = ds.daily_lock_dir(pack_dir)
+    lock.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    live_pid = os.getpid() + 2
+    monkeypatch.setattr(ds, "_pid_is_running", lambda pid: pid == live_pid)
+
+    # On disk the lock is held, live, by another run.
+    ds._write_daily_owner(lock, pid=live_pid, depth=1)
+
+    real_read = ds._read_daily_owner
+    reads: list[int] = []
+
+    def _read_once_stale(lock_dir):
+        reads.append(1)
+        if len(reads) == 1:
+            return {"pid": dead_pid, "depth": 1}
+        return real_read(lock_dir)
+
+    monkeypatch.setattr(ds, "_read_daily_owner", _read_once_stale)
+
+    with pytest.raises(ds.LockBusy):
+        ds.acquire_daily_lock(pack_dir, retries=2)
+
+    assert real_read(lock)["pid"] == live_pid
+    # Nothing was left behind that would block the real owner's release.
+    monkeypatch.setattr(ds, "_read_daily_owner", real_read)
+    ds._rmdir_lock(lock)
+    assert not lock.exists()
