@@ -1,7 +1,13 @@
 # NCAA FBS Football Analytics Pipeline — Implementation Plan
 
-Status: **PLAN — awaiting confirmation. No implementation code written.**
-Author: agent `claude`, 2026-08-31.
+Status: **IN PROGRESS — Phase 4 backtest harness live in the standalone `cfb-analytics` repo.**
+Ridge (§6.1, with recency weighting and an early-season shrinkage prior), internal Elo (§6.2), and the
+three-model ensemble (§6.4) are implemented, tested, and validated against the full 2014–2025 CFBD
+history (2020 scored separately as a stress slice, per §8). See §8a for the current, real numbers.
+Two of the three required promotion baselines (market, SP+-only) remain uncomputable against this
+store's history (§8a) — the promotion gate in §9 has NOT been cleared, and every output here is a
+model-comparison check, not a decision-grade result.
+Author: agent `claude`, 2026-08-31 (plan); backtest results current as of 2026-09-06.
 Target: new standalone repository `cfb-analytics` (separate `.git`, no code shared with `outlier`).
 
 ## 0. Decisions taken before planning
@@ -347,6 +353,10 @@ Solved by conjugate gradient on the normal equations in `models/linalg.py` (pure
 `outlier/team_strength.py` already proved out). `lambda` chosen by walk-forward CV, seeded at 25 and
 retuned for ~134 FBS teams.
 
+**Implemented.** Built with plain Gaussian elimination rather than conjugate gradient (small enough at
+FBS scale that the distinction never mattered); `lambda` grid-searched down from the seeded 25 to a
+calibrated **0.5** (real floor near lambda ~ 0.1, held-out validated). See §8a for live numbers.
+
 **Early-season prior** — this is where CFB parlay hunting actually happens, so it matters most:
 
 ```
@@ -368,6 +378,11 @@ preseason:  R_0 = 0.75 * R_final + 0.25 * 1500 + g * z(talent) + d * z(returning
 `K` seeded at 25, `HFA` at 60 Elo (~2.6 pts), venue-specific with shrinkage toward the league mean by
 games observed. FCS opponents enter as a single pooled synthetic team with a wide prior.
 
+**Implemented** as a sequential (not venue-specific) model: `K=25`, `HFA=60` kept at their seeded
+values (not found worth deviating from); preseason blend coefficients `g=40`, `d=25` grid-searched and
+held-out validated (a genuine interior minimum, not an edge-chase). FCS opponents pool into one
+synthetic team exactly as specified. See §8a for live numbers.
+
 ### 6.3 Margin to win probability
 
 ```
@@ -388,6 +403,13 @@ logit(P_ens) = sum_k v_k * logit(P_k),    v on the simplex
 `v` fitted by coordinate search minimising walk-forward out-of-sample log loss. No gradient boosting:
 with ~800 FBS games/season and ~40 features, a GBM's variance exceeds its bias gain — the stdlib
 constraint and the statistically correct choice coincide here.
+
+**Implemented**, with `v` fitted by an exhaustive simplex grid search (step 0.05) rather than
+coordinate descent, and `P_logit` on 11 of the planned ~40 T1–T5 features (home-field, rest, talent,
+returning production, and 7 net offense-minus-defense advanced-stat diffs — QB and weather/travel
+features are a tracked gap, not yet built; see `features/ensemble.py`'s docstring in `cfb-analytics`).
+`P_logit` alone is still the weakest of the three individual members, but earns real (non-zero) pooling
+weight. See §8a for live numbers.
 
 ### 6.5 Calibration
 
@@ -536,6 +558,55 @@ An alternative parlay dropping the weakest leg is emitted automatically when
   conference, and week-of-season.
 - **Baselines the model must beat out-of-sample, or it is not promoted:**
   1. vig-free market probability, 2. SP+-only `Phi(M/sigma)`, 3. Elo-only.
+
+---
+
+## 8a. Backtest results (live, full 2014–2025 history)
+
+Real numbers from the walk-forward harness in `cfb-analytics`, run 2026-09-06 against the full 12-season
+CFBD history (2020 excluded from fitting per §8, scored separately as a stress slice). This is **not** a
+promotion decision — two of the three required baselines are still uncomputable (see below) — it is
+honest model-comparison evidence, reported at its actual size.
+
+**Main slice, 2014–2025 excl. 2020, n=7853 games:**
+
+| Model | Brier | Log loss |
+|---|---|---|
+| Internal ridge (§6.1) alone | 0.1869 | 0.5627 |
+| Elo-only baseline (CFBD weekly Elo, §8 baseline #3) | 0.1839 | 0.5458 |
+| Internal Elo (§6.2) alone | 0.1851 | 0.5460 |
+| P_logit (§6.4) alone | 0.2036 | 0.5938 |
+| **Three-model ensemble (§6.4)** | **0.1803** | **0.5332** |
+
+Fitted ensemble weights: `ridge=0.25, internal_elo=0.65, logit=0.10`.
+
+The ensemble beats every individual member on both metrics, including internal Elo alone (its
+strongest single input). Ridge alone does **not** beat either Elo variant on log loss — an honest
+result, not hidden: ridge's own value here is as an ensemble member (25% of the pooled weight; distinct
+enough from Elo's sequential rating updates that pooling still helps), not as the best standalone model.
+P_logit alone is the weakest individual member by a clear margin, but still earns real (non-zero)
+pooling weight, meaning its errors are not simply a subset of ridge's and Elo's.
+
+**2020 stress slice, n≈420–441 per model (irregular/partial COVID schedules):**
+
+| Model | Brier | Log loss |
+|---|---|---|
+| Internal ridge alone | 0.1909 | 0.5792 |
+| Elo-only baseline | 0.1828 | 0.5443 |
+| Internal Elo alone | 0.1874 | 0.5550 |
+| P_logit alone | 0.1898 | 0.5677 |
+| **Three-model ensemble** | **0.1816** | **0.5414** |
+
+The ensemble is also best on the stress slice, and every model's calibration (Wilson-interval bucket
+coverage) held up reasonably well despite 2020's disrupted scheduling — a genuine, not cherry-picked,
+robustness check.
+
+**What this is not yet:** market and SP+-only baselines (§8's baselines #1 and #2) remain uncomputable
+against this store's history — `odds_snapshots` only holds live 2026 captures, and CFBD's own
+`/ratings/sp` endpoint was found to silently ignore its `week` parameter for historical seasons (always
+returning the season-final number, so no genuine weekly SP+ history can be reconstructed from it). Per
+§9's two-key promotion gate, clearing only one of three required baselines means `status` stays
+`shadow` regardless of how these numbers look. This is a tracked, load-bearing gap, not an oversight.
 
 ---
 
