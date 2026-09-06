@@ -17,10 +17,15 @@
   3. Cleared the three pre-existing ruff errors previously logged here as untouched
      (E741 in `refresh_plan.execute_refresh`, two unused imports). Zero behaviour change.
   4. Reviewed the post-`753d470` fix set (feed-health empty-slate leniency, projections
-     skip, daily-lock reclaim, feedback salvage, `clear_derived_pack_outputs`) and found
-     no defects; the MLB whitelist, `DERIVED_PACK_OUTPUTS`/`verdicts` and desk-verdict
-     invariants all hold in code.
-  5. Paid reasoning / the AI Research Desk were NOT invoked at any point.
+     skip, feedback salvage, `clear_derived_pack_outputs`); the MLB whitelist,
+     `DERIVED_PACK_OUTPUTS`/`verdicts` and desk-verdict invariants all hold in code.
+  5. Fixed a race in `acquire_daily_lock`: breaking an abandoned lock was
+     rmdir-then-mkdir, so a stale "abandoned" conclusion could delete a *live* lock and
+     leave two daily jobs writing the same pack and ledger. Breaking is now an exclusive
+     -create claim plus a re-check of lock identity/owner, and the directory is never
+     removed to break it. Regression test confirmed to fail against the old path.
+  6. Pinned `mypy>=2.3.1,<3` so local `make typecheck` and CI agree.
+  7. Paid reasoning / the AI Research Desk were NOT invoked at any point.
 - **Environment limits**: PyPI egress is blocked by this sandbox's policy, so
   `sqlalchemy`, `openai`, `anthropic` and `google-genai` were uninstallable. 29 test
   modules do not collect locally; the remaining subset ran 682 passed / 37 skipped with
@@ -28,8 +33,8 @@
   clean; local `mypy` 1.19.1 reports 3 narrowing false positives that CI's `mypy` 2.3.1
   does not (CI on `81263f2`: "Success: no issues found in 87 source files").
 - **Next Steps**: Review and merge PR #152. Re-run `report-sync.ps1` on the canonical
-  Windows checkout before trusting any branch/worktree conclusions from this session.
-  Consider pinning `mypy` in `requirements.txt` so local and CI type checks agree.
+  Windows checkout before trusting any branch/worktree conclusions from this session --
+  that verification could not run here and is the one open item from this session.
 
 **Outlier Skill Atlas (2026-09-06)**:
 - **Last Content Commit SHA**: `0f37c7f`
