@@ -1,6 +1,6 @@
 ﻿{
     "status":  "ok",
-    "timestamp_utc":  "2026-09-06T04:05:46.2469475Z",
+    "timestamp_utc":  "2026-09-07T04:03:20.3437018Z",
     "message":  "Nightly calibration audit completed.",
     "learned_multiplier_promotion":  {
                                          "status":  "NOT_READY",
