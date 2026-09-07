@@ -275,6 +275,17 @@ def blend_over_probability(
     return shrunk, True
 
 
+def _scope_token(value: Any) -> str:
+    """Fold a label/scope into the underscored vocabulary of FULL_GAME_SCOPES.
+
+    ``FULL_GAME_SCOPES`` is written in scope form (``full_game``), but a raw
+    ``periodLabel`` arrives in human form (``Full Game``, ``full-game``). Without
+    this fold the unrecognized-label fallback below reads "Full Game" as a period
+    token and every full-game GAMELINE/total on that feed drops out of the pack.
+    """
+    return "_".join(str(value or "").strip().lower().replace("-", " ").split())
+
+
 def period_identity(rec: dict[str, Any]) -> str:
     """Stable period token for grouping / full-game eligibility.
 
@@ -287,13 +298,13 @@ def period_identity(rec: dict[str, Any]) -> str:
         detected = detect_scope(period_label)
         if detected not in FULL_GAME_SCOPES:
             return detected
-        token = str(period_label).strip().lower()
+        token = _scope_token(period_label)
         if token and token not in FULL_GAME_SCOPES:
             return token
     periods = rec.get("periods")
     if isinstance(periods, list) and periods:
         return "p" + "-".join(str(p) for p in periods)
-    scope = str(rec.get("scope") or "").lower()
+    scope = _scope_token(rec.get("scope"))
     if scope and scope not in FULL_GAME_SCOPES:
         return scope
     return "full_game"

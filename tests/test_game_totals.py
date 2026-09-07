@@ -809,6 +809,24 @@ def test_period_identity_full_game_when_no_period_fields():
     assert is_eligible_total_record(rec)
 
 
+@pytest.mark.parametrize("period_label", ["Full Game", "full game", "full-game", "FULL_GAME"])
+def test_period_identity_admits_spelled_out_full_game_labels(period_label):
+    # detect_scope returns full_game for any label with no partial-game token,
+    # so the unrecognized-label fallback is the only thing standing between a
+    # spelled-out "Full Game" periodLabel and a silently dropped full-game
+    # total/GAMELINE. It must fold to the same scope token as scope=full_game.
+    rec = _norm_record(
+        "fg-labeled",
+        8.5,
+        "OVER",
+        [{"book": "DK", "odds": -110}],
+        scope="full_game",
+        period_label=period_label,
+    )
+    assert period_identity(rec) == "full_game"
+    assert is_eligible_total_record(rec)
+
+
 def test_logical_market_key_separates_team_totals():
     home = _norm_record(
         "t1",
