@@ -1,5 +1,30 @@
 # Handoff Summary
 
+**Daily Debug Review (2026-09-07)**:
+- **Last Commit SHA**: `00c9cbb`
+- **Branch / PR**: `claude/inspiring-fermat-mzn1j5` -> https://github.com/DaSilvaDub/outlier/pull/155
+- **Files Touched**: `outlier_scrapers/game_totals.py`, `tests/test_game_totals.py`, `tests/test_daily_job.py`
+- **Session Work**:
+  1. Step 0 canonical sync could NOT run: this was an automated cloud session on Linux,
+     and `report-sync.ps1` is invoked by CLAUDE.md at a Windows path
+     (`C:\Users\dasil\Dev\GitHub\outlier\`). Review was read-only against a fresh clone
+     of `master` at `adb7a26`. No reasoning models / desk runs were invoked (offline).
+  2. Fixed a silent full-game drop in `period_identity()`: `detect_scope` returns
+     `full_game` by default for unrecognised text, so the raw-`periodLabel` fallback also
+     fired on full-game labels, and `FULL_GAME_SCOPES` (underscored) never matched the
+     human-form `"Full Game"`. Since e7b1be5 gated candidates on `is_full_game_total`,
+     such a feed would drop every full-game GAMELINE/total from `candidates.csv`
+     with no flag. Labels and scopes now fold through one underscored vocabulary.
+  3. Added a parametrized regression test over `Full Game` / `full game` / `full-game` /
+     `FULL_GAME`; the 8I/6I/F5 fail-closed behaviour from #154 is unchanged.
+  4. Added the file's own `_require_daily_job()` guard to 4 tests in `test_daily_job.py`
+     that used the module without it (28 of 36 already did).
+- **Environment Gap (needs attention)**: PyPI is blocked by this sandbox's egress policy
+  (403), so `sqlalchemy`, `openai`, `anthropic` and `google-genai` could not be installed.
+  29 test modules did not collect and 65 tests failed purely on those imports — all
+  identical before and after the change. CI (which has the full lockfile) is the
+  authority for those. Re-run the full suite locally before merging.
+
 **Outlier Skill Atlas (2026-09-06)**:
 - **Last Content Commit SHA**: `0f37c7f`
 - **Branch / PR**: `feat/skill-atlas` -> https://github.com/DaSilvaDub/outlier/pull/151
