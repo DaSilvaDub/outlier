@@ -62,6 +62,8 @@ After any -SyncAllWorktrees you (or another ent) run, immediately follow with th
 See checked-in SYNC.md, AGENTS.md, and docs/ENT-SYNC-GLOBAL-PROMPT.md.
 
 This rule is what makes d05eb21-style "the commit and the pack.py changes are invisible to me" impossible across Grok/Claude/Codex/Gemini/...
+
+CLOUD/SANDBOX EXEMPTION: Cloud ents (Codex Linux sandboxes, remote VMs without PowerShell) are exempt from the Windows-specific report-sync.ps1 call. Cloud STEP 0: clone/fetch + git reset --hard origin/master + grep for all 5 upgrade markers (player_id, round_robin_then_fill, CANDIDATES_HEADER in pack.py; _acquire_pack_lock in daily_job.py; decisions.csv in pack.py). The house rule (no reasoning unless asked) still applies by policy. See docs/CLOUD-SANDBOX-LIMITATIONS.md.
 ```
 
 ## Usage instructions for harness owners

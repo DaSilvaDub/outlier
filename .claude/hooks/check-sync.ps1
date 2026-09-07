@@ -28,7 +28,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 
-$Canonical    = 'C:\Users\dasil\Dev\GitHub\outlier'
+$Canonical = if ($PSScriptRoot) {
+    $candidate = Split-Path (Split-Path $PSScriptRoot)  # hooks -> .claude -> repo root
+    if (Test-Path (Join-Path $candidate '.git')) { $candidate } else { 'C:\Users\dasil\Dev\GitHub\outlier' }
+} else { 'C:\Users\dasil\Dev\GitHub\outlier' }
 $OriginRegex  = 'DaSilvaDub/outlier(\.git)?$'
 $Step0        = '& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"'
 

@@ -449,9 +449,9 @@ def write_pack(
         ("team_totals", team_totals_rows),
     ]:
         for r in stream_rows:
-            units_val = r.get("recommended_units_pre_news")
-            if units_val not in (None, ""):
-                r["units"] = float(units_val)
+            parsed_units = _to_float(r.get("recommended_units_pre_news"))
+            if parsed_units is not None:
+                r["units"] = parsed_units
             proj = project_risk_identity(r, stream_name)
             _apply_learned_stake_before_caps(
                 proj,
