@@ -205,9 +205,11 @@ def test_pitcher_identity_parses_token_so_selection():
     assert pitcher_identity_flags(row, probable) == []
 
 
-def test_pitcher_identity_skips_when_no_probable_source():
-    assert pitcher_identity_flags(_gore_so_row(), None) == []
-    assert pitcher_identity_flags(_gore_so_row(), {}) == []
+def test_pitcher_identity_unconfirmed_when_lookup_missing():
+    # Missing/empty probable lookup must fail closed, not skip. A silent skip
+    # ships clean SO identity whenever StatsAPI export is empty.
+    assert "pitcher_identity_unconfirmed" in pitcher_identity_flags(_gore_so_row(), None)
+    assert "pitcher_identity_unconfirmed" in pitcher_identity_flags(_gore_so_row(), {})
 
 
 def test_pitcher_identity_skips_non_mlb_so():
