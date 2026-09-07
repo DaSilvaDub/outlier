@@ -3092,6 +3092,27 @@ def test_gore_matching_confirmed_starter_stays_unflagged():
     assert row["_board"] == "board_b"
 
 
+def test_so_token_market_label_does_not_unconfirm_confirmed_starter():
+    # ev_card market=SO without a dashed market_label emits
+    # "Jackson Jobe SO OVER 5.5". That must not fail-close a confirmed starter.
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    row = make_row(card, [], sport="MLB", probable_pitchers=probable)
+    assert row is not None
+    flags = row["data_quality_flags"].split(";") if row["data_quality_flags"] else []
+    assert "pitcher_identity_unconfirmed" not in flags
+    assert "pitcher_identity_mismatch" not in flags
+
+
 def test_gameline_without_team_context_is_not_flagged():
     # Game totals carry no team on purpose; the guard must not fire there.
     card = ev_card(

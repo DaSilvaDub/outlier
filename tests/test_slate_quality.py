@@ -192,6 +192,19 @@ def test_pitcher_identity_unconfirmed_when_player_not_on_slate():
     assert "pitcher_identity_mismatch" not in flags
 
 
+def test_pitcher_identity_parses_token_so_selection():
+    # Pack rows have no player column; token market_label builds
+    # "Jackson Jobe SO OVER 5.5" without a " - " delimiter.
+    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "selection": "Jackson Jobe SO OVER 5.5",
+        "team": "DET",
+    }
+    assert pitcher_identity_flags(row, probable) == []
+
+
 def test_pitcher_identity_skips_when_no_probable_source():
     assert pitcher_identity_flags(_gore_so_row(), None) == []
     assert pitcher_identity_flags(_gore_so_row(), {}) == []

@@ -7,6 +7,7 @@ from outlier_scrapers import cards
 from outlier_scrapers.cards import (
     PUBLIC_MONEY_DIVERGENCE_FLAG_PP,
     _align_main_lines,
+    _identity,
     _spread_sign_conflict,
     assemble_game_card,
     build_cards_payload,
@@ -28,6 +29,28 @@ from outlier_scrapers.cards import (
 # --------------------------------------------------------------------------- #
 # Pure helpers
 # --------------------------------------------------------------------------- #
+
+
+def test_game_identity_copies_period_label_from_games_norm():
+    # games_norm keeps period_label even when scope is wrongly stamped full_game.
+    # assemble_game_card spreads _identity onto the card; the candidate GAMELINE
+    # gate reads card.period_label, so it must survive this copy.
+    identity = _identity(
+        [
+            {
+                "proposition": "SPREAD",
+                "market_type": "GAMELINE",
+                "scope": "full_game",
+                "period_label": "8I",
+                "periods": [1, 2, 3, 4, 5, 6, 7, 8],
+                "matchup": "STL @ COL",
+                "event_id": "e1",
+            }
+        ]
+    )
+    assert identity["period_label"] == "8I"
+    assert identity["periods"] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert identity["scope"] == "full_game"
 
 
 def test_two_way_fair_removes_vig_symmetric():
@@ -172,6 +195,7 @@ def test_assemble_game_card_signal_includes_public_money_not_card_flags():
 
 # --- Spread sign-conflict guard (fix: a corrupted feed could ship both sides -
 # the same sign, e.g. HOME 1.5 / AWAY 1.5, and it would look legitimate) -------
+
 
 def test_spread_sign_conflict_false_for_mirror_pair():
     assert _spread_sign_conflict(-1.5, 1.5) is False
@@ -359,33 +383,31 @@ def test_near_equal_movement_line_does_not_trigger_mismatch_flag():
 def test_assemble_game_card_flags_sign_conflict_end_to_end():
     # Corrupted feed: both HOME and AWAY quoted 1.5 (same sign) instead of
     # mirror-image lines. This must survive _route_and_rank's flags assignment.
-    idx = build_indexes(
-        [_spread_prop_row("HOME", 1.5), _spread_prop_row("AWAY", 1.5)], [], [], []
-    )
+    idx = build_indexes([_spread_prop_row("HOME", 1.5), _spread_prop_row("AWAY", 1.5)], [], [], [])
     card = assemble_game_card("gm1", idx)
     assert "spread_sign_conflict" in card["flags"]
 
 
 def test_assemble_game_card_no_flag_for_valid_mirror_pair():
-    idx = build_indexes(
-        [_spread_prop_row("HOME", -1.5), _spread_prop_row("AWAY", 1.5)], [], [], []
-    )
+    idx = build_indexes([_spread_prop_row("HOME", -1.5), _spread_prop_row("AWAY", 1.5)], [], [], [])
     card = assemble_game_card("gm1", idx)
     assert "spread_sign_conflict" not in card["flags"]
 
 
 def test_assemble_game_card_flags_card_vs_movement_line_mismatch():
-    ev = [{
-        "market_id": "gm1",
-        "side": "AWAY",
-        "current_line": 7.5,
-        "outcome_id": "oAWAY",
-        "calculated_ev_pct": 0.05,
-        "calculated_ev_method": cards.EV_METHOD,
-        "ev_source": "NATIVE",
-        "devig_decimal": 2.0,
-        "record_id": "ev1",
-    }]
+    ev = [
+        {
+            "market_id": "gm1",
+            "side": "AWAY",
+            "current_line": 7.5,
+            "outcome_id": "oAWAY",
+            "calculated_ev_pct": 0.05,
+            "calculated_ev_method": cards.EV_METHOD,
+            "ev_source": "NATIVE",
+            "devig_decimal": 2.0,
+            "record_id": "ev1",
+        }
+    ]
     idx = build_indexes(
         [_spread_prop_row("HOME", -7.5), _spread_prop_row("AWAY", 7.5)],
         [
@@ -407,17 +429,19 @@ def test_spread_conflict_uses_headline_mirror_anywhere_in_opposite_ladder():
     home_main = _spread_prop_row("HOME", -8.5)
     home_alt = _spread_prop_row("HOME", -7.5)
     away_ev = _spread_prop_row("AWAY", 7.5)
-    ev = [{
-        "market_id": "gm1",
-        "side": "AWAY",
-        "current_line": 7.5,
-        "outcome_id": "oAWAY",
-        "calculated_ev_pct": 0.05,
-        "calculated_ev_method": cards.EV_METHOD,
-        "ev_source": "NATIVE",
-        "devig_decimal": 2.0,
-        "record_id": "ev1",
-    }]
+    ev = [
+        {
+            "market_id": "gm1",
+            "side": "AWAY",
+            "current_line": 7.5,
+            "outcome_id": "oAWAY",
+            "calculated_ev_pct": 0.05,
+            "calculated_ev_method": cards.EV_METHOD,
+            "ev_source": "NATIVE",
+            "devig_decimal": 2.0,
+            "record_id": "ev1",
+        }
+    ]
     movement = [
         {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
         {"market_id": "gm1", "side": "AWAY", "current_line": 8.5},
@@ -431,17 +455,19 @@ def test_spread_conflict_uses_headline_mirror_anywhere_in_opposite_ladder():
 
 
 def test_opposite_side_movement_mismatch_does_not_flag_matching_headline():
-    ev = [{
-        "market_id": "gm1",
-        "side": "AWAY",
-        "current_line": 7.5,
-        "outcome_id": "oAWAY",
-        "calculated_ev_pct": 0.05,
-        "calculated_ev_method": cards.EV_METHOD,
-        "ev_source": "NATIVE",
-        "devig_decimal": 2.0,
-        "record_id": "ev1",
-    }]
+    ev = [
+        {
+            "market_id": "gm1",
+            "side": "AWAY",
+            "current_line": 7.5,
+            "outcome_id": "oAWAY",
+            "calculated_ev_pct": 0.05,
+            "calculated_ev_method": cards.EV_METHOD,
+            "ev_source": "NATIVE",
+            "devig_decimal": 2.0,
+            "record_id": "ev1",
+        }
+    ]
     movement = [
         {"market_id": "gm1", "side": "HOME", "current_line": -8.5},
         {"market_id": "gm1", "side": "AWAY", "current_line": 7.5},
@@ -658,8 +684,12 @@ def test_assemble_game_card_wires_hit_rates_into_signal():
 
 
 def test_movement_corroboration_direction():
-    toward = movement_corroboration("OVER", {"line_delta_from_open": -1.0, "odds_delta_from_open": -10})
-    against = movement_corroboration("OVER", {"line_delta_from_open": 1.0, "odds_delta_from_open": 20})
+    toward = movement_corroboration(
+        "OVER", {"line_delta_from_open": -1.0, "odds_delta_from_open": -10}
+    )
+    against = movement_corroboration(
+        "OVER", {"line_delta_from_open": 1.0, "odds_delta_from_open": 20}
+    )
     assert toward == 1.0
     assert against == -1.0
     assert movement_corroboration("OVER", None) is None
@@ -702,8 +732,8 @@ def test_pick_main_line_prefers_movement_tracked_line():
 
 def test_pick_main_line_falls_back_to_pickem():
     rows = [
-        {"line": 7.5, "best_odds": -800, "books": [{"book": "A"}]},   # implied ~88.9
-        {"line": 9.5, "best_odds": 105, "books": [{"book": "A"}]},    # implied ~48.8 (closest to 50)
+        {"line": 7.5, "best_odds": -800, "books": [{"book": "A"}]},  # implied ~88.9
+        {"line": 9.5, "best_odds": 105, "books": [{"book": "A"}]},  # implied ~48.8 (closest to 50)
         {"line": 14.5, "best_odds": 600, "books": [{"book": "A"}, {"book": "B"}]},
     ]
     chosen = cards._pick_main_side_row(rows, None, [])
@@ -805,9 +835,7 @@ def _write_latest(data_dir: Path, league: str, stem: str, records, extra=None):
         payload.update(extra)
     out = data_dir / league / "normalized"
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{league.lower()}_{stem}_latest.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (out / f"{league.lower()}_{stem}_latest.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_build_cards_routes_boards_and_aligns_main_line(tmp_path, monkeypatch):
@@ -829,9 +857,7 @@ def test_build_cards_routes_boards_and_aligns_main_line(tmp_path, monkeypatch):
     insights = [_insight("mSIG", "oSIG155", "OVER", 15.5)]
 
     _write_latest(data_dir, "WNBA", "props", props)
-    _write_latest(
-        data_dir, "WNBA", "line_movement", movement, extra={"ev_records": ev_records}
-    )
+    _write_latest(data_dir, "WNBA", "line_movement", movement, extra={"ev_records": ev_records})
     _write_latest(data_dir, "WNBA", "insights", insights)
 
     payload = build_cards_payload("WNBA")
@@ -988,7 +1014,13 @@ def test_single_book_ev_flags_thin_liquidity(tmp_path, monkeypatch):
     ev = _ev("m1", "UNDER", 2.0, "oEV")
     ev["max_bet"] = None  # uniformly-null max_bet must NOT drive the flag
     _write_latest(data_dir, "WNBA", "props", props)
-    _write_latest(data_dir, "WNBA", "line_movement", [_movement("m1", "UNDER", 8.5)], extra={"ev_records": [ev]})
+    _write_latest(
+        data_dir,
+        "WNBA",
+        "line_movement",
+        [_movement("m1", "UNDER", 8.5)],
+        extra={"ev_records": [ev]},
+    )
     _write_latest(data_dir, "WNBA", "insights", [])
 
     payload = build_cards_payload("WNBA")
@@ -1012,7 +1044,9 @@ def test_ev_fallback_uses_current_line_not_arbitrary_side_ev(tmp_path, monkeypat
     ev_alt["current_line"] = 6.5
     ev_alt["book"] = "Caesars"
     _write_latest(data_dir, "WNBA", "props", props)
-    _write_latest(data_dir, "WNBA", "line_movement", movement, extra={"ev_records": [ev_main, ev_alt]})
+    _write_latest(
+        data_dir, "WNBA", "line_movement", movement, extra={"ev_records": [ev_main, ev_alt]}
+    )
     _write_latest(data_dir, "WNBA", "insights", [])
 
     payload = build_cards_payload("WNBA")
@@ -1056,9 +1090,7 @@ def test_card_success_status_uses_produced_payload_timestamp(
     status = getattr(cards, export_name)("MLB")
 
     assert status["generated_at"] == produced_at
-    persisted = json.loads(
-        (league_paths("MLB").reports / status_name).read_text(encoding="utf-8")
-    )
+    persisted = json.loads((league_paths("MLB").reports / status_name).read_text(encoding="utf-8"))
     assert persisted["generated_at"] == produced_at
 
 

@@ -778,7 +778,9 @@ def _apply_quality_and_signal_flags(
     # so the desk sees the mismatch instead of silently trusting the shown line.
     dq_flags = [str(f) for f in (card.get("flags") or [])]
     dq_flags += slate_quality.pitcher_identity_flags(
-        row, probable_pitchers, player_name=str(row.get("player") or "") or None
+        row,
+        probable_pitchers,
+        player_name=str(card.get("player") or ref.get("player") or row.get("player") or "") or None,
     )
     if (
         identity["has_player"] or market_type_upper == "PLAYER_PROP"

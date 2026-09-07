@@ -19,6 +19,8 @@ _INJURY_CHUNK = re.compile(r"\s*(?:(?P<team>[A-Z]{2,3}):\s*)?(?P<body>[^|]+)")
 _STATUS_PAREN = re.compile(r"\((?P<status>[^)]*)\)")
 _PLAYER_PROP_SIDES = re.compile(r"\b(OVER|UNDER)\b", re.IGNORECASE)
 _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+_SELECTION_NAME_RE = re.compile(r"^(.*?)\s+(?:OVER|UNDER)\b", re.IGNORECASE)
+_TRAILING_SO_MARKET_RE = re.compile(r"\s+(?:SO|STRIKEOUTS?|K)$", re.IGNORECASE)
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
@@ -158,7 +160,10 @@ def _so_player_name(row: Mapping[str, Any], player_name: str | None = None) -> s
     selection = str(row.get("selection") or "")
     if " - " in selection:
         return _normalize_person_name(selection.split(" - ", 1)[0])
-    return ""
+    match = _SELECTION_NAME_RE.match(selection)
+    if not match:
+        return ""
+    return _normalize_person_name(_TRAILING_SO_MARKET_RE.sub("", match.group(1).strip()))
 
 
 def _is_mlb_so_row(row: Mapping[str, Any]) -> bool:

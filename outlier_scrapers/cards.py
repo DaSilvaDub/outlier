@@ -50,6 +50,7 @@ def write_json(path, payload: dict[str, Any]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
+
 # --------------------------------------------------------------------------- #
 # Tunable constants
 # --------------------------------------------------------------------------- #
@@ -255,11 +256,7 @@ def _average_summary_stat_blobs(blobs: list[dict[str, Any]]) -> dict[str, Any]:
     keys = ("l5", "l10", "l20", "h2h", "curSeason", "prevSeason")
     out: dict[str, Any] = {}
     for key in keys:
-        values = [
-            float(blob[key])
-            for blob in blobs
-            if isinstance(blob.get(key), (int, float))
-        ]
+        values = [float(blob[key]) for blob in blobs if isinstance(blob.get(key), (int, float))]
         if values:
             out[key] = sum(values) / len(values)
     return out
@@ -494,9 +491,7 @@ def signal_score(
     present = {key: value for key, value in parts.items() if value is not None and key in weights}
     weight_total = sum(weights[key] for key in present)
     composite = (
-        sum(weights[key] * present[key] for key in present) / weight_total
-        if weight_total
-        else 50.0
+        sum(weights[key] * present[key] for key in present) / weight_total if weight_total else 50.0
     )
 
     return {
@@ -532,7 +527,9 @@ class Indexes:
     movement_by_market: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     ev_by_market: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     insights_by_outcome: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    insights_by_market_side: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    insights_by_market_side: dict[tuple[str, str], list[dict[str, Any]]] = field(
+        default_factory=dict
+    )
     enrichment: dict[str, dict[str, Any]] = field(default_factory=dict)
     enrichment_loaded: bool = False
     strategy_directions: list[dict[str, Any]] = field(default_factory=list)
@@ -557,7 +554,10 @@ def build_indexes(
     for row in ev_records:
         src = str(row.get("ev_source") or "").upper()
         meth = str(row.get("calculated_ev_method") or "").upper()
-        if not ((src == "NATIVE" and meth == EV_METHOD) or (src == "LOCAL" and meth == "LOCAL_PROPORTIONAL")):
+        if not (
+            (src == "NATIVE" and meth == EV_METHOD)
+            or (src == "LOCAL" and meth == "LOCAL_PROPORTIONAL")
+        ):
             continue
         if row.get("calculated_ev_pct") is None:
             continue
@@ -623,6 +623,8 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "proposition": row.get("proposition") or sctx.get("proposition"),
                 "scope": row.get("scope") or sctx.get("scope"),
+                "period_label": row.get("period_label") or sctx.get("period_label"),
+                "periods": row.get("periods") or sctx.get("periods"),
                 "team": row.get("team"),
                 "opponent": row.get("opponent"),
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
@@ -642,6 +644,8 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "market_raw": row.get("market_raw"),
                 "market_label": row.get("market_label") or sctx.get("market_label"),
                 "scope": row.get("scope") or sctx.get("scope"),
+                "period_label": row.get("period_label") or sctx.get("period_label"),
+                "periods": row.get("periods") or sctx.get("periods"),
                 "team": row.get("team"),
                 "opponent": row.get("opponent"),
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
@@ -689,7 +693,9 @@ def _ev_for_side(
     if not rows:
         return None
 
-    matched_rows = [r for r in rows if r.get("outcome_id") == main_outcome_id] if main_outcome_id else []
+    matched_rows = (
+        [r for r in rows if r.get("outcome_id") == main_outcome_id] if main_outcome_id else []
+    )
     if not matched_rows and main_line is not None:
         # Normalized EV rows carry the line as ``current_line`` (no ``line`` key).
         matched_rows = [r for r in rows if _to_float(r.get("current_line")) == main_line]
@@ -704,8 +710,8 @@ def _ev_for_side(
         rows,
         key=lambda r: (
             r.get("calculated_ev_pct") if r.get("calculated_ev_pct") is not None else float("-inf"),
-            r.get("record_id") or ""
-        )
+            r.get("record_id") or "",
+        ),
     )
     books = sorted(
         (
@@ -720,7 +726,9 @@ def _ev_for_side(
             for r in rows
             if r.get("book")
         ),
-        key=lambda b: b.get("calculated_ev_pct") if b.get("calculated_ev_pct") is not None else float("-inf"),
+        key=lambda b: (
+            b.get("calculated_ev_pct") if b.get("calculated_ev_pct") is not None else float("-inf")
+        ),
         reverse=True,
     )
     return {
@@ -754,7 +762,9 @@ def _pick_main_side_row(
     line, then fall back to the price closest to pick'em (implied ~50%), since
     "most books" is unreliable (longshot alts can carry more books).
     """
-    ev_lines = [_to_float(r.get("current_line")) for r in ev_rows if r.get("current_line") is not None]
+    ev_lines = [
+        _to_float(r.get("current_line")) for r in ev_rows if r.get("current_line") is not None
+    ]
     target = next((x for x in ev_lines if x is not None), None)
     if target is None and mv and mv.get("current_line") is not None:
         target = _to_float(mv.get("current_line"))
@@ -791,7 +801,9 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
 
     main_row = _select_main_rows(rows_by_side, movement, ev_by_side)
 
-    _align_main_lines(main_row, rows_by_side, ev_by_side, movement, str(identity.get("proposition") or ""))
+    _align_main_lines(
+        main_row, rows_by_side, ev_by_side, movement, str(identity.get("proposition") or "")
+    )
 
     alt_lines: dict[str, list[dict[str, Any]]] = {}
     for side, rws in rows_by_side.items():
@@ -799,8 +811,12 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             continue
         chosen = main_row[side]
         alt_lines[side] = [
-            {"line": r.get("line"), "best_odds": r.get("best_odds"), "book_count": len(r.get("books") or [])}
-            for r in sorted(rws, key=lambda r: (_to_float(r.get("line")) or 0.0))
+            {
+                "line": r.get("line"),
+                "best_odds": r.get("best_odds"),
+                "book_count": len(r.get("books") or []),
+            }
+            for r in sorted(rws, key=lambda r: _to_float(r.get("line")) or 0.0)
             if r is not chosen
         ]
 
@@ -839,11 +855,15 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             "signal": score,
             "proxy_market_edge": proxy,
             "insights": [_slim_insight(i) for i in matched],
-            "ev": _ev_for_side(ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))),
+            "ev": _ev_for_side(
+                ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))
+            ),
         }
 
         if idx.enrichment_loaded:
-            side_view["per_book_odds"] = enrichment_data.get("per_book_odds") if enrichment_data else []
+            side_view["per_book_odds"] = (
+                enrichment_data.get("per_book_odds") if enrichment_data else []
+            )
             side_view["public_money"] = (
                 enrichment_data.get("public_money") if enrichment_data else None
             ) or sdata.get("public_money")
@@ -860,7 +880,6 @@ def assemble_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     }
     _route_and_rank(card, idx.strategy_directions)
     return card
-
 
 
 def _spread_sign_conflict(home_line: Any, away_line: Any) -> bool:
@@ -912,6 +931,7 @@ def _align_main_lines(
 
     # Local deferred import to avoid circular dependency
     from outlier_scrapers.pack import SIGNED_MARGIN_PROPOSITIONS
+
     is_spread = str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS
 
     has_conflict = False
@@ -953,6 +973,7 @@ def _align_main_lines(
 
 def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     from .normalizer import game_sides
+
     props = idx.props_by_market.get(market_id, [])
     ev_rows = idx.ev_by_market.get(market_id, [])
     movement = idx.movement_by_market.get(market_id, {})
@@ -962,7 +983,9 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
     valid_sides = game_sides(proposition)
 
     # Group by position
-    rows_by_side: dict[str, list[dict[str, Any]]] = {s: [] for s in valid_sides} if valid_sides else {}
+    rows_by_side: dict[str, list[dict[str, Any]]] = (
+        {s: [] for s in valid_sides} if valid_sides else {}
+    )
     for prop in props:
         pos = str(prop.get("position") or "").upper()
         if not valid_sides:
@@ -986,8 +1009,12 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             continue
         chosen = main_row[side]
         alt_lines[side] = [
-            {"line": r.get("line"), "best_odds": r.get("best_odds"), "book_count": len(r.get("books") or [])}
-            for r in sorted(rws, key=lambda r: (_to_float(r.get("line")) or 0.0))
+            {
+                "line": r.get("line"),
+                "best_odds": r.get("best_odds"),
+                "book_count": len(r.get("books") or []),
+            }
+            for r in sorted(rws, key=lambda r: _to_float(r.get("line")) or 0.0)
             if r is not chosen
         ]
 
@@ -1013,7 +1040,9 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
             "signal": score,
             "proxy_market_edge": proxy,
             "insights": [_slim_insight(i) for i in matched],
-            "ev": _ev_for_side(ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))),
+            "ev": _ev_for_side(
+                ev_rows, side, sdata.get("outcome_id"), _to_float(sdata.get("line"))
+            ),
             "public_money": sdata.get("public_money"),
         }
         side_views[side] = side_view
@@ -1037,15 +1066,9 @@ def assemble_game_card(market_id: str, idx: Indexes) -> dict[str, Any]:
         headline = str(card.get("headline_side") or "")
         opposite = "HOME" if headline == "AWAY" else "AWAY"
         headline_line = _to_float(main_row.get(headline, {}).get("line"))
-        opposite_lines = [
-            _to_float(row.get("line")) for row in rows_by_side.get(opposite, [])
-        ]
-        has_mirror = (
-            headline_line is not None
-            and any(
-                other is not None and abs(headline_line + other) <= 1e-9
-                for other in opposite_lines
-            )
+        opposite_lines = [_to_float(row.get("line")) for row in rows_by_side.get(opposite, [])]
+        has_mirror = headline_line is not None and any(
+            other is not None and abs(headline_line + other) <= 1e-9 for other in opposite_lines
         )
         if not has_mirror and _spread_sign_conflict(
             main_row.get("HOME", {}).get("line"), main_row.get("AWAY", {}).get("line")
@@ -1082,6 +1105,7 @@ def _best_american_price(row: dict[str, Any]) -> int | None:
     ]
     return max(odds) if odds else None
 
+
 def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
     rates = hit_rates_from_game_stats(prop, side)
     stats_flag = game_stats_side_flag(prop, side)
@@ -1090,7 +1114,9 @@ def _side_data_from_game(prop: dict[str, Any], side: str) -> dict[str, Any]:
     return {
         "side": side,
         "line": prop.get("line"),
-        "best_odds": _best_american_price(prop) if "best_odds" not in prop else prop.get("best_odds"),
+        "best_odds": _best_american_price(prop)
+        if "best_odds" not in prop
+        else prop.get("best_odds"),
         "books": prop.get("books") or [],
         "outcome_id": prop.get("outcome_id"),
         "public_money": prop.get("public_money"),
@@ -1150,10 +1176,7 @@ def _player_matches(card_player: Any, direction: dict[str, Any]) -> bool:
     last = _token(parts[-1])
     initial = _token(parts[0][:1])
     return bool(
-        last
-        and initial
-        and direction_key.endswith(last)
-        and direction_key.startswith(initial)
+        last and initial and direction_key.endswith(last) and direction_key.startswith(initial)
     )
 
 
@@ -1184,9 +1207,7 @@ def _strategy_conflict(
         if scope == "PLAYER" and _player_matches(card.get("player"), direction):
             return True
         if scope == "TEAM":
-            direction_team = canon_team(
-                str(card.get("league") or "WNBA"), direction.get("team")
-            )
+            direction_team = canon_team(str(card.get("league") or "WNBA"), direction.get("team"))
             if card_team and direction_team and card_team == direction_team:
                 return True
     return False
@@ -1204,8 +1225,7 @@ def _route_and_rank(
     """
     sides = card.get("sides", {})
     ev_sides = {
-        s: v for s, v in sides.items()
-        if v.get("ev") and (v["ev"].get("best_ev_pct") or 0.0) > 0.0
+        s: v for s, v in sides.items() if v.get("ev") and (v["ev"].get("best_ev_pct") or 0.0) > 0.0
     }
 
     if ev_sides:
@@ -1254,7 +1274,9 @@ def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
     # Only treat max_bet as a liquidity signal when it is actually reported;
     # Outlier leaves it null for many books, which must not false-flag.
     reported_limits = [
-        b.get("max_bet") for b in ev.get("ev_books", []) if isinstance(b.get("max_bet"), (int, float))
+        b.get("max_bet")
+        for b in ev.get("ev_books", [])
+        if isinstance(b.get("max_bet"), (int, float))
     ]
     low_limits = bool(reported_limits) and all(limit <= 0 for limit in reported_limits)
     if book_count <= 1 or low_limits:
@@ -1480,7 +1502,9 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
     skew = snapshot_skew(
         {
             "games": (games_payload or {}).get("generated_at"),
-            "line_movement": (movement_payload or {}).get("generated_at") if movement_payload else None,
+            "line_movement": (movement_payload or {}).get("generated_at")
+            if movement_payload
+            else None,
         }
     )
 
@@ -1547,6 +1571,7 @@ def export_game_cards_for_league(league: str) -> dict[str, Any]:
     write_json(paths.reports / "games_cards_status_latest.json", status)
     return status
 
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -1594,7 +1619,9 @@ def main(argv: list[str] | None = None) -> int:
     cov = status["coverage"]
     skew = status["snapshot_skew"]
     if skew.get("is_skewed"):
-        print(f"WARNING: {paths.league} snapshot skew {skew.get('skew_hours')}h - {skew.get('reason')}")
+        print(
+            f"WARNING: {paths.league} snapshot skew {skew.get('skew_hours')}h - {skew.get('reason')}"
+        )
     print(
         f"{paths.league}: {cov['cards_total']} cards "
         f"(Board A={cov['board_a_cards']} verified-EV, Board B={cov['board_b_cards']} signal) "
