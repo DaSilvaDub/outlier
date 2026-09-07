@@ -977,12 +977,7 @@ def _finalize_actionable_row(
     if not is_actionable:
         row["recommended_units_pre_news"] = ""
 
-    identity_fail_closed = any(
-        flag
-        in {slate_quality.PITCHER_IDENTITY_MISMATCH, slate_quality.PITCHER_IDENTITY_UNCONFIRMED}
-        for flag in dq_flags
-    )
-    if card.get("board") == "A" or identity_fail_closed:
+    if card.get("board") == "A":
         row["_board"] = "board_a" if row["actionable"] == "true" else "flagged"
         row["board"] = "A" if row["actionable"] == "true" else "A_FLAGGED"
     else:

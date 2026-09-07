@@ -187,10 +187,13 @@ def pitcher_identity_flags(
 
     A confirmed starter on team T must not ship as a clean card for team U
     (2026-09-06 MacKenzie Gore on WSH while starting for TEX). Relievers on a
-    team with a confirmed starter are the same class of mismatch.
+    team with a confirmed starter are the same class of mismatch. A missing
+    or empty lookup is unconfirmed — it does not skip the gate.
     """
-    if not _is_mlb_so_row(row) or not probable_pitchers:
+    if not _is_mlb_so_row(row):
         return []
+    if not probable_pitchers:
+        return [PITCHER_IDENTITY_UNCONFIRMED]
     player = _so_player_name(row, player_name)
     team = str(row.get("team") or "").strip().upper()
     if not player or not team:

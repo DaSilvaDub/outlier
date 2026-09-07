@@ -226,7 +226,11 @@ def test_player_prop_with_insight_stays_capped():
             "calculated_ev_pct": 0.05,
         }
     ]
-    row = make_row(card, ev)
+    row = make_row(
+        card,
+        ev,
+        probable_pitchers={"STL": {"pitcher": "Matthew Liberatore", "confirmed": True}},
+    )
     assert row["actionable"] == "true"
     assert row["recommended_units_pre_news"] == 1.0
     assert "insight_support" in row["signal_flags"]
@@ -1690,6 +1694,24 @@ def test_flagged_audits_share_existing_ev_quota():
     assert sum(row["_board"] in {"board_a", "flagged"} for row in out) == 15
 
 
+def test_board_b_identity_rows_use_signal_quota_not_ev_quota():
+    rows = [{"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"} for i in range(15)]
+    rows += [
+        {
+            "_board": "board_b",
+            "_rank_value": 99,
+            "market_id": "so-mismatch",
+            "data_quality_flags": "pitcher_identity_mismatch",
+        }
+    ]
+    out = rank_rows(rows, top_ev_n=15, top_signal_n=10)
+    flagged_ids = [row["market_id"] for row in out if row["_board"] == "flagged"]
+    signal_ids = [row["market_id"] for row in out if row["_board"] == "board_b"]
+    assert "so-mismatch" in signal_ids
+    assert "so-mismatch" not in flagged_ids
+    assert sum(row["_board"] == "board_a" for row in out) == 15
+
+
 # 15. Date selection: pick requested, fall back to latest, keep undated.
 def test_select_date():
     rows = [
@@ -3058,6 +3080,8 @@ def _gore_so_card(team, opponent, matchup, **extra):
 
 def test_gore_on_wrong_team_is_fail_closed_flagged():
     # Gore confirmed TEX vs TB, but the card put him on WSH @ LAD.
+    # Board B identity failures stay on Board B so they do not occupy the
+    # Board A EV quota.
     probable = {
         "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
         "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
@@ -3071,8 +3095,42 @@ def test_gore_on_wrong_team_is_fail_closed_flagged():
     assert row is not None
     assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
     assert row["actionable"] == "false"
+    assert row["board"] == "B"
+    assert row["_board"] == "board_b"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_board_a_identity_mismatch_is_a_flagged():
+    probable = {
+        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
+        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
+    }
+    row = make_row(
+        _gore_so_card("WSH", "LAD", "WSH @ LAD", board="A"),
+        [],
+        sport="MLB",
+        probable_pitchers=probable,
+    )
+    assert row is not None
+    assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
+    assert row["actionable"] == "false"
     assert row["board"] == "A_FLAGGED"
     assert row["_board"] == "flagged"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_missing_probable_lookup_fail_closes_so_row():
+    row = make_row(
+        _gore_so_card("TEX", "TB", "TB @ TEX"),
+        [],
+        sport="MLB",
+        probable_pitchers={},
+    )
+    assert row is not None
+    assert "pitcher_identity_unconfirmed" in row["data_quality_flags"].split(";")
+    assert row["actionable"] == "false"
+    assert row["board"] == "B"
+    assert row["_board"] == "board_b"
     assert row["recommended_units_pre_news"] == ""
 
 
