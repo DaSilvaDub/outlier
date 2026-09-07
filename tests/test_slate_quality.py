@@ -3,7 +3,9 @@ from outlier_scrapers.slate_quality import (
     apply_local_devig_unit_cap,
     classify_injuries,
     dossier_injury_section,
+    pitcher_identity_flags,
     playable_prop_sort_key,
+    summarize_pitcher_identity,
     signed_line_moved_with_side,
     usage_up_under,
 )
@@ -132,3 +134,125 @@ def test_dossier_injury_section_explains_usage_and_side_priority():
     assert "Opponent outs" in section
     assert "UNDER" in section
     assert "opponent star Out is the primary cover signal" in section
+
+
+def _gore_so_row(**extra):
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "player": "MacKenzie Gore",
+        "selection": "MacKenzie Gore - Strikeouts OVER 4.5",
+        "team": "TEX",
+        "matchup": "TB @ TEX",
+    }
+    row.update(extra)
+    return row
+
+
+def test_pitcher_identity_flags_gore_on_wrong_team():
+    # 2026-09-06-style leak: Gore is the confirmed TEX starter but the card
+    # attached him to WSH @ LAD. Fail closed — do not ship as a clean identity.
+    probable = {
+        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
+        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
+    }
+    flags = pitcher_identity_flags(_gore_so_row(team="WSH", matchup="WSH @ LAD"), probable)
+    assert "pitcher_identity_mismatch" in flags
+
+
+def test_pitcher_identity_flags_clean_when_gore_matches_confirmed_starter():
+    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    assert pitcher_identity_flags(_gore_so_row(), probable) == []
+
+
+def test_pitcher_identity_flags_reliever_against_confirmed_starter():
+    probable = {"CWS": {"pitcher": "Bryan Hudson", "confirmed": True}}
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "player": "Sean Burke",
+        "selection": "Sean Burke - Strikeouts OVER 0.5",
+        "team": "CWS",
+    }
+    flags = pitcher_identity_flags(row, probable)
+    assert "pitcher_identity_mismatch" in flags
+
+
+def test_pitcher_identity_unconfirmed_when_player_not_on_slate():
+    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "player": "Unknown Arm",
+        "selection": "Unknown Arm - Strikeouts OVER 4.5",
+        "team": "SEA",
+    }
+    flags = pitcher_identity_flags(row, probable)
+    assert "pitcher_identity_unconfirmed" in flags
+    assert "pitcher_identity_mismatch" not in flags
+
+
+def test_pitcher_identity_skips_when_no_probable_source():
+    assert pitcher_identity_flags(_gore_so_row(), None) == []
+    assert pitcher_identity_flags(_gore_so_row(), {}) == []
+
+
+def test_pitcher_identity_skips_non_mlb_so():
+    probable = {"CHI": {"pitcher": "Someone", "confirmed": True}}
+    row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "player": "MacKenzie Gore",
+        "team": "CHI",
+    }
+    assert pitcher_identity_flags(row, probable) == []
+
+
+def test_summarize_pitcher_identity_counts_fail_closed_rows():
+    summary = summarize_pitcher_identity(
+        [
+            {
+                "market_type": "SO",
+                "player": "MacKenzie Gore",
+                "team": "WSH",
+                "matchup": "WSH @ LAD",
+                "market_id": "m1",
+                "board": "A_FLAGGED",
+                "data_quality_flags": "pitcher_identity_mismatch",
+            },
+            {
+                "market_type": "SO",
+                "player": "Unknown Arm",
+                "team": "SEA",
+                "data_quality_flags": "pitcher_identity_unconfirmed",
+            },
+            {
+                "market_type": "SO",
+                "player": "MacKenzie Gore",
+                "team": "TEX",
+                "data_quality_flags": "",
+            },
+            {"market_type": "GAMELINE", "selection": "Spread AWAY +0.5"},
+        ]
+    )
+    assert summary["so_rows"] == 3
+    assert summary["mismatch_count"] == 1
+    assert summary["unconfirmed_count"] == 1
+    assert summary["fail_closed_count"] == 2
+    assert summary["status"] == "fail_closed"
+    assert summary["mismatch"][0]["market_id"] == "m1"
+
+
+def test_summarize_pitcher_identity_ok_when_clean():
+    summary = summarize_pitcher_identity(
+        [
+            {
+                "market_type": "SO",
+                "player": "MacKenzie Gore",
+                "team": "TEX",
+                "data_quality_flags": "",
+            }
+        ]
+    )
+    assert summary["status"] == "ok"
+    assert summary["fail_closed_count"] == 0

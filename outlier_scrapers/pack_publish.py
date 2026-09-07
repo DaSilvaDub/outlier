@@ -83,7 +83,9 @@ def clear_derived_pack_outputs(out_dir: Path) -> None:
     """
     verdicts_root = (out_dir / VERDICTS_SUBTREE).resolve()
     for name in DERIVED_PACK_OUTPUTS:
-        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(f"{VERDICTS_SUBTREE}/"):
+        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(
+            f"{VERDICTS_SUBTREE}/"
+        ):
             continue
         target = out_dir / name
         try:
@@ -313,9 +315,7 @@ def write_pack(
 
     _reconcile_candidates_with_totals_board(rows, totals_rows, team_totals_rows)
     if opportunity_rows is not None:
-        _reconcile_candidates_with_totals_board(
-            opportunity_rows, totals_rows, team_totals_rows
-        )
+        _reconcile_candidates_with_totals_board(opportunity_rows, totals_rows, team_totals_rows)
 
     # Build all legacy alternate artifacts first, then compare them on one
     # conservative, price-aware shadow surface.  The legacy files remain for
@@ -383,10 +383,7 @@ def write_pack(
     alt_player_parlays: list[dict[str, Any]] = []
     for lg, payload in (props_norm_by_league or {}).items():
         league_rows = build_alt_player_props_board(
-            payload,
-            league=lg,
-            target_date=pack_date,
-            ev_over_players=ev_over_players
+            payload, league=lg, target_date=pack_date, ev_over_players=ev_over_players
         )
         alt_player_rows.extend(league_rows)
         alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
@@ -686,7 +683,9 @@ def write_pack(
         opportunity_output.append(row)
     _write_csv(out_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], opportunity_output)
 
-    proj_content = "\n".join(json.dumps(p, sort_keys=True) for p in (projection_records or [])) + ("\n" if projection_records else "")
+    proj_content = "\n".join(json.dumps(p, sort_keys=True) for p in (projection_records or [])) + (
+        "\n" if projection_records else ""
+    )
     safe_write_text(out_dir / "projections.jsonl", proj_content)
 
     safe_write_text(
@@ -702,9 +701,21 @@ def write_pack(
         ),
     )
     if coverage is not None:
-        safe_write_text(out_dir / "candidate_coverage.json", json.dumps(coverage, indent=2, sort_keys=True))
+        safe_write_text(
+            out_dir / "candidate_coverage.json", json.dumps(coverage, indent=2, sort_keys=True)
+        )
+    from outlier_scrapers.slate_quality import summarize_pitcher_identity
+
+    identity_audit = summarize_pitcher_identity(rows)
+    safe_write_text(
+        out_dir / "identity_audit.json",
+        json.dumps(identity_audit, indent=2, sort_keys=True),
+    )
     if feed_health_by_league is not None:
-        safe_write_text(out_dir / "feed_health.json", json.dumps(feed_health_by_league, indent=2, sort_keys=True))
+        safe_write_text(
+            out_dir / "feed_health.json",
+            json.dumps(feed_health_by_league, indent=2, sort_keys=True),
+        )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:
@@ -726,7 +737,10 @@ def write_pack(
     safe_write_text(sections_dir / "game_totals.md", _format_game_totals_md(totals_rows))
 
     _write_csv(out_dir / "team_totals.csv", TEAM_TOTALS_HEADER, team_totals_rows)
-    safe_write_text(sections_dir / "team_totals.md", _format_game_totals_md(team_totals_rows, title="# Team totals"))
+    safe_write_text(
+        sections_dir / "team_totals.md",
+        _format_game_totals_md(team_totals_rows, title="# Team totals"),
+    )
 
     _write_csv(out_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, alt_tt_rows)
     _write_csv(

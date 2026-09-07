@@ -53,6 +53,7 @@ def test_mlb_so_projection_uses_gamelog_features_as_independent():
         "market_type": "SO",
         "selection": "Michael McGreevy - Strikeouts OVER 5.5",
         "player": "Michael McGreevy",
+        "team": "STL",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -83,6 +84,7 @@ def test_mlb_so_projection_without_pitcher_features_stays_league_avg_audit():
         "market_type": "SO",
         "selection": "Michael McGreevy - Strikeouts OVER 5.5",
         "player": "Michael McGreevy",
+        "team": "STL",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -151,10 +153,7 @@ def test_compute_starter_so_features_fail_closed_on_low_bf():
 
 
 def test_compute_starter_so_features_caps_at_max_starts():
-    logs = [
-        _start(so=6, bf=24, date=f"2026-07-{day:02d}")
-        for day in range(1, 10)
-    ]
+    logs = [_start(so=6, bf=24, date=f"2026-07-{day:02d}") for day in range(1, 10)]
     features = compute_starter_so_features_from_logs(logs, min_starts=3, max_starts=8)
     assert features is not None
     assert features["starts"] == 8
@@ -185,6 +184,7 @@ def test_mlb_so_projection_requires_feature_source_for_independent():
         "market_type": "SO",
         "selection": "Michael McGreevy - Strikeouts OVER 5.5",
         "player": "Michael McGreevy",
+        "team": "STL",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -219,6 +219,7 @@ def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
         "market_type": "SO",
         "selection": "Michael McGreevy - Strikeouts OVER 5.5",
         "player": "Michael McGreevy",
+        "team": "STL",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -268,9 +269,7 @@ def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
     promoted_record = mlb_so_projection_record(row, probable)
     assert promoted_record["feature_snapshot_hash"] == "so-starter-calibrated-abc123"
     assert independent_projection_eligible(promoted_record) is True
-    assert (
-        promoted_record["distribution"]["win_prob"] != baseline["distribution"]["win_prob"]
-    )
+    assert promoted_record["distribution"]["win_prob"] != baseline["distribution"]["win_prob"]
     projections._PROMOTED_SO_MODEL_CACHE.clear()
 
 
@@ -284,17 +283,42 @@ def test_unpromoted_or_corrupt_artifacts_leave_inference_on_defaults(tmp_path, m
 
     schema = projections.SO_FEATURE_SCHEMA_HASH
     for payload in (
-        {"status": "trained", "promoted": False, "model_version": "x", "schema_version": 1,
-         "feature_schema_hash": schema},
-        {"status": "trained", "promoted": True, "model_version": "x", "schema_version": 99,
-         "feature_schema_hash": schema},
-        {"status": "insufficient_samples", "promoted": True, "model_version": "x",
-         "schema_version": 1, "feature_schema_hash": schema},
-        {"promoted": True, "status": "trained", "model_version": "", "schema_version": 1,
-         "feature_schema_hash": schema},
+        {
+            "status": "trained",
+            "promoted": False,
+            "model_version": "x",
+            "schema_version": 1,
+            "feature_schema_hash": schema,
+        },
+        {
+            "status": "trained",
+            "promoted": True,
+            "model_version": "x",
+            "schema_version": 99,
+            "feature_schema_hash": schema,
+        },
+        {
+            "status": "insufficient_samples",
+            "promoted": True,
+            "model_version": "x",
+            "schema_version": 1,
+            "feature_schema_hash": schema,
+        },
+        {
+            "promoted": True,
+            "status": "trained",
+            "model_version": "",
+            "schema_version": 1,
+            "feature_schema_hash": schema,
+        },
         # Fitted on a different feature contract than inference feeds it.
-        {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1,
-         "feature_schema_hash": "some-other-schema"},
+        {
+            "promoted": True,
+            "status": "trained",
+            "model_version": "x",
+            "schema_version": 1,
+            "feature_schema_hash": "some-other-schema",
+        },
         # No compatibility metadata at all.
         {"promoted": True, "status": "trained", "model_version": "x", "schema_version": 1},
     ):

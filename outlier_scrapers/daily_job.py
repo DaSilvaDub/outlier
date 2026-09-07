@@ -480,6 +480,25 @@ def _run_pack_and_desk(
     return pack_dir, profile, pack_rows
 
 
+def _log_identity_audit(pack_dir: Path) -> None:
+    path = pack_dir / "identity_audit.json"
+    if not path.exists():
+        logger.info("Pitcher identity audit: identity_audit.json not written for %s", pack_dir.name)
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Pitcher identity audit: failed to read %s (%s)", path, exc)
+        return
+    logger.info(
+        "Pitcher identity audit: status=%s so=%s mismatch=%s unconfirmed=%s",
+        payload.get("status"),
+        payload.get("so_rows"),
+        payload.get("mismatch_count"),
+        payload.get("unconfirmed_count"),
+    )
+
+
 def _finalize_run(
     pack_dir: Path,
     args: argparse.Namespace,
@@ -518,6 +537,7 @@ def _finalize_run(
         },
     )
     _atomic_write_manifest(pack_dir, manifest)
+    _log_identity_audit(pack_dir)
     final_code = run_state.exit_code_for_overall(overall)
     logger.info(
         "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall

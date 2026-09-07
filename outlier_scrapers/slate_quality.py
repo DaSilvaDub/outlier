@@ -9,15 +9,13 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 _OUT_STATUS = re.compile(
     r"\b(?:out(?:\s+for\s+season)?|ofs|inactive)\b",
     re.IGNORECASE,
 )
-_INJURY_CHUNK = re.compile(
-    r"\s*(?:(?P<team>[A-Z]{2,3}):\s*)?(?P<body>[^|]+)"
-)
+_INJURY_CHUNK = re.compile(r"\s*(?:(?P<team>[A-Z]{2,3}):\s*)?(?P<body>[^|]+)")
 _STATUS_PAREN = re.compile(r"\((?P<status>[^)]*)\)")
 _PLAYER_PROP_SIDES = re.compile(r"\b(OVER|UNDER)\b", re.IGNORECASE)
 _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
@@ -37,6 +35,9 @@ ENABLE_INDEPENDENT_SO_SIZING = os.environ.get(
     "OUTLIER_PROMOTE_INDEPENDENT_SO", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
+PITCHER_IDENTITY_MISMATCH = "pitcher_identity_mismatch"
+PITCHER_IDENTITY_UNCONFIRMED = "pitcher_identity_unconfirmed"
+_MLB_SO_MARKETS = {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"}
 PLAYER_PROP_HINTS = {
     "REB",
     "AST",
@@ -144,6 +145,113 @@ def is_player_prop(row: dict[str, Any]) -> bool:
     return " - " in str(row.get("selection") or "")
 
 
+def _normalize_person_name(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _so_player_name(row: Mapping[str, Any], player_name: str | None = None) -> str:
+    if player_name:
+        return _normalize_person_name(player_name)
+    player = str(row.get("player") or "").strip()
+    if player:
+        return _normalize_person_name(player)
+    selection = str(row.get("selection") or "")
+    if " - " in selection:
+        return _normalize_person_name(selection.split(" - ", 1)[0])
+    return ""
+
+
+def _is_mlb_so_row(row: Mapping[str, Any]) -> bool:
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market_type") or row.get("market") or "").upper()
+    if sport and sport != "MLB":
+        return False
+    if market in _MLB_SO_MARKETS:
+        return True
+    selection = str(row.get("selection") or "").upper()
+    return "STRIKEOUT" in selection or "STRIKEOUT" in market
+
+
+def pitcher_identity_flags(
+    row: Mapping[str, Any],
+    probable_pitchers: Mapping[str, Any] | None,
+    *,
+    player_name: str | None = None,
+) -> list[str]:
+    """Fail-closed MLB SO identity vs the probable-pitcher lookup.
+
+    A confirmed starter on team T must not ship as a clean card for team U
+    (2026-09-06 MacKenzie Gore on WSH while starting for TEX). Relievers on a
+    team with a confirmed starter are the same class of mismatch.
+    """
+    if not _is_mlb_so_row(row) or not probable_pitchers:
+        return []
+    player = _so_player_name(row, player_name)
+    team = str(row.get("team") or "").strip().upper()
+    if not player or not team:
+        return [PITCHER_IDENTITY_UNCONFIRMED]
+
+    listed_teams = [
+        str(code).strip().upper()
+        for code, info in probable_pitchers.items()
+        if isinstance(info, Mapping)
+        and bool(info.get("confirmed"))
+        and _normalize_person_name(info.get("pitcher")) == player
+    ]
+    if listed_teams:
+        if team in listed_teams:
+            return []
+        return [PITCHER_IDENTITY_MISMATCH]
+
+    listed = probable_pitchers.get(team)
+    if isinstance(listed, Mapping) and listed.get("confirmed"):
+        starter = _normalize_person_name(listed.get("pitcher"))
+        if starter and starter != player:
+            return [PITCHER_IDENTITY_MISMATCH]
+    return [PITCHER_IDENTITY_UNCONFIRMED]
+
+
+def _identity_audit_entry(row: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "player": str(row.get("player") or row.get("selection") or ""),
+        "team": str(row.get("team") or ""),
+        "matchup": str(row.get("matchup") or ""),
+        "market_id": str(row.get("market_id") or ""),
+        "board": str(row.get("board") or ""),
+        "data_quality_flags": str(row.get("data_quality_flags") or ""),
+    }
+
+
+def summarize_pitcher_identity(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    so_rows = 0
+    mismatch: list[dict[str, str]] = []
+    unconfirmed: list[dict[str, str]] = []
+    for row in rows:
+        if not _is_mlb_so_row(row):
+            continue
+        so_rows += 1
+        flags = {
+            flag.strip()
+            for flag in str(row.get("data_quality_flags") or "").split(";")
+            if flag.strip()
+        }
+        if PITCHER_IDENTITY_MISMATCH in flags:
+            mismatch.append(_identity_audit_entry(row))
+        if PITCHER_IDENTITY_UNCONFIRMED in flags:
+            unconfirmed.append(_identity_audit_entry(row))
+    fail_closed_count = len(mismatch) + len(unconfirmed)
+    return {
+        "schema_version": "1.0",
+        "so_rows": so_rows,
+        "mismatch_count": len(mismatch),
+        "unconfirmed_count": len(unconfirmed),
+        "fail_closed_count": fail_closed_count,
+        "status": "fail_closed" if fail_closed_count else "ok",
+        "mismatch": mismatch,
+        "unconfirmed": unconfirmed,
+    }
+
+
 def usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
     """True when an UNDER player prop sits on a usage-up (own star out) card."""
     if not is_player_prop(row):
@@ -224,11 +332,7 @@ def apply_market_devig_unit_cap(row: dict[str, Any]) -> None:
 
 
 def _signal_flag_set(row: dict[str, Any]) -> set[str]:
-    return {
-        part.strip()
-        for part in str(row.get("signal_flags") or "").split(";")
-        if part.strip()
-    }
+    return {part.strip() for part in str(row.get("signal_flags") or "").split(";") if part.strip()}
 
 
 def has_predictive_signal(row: dict[str, Any]) -> bool:
@@ -281,9 +385,7 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     cfg = load_so_promotion_config()
     unit_cap = float(cfg.get("max_units") or INDEPENDENT_SO_UNIT_CAP)
     temper_weight = float(cfg.get("temper_independent_weight") or 0.55)
-    sizing_prob = temper_independent_prob(
-        independent, market, independent_weight=temper_weight
-    )
+    sizing_prob = temper_independent_prob(independent, market, independent_weight=temper_weight)
 
     push_prob = _to_float(row.get("independent_push_prob"))
     if push_prob is None:
@@ -329,12 +431,7 @@ def apply_predictor_gates(row: dict[str, Any]) -> None:
         _append_sizing_flag(row, "missing_predictive_signal")
     independent = _to_float(row.get("independent_model_prob"))
     edge = _to_float(row.get("edge_pct"))
-    if (
-        not promoted
-        and independent is None
-        and edge is not None
-        and edge >= PHANTOM_EDGE_THRESHOLD
-    ):
+    if not promoted and independent is None and edge is not None and edge >= PHANTOM_EDGE_THRESHOLD:
         _append_sizing_flag(row, "edge_suspect_no_independent_model")
         units = _to_float(row.get("recommended_units_pre_news"))
         if units is not None and units > MARKET_DEVIG_UNIT_CAP:
@@ -345,11 +442,7 @@ def apply_predictor_gates(row: dict[str, Any]) -> None:
     edge = _to_float(row.get("edge_pct"))
     missing_signal = "missing_predictive_signal" in str(row.get("sizing_flags") or "")
     is_actionable = (
-        units is not None
-        and units > 0
-        and edge is not None
-        and edge > 0
-        and not missing_signal
+        units is not None and units > 0 and edge is not None and edge > 0 and not missing_signal
     )
     row["actionable"] = "true" if is_actionable else "false"
     if not is_actionable:

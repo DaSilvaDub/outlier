@@ -38,6 +38,7 @@ def test_mlb_so_uses_context_adjustments_when_present():
         "market_type": "SO",
         "selection": "Michael McGreevy - Strikeouts OVER 5.5",
         "player": "Michael McGreevy",
+        "team": "STL",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -81,9 +82,7 @@ def test_wnba_minutes_features_fail_closed_and_project():
         "event_id": "e1",
         "market_id": "m1",
     }
-    record = wnba_points_projection_record(
-        row, features={**features, "points_per_minute": 0.95}
-    )
+    record = wnba_points_projection_record(row, features={**features, "points_per_minute": 0.95})
     assert record is not None
     assert record["feature_snapshot_hash"] == "wnba-minutes-ppm-v1"
     assert record["distribution"]["win_prob"] > 0

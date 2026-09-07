@@ -54,7 +54,9 @@ def test_strikeouts_mix_stochastic_workload():
     distribution = mlb_strikeout_distribution(18.0, 0.27)
     assert_valid_distribution(distribution)
     partition = distribution.partition(5.5, "OVER")
-    assert partition["win_prob"] + partition["push_prob"] + partition["loss_prob"] == pytest.approx(1.0)
+    assert partition["win_prob"] + partition["push_prob"] + partition["loss_prob"] == pytest.approx(
+        1.0
+    )
 
 
 def test_hits_allowed_and_first_inning_models_emit_full_partitions():
@@ -122,7 +124,10 @@ def test_empirical_game_total_dispersion_fits_from_settled_totals():
 
 def test_empirical_game_total_dispersion_handles_empty_and_singleton():
     assert empirical_game_total_dispersion([]) == {
-        "n": 0, "mean": None, "variance": None, "dispersion": None,
+        "n": 0,
+        "mean": None,
+        "variance": None,
+        "dispersion": None,
     }
     single = empirical_game_total_dispersion([9.0])
     assert single["n"] == 1
@@ -142,13 +147,7 @@ def test_explicit_projection_date_does_not_relabel_a_stale_feed():
     with pytest.raises(ValueError, match="do not match projection target_date"):
         _projection_slate_date(
             {},
-            [
-                {
-                    "sport_context": {
-                        "event_starts_at": "2026-08-24T19:10:00-04:00"
-                    }
-                }
-            ],
+            [{"sport_context": {"event_starts_at": "2026-08-24T19:10:00-04:00"}}],
             "2026-08-25",
         )
 
@@ -159,6 +158,7 @@ def test_mlb_so_projection_only_emits_for_confirmed_starters():
         "market_type": "SO",
         "selection": "Jackson Jobe - Strikeouts OVER 4.5",
         "player": "Jackson Jobe",
+        "team": "DET",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",
@@ -170,10 +170,41 @@ def test_mlb_so_projection_only_emits_for_confirmed_starters():
     assert record is not None
     assert record["distribution"]["win_prob"] > 0
     assert record["distribution"]["side"] == "OVER"
-    assert mlb_so_projection_record(row, {"DET": {"pitcher": "Jackson Jobe", "confirmed": False}}) is None
-    assert mlb_so_projection_record(row, {"DET": {"pitcher": "Tarik Skubal", "confirmed": True}}) is None
+    assert (
+        mlb_so_projection_record(row, {"DET": {"pitcher": "Jackson Jobe", "confirmed": False}})
+        is None
+    )
+    assert (
+        mlb_so_projection_record(row, {"DET": {"pitcher": "Tarik Skubal", "confirmed": True}})
+        is None
+    )
     reliever = {**row, "player": "Robert Stock", "selection": "Robert Stock - Strikeouts OVER 3.5"}
     assert mlb_so_projection_record(reliever, confirmed) is None
+
+
+def test_mlb_so_projection_does_not_use_another_teams_starter():
+    # Fail-closed: Gore pitching for TEX must not attach TEX features to a WSH card.
+    row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "selection": "MacKenzie Gore - Strikeouts OVER 4.5",
+        "player": "MacKenzie Gore",
+        "team": "WSH",
+        "line": 4.5,
+        "headline_side": "OVER",
+    }
+    probable = {
+        "TEX": {
+            "pitcher": "MacKenzie Gore",
+            "confirmed": True,
+            "projected_bf": 23.6,
+            "strikeout_rate": 0.25,
+            "feature_source": "mlb_stats_gamelog",
+        }
+    }
+    assert mlb_so_projection_record(row, probable) is None
+    tex_row = {**row, "team": "TEX"}
+    assert mlb_so_projection_record(tex_row, probable) is not None
 
 
 def test_project_rows_returns_auditable_probability_partition():
@@ -192,7 +223,9 @@ def test_project_rows_returns_auditable_probability_partition():
     )
     assert projections[0]["status"] == "eligible"
     distribution = projections[0]["distribution"]
-    assert distribution["win_prob"] + distribution["push_prob"] + distribution["loss_prob"] == pytest.approx(1.0)
+    assert distribution["win_prob"] + distribution["push_prob"] + distribution[
+        "loss_prob"
+    ] == pytest.approx(1.0)
 
 
 def test_first_inning_yes_no_sides_map_to_over_under_partition():
@@ -222,6 +255,7 @@ def test_build_mlb_so_projections_only_keeps_eligible_rows():
             "sport": "MLB",
             "market_type": "SO",
             "player": "Jackson Jobe",
+            "team": "DET",
             "event_id": "g1",
             "market_id": "m1",
             "outcome_id": "o1",
@@ -290,6 +324,7 @@ def test_export_projections_writes_normalized_projections_file(tmp_path, monkeyp
                         "sport": "MLB",
                         "market_type": "SO",
                         "player": "Jackson Jobe",
+                        "team": "DET",
                         "event_id": "g1",
                         "market_id": "m1",
                         "outcome_id": "o1",
@@ -354,7 +389,7 @@ def test_export_projections_writes_multimarket_wnba_artifact(tmp_path, monkeypat
     fake_paths.normalized.mkdir(parents=True, exist_ok=True)
     fake_paths.props_normalized_latest().write_text(
         json.dumps(
-                        {
+            {
                 "records": [
                     {
                         "sport": "WNBA",
@@ -366,9 +401,7 @@ def test_export_projections_writes_multimarket_wnba_artifact(tmp_path, monkeypat
                         "line": 19.5,
                         "position": "OVER",
                         "as_of": "2026-08-24T12:00:00-04:00",
-                        "sport_context": {
-                            "event_starts_at": "2026-08-25T00:30:00-04:00"
-                        },
+                        "sport_context": {"event_starts_at": "2026-08-25T00:30:00-04:00"},
                     },
                     {
                         "sport": "WNBA",
@@ -377,12 +410,10 @@ def test_export_projections_writes_multimarket_wnba_artifact(tmp_path, monkeypat
                         "event_id": "g1",
                         "market_id": "m2",
                         "outcome_id": "o2",
-                            "line": 8.5,
-                            "position": "OVER",
-                            "sport_context": {
-                                "event_starts_at": "2026-08-25T00:30:00-04:00"
-                            },
-                        },
+                        "line": 8.5,
+                        "position": "OVER",
+                        "sport_context": {"event_starts_at": "2026-08-25T00:30:00-04:00"},
+                    },
                 ]
             }
         ),
@@ -441,6 +472,7 @@ def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatc
                         "sport": "MLB",
                         "market_type": "SO",
                         "player": "Jackson Jobe",
+                        "team": "DET",
                         "event_id": "g1",
                         "market_id": "m1",
                         "outcome_id": "o1",
@@ -452,6 +484,7 @@ def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatc
                         "sport": "MLB",
                         "market_type": "SO",
                         "player": "Tarik Skubal",
+                        "team": "SEA",
                         "event_id": "g2",
                         "market_id": "m2",
                         "outcome_id": "o2",
@@ -499,6 +532,7 @@ def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path,
                         "sport": "MLB",
                         "market_type": "SO",
                         "player": "Jackson Jobe",
+                        "team": "DET",
                         "event_id": "g1",
                         "market_id": "m1",
                         "outcome_id": "o1",
@@ -510,6 +544,7 @@ def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path,
                         "sport": "MLB",
                         "market_type": "SO",
                         "player": "Tarik Skubal",
+                        "team": "SEA",
                         "event_id": "g2",
                         "market_id": "m2",
                         "outcome_id": "o2",
@@ -517,7 +552,7 @@ def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path,
                         "position": "OVER",
                         "sport_context": {"event_starts_at": "2026-08-26T19:10:00-04:00"},
                     },
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -564,35 +599,39 @@ def test_wnba_projection_build_fetches_once_per_player_and_skips_unsupported_mar
     monkeypatch.setattr(projections_module, "resolve_wnba_athlete_id", fake_resolve)
     monkeypatch.setattr(projections_module, "fetch_wnba_athlete_gamelog", fake_gamelog)
 
-    rows = [
-        {
-            "sport": "WNBA",
-            "market_type": "PTS",
-            "player": "A Player" if index < 4 else "B Player",
-            "outcome_id": f"o{index}",
-            "line": 15.5,
-            "position": "OVER" if index % 2 else "UNDER",
-        }
-        for index in range(6)
-    ] + [
-        {
-            "sport": "WNBA",
-            "market_type": "AST",
-            "player": "C Player",
-            "outcome_id": "o9",
-            "line": 4.5,
-            "position": "OVER",
-        }
-    ] + [
-        {
-            "sport": "WNBA",
-            "market_type": "BLK",
-            "player": "D Player",
-            "outcome_id": "o10",
-            "line": 1.5,
-            "position": "OVER",
-        }
-    ]
+    rows = (
+        [
+            {
+                "sport": "WNBA",
+                "market_type": "PTS",
+                "player": "A Player" if index < 4 else "B Player",
+                "outcome_id": f"o{index}",
+                "line": 15.5,
+                "position": "OVER" if index % 2 else "UNDER",
+            }
+            for index in range(6)
+        ]
+        + [
+            {
+                "sport": "WNBA",
+                "market_type": "AST",
+                "player": "C Player",
+                "outcome_id": "o9",
+                "line": 4.5,
+                "position": "OVER",
+            }
+        ]
+        + [
+            {
+                "sport": "WNBA",
+                "market_type": "BLK",
+                "player": "D Player",
+                "outcome_id": "o10",
+                "line": 1.5,
+                "position": "OVER",
+            }
+        ]
+    )
     records = build_wnba_projections(rows, season=2026)
 
     assert len(records) == 7
@@ -675,9 +714,7 @@ def test_wnba_gamelog_parser_reads_points_rebounds_and_assists_aliases():
         ],
     }
 
-    minutes, stats = fetch_wnba_athlete_gamelog(
-        "123", season=2026, fetch_json=lambda url: payload
-    )
+    minutes, stats = fetch_wnba_athlete_gamelog("123", season=2026, fetch_json=lambda url: payload)
 
     assert minutes == [31.0, 29.0]
     assert stats == {
@@ -685,8 +722,6 @@ def test_wnba_gamelog_parser_reads_points_rebounds_and_assists_aliases():
         "rebounds": [9.0, 7.0],
         "assists": [6.0, 5.0],
     }
-
-
 
 
 def _props_file(tmp_path, monkeypatch, *, generated_at: str, slate_date: str):
