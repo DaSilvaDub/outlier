@@ -1,5 +1,29 @@
 # Handoff Summary
 
+**Calibration Audit & Upgrades (2026-09-08)**:
+- **Last Commit SHA**: `103a07e`
+- **Branch / PR**: `feat/calibration-audit-upgrades` -> https://github.com/DaSilvaDub/outlier/pull/156
+- **Files Touched**: `outlier_scrapers/pack_selection.py`, `outlier_scrapers/slate_quality.py`, `tests/test_calibration_upgrades.py`, `calibration/blend_weights.json`, `calibration/stake_calibration.json`, `calibration/alerts/nightly_audit_status.json`
+- **Session Work**:
+  1. Ran STEP 0 canonical multi-ent verification: `REPORT STATUS: OK`, `RUN-NONCE: 342ec53e2f584285`.
+  2. Executed `/calibrate-outlier for last night slate`:
+     - Graded completed games and imported 275 settlements for the 2026-09-07 slate via `outlier_scrapers.results`.
+     - Analyzed `play_vs_stand_down.csv`: historical PLAY ROI is +2.00% (+4.87 units, +0.0387 price CLV), while STAND_DOWN filter avoided -2,201.01 units in negative EV churn.
+     - Refitted `fit-blend` (422 samples, 0.75 market consensus anchor) and `fit-stake-calibration` (17,997 samples).
+     - Successfully replayed chronological portfolio (2026-07-01 to 2026-12-31) and regenerated reports in `calibration/reports/latest/`.
+  3. Audited 2026-09-07 slate vs actual scores and player box scores:
+     - All 185 pipeline decisions issued `STAND_DOWN`. The raw candidate pool went 8-8 (50%), so standing down protected bankroll capital against vig churn.
+     - Identified root cause of Nick Pivetta K loss: pitcher returning from 60-day IL on strict pitch limit.
+     - Identified stray MLB `GAME_PROP` (`CIN @ LAD Hits OVER 1.5`) in candidate pool.
+  4. Implemented code recommendations on `feat/calibration-audit-upgrades`:
+     - Added `slate_quality.pitcher_returning_from_il` to detect pitchers returning from IL/rehab. Disqualifies OVER strikeout recommendations (`actionable = false`, units cleared, 25% projection haircut).
+     - Enforced strict exclusion of non-first-inning MLB `GAME_PROP` markets from `candidates.csv`.
+     - Added `tests/test_calibration_upgrades.py` (5 unit tests passing; 169 total tests passing across suite).
+     - Pushed branch and opened PR #156.
+- **Next Steps**:
+  - Review and merge PR #156 into `master`.
+  - Next daily pipeline run will automatically benefit from IL return pitch limit protection and clean candidate markets.
+
 **Daily Debug Review (2026-09-07)**:
 - **Last Commit SHA**: `00c9cbb`
 - **Branch / PR**: `claude/inspiring-fermat-mzn1j5` -> https://github.com/DaSilvaDub/outlier/pull/155
