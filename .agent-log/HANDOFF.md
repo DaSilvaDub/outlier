@@ -1,5 +1,18 @@
 # Handoff Summary
 
+**Calibration audit review fixes (2026-09-08)**:
+- **Branch**: `fix/calibration-audit-review` (follow-up to merged PR #156).
+- **Files Touched**: `outlier_scrapers/pack_selection.py`, `outlier_scrapers/slate_quality.py`, `tests/test_calibration_upgrades.py`, `calibration/stake_calibration.json`
+- **Session Work**:
+  1. STEP 0: `REPORT STATUS: OK`, `RUN-NONCE: 3c7d09a397e34a41`, head `acf0bfc`.
+  2. PR #156 review: UNDER SO was also `A_FLAGGED` because `pitcher_returning_from_il` was stamped into `data_quality_flags` and `_finalize_actionable_row` requires `not dq_flags`.
+  3. OVER-only DQ flag; UNDER gets `pitcher_rehab_context` on `signal_flags`. Dropped the post-sizing 25% `projection_mean` haircut.
+  4. IL detector uses `ret YYYY-MM-DD` vs slate date (21-day window), rejects "has not been cleared", and no longer treats bare rehab/cleared/first time as a return.
+  5. MLB `GAME_PROP` candidates now require NRFI/YRFI or first-inning RUNS (first-inning Hits dropped).
+  6. Restored `calibration/stake_calibration.json` to the `market_consensus_prob` artifact. The 17,997-sample refit used `final_blended_prob` and live policy would reject it.
+- **Verify**: `pytest tests/test_calibration_upgrades.py tests/test_pack.py tests/test_pack_integrity.py tests/test_predictor_gates.py tests/test_stake_calibration.py` → 195 passed; ruff clean.
+- **Next Steps**: Open PR from `fix/calibration-audit-review`. Refit stake calibration with `--source-column market_consensus_prob` when the ledger is available.
+
 **Calibration Audit & Upgrades (2026-09-08)**:
 - **Last Commit SHA**: `103a07e`
 - **Branch / PR**: `feat/calibration-audit-upgrades` -> https://github.com/DaSilvaDub/outlier/pull/156

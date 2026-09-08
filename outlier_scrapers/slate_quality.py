@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 _OUT_STATUS = re.compile(
@@ -26,9 +27,28 @@ _RETURNING_IL_STATUS_RE = re.compile(
     re.IGNORECASE,
 )
 _RETURNING_IL_NOTE_RE = re.compile(
-    r"\b(?:cleared(?:\s+to)?|first\s+(?:start|time|game|outing|appearance)|rehab(?:\s+(?:assignment|start|outing))?|activat(?:ed|ion)|pitch\s+(?:count|limit|restriction)|simulated\s+game)\b",
+    r"\b(?:"
+    r"cleared\s+to\s+(?:start|pitch|take\s+the\s+mound)|"
+    r"first\s+start|"
+    r"pitch\s+(?:count|limit|restriction)|"
+    r"activated"
+    r")\b",
     re.IGNORECASE,
 )
+_RETURNING_IL_NEGATED_RE = re.compile(
+    r"\b(?:has|have|is|are|was|were)\s+not\s+(?:been\s+)?cleared\b|"
+    r"\b(?:not|never)\s+(?:been\s+)?cleared\b",
+    re.IGNORECASE,
+)
+_RET_DATE_RE = re.compile(r"\bret\s+(\d{4}-\d{2}-\d{2})\b", re.IGNORECASE)
+_MLB_NRFI_YRFI_TOKEN_RE = re.compile(r"\b(?:NRFI|YRFI)\b", re.IGNORECASE)
+_MLB_FIRST_INNING_RE = re.compile(
+    r"\b(?:FIRST[ _-]?INNING|1ST[ _-]?(?:INNING|INN)|1I)\b",
+    re.IGNORECASE,
+)
+_MLB_RUNS_TOKEN_RE = re.compile(r"\bRUNS?\b", re.IGNORECASE)
+# ret date on/before slate date, and not older than this many days.
+IL_RETURN_WINDOW_DAYS = 21
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
@@ -48,6 +68,8 @@ GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
 PITCHER_IDENTITY_MISMATCH = "pitcher_identity_mismatch"
 PITCHER_IDENTITY_UNCONFIRMED = "pitcher_identity_unconfirmed"
 PITCHER_RETURNING_FROM_IL = "pitcher_returning_from_il"
+PITCHER_REHAB_CONTEXT = "pitcher_rehab_context"
+PITCHER_REHAB_PITCH_LIMIT = "pitcher_rehab_pitch_limit"
 _MLB_SO_MARKETS = {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"}
 PLAYER_PROP_HINTS = {
     "REB",
@@ -228,13 +250,59 @@ def pitcher_identity_flags(
     return [PITCHER_IDENTITY_UNCONFIRMED]
 
 
+def _parse_date_value(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _row_slate_date(row: Mapping[str, Any]) -> date | None:
+    for key in ("_event_starts_at", "event_starts_at", "as_of"):
+        parsed = _parse_date_value(row.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _ret_date_in_return_window(ret_date: date, slate_date: date) -> bool:
+    if ret_date > slate_date:
+        return False
+    return (slate_date - ret_date).days <= IL_RETURN_WINDOW_DAYS
+
+
+def is_mlb_nrfi_yrfi_candidate(
+    *,
+    proposition: Any = "",
+    market_label: Any = "",
+    market_token: Any = "",
+    period_label: Any = "",
+) -> bool:
+    """True for MLB first-inning run props (NRFI/YRFI), not first-inning Hits."""
+    text = " ".join(
+        str(part or "") for part in (proposition, market_label, market_token, period_label)
+    )
+    if _MLB_NRFI_YRFI_TOKEN_RE.search(text):
+        return True
+    return bool(_MLB_FIRST_INNING_RE.search(text) and _MLB_RUNS_TOKEN_RE.search(text))
+
+
 def pitcher_returning_from_il(
     row: Mapping[str, Any],
     injury_flags: str | None = None,
     *,
     player_name: str | None = None,
 ) -> bool:
-    """True when an MLB starting pitcher is returning from an IL stint or rehab limit."""
+    """True when an MLB starter's IL note is a return for this start."""
     if not _is_mlb_so_row(row):
         return False
     player = _so_player_name(row, player_name)
@@ -243,6 +311,7 @@ def pitcher_returning_from_il(
     text = str(injury_flags if injury_flags is not None else row.get("injury_flags") or "").strip()
     if not text:
         return False
+    slate_date = _row_slate_date(row)
 
     for match in _INJURY_CHUNK.finditer(text):
         body = (match.group("body") or "").strip()
@@ -257,7 +326,18 @@ def pitcher_returning_from_il(
 
         status_match = _STATUS_PAREN.search(body)
         status = status_match.group("status") if status_match else body
-        if _RETURNING_IL_STATUS_RE.search(status) and _RETURNING_IL_NOTE_RE.search(body):
+        if not _RETURNING_IL_STATUS_RE.search(status):
+            continue
+        if _RETURNING_IL_NEGATED_RE.search(body):
+            continue
+
+        ret_match = _RET_DATE_RE.search(status) or _RET_DATE_RE.search(body)
+        ret_date = _parse_date_value(ret_match.group(1) if ret_match else None)
+        if ret_date is not None and slate_date is not None:
+            if _ret_date_in_return_window(ret_date, slate_date):
+                return True
+            continue
+        if _RETURNING_IL_NOTE_RE.search(body):
             return True
     return False
 

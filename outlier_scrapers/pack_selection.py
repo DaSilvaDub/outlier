@@ -431,14 +431,12 @@ def _resolve_candidate_identity(
         return None
     market_type_upper = str(market_type or "").upper()
     if sport == "MLB" and market_type_upper == "GAME_PROP":
-        first_inning_text = f"{proposition or ''} {card.get('market_label') or ''} {market_token or ''} {card.get('period_label') or ''}".upper()
-        is_nrfi_yrfi = bool(
-            re.search(
-                r"\b(?:NRFI|YRFI|FIRST[ _-]?INNING|1ST[ _-]?(?:INNING|INN)|1I)\b",
-                first_inning_text,
-            )
-        )
-        if not is_nrfi_yrfi:
+        if not slate_quality.is_mlb_nrfi_yrfi_candidate(
+            proposition=proposition,
+            market_label=card.get("market_label") or ref.get("market_label"),
+            market_token=market_token,
+            period_label=card.get("period_label") or ref.get("period_label"),
+        ):
             return None
     scope = card.get("scope") or ref.get("scope")
     is_total_proposition = (
@@ -851,18 +849,13 @@ def _apply_quality_and_signal_flags(
     )
     if slate_quality.usage_up_under(row, injury_view):
         dq_flags.append("usage_up_under")
-    if slate_quality.pitcher_returning_from_il(
+    returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
-    ):
+    )
+    if returning_from_il and headline_side == "OVER":
         dq_flags.append(slate_quality.PITCHER_RETURNING_FROM_IL)
-        if headline_side == "OVER":
-            row["recommended_units_pre_news"] = ""
-            existing_sizing = str(row.get("sizing_flags") or "")
-            if "pitcher_rehab_pitch_limit" not in existing_sizing:
-                row["sizing_flags"] = f"{existing_sizing};pitcher_rehab_pitch_limit".strip(";")
-            mean_val = _to_float(row.get("projection_mean"))
-            if mean_val is not None:
-                row["projection_mean"] = round(mean_val * 0.75, 4)
+        row["recommended_units_pre_news"] = ""
+        slate_quality._append_sizing_flag(row, slate_quality.PITCHER_REHAB_PITCH_LIMIT)
     line_with_side = slate_quality.signed_line_moved_with_side(row)
     if line_with_side:
         dq_flags = [flag for flag in dq_flags if flag != "reverse_line_movement"]
@@ -896,7 +889,6 @@ def _apply_quality_and_signal_flags(
         not DISQUALIFYING_DQ_FLAGS.isdisjoint(dq_flags)
         or any(f.startswith(CROSS_SPORT_DQ_PREFIX) for f in dq_flags)
         or any(f == "ev_line_fallback" or f.startswith("ev_line_fallback:") for f in dq_flags)
-        or (headline_side == "OVER" and slate_quality.PITCHER_RETURNING_FROM_IL in dq_flags)
     )
     if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
@@ -942,6 +934,8 @@ def _apply_quality_and_signal_flags(
             signal_flags.append("movement_against")
     if line_with_side:
         signal_flags.append("line_moved_with_side")
+    if returning_from_il and headline_side != "OVER":
+        signal_flags.append(slate_quality.PITCHER_REHAB_CONTEXT)
     if injury_view.own_star_out:
         signal_flags.append("own_star_out")
     if injury_view.opponent_star_out:
