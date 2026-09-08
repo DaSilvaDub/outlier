@@ -21,6 +21,14 @@ _PLAYER_PROP_SIDES = re.compile(r"\b(OVER|UNDER)\b", re.IGNORECASE)
 _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 _SELECTION_NAME_RE = re.compile(r"^(.*?)\s+(?:OVER|UNDER)\b", re.IGNORECASE)
 _TRAILING_SO_MARKET_RE = re.compile(r"\s+(?:SO|STRIKEOUTS?|K)$", re.IGNORECASE)
+_RETURNING_IL_STATUS_RE = re.compile(
+    r"\b(?:60|15|10|7)[- ]day\s+il\b|\binjured\s+list\b",
+    re.IGNORECASE,
+)
+_RETURNING_IL_NOTE_RE = re.compile(
+    r"\b(?:cleared(?:\s+to)?|first\s+(?:start|time|game|outing|appearance)|rehab(?:\s+(?:assignment|start|outing))?|activat(?:ed|ion)|pitch\s+(?:count|limit|restriction)|simulated\s+game)\b",
+    re.IGNORECASE,
+)
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
@@ -39,6 +47,7 @@ ENABLE_INDEPENDENT_SO_SIZING = os.environ.get(
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
 PITCHER_IDENTITY_MISMATCH = "pitcher_identity_mismatch"
 PITCHER_IDENTITY_UNCONFIRMED = "pitcher_identity_unconfirmed"
+PITCHER_RETURNING_FROM_IL = "pitcher_returning_from_il"
 _MLB_SO_MARKETS = {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"}
 PLAYER_PROP_HINTS = {
     "REB",
@@ -217,6 +226,40 @@ def pitcher_identity_flags(
         if starter and starter != player:
             return [PITCHER_IDENTITY_MISMATCH]
     return [PITCHER_IDENTITY_UNCONFIRMED]
+
+
+def pitcher_returning_from_il(
+    row: Mapping[str, Any],
+    injury_flags: str | None = None,
+    *,
+    player_name: str | None = None,
+) -> bool:
+    """True when an MLB starting pitcher is returning from an IL stint or rehab limit."""
+    if not _is_mlb_so_row(row):
+        return False
+    player = _so_player_name(row, player_name)
+    if not player:
+        return False
+    text = str(injury_flags if injury_flags is not None else row.get("injury_flags") or "").strip()
+    if not text:
+        return False
+
+    for match in _INJURY_CHUNK.finditer(text):
+        body = (match.group("body") or "").strip()
+        if not body:
+            continue
+        name_part = body.split("(", 1)[0].split(":", 1)[0].strip()
+        if not name_part:
+            continue
+        norm_name = _normalize_person_name(name_part)
+        if norm_name != player and player not in norm_name and norm_name not in player:
+            continue
+
+        status_match = _STATUS_PAREN.search(body)
+        status = status_match.group("status") if status_match else body
+        if _RETURNING_IL_STATUS_RE.search(status) and _RETURNING_IL_NOTE_RE.search(body):
+            return True
+    return False
 
 
 def _identity_audit_entry(row: Mapping[str, Any]) -> dict[str, str]:
