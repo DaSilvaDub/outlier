@@ -17,7 +17,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["outlier_scrapers"]
+packages = ["outlier_scrapers", "outlier_scrapers.ncaa"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

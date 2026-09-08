@@ -26,6 +26,7 @@ original_write_pack.py
 config/*
 !config/.gitkeep
 !config/blend_promotion.json
+!config/ncaa_pipeline.json
 config/outlier_session.json
 config/.outlier_session/
 config/api_bearer_token.txt

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "_comment": "NCAA football pipeline thresholds. Every value here is a starting framework from the operating spec, not a validated setting. Recalibrate against outlier_scrapers.ncaa.backtest output before trusting any of them. Unknown keys raise on load.",
+  "devig_method": "power",
+  "margin": {
+    "margin_sigma": 16.0,
+    "home_field_points": 2.4,
+    "market_spread_weight": 0.55
+  },
+  "tiers": {
+    "core_min_win_prob": 0.90,
+    "core_min_confidence": 85.0,
+    "supporting_min_win_prob": 0.85,
+    "supporting_min_confidence": 78.0
+  },
+  "parlay": {
+    "objective": "kelly_growth",
+    "max_probability_decay_per_leg": 0.06
+  },
+  "totals": {
+    "min_total_edge": 3.0
+  }
+}
