@@ -433,13 +433,18 @@ def write_pack(
                 res = conn.execute(
                     "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
                 ).fetchone()
-                days = res[0] if res else 0
-                if days < 14:
-                    raise ValueError(
-                        f"Enforce mode refused: only {days} days of shadow history found. 14 required."
-                    )
+                days = int(res[0] or 0) if res else 0
             except sqlite3.OperationalError:
-                pass  # table might not exist in an empty db
+                # No market_snapshots table (or no captured_at column) is an empty
+                # feedback db — zero shadow days, the same condition the missing-file
+                # branch above refuses on. Swallowing it here let enforce mode write a
+                # real-money-sized pack with no measured shadow history at all, which
+                # is the one thing this gate exists to prevent.
+                days = 0
+        if days < 14:
+            raise ValueError(
+                f"Enforce mode refused: only {days} days of shadow history found. 14 required."
+            )
 
     learned_runtime = _load_learned_stake_runtime(policy)
     all_projected = []

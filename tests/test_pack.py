@@ -4036,3 +4036,56 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
                 pytest.fail(f"Unexpected error: {e}")
     finally:
         P.PROJECT_ROOT = original_project_root
+
+
+@pytest.mark.uses_enforce_mode
+def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path):
+    """An existing-but-empty feedback db is zero shadow days, not a free pass.
+
+    The 14-day check used to swallow ``sqlite3.OperationalError`` and fall
+    through, so a ``feedback.sqlite3`` that exists without a
+    ``market_snapshots`` table let enforce mode write a real-money-sized pack
+    with no measured shadow history — while a *missing* db file was refused.
+    """
+    out_dir = tmp_path / "2026-07-25"
+    out_dir.mkdir()
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    policy_path = config_dir / "portfolio_risk.json"
+    policy_path.write_text(
+        """{
+    "schema_version": "1.0",
+    "policy_version": "1.0",
+    "mode": "enforce",
+    "streams_in_scope": ["candidates", "game_totals", "team_totals"],
+    "stake_increment": 0.5,
+    "max_wager_units": 1.0,
+    "max_daily_units": 20.0,
+    "max_event_units": 4.0,
+    "max_player_units": 3.0,
+    "max_team_units": 5.0,
+    "max_market_type_units": 6.0,
+    "max_correlated_cluster_units": 5.0,
+    "max_book_units": 8.0,
+    "non_authoritative_book_policy": "flag_and_report_only",
+    "shadow_multipliers_neutral": true
+}""",
+        encoding="utf-8",
+    )
+
+    db_dir = tmp_path / "calibration"
+    db_dir.mkdir()
+    import sqlite3
+
+    sqlite3.connect(db_dir / "feedback.sqlite3").close()
+
+    import outlier_scrapers.paths as P
+
+    original_project_root = P.PROJECT_ROOT
+    P.PROJECT_ROOT = tmp_path
+    try:
+        with pytest.raises(ValueError, match="only 0 days of shadow history found"):
+            write_pack([], out_dir)
+    finally:
+        P.PROJECT_ROOT = original_project_root
