@@ -4042,10 +4042,12 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
 def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path):
     """An existing-but-empty feedback db is zero shadow days, not a free pass.
 
-    The 14-day check used to swallow ``sqlite3.OperationalError`` and fall
-    through, so a ``feedback.sqlite3`` that exists without a
-    ``market_snapshots`` table let enforce mode write a real-money-sized pack
-    with no measured shadow history — while a *missing* db file was refused.
+    ``write_pack`` used to carry a second, weaker copy of this gate further
+    down the same function, which swallowed ``sqlite3.OperationalError`` and
+    fell through. It was unreachable behind the live gate, but nothing pinned
+    the behaviour it disagreed about, so this covers the shape both copies read
+    differently: a ``feedback.sqlite3`` that exists without a
+    ``market_snapshots`` table must fail closed, like a missing db file does.
     """
     out_dir = tmp_path / "2026-07-25"
     out_dir.mkdir()
@@ -4085,7 +4087,7 @@ def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
     try:
-        with pytest.raises(ValueError, match="only 0 days of shadow history found"):
+        with pytest.raises(ValueError, match="Enforce mode refused.*market_snapshots"):
             write_pack([], out_dir)
     finally:
         P.PROJECT_ROOT = original_project_root

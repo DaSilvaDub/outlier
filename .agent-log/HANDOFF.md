@@ -10,13 +10,20 @@
      were inert. Review is against this clone's `claude/inspiring-fermat-b1yfk9`; branch /
      worktree conclusions still need a canonical sync run. No reasoning models, desk
      runs or provider calls were invoked at any point (offline throughout).
-  2. Fixed a fail-open in the enforce-mode 14-day shadow-window gate
-     (`pack_publish.write_pack`). `except sqlite3.OperationalError: pass` swallowed a
-     missing `market_snapshots` table and fell through, so a `feedback.sqlite3` that
-     exists but is empty let enforce mode publish a real-money-sized pack with zero
-     measured shadow history — while a *missing* db file was correctly refused. A
-     missing table now reads as 0 days and the refusal moved out of the `try`.
-     Added `test_enforce_refused_when_feedback_db_has_no_market_snapshots_table`.
+  2. Removed a duplicated enforce-mode gate in `pack_publish.write_pack`. The function
+     carried the immutable-pack + 14-day shadow-window checks **twice** (L197-243 and
+     L408-447) against the same policy and the same db. The second copy was the weaker
+     of the two — `except sqlite3.OperationalError: pass` swallowed a missing
+     `market_snapshots` table and fell through, where the live gate refuses on any
+     query failure — and it was unreachable, since the live gate's shadow-day count is
+     a subset (it joins `decisions.portfolio_mode = 'shadow'` when that column exists),
+     so it raises wherever the copy would have. Deleted rather than aligned: two copies
+     of one risk gate is how the weaker one ends up being the one that runs. Behaviour
+     is unchanged. NB an earlier commit on this branch (`1e2275b`) reported this as a
+     live fail-open; that was wrong — I had read only the second copy. CI caught it.
+  2b. Added `test_enforce_refused_when_feedback_db_has_no_market_snapshots_table`: an
+     existing-but-empty feedback db must fail closed like a missing file. Nothing
+     pinned that shape before, which is why the two copies could disagree unnoticed.
   3. Reviewed the five commits this branch carries over `master` (IL-return SO
      disqualification, MLB `GAME_PROP` NRFI/YRFI pruning, `_scope_token` full-game fold,
      `_to_float` unit hardening). No defects found; `_event_starts_at` is populated
