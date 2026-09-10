@@ -403,44 +403,13 @@ def write_pack(
     except Exception:
         git_sha = "unknown"
 
-    policy = load_portfolio_policy()
-
-    # Immutable enforce pack check
-    if policy.mode == "enforce":
-        sidecar_path = out_dir / "portfolio_risk.json"
-        if sidecar_path.exists():
-            with open(sidecar_path, "r", encoding="utf-8") as sf:
-                try:
-                    existing = json.load(sf)
-                    if existing.get("mode") == "enforce":
-                        raise ValueError(
-                            "Enforce pack already exists for this slate. Refusing to overwrite immutable pack."
-                        )
-                except json.JSONDecodeError:
-                    pass
-
-        # 14-day shadow window check
-        import sqlite3
-        from outlier_scrapers import paths
-
-        db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
-        if not db_path.exists():
-            raise ValueError(
-                "Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required."
-            )
-        with sqlite3.connect(db_path) as conn:
-            try:
-                res = conn.execute(
-                    "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
-                ).fetchone()
-                days = res[0] if res else 0
-                if days < 14:
-                    raise ValueError(
-                        f"Enforce mode refused: only {days} days of shadow history found. 14 required."
-                    )
-            except sqlite3.OperationalError:
-                pass  # table might not exist in an empty db
-
+    # The immutable-pack and 14-day shadow-window gates already ran at the top of
+    # write_pack, against the same policy and the same db. A second copy stood here
+    # and could never reach a refusal the first had not already raised — but it was
+    # the weaker of the two: it swallowed sqlite3.OperationalError and fell through,
+    # where the live gate refuses on any query failure. Two copies of one risk gate
+    # is how the weaker one ends up being the one that runs, so the dead copy is
+    # gone rather than merely brought into line.
     learned_runtime = _load_learned_stake_runtime(policy)
     all_projected = []
     for stream_name, stream_rows in [
