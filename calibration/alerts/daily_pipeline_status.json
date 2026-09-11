@@ -1,12 +1,12 @@
 ﻿{
     "status":  "ok",
-    "timestamp_utc":  "2026-09-07T12:03:14.3564070Z",
+    "timestamp_utc":  "2026-09-11T12:04:14.5114089Z",
     "message":  "Daily pipeline completed.",
     "identity_audit":  {
-                           "so_rows":  7,
-                           "status":  "fail_closed",
+                           "so_rows":  23,
+                           "status":  "ok",
                            "mismatch_count":  0,
-                           "unconfirmed_count":  1,
-                           "fail_closed_count":  1
+                           "unconfirmed_count":  0,
+                           "fail_closed_count":  0
                        }
 }

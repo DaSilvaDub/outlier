@@ -1,5 +1,17 @@
 # Handoff Summary
 
+**Daily Pipeline Run (2026-09-10)**:
+- **Last Commit SHA**: `ec02340`
+- **Files Touched**: `calibration/alerts/daily_pipeline_status.json`, `calibration/alerts/nightly_audit_status.json`, `calibration/blend_weights.json`, `calibration/stake_calibration.json`, `.agent-log/HANDOFF.md`
+- **Session Work**:
+  1. Ran STEP 0 canonical multi-ent verification: `REPORT STATUS: OK`, `RUN-NONCE: bb7fc45276a04d7b`, head `ec02340`.
+  2. Executed daily pipeline via `powershell -ExecutionPolicy Bypass -File scripts\run_daily_pipeline.ps1` with paid reasoning strictly OFF (`analysis-profile local`, MLB and WNBA leagues).
+  3. Identified and resolved stray test directory `packs/2099-07-07` by renaming it to `_test_fixture_2099-07-07-renamed` so that `find_all_pack_dirs` correctly resolves today's pack `2026-09-10`.
+  4. Automatic result collection: 44 provider events processed, 44 settlements updated, 0 ambiguous/unmatched.
+  5. Pitcher identity audit confirmed: `status=ok so=8 mismatch=0 unconfirmed=0 fail_closed_count=0`.
+  6. Export directories cleanly organized for `2026-09-10` into both `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+- **Next Steps**: Slate is processed and ready for prompt consumption or downstream manual reviews.
+
 **Calibration audit review fixes (2026-09-08)**:
 - **Branch**: `fix/calibration-audit-review` (follow-up to merged PR #156).
 - **Files Touched**: `outlier_scrapers/pack_selection.py`, `outlier_scrapers/slate_quality.py`, `tests/test_calibration_upgrades.py`, `calibration/stake_calibration.json`
