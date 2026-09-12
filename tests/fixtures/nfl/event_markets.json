@@ -1,0 +1,170 @@
+{
+  "markets": [
+    {
+      "marketId": "m-spread-kc-bal",
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "marketType": "GAMELINE",
+      "proposition": "SPREAD",
+      "label": "Point Spread",
+      "periodLabel": null,
+      "includeOvertime": true,
+      "books": ["DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS"],
+      "publicMoney": [
+        {"position": "HOME", "percentage": 55, "money": 68},
+        {"position": "AWAY", "percentage": 45, "money": 32}
+      ],
+      "outcomes": [
+        {
+          "outcomeId": "o-spread-kc",
+          "position": "HOME",
+          "line": -3.5,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -108, "decimal": 1.93},
+            {"book": "BETMGM", "american": -110, "decimal": 1.91},
+            {"book": "CAESARS", "american": -110, "decimal": 1.91}
+          ],
+          "stats": {"curSeason": 0.65, "l5": 0.80, "l10": 0.70, "h2h": 0.60}
+        },
+        {
+          "outcomeId": "o-spread-bal",
+          "position": "AWAY",
+          "line": 3.5,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -112, "decimal": 1.89},
+            {"book": "BETMGM", "american": -110, "decimal": 1.91},
+            {"book": "CAESARS", "american": -110, "decimal": 1.91}
+          ],
+          "stats": {"curSeason": 0.60, "l5": 0.60, "l10": 0.60, "h2h": 0.40}
+        }
+      ]
+    },
+    {
+      "marketId": "m-tot-kc-bal",
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "marketType": "GAMELINE",
+      "proposition": "TOTAL",
+      "label": "Total Points",
+      "periodLabel": null,
+      "includeOvertime": true,
+      "books": ["DRAFTKINGS", "FANDUEL", "BETMGM"],
+      "outcomes": [
+        {
+          "outcomeId": "o-tot-over",
+          "position": "OVER",
+          "line": 47.5,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -105, "decimal": 1.95},
+            {"book": "BETMGM", "american": -110, "decimal": 1.91}
+          ]
+        },
+        {
+          "outcomeId": "o-tot-under",
+          "position": "UNDER",
+          "line": 47.5,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -115, "decimal": 1.87},
+            {"book": "BETMGM", "american": -110, "decimal": 1.91}
+          ]
+        }
+      ]
+    },
+    {
+      "marketId": "m-ml-kc-bal",
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "marketType": "GAMELINE",
+      "proposition": "MONEYLINE",
+      "label": "Moneyline",
+      "periodLabel": null,
+      "includeOvertime": true,
+      "books": ["DRAFTKINGS", "FANDUEL"],
+      "outcomes": [
+        {
+          "outcomeId": "o-ml-kc",
+          "position": "HOME",
+          "line": 0.0,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -175, "decimal": 1.57},
+            {"book": "FANDUEL", "american": -170, "decimal": 1.59}
+          ]
+        },
+        {
+          "outcomeId": "o-ml-bal",
+          "position": "AWAY",
+          "line": 0.0,
+          "odds": [
+            {"book": "DRAFTKINGS", "american": 145, "decimal": 2.45},
+            {"book": "FANDUEL", "american": 142, "decimal": 2.42}
+          ]
+        }
+      ]
+    },
+    {
+      "marketId": "m-tt-kc",
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "marketType": "TEAM_PROP",
+      "proposition": "POINTS",
+      "label": "Kansas City Chiefs - Total Points",
+      "periodLabel": null,
+      "includeOvertime": true,
+      "books": ["DRAFTKINGS", "FANDUEL"],
+      "outcomes": [
+        {
+          "outcomeId": "o-tt-kc-over",
+          "position": "OVER",
+          "line": 25.5,
+          "teamId": "kc-chiefs",
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -115, "decimal": 1.87},
+            {"book": "FANDUEL", "american": -110, "decimal": 1.91}
+          ]
+        },
+        {
+          "outcomeId": "o-tt-kc-under",
+          "position": "UNDER",
+          "line": 25.5,
+          "teamId": "kc-chiefs",
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -105, "decimal": 1.95},
+            {"book": "FANDUEL", "american": -110, "decimal": 1.91}
+          ]
+        }
+      ]
+    },
+    {
+      "marketId": "m-tt-bal",
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "marketType": "TEAM_PROP",
+      "proposition": "POINTS",
+      "label": "Baltimore Ravens - Total Points",
+      "periodLabel": null,
+      "includeOvertime": true,
+      "books": ["DRAFTKINGS", "FANDUEL"],
+      "outcomes": [
+        {
+          "outcomeId": "o-tt-bal-over",
+          "position": "OVER",
+          "line": 22.5,
+          "teamId": "bal-ravens",
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -108, "decimal": 1.93}
+          ]
+        },
+        {
+          "outcomeId": "o-tt-bal-under",
+          "position": "UNDER",
+          "line": 22.5,
+          "teamId": "bal-ravens",
+          "odds": [
+            {"book": "DRAFTKINGS", "american": -110, "decimal": 1.91},
+            {"book": "FANDUEL", "american": -112, "decimal": 1.89}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -112,3 +112,36 @@ Extend `cfb_analytics/sources/outlier.py`. Respect two documented traps (and pro
 - Use the reference slate `2026-09-05` for realistic fixtures (30 games, 12 books, ~630 prices).
 - Read conventions in `README.md` and module docstrings before assuming a house style.
 - If R1 shows Outlier offers no usable NCAAFB props, **say so and stop.** Truthful negative findings close this project successfully.
+
+## 2026-09-12T10:39:21Z
+
+# Teamwork Project Prompt — Draft
+
+> Status: Launched
+> Requested team: [none — teamwork routes from the description]
+
+A standalone NFL betting data pipeline, derived from the existing Outlier pipeline. It will cover NFL player props and team props (game totals, team totals, spreads) while leaving the existing WNBA/MLB pipeline intact.
+
+Working directory: `C:\Users\dasil\Dev\GitHub\outlier`
+Integrity mode: development
+
+## Requirements
+
+### R1. Standalone NFL Pipeline Module
+Create a new standalone package (e.g., `outlier_nfl`) within the existing `outlier` repository. It must mirror the architecture of the existing pipeline but remain entirely separate from the WNBA and MLB code paths.
+
+### R2. NFL Data Sourcing
+Reuse the existing Outlier API integration patterns, modifying them to hit NFL-specific endpoints instead of MLB/WNBA endpoints.
+
+### R3. Market Coverage
+The extraction logic must process NFL player props and team props, specifically extracting: game totals, team totals, and spreads.
+
+## Acceptance Criteria
+
+### Unit Testing
+- [ ] A test suite is created for the `outlier_nfl` module that passes without errors when run via `pytest`.
+- [ ] Tests explicitly verify that NFL player props and team props (totals, spreads) are parsed correctly.
+
+### End-to-End Verification
+- [ ] A standalone script (e.g., `verify_nfl_pipeline.py`) is provided that runs the `outlier_nfl` extraction end-to-end.
+- [ ] The script automatically asserts that the output data structure contains the expected NFL prop markets.
