@@ -1,5 +1,43 @@
 # Handoff Summary
 
+**Daily Debug Review (2026-09-12)**:
+- **Last Commit SHA**: `0ebe280` (branched from `master` @ `9fc96e8`)
+- **Branch / PR**: `claude/inspiring-fermat-2r8gdr` -> https://github.com/DaSilvaDub/outlier/pull/159
+- **Files Touched**: `outlier_nfl/schema.py`, `tests/test_nfl_stress_m1.py`, `tests/test_calibration_upgrades.py`
+- **Session Work**:
+  1. STEP 0 canonical sync could NOT run: automated cloud session on Linux, and CLAUDE.md
+     invokes `report-sync.ps1` at a Windows path. Used the AGENTS.md "Cloud / Sandbox Agents"
+     equivalent instead. 4 of the 5 upgrade markers present; the 5th (`_acquire_pack_lock` in
+     `outlier_scrapers/daily_job.py`) is stale documentation -- the function was renamed to
+     `_acquire_writer_lock` (`daily_job.py:358`) and the lock itself is intact. The documented
+     cloud STEP 0 therefore reports a false failure for every cloud ent and should be updated.
+  2. **`master` CI (Offline Pytest) has been RED since 2026-09-11** -- runs 537 and 538,
+     `4 failed, 1758 passed`. Reproduced all four locally and fixed all four on the branch above:
+     - `outlier_nfl/schema.py::_validate_book_entry` used `hasattr()`, which only swallows
+       `AttributeError`; a property raising anything else escaped a validator whose contract is
+       to return errors, aborting `validate_normalized_dataset()` mid-dataset.
+     - Two `TestAtomicFileOperations` cases assert Windows file-lock semantics unconditionally;
+       POSIX `os.replace()` ignores open handles, so they fail on every Linux runner. Gated on
+       `os.name == "nt"`.
+     - `test_live_stake_calibration_matches_policy_source_column` pinned the literal
+       `artifact_version` / `eligible_samples`. `artifact_version` is a sha256 over the artifact
+       minus `generated_at`, so every nightly refit changes it (17817 -> 18231 -> 18245 across
+       three days). Replaced with a fingerprint self-consistency check -- stable across refits
+       and strictly stronger. The `source_probability_column` guard from `ec02340` is untouched.
+  3. No reasoning models / desk runners / provider APIs invoked (offline throughout).
+- **Verify**: `pytest tests/test_nfl_stress_m1.py tests/test_challenger_adversarial.py
+  tests/test_calibration_upgrades.py` -> 182 passed, 2 skipped (was 4 failed). Ruff clean on
+  touched files. `outlier_scrapers` suites needing sqlalchemy/structlog could not be collected
+  in the sandbox -- PyPI is blocked by the environment network policy; none are touched by the diff.
+- **Next Steps**:
+  1. Review and merge PR #159 to get `master` CI green again.
+  2. Update the AGENTS.md cloud STEP 0 marker list: `_acquire_pack_lock` -> `_acquire_writer_lock`.
+  3. Decide whether the auto-snapshot job should keep committing `calibration/stake_calibration.json`
+     daily, or whether a nightly refit belongs on its own branch -- the daily rewrite is what
+     broke the pinned test and will churn any future artifact assertion.
+  4. Unrelated pre-existing lint: `tests/test_challenger_adversarial.py` carries 12 unused
+     imports (F401). Ruff is not a CI gate, so this is cosmetic; left alone deliberately.
+
 **Daily Pipeline Run (2026-09-10)**:
 - **Last Commit SHA**: `ec02340`
 - **Files Touched**: `calibration/alerts/daily_pipeline_status.json`, `calibration/alerts/nightly_audit_status.json`, `calibration/blend_weights.json`, `calibration/stake_calibration.json`, `.agent-log/HANDOFF.md`
