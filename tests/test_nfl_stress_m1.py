@@ -9,6 +9,7 @@ Stress-tests:
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -458,6 +459,15 @@ class TestDatasetValidationGate:
 class TestAtomicFileOperations:
     """Stress-test _replace_with_retry and safe_write_json under lock contention."""
 
+    # An open read handle only blocks os.replace() on Windows; POSIX renames over an
+    # open file succeed immediately, so the two lock-contention cases below can only
+    # assert anything meaningful on nt. See docs/CLOUD-SANDBOX-LIMITATIONS.md.
+    windows_only = pytest.mark.skipif(
+        os.name != "nt",
+        reason="Windows-only file lock semantics; POSIX os.replace() ignores open handles",
+    )
+
+    @windows_only
     def test_replace_with_retry_succeeds_under_transient_lock(self, tmp_path: Path):
         """Simulate a transient Windows file lock (WinError 32) released during retries."""
         src = tmp_path / "test_src.json"
@@ -490,6 +500,7 @@ class TestAtomicFileOperations:
         assert dst.exists()
         assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 2}
 
+    @windows_only
     def test_replace_with_retry_fails_when_lock_held_permanently(self, tmp_path: Path):
         """Verify that permanent lock cleanly raises OSError without deleting src."""
         src = tmp_path / "test_src_perm.json"
