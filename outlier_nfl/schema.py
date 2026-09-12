@@ -109,13 +109,20 @@ def _validate_book_entry(book_entry: Any, b_idx: int) -> list[str]:
     errors: list[str] = []
     if isinstance(book_entry, dict):
         b_dict = book_entry
-    elif hasattr(book_entry, "to_dict") and callable(book_entry.to_dict):
+    else:
+        # hasattr() only swallows AttributeError, so a descriptor that raises anything
+        # else (a property blowing up on access) would escape this validator and abort
+        # the whole dataset pass. Resolve the attribute defensively instead.
         try:
-            b_dict = book_entry.to_dict()
+            to_dict = getattr(book_entry, "to_dict", None)
+        except Exception:
+            to_dict = None
+        if not callable(to_dict):
+            return [f"Book entry at index {b_idx} is not a valid dict or BookPrice instance"]
+        try:
+            b_dict = to_dict()
         except Exception as exc:
             return [f"Book entry at index {b_idx} to_dict() raised exception: {exc}"]
-    else:
-        return [f"Book entry at index {b_idx} is not a valid dict or BookPrice instance"]
 
     if not isinstance(b_dict, dict):
         return [f"Book entry at index {b_idx} did not produce a dictionary"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -327,8 +328,25 @@ def test_live_stake_calibration_matches_policy_source_column():
     )
     expected = policy["calibration"]["source_probability_column"]
     assert artifact["source_probability_column"] == expected
-    assert artifact["artifact_version"] == "stake-cal-v1-131c319c2d5d"
-    assert artifact["eligible_samples"] == 17817
+
+    # artifact_version is a content hash over every field except generated_at, so it
+    # legitimately changes on each nightly refit. Pinning the literal made this test
+    # fail on every refit; assert self-consistency instead, which also catches a
+    # hand-edited or truncated artifact.
+    fingerprint_payload = {
+        key: value
+        for key, value in artifact.items()
+        if key not in ("generated_at", "artifact_version", "artifact_fingerprint")
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:12]
+    assert artifact["artifact_fingerprint"] == fingerprint
+    assert artifact["artifact_version"] == f"stake-cal-v1-{fingerprint}"
+
+    assert artifact["status"] == "active"
+    assert isinstance(artifact["eligible_samples"], int)
+    assert artifact["eligible_samples"] >= artifact["min_samples"]
     assert Path(policy["calibration"]["artifact_path"]).as_posix() == (
         "calibration/stake_calibration.json"
     )
