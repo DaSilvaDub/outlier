@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any
@@ -34,6 +35,14 @@ from outlier_nfl.utils import (
     safe_read_json,
     safe_write_json,
     to_eastern_date,
+)
+
+# Windows applies mandatory file locking: an open handle on the destination makes
+# os.replace() fail with WinError 32. POSIX has no such lock, so replace() always
+# succeeds there and the retry/back-off path these tests exercise never triggers.
+requires_windows_file_locks = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="requires Windows mandatory file locking (WinError 32); POSIX replace() never blocks",
 )
 
 
@@ -458,6 +467,7 @@ class TestDatasetValidationGate:
 class TestAtomicFileOperations:
     """Stress-test _replace_with_retry and safe_write_json under lock contention."""
 
+    @requires_windows_file_locks
     def test_replace_with_retry_succeeds_under_transient_lock(self, tmp_path: Path):
         """Simulate a transient Windows file lock (WinError 32) released during retries."""
         src = tmp_path / "test_src.json"
@@ -490,6 +500,7 @@ class TestAtomicFileOperations:
         assert dst.exists()
         assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 2}
 
+    @requires_windows_file_locks
     def test_replace_with_retry_fails_when_lock_held_permanently(self, tmp_path: Path):
         """Verify that permanent lock cleanly raises OSError without deleting src."""
         src = tmp_path / "test_src_perm.json"

@@ -140,9 +140,15 @@ Easy to get wrong, so it is asserted here explicitly:
 | `round_robin_then_fill` | `outlier_scrapers/pack.py` |
 | `CANDIDATES_HEADER` | `outlier_scrapers/pack.py` |
 | `decisions.csv` | `outlier_scrapers/pack.py` |
-| `_acquire_pack_lock` | `outlier_scrapers/daily_job.py` |
+| `_acquire_writer_lock` | `outlier_scrapers/daily_job.py` |
 
-Despite its name, `_acquire_pack_lock` is **not** in `pack.py` and never has been
-(`git log -S'_acquire_pack_lock' -- outlier_scrapers/pack.py` is empty). The authority is
-`scripts/verify-sync.ps1` (~L81), which checks it against the *daily* blob:
-`$hasLock = $gitDaily -match '_acquire_pack_lock'`.
+The lock marker is `_acquire_writer_lock`, and it is **not** in `pack.py` — it is the
+daily-job writer lock. The authority is `scripts/verify-sync.ps1` (~L206), which checks it
+against the *daily* blob: `$hasLock = $gitDaily -match '_acquire_writer_lock'`.
+
+Earlier revisions of this hook, of `AGENTS.md`'s cloud STEP 0 block, and of
+`docs/ENT-SYNC-GLOBAL-PROMPT.md` named this marker `_acquire_pack_lock`. No such symbol has
+ever existed anywhere in `outlier_scrapers/` (`git log -S'_acquire_pack_lock' --
+outlier_scrapers/` is empty), so marker 5 of 5 reported MISSING on every session — a gate
+that always fires teaches agents to ignore it, which is the d05eb21 failure mode these
+markers exist to prevent.

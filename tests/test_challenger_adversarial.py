@@ -111,7 +111,8 @@ class TestAdversarialBookValidation:
 
     def test_validate_book_entry_property_boom(self):
         obj = PropertyExplodingClass()
-        # In Python, hasattr catches Exception (AttributeError/RuntimeError etc) and returns False
+        # hasattr()/getattr() only swallow AttributeError, so _validate_book_entry has to
+        # catch the property's RuntimeError itself and report an unusable book entry.
         errors = _validate_book_entry(obj, 0)
         assert len(errors) == 1
         assert "not a valid dict or BookPrice instance" in errors[0]
