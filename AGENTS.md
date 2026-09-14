@@ -116,7 +116,7 @@ grep -q 'player_id'              outlier_scrapers/pack.py
 grep -q 'round_robin_then_fill'  outlier_scrapers/pack.py
 grep -q 'CANDIDATES_HEADER'      outlier_scrapers/pack.py
 grep -q 'decisions.csv'          outlier_scrapers/pack.py
-grep -q '_acquire_pack_lock'     outlier_scrapers/daily_job.py
+grep -q '_acquire_writer_lock'   outlier_scrapers/daily_job.py
 echo "All 5 upgrade markers present."
 ```
 
