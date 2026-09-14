@@ -36,6 +36,7 @@ from outlier_scrapers.utils import _write_csv
 
 DEFAULT_REPORT_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\reports\latest")
 
+
 def _flat_pnl(
     row: dict[str, Any], result_field: str = "win_loss_push", *, invert: bool = False
 ) -> float | None:
@@ -282,9 +283,7 @@ def _decision_coverage(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     for raw in rows:
         row = dict(raw)
         decision_class = (
-            "PLAY"
-            if _is_play("", row.get("pipeline_verdict"), row.get("units"))
-            else "STAND_DOWN"
+            "PLAY" if _is_play("", row.get("pipeline_verdict"), row.get("units")) else "STAND_DOWN"
         )
         groups[decision_class].append(row)
 
@@ -301,9 +300,7 @@ def _decision_coverage(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "settled_decisions": len(settled),
                 "unsettled_decisions": len(group) - len(settled),
                 "settlement_rate": len(settled) / len(group) if group else None,
-                "missing_event_start": sum(
-                    not _text(row.get("event_starts_at")) for row in group
-                ),
+                "missing_event_start": sum(not _text(row.get("event_starts_at")) for row in group),
                 "total_units": total_units,
                 "settled_units": settled_units,
             }
@@ -456,6 +453,7 @@ def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_type": by_type,
     }
 
+
 def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
     output_dir = Path(output_dir)
     with _connect(Path(db_path)) as conn:
@@ -531,6 +529,12 @@ def export_ledgers(db_path: Path, output_dir: Path) -> dict[str, int]:
     }
 
 
+def _write_json(path: Path, payload: Any) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
 def _fmt(value: Any) -> str:
     if value is None:
         return "—"
@@ -546,9 +550,7 @@ def _report_markdown(
     market_type: list[dict[str, Any]],
     learned_multiplier_signal: dict[str, Any],
 ) -> str:
-    play_coverage = next(
-        (row for row in decision_coverage if row["decision_class"] == "PLAY"), {}
-    )
+    play_coverage = next((row for row in decision_coverage if row["decision_class"] == "PLAY"), {})
     lines = [
         "# Feedback-loop calibration report",
         "",
@@ -935,41 +937,29 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_
         ["side", "band", "n", "wins", "hit_rate", "hit_rate_ci95", "mean_edge"],
         totals_edge_buckets["buckets"],
     )
-    (output_dir / "learned_multiplier_promotion.json").write_text(
-        json.dumps(learned_multiplier_signal, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    _write_json(output_dir / "learned_multiplier_promotion.json", learned_multiplier_signal)
+    _write_json(
+        output_dir / "totals_oos_scoring.json",
+        {
+            "paired_loss": totals_paired_loss,
+            "edge_buckets": totals_edge_buckets,
+        },
     )
-    (output_dir / "totals_oos_scoring.json").write_text(
-        json.dumps(
-            {
-                "paired_loss": totals_paired_loss,
-                "edge_buckets": totals_edge_buckets,
+    _write_json(
+        output_dir / "summary.json",
+        {
+            "coverage": coverage,
+            "decision_coverage": decision_coverage,
+            "probability_metrics": probability_metrics,
+            "learned_multiplier_promotion": learned_multiplier_signal,
+            "ultimate_alt_shadow_release": ultimate_alt_release,
+            "missing_edge_diagnostics": missing_edge_diagnostics,
+            "totals_oos_paired_loss": totals_paired_loss,
+            "totals_oos_edge_monotonicity": {
+                "monotonic_above_market": totals_edge_buckets["monotonic_above_market"],
+                "monotonic_below_market": totals_edge_buckets["monotonic_below_market"],
             },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (output_dir / "summary.json").write_text(
-        json.dumps(
-            {
-                "coverage": coverage,
-                "decision_coverage": decision_coverage,
-                "probability_metrics": probability_metrics,
-                "learned_multiplier_promotion": learned_multiplier_signal,
-                "ultimate_alt_shadow_release": ultimate_alt_release,
-                "missing_edge_diagnostics": missing_edge_diagnostics,
-                "totals_oos_paired_loss": totals_paired_loss,
-                "totals_oos_edge_monotonicity": {
-                    "monotonic_above_market": totals_edge_buckets["monotonic_above_market"],
-                    "monotonic_below_market": totals_edge_buckets["monotonic_below_market"],
-                },
-            },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+        },
     )
     (output_dir / "report.md").write_text(
         _report_markdown(

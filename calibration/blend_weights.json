@@ -1,83 +1,100 @@
 {
   "dimensions": {
-    "data_quality_tier": {},
+    "data_quality_tier": {
+      "HIGH": {
+        "brier_score": 0.2500086918,
+        "holdout": null,
+        "market_weight": 0.97058824,
+        "model_weight": 0.02941176,
+        "n": 225,
+        "raw_market_weight": 1.0
+      },
+      "MEDIUM": {
+        "brier_score": 0.238595352,
+        "holdout": null,
+        "market_weight": 0.75,
+        "model_weight": 0.25,
+        "n": 206,
+        "raw_market_weight": 0.28052812
+      }
+    },
     "league": {
       "MLB": {
-        "brier_score": 0.2442041207,
+        "brier_score": 0.2446031434,
         "holdout": {
-          "blended_brier": 0.2540918777,
+          "blended_brier": 0.24445871,
           "improved": false,
-          "market_only_brier": 0.2516039234,
-          "n_holdout": 80,
-          "n_train": 319,
-          "trained_market_weight": 0.25850479
+          "market_only_brier": 0.2414211529,
+          "n_holdout": 105,
+          "n_train": 420,
+          "trained_market_weight": 0.44451347
         },
         "market_weight": 0.75,
         "model_weight": 0.25,
-        "n": 399,
-        "raw_market_weight": 0.3391818
+        "n": 525,
+        "raw_market_weight": 0.53874816
       }
     },
     "market_type": {
       "SO": {
-        "brier_score": 0.2495240806,
+        "brier_score": 0.2486433058,
         "holdout": {
-          "blended_brier": 0.2571672467,
+          "blended_brier": 0.2438233867,
           "improved": false,
-          "market_only_brier": 0.2561975718,
-          "n_holdout": 65,
-          "n_train": 262,
-          "trained_market_weight": 0.13368343
+          "market_only_brier": 0.2391368612,
+          "n_holdout": 91,
+          "n_train": 362,
+          "trained_market_weight": 0.40175521
         },
         "market_weight": 0.75,
         "model_weight": 0.25,
-        "n": 327,
-        "raw_market_weight": 0.22782827
+        "n": 453,
+        "raw_market_weight": 0.56339114
       }
     },
     "odds_range": {},
     "time_before_game": {
       "6_TO_24H": {
-        "brier_score": 0.2469366418,
+        "brier_score": 0.2458595271,
         "holdout": {
-          "blended_brier": 0.2533275817,
-          "improved": false,
-          "market_only_brier": 0.2525035306,
-          "n_holdout": 69,
-          "n_train": 277,
-          "trained_market_weight": 0.56651854
+          "blended_brier": 0.2411415881,
+          "improved": true,
+          "market_only_brier": 0.2420334281,
+          "n_holdout": 91,
+          "n_train": 363,
+          "trained_market_weight": 0.68576336
         },
-        "market_weight": 0.75,
-        "model_weight": 0.25,
-        "n": 346,
-        "raw_market_weight": 0.60733652
+        "market_weight": 0.68974497,
+        "model_weight": 0.31025503,
+        "n": 454,
+        "raw_market_weight": 0.67292593
       }
     }
   },
-  "eligible_samples": 422,
-  "generated_at": "2026-09-08T05:06:23.638471+00:00",
+  "eligible_samples": 548,
+  "generated_at": "2026-09-14T12:02:29.371384+00:00",
   "global": {
-    "brier_score": 0.2453086108,
+    "brier_score": 0.2451761294,
     "market_weight": 0.75,
     "model_weight": 0.25,
-    "n": 422,
-    "raw_market_weight": 0.4485223
+    "n": 548,
+    "raw_market_weight": 0.60666135
   },
   "global_holdout": {
-    "blended_brier": 0.2542044806,
+    "blended_brier": 0.2444598846,
     "improved": false,
-    "market_only_brier": 0.2529428883,
-    "n_holdout": 84,
-    "n_train": 338,
-    "trained_market_weight": 0.39654028
+    "market_only_brier": 0.2411660318,
+    "n_holdout": 110,
+    "n_train": 438,
+    "trained_market_weight": 0.50982959
   },
   "holdout_fraction": 0.2,
   "market_weight_floor": 0.75,
   "min_samples": 200,
-  "model_version": "blend-brier-v1-806ac889a4b9",
+  "model_version": "blend-brier-v1-ae86af6b8990",
   "objective": "brier_score",
   "prior_strength": 30.0,
   "schema_version": 1,
   "status": "active",
-  "trained_through": "2026-09-07T03:54:26.287655-04:00"
+  "trained_through": "2026-09-13T08:04:59.961151-04:00"
 }
