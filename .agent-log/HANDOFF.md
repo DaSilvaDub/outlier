@@ -12,3 +12,9 @@
    - Review and merge PR #161 (`feat/nfl-pipeline-execution`).
    - NFL pipeline datasets successfully verified and saved under `data/NFL/normalized/` (470 game totals, 502 spreads, 453 team totals, 3,761 player props).
    - 303/303 unit & adversarial stress tests passing cleanly with zero ruff or mypy errors.
+
+## Codex merge batch - 2026-09-14
+- Last merged commit: 2e6e06400a7824d8b00b485bf6c1820f05cab8f4 (PR #136); prior merge dca927305e9905531891c951807450c37bdb5aa0 (PR #162).
+- Files touched by merged PRs: sync hook/docs and AGENTS.md; NFL schema validation; stake calibration fingerprint helper and regression tests; feedback_reporting.py JSON writing. This session added only this handoff.
+- Verification: independent review found no blockers and zero review threads; hosted PR tests/typechecks passed. PR #162: 195 targeted Windows tests passed on rerun (initial run had one intermittent unchanged 50-thread contention failure). Ruff reported 12 pre-existing unused imports in unchanged challenger imports. PR #136: 69 feedback tests passed on integration with updated master; changed-file Ruff passed.
+- Next steps: review remaining PRs in batches. #149 needs explicit push/void/unfinished grading and actionable-only export semantics. Conflicting PRs require individual reconciliation; #159/#160 overlap #162 and should be compared for supersession before closing. #161 is a larger NFL review. No PRs closed as duplicates this session. Paid reasoning was not invoked.
