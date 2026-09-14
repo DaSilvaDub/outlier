@@ -439,15 +439,27 @@ def fit_stake_calibration(
         "global": global_fit,
         "dimensions": dimensions,
     }
-    fingerprint_payload = {
-        key: value for key, value in artifact.items() if key != "generated_at"
-    }
-    fingerprint = hashlib.sha256(
-        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()[:12]
+    fingerprint = compute_artifact_fingerprint(artifact)
     artifact["artifact_version"] = f"stake-cal-v1-{fingerprint}"
     artifact["artifact_fingerprint"] = fingerprint
     return artifact
+
+
+def compute_artifact_fingerprint(artifact: Mapping[str, Any]) -> str:
+    """Return the content fingerprint for a stake-calibration artifact.
+
+    ``generated_at`` and the two derived identity keys are excluded so the
+    fingerprint of an already-stamped artifact recomputes to the same value it
+    carries, making ``artifact_version`` verifiable after the fact.
+    """
+    payload = {
+        key: value
+        for key, value in artifact.items()
+        if key not in ("generated_at", "artifact_version", "artifact_fingerprint")
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:12]
 
 
 def write_stake_calibration_artifact(artifact: Mapping[str, Any], output_path: Path) -> Path:

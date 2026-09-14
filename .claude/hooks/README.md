@@ -9,7 +9,7 @@ The hooks are registered in **two** places, deliberately, and they point at **di
 
 | Scope | Settings file | Script path | Why |
 |---|---|---|---|
-| Project (committed) | `.claude/settings.json` | `C:\Users\dasil\Dev\GitHub\outlier\.claude\hooks\` | Shared with every ent via git; reviewable in a PR |
+| Project (committed) | `.claude/settings.json` | `.claude/hooks/` (relative to repo root) | Shared with every ent via git; reviewable in a PR |
 | User (personal) | `~/.claude/settings.json` | `~/.claude/hooks/outlier-*.ps1` | Fires regardless of cwd |
 
 Two reasons the project copy alone is not enough:
@@ -18,13 +18,14 @@ Two reasons the project copy alone is not enough:
    from the OneDrive mirror (`OneDrive\Documents\outlier`) never load
    `.claude/settings.json` from canonical — and that mirror is exactly where the sync trap
    lives.
-2. **The canonical absolute path is branch-dependent.** It resolves through canonical's
-   *currently checked-out branch*. Canonical is frequently sitting on a `risk-opt/*` or other
-   feature branch; any branch created before these files landed on `master` does not contain
-   `.claude/hooks/`, so the script is missing and `pwsh` exits non-zero. A non-2 exit from a
-   `PreToolUse` hook is a **non-blocking error — the command is allowed**. In other words the
-   spend guard fails *open* in exactly that case. The user-scope copy under `~/.claude/hooks/`
-   is branch-independent and is what actually protects you.
+2. **Branch-dependency (mitigated).** Previously the project settings used absolute paths
+   pointing through canonical's checked-out branch. Branches created before the hooks landed
+   on `master` would be missing `.claude/hooks/`, causing `pwsh` to exit non-zero — a non-2
+   exit from a `PreToolUse` hook is a non-blocking error, so the spend guard failed *open*.
+   This is now mitigated: project-scope settings use **relative paths** (`.claude/hooks/...`)
+   that resolve against the clone location, and `check-sync.ps1` derives `$Canonical` from
+   its own `$PSScriptRoot` with a hardcoded fallback. The user-scope copy under
+   `~/.claude/hooks/` remains the belt-and-suspenders guard.
 
 **Consequence: after editing either script, re-copy it to `~/.claude/hooks/`** or the two
 copies drift. The repo copy is the source of truth for review and for other ents; the
@@ -139,9 +140,15 @@ Easy to get wrong, so it is asserted here explicitly:
 | `round_robin_then_fill` | `outlier_scrapers/pack.py` |
 | `CANDIDATES_HEADER` | `outlier_scrapers/pack.py` |
 | `decisions.csv` | `outlier_scrapers/pack.py` |
-| `_acquire_pack_lock` | `outlier_scrapers/daily_job.py` |
+| `_acquire_writer_lock` | `outlier_scrapers/daily_job.py` |
 
-Despite its name, `_acquire_pack_lock` is **not** in `pack.py` and never has been
-(`git log -S'_acquire_pack_lock' -- outlier_scrapers/pack.py` is empty). The authority is
-`scripts/verify-sync.ps1` (~L81), which checks it against the *daily* blob:
-`$hasLock = $gitDaily -match '_acquire_pack_lock'`.
+The lock marker is `_acquire_writer_lock`, and it is **not** in `pack.py` — it is the
+daily-job writer lock. The authority is `scripts/verify-sync.ps1` (~L206), which checks it
+against the *daily* blob: `$hasLock = $gitDaily -match '_acquire_writer_lock'`.
+
+Earlier revisions of this hook, of `AGENTS.md`'s cloud STEP 0 block, and of
+`docs/ENT-SYNC-GLOBAL-PROMPT.md` named this marker `_acquire_pack_lock`. No such symbol has
+ever existed anywhere in `outlier_scrapers/` (`git log -S'_acquire_pack_lock' --
+outlier_scrapers/` is empty), so marker 5 of 5 reported MISSING on every session — a gate
+that always fires teaches agents to ignore it, which is the d05eb21 failure mode these
+markers exist to prevent.

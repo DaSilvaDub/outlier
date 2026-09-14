@@ -818,6 +818,7 @@ def test_refit_blend_weights_skips_without_a_ledger(tmp_path, monkeypatch):
 
 
 def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
+    _require_daily_job()
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
     calls = []
@@ -842,6 +843,7 @@ def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
 
 
 def test_maintain_feedback_ledger_isolates_failures(tmp_path, monkeypatch):
+    _require_daily_job()
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
     monkeypatch.setattr(
@@ -861,6 +863,7 @@ def test_maintain_feedback_ledger_isolates_failures(tmp_path, monkeypatch):
 
 
 def test_run_pack_forwards_date_and_feedback_db(monkeypatch, tmp_path):
+    _require_daily_job()
     calls = []
     monkeypatch.setattr(daily_job.pack, "main", lambda args: calls.append(args) or tmp_path)
     db = tmp_path / "feedback.sqlite3"
@@ -869,6 +872,7 @@ def test_run_pack_forwards_date_and_feedback_db(monkeypatch, tmp_path):
 
 
 def test_persist_desk_feedback_is_nonfatal(tmp_path, monkeypatch):
+    _require_daily_job()
     pack_dir = tmp_path / "pack"
     (pack_dir / "verdicts").mkdir(parents=True)
     (pack_dir / "verdicts" / "desk_snapshot.json").write_text("{}", encoding="utf-8")

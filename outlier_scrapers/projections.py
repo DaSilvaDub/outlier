@@ -33,7 +33,9 @@ class ProjectionDistribution:
     model_version: str = "projection-v1"
 
     def __post_init__(self) -> None:
-        if any(outcome < 0 or not math.isfinite(prob) or prob < 0 for outcome, prob in self.pmf.items()):
+        if any(
+            outcome < 0 or not math.isfinite(prob) or prob < 0 for outcome, prob in self.pmf.items()
+        ):
             raise ValueError("PMF outcomes must be nonnegative and probabilities must be finite")
         if not math.isfinite(self.tail_mass) or self.tail_mass < 0:
             raise ValueError("tail_mass must be finite and nonnegative")
@@ -95,7 +97,9 @@ class ProjectionDistribution:
         return record
 
 
-def _bounded_distribution(weights: Mapping[int, float], *, model_version: str = "projection-v1") -> ProjectionDistribution:
+def _bounded_distribution(
+    weights: Mapping[int, float], *, model_version: str = "projection-v1"
+) -> ProjectionDistribution:
     cleaned = {int(outcome): max(0.0, float(weight)) for outcome, weight in weights.items()}
     total = sum(cleaned.values())
     if total <= 0:
@@ -190,12 +194,18 @@ def mlb_strikeout_distribution(
     if projected_bf < 0 or not 0 <= strikeout_rate <= 1:
         raise ValueError("projected_bf must be nonnegative and strikeout_rate must be in [0, 1]")
     bf_variance = projected_bf + projected_bf**2 / workload_dispersion
-    maximum_bf = maximum_bf or max(1, math.ceil(projected_bf + 10 * math.sqrt(max(bf_variance, 1e-12))))
+    maximum_bf = maximum_bf or max(
+        1, math.ceil(projected_bf + 10 * math.sqrt(max(bf_variance, 1e-12)))
+    )
     workload = _negative_binomial_pmf(projected_bf, workload_dispersion, maximum_bf)
     strikeouts: dict[int, float] = {}
     for bf, workload_probability in workload.items():
-        for strikeout, conditional_probability in binomial_distribution(bf, strikeout_rate).pmf.items():
-            strikeouts[strikeout] = strikeouts.get(strikeout, 0.0) + workload_probability * conditional_probability
+        for strikeout, conditional_probability in binomial_distribution(
+            bf, strikeout_rate
+        ).pmf.items():
+            strikeouts[strikeout] = (
+                strikeouts.get(strikeout, 0.0) + workload_probability * conditional_probability
+            )
     mass = sum(strikeouts.values())
     return ProjectionDistribution(strikeouts, max(0.0, 1.0 - mass))
 
@@ -219,19 +229,30 @@ def mlb_total_bases_distribution(
 
     if plate_appearances < 0 or not 0 <= zero_rate <= 1:
         raise ValueError("plate_appearances must be nonnegative and zero_rate must be in [0, 1]")
-    outcomes = {int(value): float(probability) for value, probability in positive_outcome_probs.items()}
-    if not outcomes or any(value <= 0 or probability < 0 for value, probability in outcomes.items()):
-        raise ValueError("positive outcomes must have positive values and nonnegative probabilities")
+    outcomes = {
+        int(value): float(probability) for value, probability in positive_outcome_probs.items()
+    }
+    if not outcomes or any(
+        value <= 0 or probability < 0 for value, probability in outcomes.items()
+    ):
+        raise ValueError(
+            "positive outcomes must have positive values and nonnegative probabilities"
+        )
     positive_total = sum(outcomes.values())
     if not math.isclose(positive_total, 1.0, abs_tol=1e-9):
         raise ValueError("positive outcome probabilities must sum to one")
-    pa = {0: zero_rate, **{value: (1.0 - zero_rate) * probability for value, probability in outcomes.items()}}
+    pa = {
+        0: zero_rate,
+        **{value: (1.0 - zero_rate) * probability for value, probability in outcomes.items()},
+    }
     aggregate = {0: 1.0}
     for _ in range(plate_appearances):
         next_aggregate: dict[int, float] = {}
         for current, current_probability in aggregate.items():
             for value, probability in pa.items():
-                next_aggregate[current + value] = next_aggregate.get(current + value, 0.0) + current_probability * probability
+                next_aggregate[current + value] = (
+                    next_aggregate.get(current + value, 0.0) + current_probability * probability
+                )
         aggregate = next_aggregate
     return _bounded_distribution(aggregate)
 
@@ -247,7 +268,10 @@ DEFAULT_MLB_GAME_TOTAL_DISPERSION = 12.0
 
 
 def mlb_game_total_runs_distribution(
-    mean: float, *, dispersion: float = DEFAULT_MLB_GAME_TOTAL_DISPERSION, maximum: int | None = None
+    mean: float,
+    *,
+    dispersion: float = DEFAULT_MLB_GAME_TOTAL_DISPERSION,
+    maximum: int | None = None,
 ) -> ProjectionDistribution:
     """Project full-game combined run total as a single NB2 around ``mean``.
 
@@ -290,7 +314,9 @@ def fit_negative_binomial_dispersion(mean: float, sample_variance: float) -> flo
     return mean * mean / (sample_variance - mean)
 
 
-def empirical_game_total_dispersion(actual_totals: Iterable[float]) -> dict[str, float | int | None]:
+def empirical_game_total_dispersion(
+    actual_totals: Iterable[float],
+) -> dict[str, float | int | None]:
     """Method-of-moments NB2 dispersion fit from settled game-total outcomes.
 
     Pure, DB-free: callers pass in the actual settled totals (e.g. from
@@ -321,9 +347,7 @@ LEAGUE_AVG_SO_HASH = "so-starter-league-avg-v1"
 GAMELOG_SO_HASH = "so-starter-gamelog-v2"  # v2 = EB shrink + thin-sample soften
 WNBA_MINUTES_HASH = "wnba-minutes-ppm-v1"  # legacy points-only scaffold
 WNBA_GAMELOG_HASH = "wnba-gamelog-stat-rates-v2"
-AUDIT_ONLY_PROJECTION_HASHES = frozenset(
-    {LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH, WNBA_GAMELOG_HASH}
-)
+AUDIT_ONLY_PROJECTION_HASHES = frozenset({LEAGUE_AVG_SO_HASH, WNBA_MINUTES_HASH, WNBA_GAMELOG_HASH})
 WNBA_MARKET_COMPONENTS: dict[str, tuple[str, ...]] = {
     "PTS": ("points",),
     "REB": ("rebounds",),
@@ -472,9 +496,9 @@ SO_FEATURE_SCHEMA: tuple[str, ...] = (
     "total_bf",
     "total_k",
 )
-SO_FEATURE_SCHEMA_HASH = hashlib.sha256(
-    "|".join(SO_FEATURE_SCHEMA).encode("utf-8")
-).hexdigest()[:16]
+SO_FEATURE_SCHEMA_HASH = hashlib.sha256("|".join(SO_FEATURE_SCHEMA).encode("utf-8")).hexdigest()[
+    :16
+]
 
 
 def is_current_gamelog_so_hash(digest: object) -> bool:
@@ -772,7 +796,14 @@ def enrich_probable_with_so_features(
                         max_starts=max_starts,
                         min_total_bf=min_total_bf,
                     )
-                except (HTTPError, URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError) as exc:
+                except (
+                    HTTPError,
+                    URLError,
+                    TimeoutError,
+                    ValueError,
+                    OSError,
+                    json.JSONDecodeError,
+                ) as exc:
                     logger.warning(
                         "SO gamelog features failed for pitcher_id=%s season=%s: %s",
                         pitcher_id,
@@ -832,7 +863,9 @@ def mlb_so_projection_record(
     The betting line is never used as a feature.
     """
     sport = str(row.get("sport") or row.get("league") or "").upper()
-    market = str(row.get("market_type") or row.get("market") or row.get("proposition") or "").upper()
+    market = str(
+        row.get("market_type") or row.get("market") or row.get("proposition") or ""
+    ).upper()
     if sport != "MLB":
         return None
     if market not in {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"} and "STRIKEOUT" not in market:
@@ -840,16 +873,13 @@ def mlb_so_projection_record(
         if "STRIKEOUT" not in selection:
             return None
     player = _normalize_person_name(_player_name_from_row(row))
-    if not player or not probable_by_team:
+    team = str(row.get("team") or "").strip().upper()
+    if not player or not probable_by_team or not team:
         return None
-    listed = None
-    for info in probable_by_team.values():
-        if not isinstance(info, Mapping):
-            continue
-        if _normalize_person_name(info.get("pitcher")) == player:
-            listed = info
-            break
-    if listed is None or not listed.get("confirmed"):
+    listed = probable_by_team.get(team)
+    if not isinstance(listed, Mapping):
+        return None
+    if _normalize_person_name(listed.get("pitcher")) != player or not listed.get("confirmed"):
         return None
     line = row.get("line")
     side = str(row.get("headline_side") or row.get("position") or "").upper()
@@ -947,7 +977,9 @@ def shrink_starter_so_features(
     prior_starts = settings["bf_prior_starts"]
     prior_workload = settings["starter_projected_bf"]
     starts = max(0, int(starts))
-    observed_bf = float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
+    observed_bf = (
+        float(total_bf) if total_bf is not None and total_bf > 0 else projected_bf * max(starts, 1)
+    )
     if total_k is not None and total_k >= 0 and observed_bf > 0:
         rate_numer = float(total_k) + prior_bf * prior_rate
         rate_denom = float(observed_bf) + prior_bf
@@ -1143,8 +1175,7 @@ def fetch_wnba_athlete_gamelog(
     if not isinstance(names, list):
         return [], {}
     normalized_names = {
-        re.sub(r"[^a-z0-9]", "", str(name).casefold()): index
-        for index, name in enumerate(names)
+        re.sub(r"[^a-z0-9]", "", str(name).casefold()): index for index, name in enumerate(names)
     }
     minutes_idx = normalized_names.get("minutes")
     stat_indices: dict[str, int] = {}
@@ -1204,9 +1235,7 @@ def fetch_wnba_athlete_gamelog_stats(
 ) -> tuple[list[float], list[float]]:
     """Backward-compatible points-only view of the generalized gamelog."""
 
-    minutes, stats = fetch_wnba_athlete_gamelog(
-        athlete_id, season=season, fetch_json=fetch_json
-    )
+    minutes, stats = fetch_wnba_athlete_gamelog(athlete_id, season=season, fetch_json=fetch_json)
     return minutes, stats.get("points", [])
 
 
@@ -1251,9 +1280,7 @@ def get_wnba_points_features(
 ) -> dict[str, object] | None:
     """Backward-compatible alias for callers of the points-only scaffold."""
 
-    return get_wnba_player_features(
-        player_name, season=season, fetch_json=fetch_json, cache=cache
-    )
+    return get_wnba_player_features(player_name, season=season, fetch_json=fetch_json, cache=cache)
 
 
 def _wnba_market_code(row: Mapping[str, object]) -> str | None:
@@ -1290,11 +1317,7 @@ def wnba_projection_record(
         _float_stat(features.get(f"{component}_per_minute"))
         for component in WNBA_MARKET_COMPONENTS[market]
     ]
-    if (
-        minutes is None
-        or minutes <= 0
-        or any(rate is None or rate < 0 for rate in component_rates)
-    ):
+    if minutes is None or minutes <= 0 or any(rate is None or rate < 0 for rate in component_rates):
         return None
     line = row.get("line")
     side = str(row.get("headline_side") or row.get("position") or "").upper()
@@ -1359,7 +1382,9 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
             )
         elif "HITS_ALLOWED" in proposition or proposition in {"PITCHER_HITS", "HITS"}:
             distribution = mlb_hits_allowed_distribution(
-                float(features["projected_bf"]), float(features["hit_rate"]), dispersion=float(features.get("dispersion", 8.0))
+                float(features["projected_bf"]),
+                float(features["hit_rate"]),
+                dispersion=float(features.get("dispersion", 8.0)),
             )
         elif "TOTAL_BASE" in proposition:
             distribution = mlb_total_bases_distribution(
@@ -1372,7 +1397,11 @@ def project_mlb_row(row: Mapping[str, object]) -> dict[str, object]:
                 float(features["home_run_mean"]), float(features["away_run_mean"])
             )
         else:
-            return {"status": "ineligible", "reason": "unsupported_market", "row_id": row.get("outcome_id")}
+            return {
+                "status": "ineligible",
+                "reason": "unsupported_market",
+                "row_id": row.get("outcome_id"),
+            }
     except (KeyError, TypeError, ValueError) as exc:
         return {
             "status": "ineligible",
@@ -1524,11 +1553,7 @@ def _projection_season(props_rows: Iterable[Mapping[str, object]]) -> int:
 def _row_slate_date(row: Mapping[str, object]) -> str | None:
     context = row.get("sport_context")
     context = context if isinstance(context, Mapping) else {}
-    starts_at = (
-        context.get("event_starts_at")
-        or row.get("event_starts_at")
-        or row.get("starts_at")
-    )
+    starts_at = context.get("event_starts_at") or row.get("event_starts_at") or row.get("starts_at")
     return _local_date(str(starts_at) if starts_at else None)
 
 
@@ -1563,18 +1588,14 @@ def _feed_is_current_with_no_slate(
             return False
 
     slate_dates = {
-        slate
-        for row in props_rows
-        if isinstance(row, Mapping) and (slate := _row_slate_date(row))
+        slate for row in props_rows if isinstance(row, Mapping) and (slate := _row_slate_date(row))
     }
     if not slate_dates or target_iso in slate_dates:
         return False
 
     from .line_movement import _props_freshness
 
-    return not _props_freshness(
-        dict(props_payload), now=datetime.now().astimezone()
-    ).is_stale
+    return not _props_freshness(dict(props_payload), now=datetime.now().astimezone()).is_stale
 
 
 def _projection_slate_date(
@@ -1685,9 +1706,7 @@ def export_projections(
         probable_by_team = load_probable_pitcher_lookup("MLB")
         records = build_mlb_so_projections(props_rows, probable_by_team)
     else:
-        records = build_wnba_projections(
-            props_rows, season=_projection_season(props_rows)
-        )
+        records = build_wnba_projections(props_rows, season=_projection_season(props_rows))
 
     result: dict[str, object] = {
         "sport": sport,

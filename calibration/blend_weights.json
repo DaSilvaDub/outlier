@@ -1,83 +1,100 @@
 {
   "dimensions": {
-    "data_quality_tier": {},
+    "data_quality_tier": {
+      "HIGH": {
+        "brier_score": 0.2500086918,
+        "holdout": null,
+        "market_weight": 0.97058824,
+        "model_weight": 0.02941176,
+        "n": 225,
+        "raw_market_weight": 1.0
+      },
+      "MEDIUM": {
+        "brier_score": 0.238595352,
+        "holdout": null,
+        "market_weight": 0.75,
+        "model_weight": 0.25,
+        "n": 206,
+        "raw_market_weight": 0.28052812
+      }
+    },
     "league": {
       "MLB": {
-        "brier_score": 0.2422772172,
+        "brier_score": 0.2446031434,
         "holdout": {
-          "blended_brier": 0.2510676401,
-          "improved": true,
-          "market_only_brier": 0.2512314159,
-          "n_holdout": 66,
-          "n_train": 262,
-          "trained_market_weight": 0.24891735
+          "blended_brier": 0.24445871,
+          "improved": false,
+          "market_only_brier": 0.2414211529,
+          "n_holdout": 105,
+          "n_train": 420,
+          "trained_market_weight": 0.44451347
         },
-        "market_weight": 0.26410746,
-        "model_weight": 0.73589254,
-        "n": 328,
-        "raw_market_weight": 0.28472762
+        "market_weight": 0.75,
+        "model_weight": 0.25,
+        "n": 525,
+        "raw_market_weight": 0.53874816
       }
     },
     "market_type": {
       "SO": {
-        "brier_score": 0.2482638233,
+        "brier_score": 0.2486433058,
         "holdout": {
-          "blended_brier": 0.2531043758,
+          "blended_brier": 0.2438233867,
           "improved": false,
-          "market_only_brier": 0.2518553486,
-          "n_holdout": 51,
-          "n_train": 205,
-          "trained_market_weight": 0.0
+          "market_only_brier": 0.2391368612,
+          "n_holdout": 91,
+          "n_train": 362,
+          "trained_market_weight": 0.40175521
         },
-        "market_weight": 0.71645307,
-        "model_weight": 0.28354693,
-        "n": 256,
-        "raw_market_weight": 0.09736328
+        "market_weight": 0.75,
+        "model_weight": 0.25,
+        "n": 453,
+        "raw_market_weight": 0.56339114
       }
     },
     "odds_range": {},
     "time_before_game": {
       "6_TO_24H": {
-        "brier_score": 0.2457368777,
+        "brier_score": 0.2458595271,
         "holdout": {
-          "blended_brier": 0.2515123427,
-          "improved": false,
-          "market_only_brier": 0.2513389499,
-          "n_holdout": 57,
-          "n_train": 227,
-          "trained_market_weight": 0.56703027
+          "blended_brier": 0.2411415881,
+          "improved": true,
+          "market_only_brier": 0.2420334281,
+          "n_holdout": 91,
+          "n_train": 363,
+          "trained_market_weight": 0.68576336
         },
-        "market_weight": 0.71944452,
-        "model_weight": 0.28055548,
-        "n": 284,
-        "raw_market_weight": 0.59146968
+        "market_weight": 0.68974497,
+        "model_weight": 0.31025503,
+        "n": 454,
+        "raw_market_weight": 0.67292593
       }
     }
   },
-  "eligible_samples": 351,
-  "generated_at": "2026-09-06T04:04:19.980861+00:00",
+  "eligible_samples": 548,
+  "generated_at": "2026-09-14T12:02:29.371384+00:00",
   "global": {
-    "brier_score": 0.2438496565,
-    "market_weight": 0.43018595,
-    "model_weight": 0.56981405,
-    "n": 351,
-    "raw_market_weight": 0.4148626
+    "brier_score": 0.2451761294,
+    "market_weight": 0.75,
+    "model_weight": 0.25,
+    "n": 548,
+    "raw_market_weight": 0.60666135
   },
   "global_holdout": {
-    "blended_brier": 0.2513687459,
-    "improved": true,
-    "market_only_brier": 0.2541184066,
-    "n_holdout": 70,
-    "n_train": 281,
-    "trained_market_weight": 0.43018595
+    "blended_brier": 0.2444598846,
+    "improved": false,
+    "market_only_brier": 0.2411660318,
+    "n_holdout": 110,
+    "n_train": 438,
+    "trained_market_weight": 0.50982959
   },
   "holdout_fraction": 0.2,
   "market_weight_floor": 0.75,
   "min_samples": 200,
-  "model_version": "blend-brier-v1-4d637764dce1",
+  "model_version": "blend-brier-v1-ae86af6b8990",
   "objective": "brier_score",
   "prior_strength": 30.0,
   "schema_version": 1,
   "status": "active",
-  "trained_through": "2026-09-04T00:50:06.130572-04:00"
+  "trained_through": "2026-09-13T08:04:59.961151-04:00"
 }

@@ -1,0 +1,76 @@
+{
+  "events": [
+    {
+      "eventId": "nfl-event-2026-w1-kc-bal",
+      "id": "nfl-event-2026-w1-kc-bal",
+      "scheduledTime": "2026-09-13T17:00:00+00:00",
+      "startTime": "2026-09-13T17:00:00+00:00",
+      "status": "scheduled",
+      "season": 2026,
+      "week": 1,
+      "venue": "Arrowhead Stadium",
+      "network": "CBS",
+      "dayOfWeek": 6,
+      "home": {
+        "teamId": "kc-chiefs",
+        "name": "Kansas City Chiefs",
+        "alias": "KC",
+        "market": "Kansas City"
+      },
+      "away": {
+        "teamId": "bal-ravens",
+        "name": "Baltimore Ravens",
+        "alias": "BAL",
+        "market": "Baltimore"
+      }
+    },
+    {
+      "eventId": "nfl-event-2026-w1-sf-lar",
+      "id": "nfl-event-2026-w1-sf-lar",
+      "scheduledTime": "2026-09-13T20:25:00+00:00",
+      "startTime": "2026-09-13T20:25:00+00:00",
+      "status": "scheduled",
+      "season": 2026,
+      "week": 1,
+      "venue": "SoFi Stadium",
+      "network": "FOX",
+      "dayOfWeek": 6,
+      "home": {
+        "teamId": "lar-rams",
+        "name": "Los Angeles Rams",
+        "alias": "LAR",
+        "market": "Los Angeles"
+      },
+      "away": {
+        "teamId": "sf-49ers",
+        "name": "San Francisco 49ers",
+        "alias": "SF",
+        "market": "San Francisco"
+      }
+    },
+    {
+      "eventId": "nfl-event-2026-w1-dal-phi",
+      "id": "nfl-event-2026-w1-dal-phi",
+      "scheduledTime": "2026-09-14T00:20:00+00:00",
+      "startTime": "2026-09-14T00:20:00+00:00",
+      "status": "scheduled",
+      "season": 2026,
+      "week": 1,
+      "venue": "Lincoln Financial Field",
+      "network": "NBC",
+      "dayOfWeek": 7,
+      "home": {
+        "teamId": "phi-eagles",
+        "name": "Philadelphia Eagles",
+        "alias": "PHI",
+        "market": "Philadelphia"
+      },
+      "away": {
+        "teamId": "dal-cowboys",
+        "name": "Dallas Cowboys",
+        "alias": "DAL",
+        "market": "Dallas"
+      }
+    }
+  ]
+}
