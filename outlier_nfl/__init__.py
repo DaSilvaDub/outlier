@@ -54,6 +54,15 @@ from outlier_nfl.schema import (
     validate_player_props_payload,
     validate_schedule_payload,
 )
+from outlier_nfl.normalizer import (
+    adjust_push_probability,
+    american_to_implied_probability,
+    build_schedule_index,
+    build_team_index,
+    normalize_game_markets,
+    normalize_player_props,
+)
+from outlier_nfl.pipeline import NflPipeline
 from outlier_nfl.utils import (
     format_signed_line,
     parse_iso_datetime,
@@ -108,6 +117,14 @@ __all__: list[str] = [
     "validate_game_line_record",
     "validate_player_prop_record",
     "validate_normalized_dataset",
+    # Normalizer & Pipeline
+    "NflPipeline",
+    "adjust_push_probability",
+    "american_to_implied_probability",
+    "build_schedule_index",
+    "build_team_index",
+    "normalize_game_markets",
+    "normalize_player_props",
     # Utilities
     "safe_write_json",
     "safe_read_json",

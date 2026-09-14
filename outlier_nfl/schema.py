@@ -109,13 +109,20 @@ def _validate_book_entry(book_entry: Any, b_idx: int) -> list[str]:
     errors: list[str] = []
     if isinstance(book_entry, dict):
         b_dict = book_entry
-    elif hasattr(book_entry, "to_dict") and callable(book_entry.to_dict):
-        try:
-            b_dict = book_entry.to_dict()
-        except Exception as exc:
-            return [f"Book entry at index {b_idx} to_dict() raised exception: {exc}"]
     else:
-        return [f"Book entry at index {b_idx} is not a valid dict or BookPrice instance"]
+        to_dict_fn = None
+        try:
+            to_dict_fn = getattr(book_entry, "to_dict", None)
+        except Exception:
+            to_dict_fn = None
+
+        if callable(to_dict_fn):
+            try:
+                b_dict = to_dict_fn()
+            except Exception as exc:
+                return [f"Book entry at index {b_idx} to_dict() raised exception: {exc}"]
+        else:
+            return [f"Book entry at index {b_idx} is not a valid dict or BookPrice instance"]
 
     if not isinstance(b_dict, dict):
         return [f"Book entry at index {b_idx} did not produce a dictionary"]

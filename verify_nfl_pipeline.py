@@ -112,7 +112,7 @@ def verify_point_spreads(game_records: list[dict], verbose: bool) -> int:
     for s in spreads:
         signed = s.get("signed_line")
         assert signed is not None, f"Point Spread missing signed_line: {s}"
-        assert signed.startswith("+") or signed.startswith("-") or signed in ("0", "0.0", "+0.0"), (
+        assert signed.startswith("+") or signed.startswith("-") or signed in ("0", "0.0", "+0.0", "PK"), (
             f"Point Spread signed_line improperly formatted: {signed}"
         )
         assert s.get("selection"), f"Point Spread missing selection string: {s}"
