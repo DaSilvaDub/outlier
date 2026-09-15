@@ -51,3 +51,16 @@
      - PR #6: Closed as superseded by PR #5 (superseded by modular SQLite odds_service architecture).
 - **Verification**: All merged PRs passed local tests, lint, and full hosted GitHub Actions CI suites. Zero uncommitted changes. Paid reasoning models were not invoked.
 
+
+## Daily automated debug review (claude) - 2026-09-15
+- **Last Commit SHA**: 9c291980a79bd20abeaa61dea8ee3b762e7f5eca on `claude/inspiring-fermat-g7a512`; PR #163 -> master (green, `mergeable_state: clean`, awaiting human review).
+- **Files Touched**:
+  - `outlier_scrapers/desk_snapshot.py`: `_claim_abandoned_daily_lock` recovery no longer deletes a claim marker; new `_abandoned_claim_token` helper.
+  - `tests/test_desk_snapshot.py`: two regression tests (empty marker not stolen mid-claim; recovery never deletes the stranded marker).
+- **Finding**: `31cdd18` (merged via #152 on 2026-09-15) reintroduced the double-acquire it was meant to guard against. Recovering a stranded claim marker by unlink-then-recreate lets two runs both come away holding the daily lock, so two daily jobs write the same pack and ledger. Reproduced deterministically; both new tests fail on the pre-fix code.
+- **Sandbox constraint**: PyPI egress is blocked by proxy policy (403 on CONNECT), so `pytest`/`ruff`/`mypy` could not be installed. Verified by replaying the 8 existing daily-lock test bodies plus the 2 new ones against `desk_snapshot` loaded in isolation (intra-package imports stripped). Hosted CI on PR #163 is the authoritative check.
+- **Reported, not fixed** (needs a human call):
+  - `outlier_nfl/utils.py:54` `_replace_with_retry` last-ditch branch runs `dst.unlink()` then retries the replace; when that retry also fails the previous good `nfl_*_latest.json` is deleted and nothing replaces it. Confirmed by direct execution. Suggested fix: rename `dst` aside, replace, delete the backup on success and restore it on failure. Untestable from Linux, so left alone.
+  - `outlier_nfl/utils.py:183` `to_eastern_date` falls back to a fixed UTC-5 when `zoneinfo` has no tz database, which is wrong during EDT (most of the NFL season). Current kickoff times still bucket to the right date, so it is latent rather than active.
+- **Review round**: Copilot found a real defect in the first fix -- the recovery marker could itself strand (a run that won it and died before rewriting owner.json deadlocked the lock permanently, the same failure one level down). Reproduced, fixed in 9c29198: the markers now form a chain, every link recoverable on the same terms, each step still one exclusive create, name kept fixed-length via a hashed trail, walk bounded by MAX_CLAIM_RECOVERY_DEPTH. Thread resolved. Copilot's second (self-suppressed) point -- a claimer stalled past the 30s grace can still be taken over -- was left deliberately and answered on the thread: it is the same structural trade `_daily_lock_is_abandoned` already makes one level up, and closing it needs an atomic compare-and-swap on owner.json that the file-per-marker scheme cannot express. That is a good separate change if anyone wants it.
+- **Next Steps**: land #163 (green; nothing left for an agent to do on it). Paid reasoning / AI Research Desk was not invoked at any point.
