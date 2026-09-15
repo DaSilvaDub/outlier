@@ -24,3 +24,30 @@
 - Files touched: pack_publish.py removes the second policy load and weaker duplicate enforce gate; test_pack.py adds missing-market_snapshots fail-closed regression. Handoff conflict resolved preserving current master notes.
 - Validation: 161 pack tests passed; Ruff passed for both changed Python files. Independent review found no blocker; prior review thread resolved.
 - Next: await fresh hosted CI before merging this PR. #159/#160 were closed as superseded by #162; #152 crash-recovery repair is in a separate worktree.
+
+## Gemini PR Resolution & Merge Completion - 2026-09-15
+- **Last Commit SHA**: db0f1d121814dc8614a9a447478a47462f9fa25a
+- **Repository Scope Completed (18/18 PRs Resolved -> 0 Open PRs Remaining)**:
+  1. **outlier (11/11 resolved)**:
+     - PR #162: Merged (CI fixes and sync marker correction).
+     - PR #136: Merged (streaming JSON reports).
+     - PR #160 & #159: Closed as superseded by PR #162.
+     - PR #158: Merged (drop duplicate weaker enforce gate in write_pack; all CI checks green).
+     - PR #152: Merged (silent export copy loss, daily lock atomic recovery with dead claim marker crash recovery, mypy pin; all 29 tests and CI green).
+     - PR #150: Closed as superseded by newer calibration snapshots on master through 2026-09-14 (commit d40b027).
+     - PR #149: Merged (consolidated playable props export with actionable-only filter semantics, explicit push/void/unfinished grading).
+     - PR #161: Merged (complete standalone NFL betting pipeline extraction and normalization; 311 unit & adversarial stress tests passing, all CI green).
+     - PR #118: Closed as superseded (audit remediation landed via #119, #122, and modular refactors).
+     - PR #141: Merged (structlog API latency and throttle tracking with safe response getcode extraction; all CI green).
+  2. **nba-props-pipeline (1/1 resolved)**:
+     - PR #1: Merged (browser headers on FantasyLabs requests, test isolation; all CI green).
+  3. **NBA-SCRIPTS (1/1 resolved)**:
+     - PR #1: Merged (removed exposed hardcoded odds API key, added check_system_health.py).
+  4. **Sports_Analytics (5/5 resolved)**:
+     - PR #5: Merged (CTG scraper hardening, core utilities, output contracts).
+     - PR #2: Closed as superseded by PR #5 (duplicate targeting main).
+     - PR #3: Closed as superseded by PR #5 (Hard Rock odds service draft).
+     - PR #4: Merged (verify_endpoints.py utility added to master).
+     - PR #6: Closed as superseded by PR #5 (superseded by modular SQLite odds_service architecture).
+- **Verification**: All merged PRs passed local tests, lint, and full hosted GitHub Actions CI suites. Zero uncommitted changes. Paid reasoning models were not invoked.
+
