@@ -85,7 +85,8 @@ ROLE_BLOCK = [
     " non_numeric_line, spread_sign_conflict, movement_line_mismatch,"
     " ev_probability_mismatch,"
     " edge_suspect_stale_line, edge_suspect_thin_liquidity, SOURCE_INTEGRITY_FLAG,"
-    " SIDE_RESOLUTION_CONFLICT, or UNINDEXED_SLATE_GAME — treat any such row as a"
+    " SIDE_RESOLUTION_CONFLICT, UNINDEXED_SLATE_GAME, pitcher_identity_mismatch,"
+    " or pitcher_identity_unconfirmed — treat any such row as a"
     " data artifact with actionable=false and verdict PASS / STAND-DOWN.",
     "- model_prob_source distinguishes Outlier EV devig from proxy_market_devig. The proxy"
     " source fills probability/edge/Kelly for auditability but is market-implied context,"

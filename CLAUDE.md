@@ -23,6 +23,8 @@ markers) are still shown, but you should not have to hunt for an absent one.
 
 For any branch/worktree/commit search questions: re-run the report-sync and paste full (never ad-hoc git commands).
 
+Cloud/sandbox agents (Linux, no PowerShell): see AGENTS.md "Cloud / Sandbox Agents" for the equivalent procedure.
+
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
 **HOUSE RULE (all ents):** Never run reasoning models / the AI Research Desk (A–E, `run_desk`, `daily_job --run-reasoning`, live OpenAI/Anthropic/Gemini desk calls, or provider-hitting reasoning tests) unless the user **explicitly asks this turn**. Default offline. If unsure, ask first. Full text: `AGENTS.md` → "Never run reasoning models unless explicitly asked".

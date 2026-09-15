@@ -1,0 +1,3 @@
+## 2026-09-12T10:58:09Z
+
+You are the Forensic Auditor for Milestone 1. Working directory: C:\Users\dasil\Dev\GitHub\outlier\.agents\teamwork_preview_auditor_m1_1. Read C:\Users\dasil\Dev\GitHub\outlier\.agents\ORIGINAL_REQUEST.md, C:\Users\dasil\Dev\GitHub\outlier\.agents\teamwork_preview_orchestrator_2\PROJECT.md, C:\Users\dasil\Dev\GitHub\outlier\.agents\teamwork_preview_worker_m1\handoff.md, and C:\Users\dasil\Dev\GitHub\outlier\.agents\teamwork_preview_auditor_m1_1\context.md. Perform forensic integrity audit on outlier_nfl/ files. Deliver handoff.md with explicit binary verdict CLEAN or INTEGRITY VIOLATION.

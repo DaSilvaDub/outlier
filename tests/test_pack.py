@@ -226,7 +226,11 @@ def test_player_prop_with_insight_stays_capped():
             "calculated_ev_pct": 0.05,
         }
     ]
-    row = make_row(card, ev)
+    row = make_row(
+        card,
+        ev,
+        probable_pitchers={"STL": {"pitcher": "Matthew Liberatore", "confirmed": True}},
+    )
     assert row["actionable"] == "true"
     assert row["recommended_units_pre_news"] == 1.0
     assert "insight_support" in row["signal_flags"]
@@ -786,9 +790,9 @@ def test_duplicate_projection_outcome_ids_are_rejected_as_ambiguous():
 
 def test_projection_artifact_date_must_be_present_and_match_expected_slate():
     projection = {"status": "eligible", "row_id": "o1", "event_id": "game-1"}
-    assert index_projections(
-        {"date": "2026-08-25", "projections": [projection]}, "2026-08-25"
-    ) == {"o1": projection}
+    assert index_projections({"date": "2026-08-25", "projections": [projection]}, "2026-08-25") == {
+        "o1": projection
+    }
     with pytest.raises(ValidationError, match="missing date"):
         index_projections({"projections": [projection]}, "2026-08-25")
 
@@ -865,9 +869,7 @@ def test_selected_method_devig_keeps_pack_edge_coherent_with_source_ev():
             "ev_source": "NATIVE",
             "sport_context": {
                 "selected_ev_method": "AVERAGE",
-                "calculated_ev_methods": {
-                    "AVERAGE": {"noVigOdds": {"decimal": selected_devig}}
-                },
+                "calculated_ev_methods": {"AVERAGE": {"noVigOdds": {"decimal": selected_devig}}},
             },
         }
     ]
@@ -906,9 +908,7 @@ def test_selected_method_ev_probability_mismatch_fails_closed():
             "ev_source": "NATIVE",
             "sport_context": {
                 "selected_ev_method": "AVERAGE",
-                "calculated_ev_methods": {
-                    "AVERAGE": {"noVigOdds": {}}
-                },
+                "calculated_ev_methods": {"AVERAGE": {"noVigOdds": {}}},
             },
         }
     ]
@@ -1230,9 +1230,7 @@ def test_shadow_neutral_learned_diagnostics_do_not_change_pre_cap_units():
     assert projected["learned_multiplier_status"] == "shadow_neutral"
 
 
-def test_learned_stake_runtime_uses_market_consensus_source_from_policy(
-    tmp_path, monkeypatch
-):
+def test_learned_stake_runtime_uses_market_consensus_source_from_policy(tmp_path, monkeypatch):
     from outlier_scrapers.portfolio import PortfolioPolicy
 
     config_dir = tmp_path / "config"
@@ -1258,15 +1256,11 @@ def test_learned_stake_runtime_uses_market_consensus_source_from_policy(
     )
     monkeypatch.setattr(P, "PROJECT_ROOT", tmp_path)
 
-    runtime = _load_learned_stake_runtime(
-        PortfolioPolicy(shadow_multipliers_neutral=False)
-    )
+    runtime = _load_learned_stake_runtime(PortfolioPolicy(shadow_multipliers_neutral=False))
 
     assert runtime["enabled"] is True
     assert runtime["source_probability_column"] == "market_consensus_prob"
-    assert runtime["calibration_artifact"]["source_probability_column"] == (
-        "market_consensus_prob"
-    )
+    assert runtime["calibration_artifact"]["source_probability_column"] == ("market_consensus_prob")
 
 
 def test_drawdown_only_policy_stand_down_zeros_pre_cap_units(tmp_path, monkeypatch):
@@ -1700,6 +1694,24 @@ def test_flagged_audits_share_existing_ev_quota():
     assert sum(row["_board"] in {"board_a", "flagged"} for row in out) == 15
 
 
+def test_board_b_identity_rows_use_signal_quota_not_ev_quota():
+    rows = [{"_board": "board_a", "_rank_value": i, "market_id": f"a{i}"} for i in range(15)]
+    rows += [
+        {
+            "_board": "board_b",
+            "_rank_value": 99,
+            "market_id": "so-mismatch",
+            "data_quality_flags": "pitcher_identity_mismatch",
+        }
+    ]
+    out = rank_rows(rows, top_ev_n=15, top_signal_n=10)
+    flagged_ids = [row["market_id"] for row in out if row["_board"] == "flagged"]
+    signal_ids = [row["market_id"] for row in out if row["_board"] == "board_b"]
+    assert "so-mismatch" in signal_ids
+    assert "so-mismatch" not in flagged_ids
+    assert sum(row["_board"] == "board_a" for row in out) == 15
+
+
 # 15. Date selection: pick requested, fall back to latest, keep undated.
 def test_select_date():
     rows = [
@@ -1894,6 +1906,9 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert len(projection_lines) == 2
     assert json.loads(projection_lines[0])["row_id"] == "go"
     assert (out_dir / "candidate_coverage.json").exists()
+    identity_audit = json.loads((out_dir / "identity_audit.json").read_text(encoding="utf-8"))
+    assert identity_audit["schema_version"] == "1.0"
+    assert "fail_closed_count" in identity_audit
     health_snapshot = json.loads((out_dir / "feed_health.json").read_text())
     assert health_snapshot["MLB"]["schema_version"] == "1.0"
     assert (out_dir / "game_totals.csv").exists()
@@ -1951,12 +1966,14 @@ def test_build_pack_with_coverage_skips_a_confirmed_empty_slate_league(tmp_path,
         health["_league"] = league
         return health
 
-    monkeypatch.setattr("outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health)
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health
+    )
     monkeypatch.setattr(
         "outlier_scrapers.pack.feed_health.validate_feed_health",
-        lambda health: (False, ["games_status is stale"])
-        if health.get("_league") == "WNBA"
-        else (True, []),
+        lambda health: (
+            (False, ["games_status is stale"]) if health.get("_league") == "WNBA" else (True, [])
+        ),
     )
     monkeypatch.setattr(
         "outlier_scrapers.pack.feed_health.league_has_confirmed_empty_slate",
@@ -1971,9 +1988,7 @@ def test_build_pack_with_coverage_skips_a_confirmed_empty_slate_league(tmp_path,
     assert coverage["MLB"]["emitted"] > 0
 
 
-def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(
-    tmp_path, monkeypatch
-):
+def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(tmp_path, monkeypatch):
     """A skipped league's frozen projection artifact must not abort the pack.
 
     build_pack_with_coverage skips a confirmed-empty-slate league before ever
@@ -2016,20 +2031,22 @@ def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(
     )
     monkeypatch.setattr(
         "outlier_scrapers.pack_context.feed_health.validate_feed_health",
-        lambda health: (False, ["games_status is stale"])
-        if health.get("_league") == "WNBA"
-        else (True, []),
+        lambda health: (
+            (False, ["games_status is stale"]) if health.get("_league") == "WNBA" else (True, [])
+        ),
     )
     monkeypatch.setattr(
         "outlier_scrapers.pack_context.feed_health.league_has_confirmed_empty_slate",
         lambda league, **_kwargs: league == "WNBA",
     )
-    monkeypatch.setattr("outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health)
+    monkeypatch.setattr(
+        "outlier_scrapers.pack.feed_health.build_feed_health", fake_build_feed_health
+    )
     monkeypatch.setattr(
         "outlier_scrapers.pack.feed_health.validate_feed_health",
-        lambda health: (False, ["games_status is stale"])
-        if health.get("_league") == "WNBA"
-        else (True, []),
+        lambda health: (
+            (False, ["games_status is stale"]) if health.get("_league") == "WNBA" else (True, [])
+        ),
     )
     monkeypatch.setattr(
         "outlier_scrapers.pack.feed_health.league_has_confirmed_empty_slate",
@@ -2369,6 +2386,70 @@ def test_period_scoped_game_total_excluded_from_general_candidate_pool():
         "sides": {"OVER": {"outcome_id": "game-over-1h", "line": 4.5, "best_odds": -110}},
     }
     assert make_row(card, [], sport="MLB") is None
+
+
+def test_period_scoped_spread_excluded_from_general_candidate_pool():
+    # 2026-09-06 briefing listed STL @ COL Spread AWAY +0.5 twice (-375 / -425).
+    # Those were 8I and 4I run lines, not full-game spreads. Totals already
+    # drop period-scoped markets; unlabeled innings spreads must follow.
+    card = {
+        "headline_side": "AWAY",
+        "card_id": "03b2ff9ff6354a2375dff60140003726ac8f3ac7",
+        "proposition": "SPREAD",
+        "market": "SPREAD",
+        "market_type": "GAMELINE",
+        "team": "STL",
+        "matchup": "STL @ COL",
+        "scope": "partial_period",
+        "period_label": "8I",
+        "board": "B",
+        "sides": {"AWAY": {"outcome_id": "o-away-8i", "line": 0.5, "best_odds": -375}},
+    }
+    assert make_row(card, [], sport="MLB") is None
+
+
+def test_inning_spread_stamped_full_game_scope_still_excluded():
+    # games_norm historically stamps inning markets as scope=full_game while
+    # period_label carries the real window (e.g. 4I). period_identity prefers
+    # period_label; the candidate gate must too.
+    card = {
+        "headline_side": "AWAY",
+        "card_id": "3be3136c9e6cd42d64c838091a6f5ef8aae05530",
+        "proposition": "SPREAD",
+        "market": "SPREAD",
+        "market_type": "GAMELINE",
+        "team": "STL",
+        "matchup": "STL @ COL",
+        "scope": "full_game",
+        "period_label": "4I",
+        "board": "B",
+        "sides": {"AWAY": {"outcome_id": "o-away-4i", "line": 0.5, "best_odds": -425}},
+    }
+    assert make_row(card, [], sport="MLB") is None
+
+
+def test_period_scoped_moneyline_excluded_from_general_candidate_pool():
+    card = {
+        "headline_side": "HOME",
+        "card_id": "ml-5i",
+        "proposition": "MONEYLINE",
+        "market": "MONEYLINE",
+        "market_type": "GAMELINE",
+        "team": "NYY",
+        "matchup": "NYY @ SD",
+        "scope": "partial_period",
+        "period_label": "5I",
+        "board": "B",
+        "sides": {"HOME": {"outcome_id": "o-home-5i", "line": None, "best_odds": -140}},
+    }
+    assert make_row(card, [], sport="MLB") is None
+
+
+def test_full_game_spread_still_enters_candidate_pool():
+    row = make_row(_spread_card("AWAY", 0.5), [], sport="MLB")
+    assert row is not None
+    assert row["market_type"] == "GAMELINE"
+    assert "AWAY" in row["selection"]
 
 
 def test_untyped_mlb_total_with_team_stays_game_total():
@@ -2982,6 +3063,114 @@ def test_resolved_team_context_is_not_flagged():
     assert "team_enrichment_failed" not in row["data_quality_flags"]
 
 
+def _gore_so_card(team, opponent, matchup, **extra):
+    card = _ctx_card(
+        team,
+        opponent,
+        matchup,
+        player="MacKenzie Gore",
+        market="SO",
+        market_type="SO",
+        market_label="MacKenzie Gore - Strikeouts",
+        board="B",
+    )
+    card.update(extra)
+    return card
+
+
+def test_gore_on_wrong_team_is_fail_closed_flagged():
+    # Gore confirmed TEX vs TB, but the card put him on WSH @ LAD.
+    # Board B identity failures stay on Board B so they do not occupy the
+    # Board A EV quota.
+    probable = {
+        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
+        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
+    }
+    row = make_row(
+        _gore_so_card("WSH", "LAD", "WSH @ LAD"),
+        [],
+        sport="MLB",
+        probable_pitchers=probable,
+    )
+    assert row is not None
+    assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
+    assert row["actionable"] == "false"
+    assert row["board"] == "B"
+    assert row["_board"] == "board_b"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_board_a_identity_mismatch_is_a_flagged():
+    probable = {
+        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
+        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
+    }
+    row = make_row(
+        _gore_so_card("WSH", "LAD", "WSH @ LAD", board="A"),
+        [],
+        sport="MLB",
+        probable_pitchers=probable,
+    )
+    assert row is not None
+    assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+    assert row["_board"] == "flagged"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_missing_probable_lookup_fail_closes_so_row():
+    row = make_row(
+        _gore_so_card("TEX", "TB", "TB @ TEX"),
+        [],
+        sport="MLB",
+        probable_pitchers={},
+    )
+    assert row is not None
+    assert "pitcher_identity_unconfirmed" in row["data_quality_flags"].split(";")
+    assert row["actionable"] == "false"
+    assert row["board"] == "B"
+    assert row["_board"] == "board_b"
+    assert row["recommended_units_pre_news"] == ""
+
+
+def test_gore_matching_confirmed_starter_stays_unflagged():
+    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    row = make_row(
+        _gore_so_card("TEX", "TB", "TB @ TEX"),
+        [],
+        sport="MLB",
+        probable_pitchers=probable,
+    )
+    assert row is not None
+    flags = row["data_quality_flags"].split(";") if row["data_quality_flags"] else []
+    assert "pitcher_identity_mismatch" not in flags
+    assert "pitcher_identity_unconfirmed" not in flags
+    assert row["board"] == "B"
+    assert row["_board"] == "board_b"
+
+
+def test_so_token_market_label_does_not_unconfirm_confirmed_starter():
+    # ev_card market=SO without a dashed market_label emits
+    # "Jackson Jobe SO OVER 5.5". That must not fail-close a confirmed starter.
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    row = make_row(card, [], sport="MLB", probable_pitchers=probable)
+    assert row is not None
+    flags = row["data_quality_flags"].split(";") if row["data_quality_flags"] else []
+    assert "pitcher_identity_unconfirmed" not in flags
+    assert "pitcher_identity_mismatch" not in flags
+
+
 def test_gameline_without_team_context_is_not_flagged():
     # Game totals carry no team on purpose; the guard must not fire there.
     card = ev_card(
@@ -3139,17 +3328,13 @@ def test_reconcile_preserves_nonmatching_total_representation(specialized):
 
 def test_reconcile_preserves_candidate_when_exact_specialized_total_is_actionable():
     rows = [_candidate_total()]
-    _reconcile_candidates_with_totals_board(
-        rows, [_specialized_total(actionable="true")], []
-    )
+    _reconcile_candidates_with_totals_board(rows, [_specialized_total(actionable="true")], [])
     assert rows[0]["actionable"] == "true"
 
 
 def test_reconcile_team_total_identity_includes_team():
     rows = [_candidate_total(team="NYY")]
-    _reconcile_candidates_with_totals_board(
-        rows, [], [_specialized_total(team="BOS")]
-    )
+    _reconcile_candidates_with_totals_board(rows, [], [_specialized_total(team="BOS")])
     assert rows[0]["actionable"] == "true"
 
 
@@ -3849,5 +4034,60 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
         except Exception as e:
             if "shadow history" in str(e):
                 pytest.fail(f"Unexpected error: {e}")
+    finally:
+        P.PROJECT_ROOT = original_project_root
+
+
+@pytest.mark.uses_enforce_mode
+def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path):
+    """An existing-but-empty feedback db is zero shadow days, not a free pass.
+
+    ``write_pack`` used to carry a second, weaker copy of this gate further
+    down the same function, which swallowed ``sqlite3.OperationalError`` and
+    fell through. It was unreachable behind the live gate, but nothing pinned
+    the behaviour it disagreed about, so this covers the shape both copies read
+    differently: a ``feedback.sqlite3`` that exists without a
+    ``market_snapshots`` table must fail closed, like a missing db file does.
+    """
+    out_dir = tmp_path / "2026-07-25"
+    out_dir.mkdir()
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    policy_path = config_dir / "portfolio_risk.json"
+    policy_path.write_text(
+        """{
+    "schema_version": "1.0",
+    "policy_version": "1.0",
+    "mode": "enforce",
+    "streams_in_scope": ["candidates", "game_totals", "team_totals"],
+    "stake_increment": 0.5,
+    "max_wager_units": 1.0,
+    "max_daily_units": 20.0,
+    "max_event_units": 4.0,
+    "max_player_units": 3.0,
+    "max_team_units": 5.0,
+    "max_market_type_units": 6.0,
+    "max_correlated_cluster_units": 5.0,
+    "max_book_units": 8.0,
+    "non_authoritative_book_policy": "flag_and_report_only",
+    "shadow_multipliers_neutral": true
+}""",
+        encoding="utf-8",
+    )
+
+    db_dir = tmp_path / "calibration"
+    db_dir.mkdir()
+    import sqlite3
+
+    sqlite3.connect(db_dir / "feedback.sqlite3").close()
+
+    import outlier_scrapers.paths as P
+
+    original_project_root = P.PROJECT_ROOT
+    P.PROJECT_ROOT = tmp_path
+    try:
+        with pytest.raises(ValueError, match="Enforce mode refused.*market_snapshots"):
+            write_pack([], out_dir)
     finally:
         P.PROJECT_ROOT = original_project_root

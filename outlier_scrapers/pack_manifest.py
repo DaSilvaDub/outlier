@@ -25,6 +25,7 @@ KNOWN_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("decisions.csv", "pack"),
     ("projections.jsonl", "pack"),
     ("candidate_coverage.json", "pack"),
+    ("identity_audit.json", "pack"),
     ("reasoning_status.json", "desk"),
     ("manual_betting_report.md", "desk"),
     ("chatgpt_a.md", "desk"),

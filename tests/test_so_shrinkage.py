@@ -24,7 +24,9 @@ def test_shrink_starter_so_features_pulls_extreme_rate_toward_league():
         total_k=28.8,
     )
     assert LEAGUE_STRIKEOUT_RATE < shrunk["strikeout_rate"] < raw_rate
-    assert STARTER_PROJECTED_BF < shrunk["projected_bf"] < raw_bf or shrunk["projected_bf"] != raw_bf
+    assert (
+        STARTER_PROJECTED_BF < shrunk["projected_bf"] < raw_bf or shrunk["projected_bf"] != raw_bf
+    )
     assert shrunk["workload_dispersion"] > 12.0
     assert 0.0 < shrunk["reliability"] < 1.0
 
@@ -43,6 +45,7 @@ def test_mlb_so_gamelog_path_is_less_extreme_after_shrinkage():
         "market_type": "SO",
         "selection": "Cam Schlittler - Strikeouts OVER 5.5",
         "player": "Cam Schlittler",
+        "team": "NYY",
         "event_id": "g1",
         "market_id": "m1",
         "outcome_id": "o1",

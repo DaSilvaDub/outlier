@@ -83,7 +83,9 @@ def clear_derived_pack_outputs(out_dir: Path) -> None:
     """
     verdicts_root = (out_dir / VERDICTS_SUBTREE).resolve()
     for name in DERIVED_PACK_OUTPUTS:
-        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(f"{VERDICTS_SUBTREE}/"):
+        if name == VERDICTS_SUBTREE or str(name).replace("\\", "/").startswith(
+            f"{VERDICTS_SUBTREE}/"
+        ):
             continue
         target = out_dir / name
         try:
@@ -313,9 +315,7 @@ def write_pack(
 
     _reconcile_candidates_with_totals_board(rows, totals_rows, team_totals_rows)
     if opportunity_rows is not None:
-        _reconcile_candidates_with_totals_board(
-            opportunity_rows, totals_rows, team_totals_rows
-        )
+        _reconcile_candidates_with_totals_board(opportunity_rows, totals_rows, team_totals_rows)
 
     # Build all legacy alternate artifacts first, then compare them on one
     # conservative, price-aware shadow surface.  The legacy files remain for
@@ -383,10 +383,7 @@ def write_pack(
     alt_player_parlays: list[dict[str, Any]] = []
     for lg, payload in (props_norm_by_league or {}).items():
         league_rows = build_alt_player_props_board(
-            payload,
-            league=lg,
-            target_date=pack_date,
-            ev_over_players=ev_over_players
+            payload, league=lg, target_date=pack_date, ev_over_players=ev_over_players
         )
         alt_player_rows.extend(league_rows)
         alt_player_parlays.extend(build_alt_player_props_parlays(league_rows))
@@ -406,44 +403,13 @@ def write_pack(
     except Exception:
         git_sha = "unknown"
 
-    policy = load_portfolio_policy()
-
-    # Immutable enforce pack check
-    if policy.mode == "enforce":
-        sidecar_path = out_dir / "portfolio_risk.json"
-        if sidecar_path.exists():
-            with open(sidecar_path, "r", encoding="utf-8") as sf:
-                try:
-                    existing = json.load(sf)
-                    if existing.get("mode") == "enforce":
-                        raise ValueError(
-                            "Enforce pack already exists for this slate. Refusing to overwrite immutable pack."
-                        )
-                except json.JSONDecodeError:
-                    pass
-
-        # 14-day shadow window check
-        import sqlite3
-        from outlier_scrapers import paths
-
-        db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
-        if not db_path.exists():
-            raise ValueError(
-                "Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required."
-            )
-        with sqlite3.connect(db_path) as conn:
-            try:
-                res = conn.execute(
-                    "SELECT COUNT(DISTINCT SUBSTR(captured_at, 1, 10)) FROM market_snapshots"
-                ).fetchone()
-                days = res[0] if res else 0
-                if days < 14:
-                    raise ValueError(
-                        f"Enforce mode refused: only {days} days of shadow history found. 14 required."
-                    )
-            except sqlite3.OperationalError:
-                pass  # table might not exist in an empty db
-
+    # The immutable-pack and 14-day shadow-window gates already ran at the top of
+    # write_pack, against the same policy and the same db. A second copy stood here
+    # and could never reach a refusal the first had not already raised — but it was
+    # the weaker of the two: it swallowed sqlite3.OperationalError and fell through,
+    # where the live gate refuses on any query failure. Two copies of one risk gate
+    # is how the weaker one ends up being the one that runs, so the dead copy is
+    # gone rather than merely brought into line.
     learned_runtime = _load_learned_stake_runtime(policy)
     all_projected = []
     for stream_name, stream_rows in [
@@ -452,9 +418,9 @@ def write_pack(
         ("team_totals", team_totals_rows),
     ]:
         for r in stream_rows:
-            units_val = r.get("recommended_units_pre_news")
-            if units_val not in (None, ""):
-                r["units"] = float(units_val)
+            parsed_units = _to_float(r.get("recommended_units_pre_news"))
+            if parsed_units is not None:
+                r["units"] = parsed_units
             proj = project_risk_identity(r, stream_name)
             _apply_learned_stake_before_caps(
                 proj,
@@ -686,7 +652,9 @@ def write_pack(
         opportunity_output.append(row)
     _write_csv(out_dir / "opportunities.csv", [*CANDIDATES_HEADER, "selected"], opportunity_output)
 
-    proj_content = "\n".join(json.dumps(p, sort_keys=True) for p in (projection_records or [])) + ("\n" if projection_records else "")
+    proj_content = "\n".join(json.dumps(p, sort_keys=True) for p in (projection_records or [])) + (
+        "\n" if projection_records else ""
+    )
     safe_write_text(out_dir / "projections.jsonl", proj_content)
 
     safe_write_text(
@@ -702,9 +670,21 @@ def write_pack(
         ),
     )
     if coverage is not None:
-        safe_write_text(out_dir / "candidate_coverage.json", json.dumps(coverage, indent=2, sort_keys=True))
+        safe_write_text(
+            out_dir / "candidate_coverage.json", json.dumps(coverage, indent=2, sort_keys=True)
+        )
+    from outlier_scrapers.slate_quality import summarize_pitcher_identity
+
+    identity_audit = summarize_pitcher_identity(rows)
+    safe_write_text(
+        out_dir / "identity_audit.json",
+        json.dumps(identity_audit, indent=2, sort_keys=True),
+    )
     if feed_health_by_league is not None:
-        safe_write_text(out_dir / "feed_health.json", json.dumps(feed_health_by_league, indent=2, sort_keys=True))
+        safe_write_text(
+            out_dir / "feed_health.json",
+            json.dumps(feed_health_by_league, indent=2, sort_keys=True),
+        )
     dossiers_dir.mkdir(exist_ok=True)
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in rows:
@@ -726,7 +706,10 @@ def write_pack(
     safe_write_text(sections_dir / "game_totals.md", _format_game_totals_md(totals_rows))
 
     _write_csv(out_dir / "team_totals.csv", TEAM_TOTALS_HEADER, team_totals_rows)
-    safe_write_text(sections_dir / "team_totals.md", _format_game_totals_md(team_totals_rows, title="# Team totals"))
+    safe_write_text(
+        sections_dir / "team_totals.md",
+        _format_game_totals_md(team_totals_rows, title="# Team totals"),
+    )
 
     _write_csv(out_dir / "alt_team_totals.csv", ALT_TEAM_TOTALS_HEADER, alt_tt_rows)
     _write_csv(

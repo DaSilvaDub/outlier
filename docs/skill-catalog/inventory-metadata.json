@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-09-06T06:52:15.972Z",
+  "physicalPackageCount": 982,
+  "uniqueSkillCount": 979,
+  "duplicatePackageCopiesCollapsed": 3,
+  "configuredRoots": [
+    "C:/Users/dasil/.codex/skills",
+    "C:/Users/dasil/.agents/skills",
+    "C:/Users/dasil/.codex/skills/.system",
+    "C:/Users/dasil/.codex/plugins/cache/openai-bundled",
+    "C:/Users/dasil/.codex/plugins/cache/openai-curated-remote",
+    "C:/Users/dasil/.codex/plugins/cache/openai-primary-runtime",
+    "C:/Users/dasil/Dev/GitHub/outlier/.agents/skills"
+  ],
+  "countsByFit": {
+    "No direct fit": 614,
+    "Peripheral": 72,
+    "Supporting": 234,
+    "Direct": 14,
+    "Strong": 45
+  },
+  "countsByCategory": {
+    "AI & research": 72,
+    "Business operations": 584,
+    "Cloud & infrastructure": 25,
+    "Collaboration & projects": 23,
+    "Communication": 17,
+    "Data & analytics": 44,
+    "Developer tools": 5,
+    "Files & documents": 46,
+    "Finance & trading": 18,
+    "Media & design": 14,
+    "Outlier pipeline": 14,
+    "Sales & marketing": 40,
+    "Security & compliance": 9,
+    "Sports & betting": 3,
+    "Web & extraction": 65
+  }
+}

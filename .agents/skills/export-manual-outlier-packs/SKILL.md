@@ -15,6 +15,12 @@ Use this skill when the user wants to run the daily betting pipeline but bypasse
 Execute the pipeline in data-only mode to generate the briefing and candidates data:
 `python -m outlier_scrapers.daily_job --analysis-profile local`
 
+Pack write now includes `packs/<date>/identity_audit.json`. After the job, check that file (or the `Pitcher identity audit:` log line) for `mismatch_count` / `unconfirmed_count`. Fail-closed SO identity rows are `A_FLAGGED` and must not be treated as Board A.
+
+To run the same sequence unattended every morning:
+`powershell -File C:\Users\dasil\Dev\GitHub\outlier\scripts\run_daily_pipeline.ps1`
+(see the script header for a one-time `schtasks` install). The wrapper uses `--leagues MLB,WNBA`. A confirmed empty WNBA slate is non-fatal; when WNBA games return they are packed automatically. The pitcher identity audit is MLB SO only.
+
 > [!TIP]
 > **Handling Off-Slate / Hiatus Leagues**: If a sport has no games scheduled for today (e.g., WNBA mid-season break or off-season), specify only active leagues via `--leagues <ACTIVE_LEAGUES>` (e.g., `--leagues MLB`). This prevents `projections.py` date-mismatch errors and stale feed-health rejections caused by sportsbooks posting advance lines for future dates.
 
