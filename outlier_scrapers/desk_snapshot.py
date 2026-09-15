@@ -298,6 +298,38 @@ def _daily_lock_generation(owner: dict[str, Any] | None) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _abandoned_claim_token(claim: Path) -> str | None:
+    """Stable id for a claim marker no live run can still be holding.
+
+    ``_daily_lock_is_abandoned`` one level down, and abandoned for the same two
+    reasons: the marker names a process that is gone, or it has no claimant at
+    all. Creating the marker and writing the pid into it are two steps, so a
+    marker that is still empty may simply be mid-claim -- it is only stranded
+    once it has sat empty past the same grace a lock with no owner yet gets.
+
+    Returns None whenever the marker may still belong to a live claim, which is
+    what keeps a run that is between its own ``os.open`` and ``os.write`` from
+    having its claim taken out from under it.
+    """
+    try:
+        content = claim.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not content:
+        try:
+            age = _now() - _dir_mtime(claim)
+        except OSError:
+            return None
+        return "empty" if age >= DAILY_LOCK_OWNERLESS_GRACE else None
+    try:
+        claimant = int(content.split()[0])
+    except (IndexError, ValueError):
+        return None
+    if _pid_is_running(claimant):
+        return None
+    return f"pid{claimant}"
+
+
 def _claim_abandoned_daily_lock(
     lock_dir: Path, owner: dict[str, Any] | None, *, pid: int
 ) -> bool:
@@ -314,43 +346,43 @@ def _claim_abandoned_daily_lock(
 
     Claiming in place is also what already had to happen on Windows, where a
     sync or AV filter can hold the directory open and refuse rmdir outright.
+
+    A takeover that died before it could rewrite owner.json leaves its marker
+    behind and would strand the lock forever, so that one state is recoverable
+    -- but only by winning a *second* exclusive create, never by deleting the
+    marker and re-creating it. Deleting it reopens exactly the gap the marker
+    closes: the run whose marker was removed still believes it won, and so does
+    the run that removed it.
     """
     try:
         identity_before = lock_dir.stat().st_ino
     except OSError:
         return False
     claim = lock_dir / f"claim-{_daily_lock_generation(owner)}"
-    for _ in range(2):
-        try:
-            fd = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            try:
-                os.write(fd, f"{pid}\n".encode("utf-8"))
-            finally:
-                os.close(fd)
-            break
-        except OSError:
-            # Check if the existing claim marker belongs to a dead process.
-            # An interrupted takeover (e.g. killed before writing owner.json)
-            # would otherwise leave an abandoned claim marker that blocks
-            # future takeovers indefinitely.
-            claimant_pid: int | None = None
-            try:
-                content = claim.read_text(encoding="utf-8").strip()
-                if content:
-                    claimant_pid = int(content)
-                elif (time.time() - claim.stat().st_mtime) > 0.1:
-                    claimant_pid = -1  # Dead/orphaned empty claim marker
-            except (OSError, ValueError):
-                pass
-            if claimant_pid is not None and not _pid_is_running(claimant_pid):
-                try:
-                    claim.unlink()
-                    continue
-                except OSError:
-                    pass
+    try:
+        fd = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        # Lost the race, or the directory went away under us (the legitimate
+        # owner released it). Either way this process has no claim unless the
+        # marker it collided with is itself stranded.
+        token = _abandoned_claim_token(claim)
+        if token is None:
             return False
-    else:
-        return False
+        # Recovering is a race between every run that read the same stranded
+        # marker, so it is settled the same way the first claim was: one
+        # exclusive create, named for the state it was judged on.
+        recovery = claim.with_name(f"{claim.name}.take-{token}")
+        try:
+            fd = os.open(recovery, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except OSError:
+            return False
+        claim = recovery
+    # The pid goes in immediately: a marker that names its claimant is one a
+    # later run can tell apart from one whose claimant is still alive.
+    try:
+        os.write(fd, f"{pid}\n".encode("utf-8"))
+    finally:
+        os.close(fd)
 
     if _daily_lock_moved_on(lock_dir, owner, identity_before):
         try:

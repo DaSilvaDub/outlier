@@ -766,3 +766,64 @@ def test_interrupted_claim_marker_does_not_block_future_takeover(tmp_path, monke
     assert ds._claim_abandoned_daily_lock(stranded, seen, pid=new_pid) is True
     assert ds._read_daily_owner(stranded)["pid"] == new_pid
 
+
+def test_a_claim_in_progress_is_not_stolen_before_its_pid_lands(tmp_path, monkeypatch):
+    """The exclusive create and the pid write are two steps, like mkdir and owner.json.
+
+    A run stalled between them -- on Windows a sync or AV filter is enough --
+    leaves its marker momentarily empty. Reading that as stranded hands the lock
+    to a second run while the first still believes it won it: both go on to
+    rewrite owner.json, which is the two-daily-jobs-on-one-pack outcome claim
+    markers exist to prevent. An empty marker is only stranded once it has sat
+    empty past the grace a lock with no owner yet gets.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    # Mirrors the real predicate, which reports no pid <= 0 as running.
+    monkeypatch.setattr(ds, "_pid_is_running", lambda pid: pid > 0 and pid != dead_pid)
+
+    seen = ds._read_daily_owner(stranded)
+    claim = stranded / f"claim-{ds._daily_lock_generation(seen)}"
+
+    # The first run won the exclusive create; its pid has not landed yet.
+    os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+    stalled = time.time() - 1.0
+    os.utime(claim, (stalled, stalled))
+
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=os.getpid() + 2) is False
+    assert ds._read_daily_owner(stranded)["pid"] == dead_pid
+
+
+def test_recovering_a_stranded_claim_never_deletes_it(tmp_path, monkeypatch):
+    """Recovery is settled by a second exclusive create, not by unlink-and-retry.
+
+    Deleting the stranded marker and creating a fresh one reopens the gap the
+    marker closes -- two runs that both read the same stranded marker would both
+    delete it, both re-create it, and both come away holding the lock. The
+    marker another run may still be holding is therefore never removed; the
+    winner is whoever exclusively creates the recovery marker beside it.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    crashed_claimer_pid = os.getpid() + 2
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    monkeypatch.setattr(
+        ds, "_pid_is_running", lambda pid: pid not in (dead_pid, crashed_claimer_pid)
+    )
+
+    seen = ds._read_daily_owner(stranded)
+    claim = stranded / f"claim-{ds._daily_lock_generation(seen)}"
+    claim.write_text(f"{crashed_claimer_pid}\n", encoding="utf-8")
+
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=os.getpid() + 3) is True
+    # The stranded marker is untouched -- same file, same claimant.
+    assert claim.read_text(encoding="utf-8").strip() == str(crashed_claimer_pid)
+    # A run that read the same stranded marker loses the recovery outright.
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=os.getpid() + 4) is False
