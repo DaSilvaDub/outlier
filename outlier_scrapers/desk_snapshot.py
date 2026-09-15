@@ -320,13 +320,38 @@ def _claim_abandoned_daily_lock(
     except OSError:
         return False
     claim = lock_dir / f"claim-{_daily_lock_generation(owner)}"
-    try:
-        os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
-    except OSError:
-        # Lost the race, or the directory went away under us (the legitimate
-        # owner released it). Either way this process has no claim; the caller
-        # re-reads the lock on its next attempt.
+    for _ in range(2):
+        try:
+            fd = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, f"{pid}\n".encode("utf-8"))
+            finally:
+                os.close(fd)
+            break
+        except OSError:
+            # Check if the existing claim marker belongs to a dead process.
+            # An interrupted takeover (e.g. killed before writing owner.json)
+            # would otherwise leave an abandoned claim marker that blocks
+            # future takeovers indefinitely.
+            claimant_pid: int | None = None
+            try:
+                content = claim.read_text(encoding="utf-8").strip()
+                if content:
+                    claimant_pid = int(content)
+                elif (time.time() - claim.stat().st_mtime) > 0.1:
+                    claimant_pid = -1  # Dead/orphaned empty claim marker
+            except (OSError, ValueError):
+                pass
+            if claimant_pid is not None and not _pid_is_running(claimant_pid):
+                try:
+                    claim.unlink()
+                    continue
+                except OSError:
+                    pass
+            return False
+    else:
         return False
+
     if _daily_lock_moved_on(lock_dir, owner, identity_before):
         try:
             claim.unlink()

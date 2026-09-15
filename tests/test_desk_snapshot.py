@@ -743,3 +743,26 @@ def test_a_stale_break_decision_cannot_destroy_a_live_lock(tmp_path, monkeypatch
     monkeypatch.setattr(ds, "_read_daily_owner", real_read)
     ds._rmdir_lock(lock)
     assert not lock.exists()
+
+
+def test_interrupted_claim_marker_does_not_block_future_takeover(tmp_path, monkeypatch):
+    """An interrupted claim marker left by a dead process must not deadlock future takeovers."""
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    crashed_claimer_pid = os.getpid() + 2
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    monkeypatch.setattr(
+        ds, "_pid_is_running", lambda pid: pid not in (dead_pid, crashed_claimer_pid)
+    )
+
+    seen = ds._read_daily_owner(stranded)
+    claim = stranded / f"claim-{ds._daily_lock_generation(seen)}"
+    claim.write_text(f"{crashed_claimer_pid}\n", encoding="utf-8")
+
+    new_pid = os.getpid() + 3
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=new_pid) is True
+    assert ds._read_daily_owner(stranded)["pid"] == new_pid
+
