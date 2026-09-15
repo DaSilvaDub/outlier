@@ -51,3 +51,15 @@
      - PR #6: Closed as superseded by PR #5 (superseded by modular SQLite odds_service architecture).
 - **Verification**: All merged PRs passed local tests, lint, and full hosted GitHub Actions CI suites. Zero uncommitted changes. Paid reasoning models were not invoked.
 
+
+## Daily automated debug review (claude) - 2026-09-15
+- **Last Commit SHA**: 11c94d12d3a56a2fde02b1692253c425713cc136 on `claude/inspiring-fermat-g7a512`; PR #163 -> master.
+- **Files Touched**:
+  - `outlier_scrapers/desk_snapshot.py`: `_claim_abandoned_daily_lock` recovery no longer deletes a claim marker; new `_abandoned_claim_token` helper.
+  - `tests/test_desk_snapshot.py`: two regression tests (empty marker not stolen mid-claim; recovery never deletes the stranded marker).
+- **Finding**: `31cdd18` (merged via #152 on 2026-09-15) reintroduced the double-acquire it was meant to guard against. Recovering a stranded claim marker by unlink-then-recreate lets two runs both come away holding the daily lock, so two daily jobs write the same pack and ledger. Reproduced deterministically; both new tests fail on the pre-fix code.
+- **Sandbox constraint**: PyPI egress is blocked by proxy policy (403 on CONNECT), so `pytest`/`ruff`/`mypy` could not be installed. Verified by replaying the 8 existing daily-lock test bodies plus the 2 new ones against `desk_snapshot` loaded in isolation (intra-package imports stripped). Hosted CI on PR #163 is the authoritative check.
+- **Reported, not fixed** (needs a human call):
+  - `outlier_nfl/utils.py:54` `_replace_with_retry` last-ditch branch runs `dst.unlink()` then retries the replace; when that retry also fails the previous good `nfl_*_latest.json` is deleted and nothing replaces it. Confirmed by direct execution. Suggested fix: rename `dst` aside, replace, delete the backup on success and restore it on failure. Untestable from Linux, so left alone.
+  - `outlier_nfl/utils.py:183` `to_eastern_date` falls back to a fixed UTC-5 when `zoneinfo` has no tz database, which is wrong during EDT (most of the NFL season). Current kickoff times still bucket to the right date, so it is latent rather than active.
+- **Next Steps**: land #163 once CI is green. Paid reasoning / AI Research Desk was not invoked at any point.
