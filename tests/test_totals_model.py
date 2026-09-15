@@ -12,7 +12,6 @@ import pytest
 
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.totals_model import (
-    BASE_INDEPENDENT_WEIGHT,
     SOURCE_DEVIG,
     backfill_totals_probabilities,
     blend_over_probability,

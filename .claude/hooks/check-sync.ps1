@@ -38,16 +38,16 @@ $Step0        = '& "C:\Users\dasil\Dev\GitHub\outlier\report-sync.ps1"'
 # Tier-1 pipeline upgrade markers (CLAUDE.md / AGENTS.md). Absence means the
 # tree predates 88083ff and is the d05eb21-class "changes invisible to me" bug.
 #
-# The marker -> file mapping matters and is easy to get wrong: despite its name,
-# _acquire_pack_lock lives in daily_job.py, not pack.py. Authority is
-# scripts/verify-sync.ps1 (~L81), which checks it against the *daily* blob:
-#     $hasLock = $gitDaily -match '_acquire_pack_lock'
+# The marker -> file mapping matters and is easy to get wrong: the lock marker
+# lives in daily_job.py, not pack.py. Authority is scripts/verify-sync.ps1
+# (~L206), which checks it against the *daily* blob:
+#     $hasLock = $gitDaily -match '_acquire_writer_lock'
 $Markers = @{
     'player_id'              = 'outlier_scrapers/pack.py'
     'round_robin_then_fill'  = 'outlier_scrapers/pack.py'
     'CANDIDATES_HEADER'      = 'outlier_scrapers/pack.py'
     'decisions.csv'          = 'outlier_scrapers/pack.py'
-    '_acquire_pack_lock'     = 'outlier_scrapers/daily_job.py'
+    '_acquire_writer_lock'   = 'outlier_scrapers/daily_job.py'
 }
 
 $findings = [System.Collections.Generic.List[string]]::new()

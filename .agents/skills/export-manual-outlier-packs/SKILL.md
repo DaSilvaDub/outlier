@@ -48,7 +48,25 @@ The script structures the output into two pipelines:
 
 Each run archives old pack files into an `archive/` subfolder.
 
-### 3. Run or Hand Off for Analysis
+### 3. Consolidated Playable Props Export (`today` folder)
+
+When the user requests to view or export playable props directly into the `today` folders:
+1. Extract candidate rows from `packs/YYYY-MM-DD/candidates.csv` across:
+   - **Actionable-only filter**: Filter strictly for `actionable == 'true'` (Board A qualified selections with recommended units > 0 and positive edge). Disqualified or flagged rows (`actionable == 'false'`) must never be exported as playable.
+   - **Player Props (`SO`)**: Pitcher Strikeouts (full-game, whitelisted per House Rules).
+   - **Team Props (`TEAM_PROP`)**: Team Run Totals.
+   - **Game Lines (`GAMELINE`)**: Game Totals, Moneylines, and Spreads with edge.
+2. Generate consolidated files:
+   - `playable_props.csv` and `playable_props_YYYY-MM-DD.csv`
+   - `playable_props.md` and `playable_props_YYYY-MM-DD.md`
+   Including: Selection, Type, Matchup, Line, Price, Book, Model Win %, Implied %, Edge %, Hit Rate %, Projection Mean, Board, Actionable, Flags.
+3. Save using `safe_copy` retry loops into:
+   - `C:\Users\dasil\OneDrive\Desktop\today`
+   - `C:\Users\dasil\OneDrive\Desktop\today\extracted_data_YYYY-MM-DD_latest`
+   - `G:\My Drive\today`
+   - `G:\My Drive\today\extracted_data_YYYY-MM-DD_latest`
+
+### 4. Run or Hand Off for Analysis
 
 If the user also explicitly asks in the current turn to analyze generated prompts, route by folder:
 
@@ -56,3 +74,21 @@ If the user also explicitly asks in the current turn to analyze generated prompt
 - `Desk2_Manual/`: follow `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`. Its shared CLI runner executes Q → R → W → X → S with the fixed provider assignments and saves phase reports under `BETTING REPORTS/SEQUENTIAL/YYYY-MM-DD`.
 
 If the user requested only data and prompt export, stop after reporting the generated paths. Prompt creation by itself does not authorize reasoning-model use.
+
+### 5. Post-Game Slate Accuracy Audit
+
+When the user asks to check actual game stats against candidate props:
+1. Query the official MLB Stats API schedule and box scores:
+   `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=YYYY-MM-DD&hydrate=boxscore,linescore`
+2. Extract actual starter pitcher strikeouts (`stats.pitching.strikeOuts`) and final team runs (`teams.<side>.score`).
+3. Explicitly grade each selection against the line:
+   - **HIT (WIN)**: Over with actual > line, or Under with actual < line.
+   - **MISS (LOSS)**: Over with actual < line, or Under with actual > line.
+   - **PUSH**: Actual exactly equals the line (e.g. integer line push).
+   - **VOID**: Scheduled starting pitcher did not start/pitch, or game was cancelled/postponed prior to reaching official status.
+   - **UNFINISHED**: Game scheduled but not yet completed or currently in progress.
+4. Calculate and report:
+   - Strikeout prop hit, miss, push, and void counts, plus net win percentage and ROI.
+   - Board `A_FLAGGED` vs Board `B` win percentage and ROI.
+   - Team total under/over hit, miss, and push counts and win percentage.
+

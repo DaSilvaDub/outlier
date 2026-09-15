@@ -110,19 +110,18 @@ def _validate_book_entry(book_entry: Any, b_idx: int) -> list[str]:
     if isinstance(book_entry, dict):
         b_dict = book_entry
     else:
-        to_dict_fn = None
+        # hasattr()/getattr() only swallow AttributeError, so a 'to_dict' property
+        # (or __getattr__) that raises anything else would escape this validator.
         try:
-            to_dict_fn = getattr(book_entry, "to_dict", None)
+            to_dict = getattr(book_entry, "to_dict", None)
         except Exception:
-            to_dict_fn = None
-
-        if callable(to_dict_fn):
-            try:
-                b_dict = to_dict_fn()
-            except Exception as exc:
-                return [f"Book entry at index {b_idx} to_dict() raised exception: {exc}"]
-        else:
+            to_dict = None
+        if not callable(to_dict):
             return [f"Book entry at index {b_idx} is not a valid dict or BookPrice instance"]
+        try:
+            b_dict = to_dict()
+        except Exception as exc:
+            return [f"Book entry at index {b_idx} to_dict() raised exception: {exc}"]
 
     if not isinstance(b_dict, dict):
         return [f"Book entry at index {b_idx} did not produce a dictionary"]
