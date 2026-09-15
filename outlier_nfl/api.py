@@ -18,6 +18,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import re
 import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -151,18 +152,21 @@ def extract_token_from_storage_state(storage_state: dict[str, Any]) -> str | Non
         for origin_entry in origins:
             if not isinstance(origin_entry, dict):
                 continue
-            origin_url = origin_entry.get("origin", "")
+            origin_url = str(origin_entry.get("origin", ""))
             if "outlier.bet" in origin_url:
                 local_storage = origin_entry.get("localStorage", [])
                 if isinstance(local_storage, list):
                     for item in local_storage:
                         if isinstance(item, dict):
-                            val = item.get("value")
-                            token = _extract_token_from_object(val)
-                            if token:
-                                return token
+                            name = str(item.get("name") or "").strip().lower()
+                            compact = re.sub(r"[^a-z0-9]+", "", name)
+                            if any(m.replace("-", "").replace("_", "") in compact for m in TOKEN_MARKERS):
+                                val = item.get("value")
+                                token = _extract_token_from_object(val)
+                                if token:
+                                    return token
 
-    # 2. Search cookies
+    # 2. Search cookies for token markers
     cookies = storage_state.get("cookies", [])
     if isinstance(cookies, list):
         for cookie in cookies:
@@ -177,18 +181,31 @@ def extract_token_from_storage_state(storage_state: dict[str, Any]) -> str | Non
     return _extract_token_from_object(storage_state)
 
 
-def build_cookie_header_from_storage_state(storage_state: dict[str, Any]) -> str | None:
-    """Format Cookie header string from storage_state cookies."""
+def build_cookie_header_from_storage_state(
+    storage_state: dict[str, Any],
+    target_hosts: tuple[str, ...] = ("api.outlier.bet", "app.outlier.bet"),
+) -> str | None:
+    """Format Cookie header string from storage_state cookies for target hosts."""
     cookies = storage_state.get("cookies", [])
     if not isinstance(cookies, list) or not cookies:
         return None
+    hosts = tuple(h.lower() for h in target_hosts)
+    now = time.time()
     pairs: list[str] = []
     for c in cookies:
-        if isinstance(c, dict):
-            name = c.get("name")
-            val = c.get("value")
-            if name and val is not None:
-                pairs.append(f"{name}={val}")
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").strip()
+        val = str(c.get("value") or "").strip()
+        domain = str(c.get("domain") or "").strip().lstrip(".").lower()
+        expires = c.get("expires")
+        if not name or not val or not domain:
+            continue
+        if isinstance(expires, (int, float)) and 0 < expires < now:
+            continue
+        if not any(h == domain or h.endswith(f".{domain}") or domain.endswith(f".{h}") for h in hosts):
+            continue
+        pairs.append(f"{name}={val}")
     return "; ".join(pairs) if pairs else None
 
 
