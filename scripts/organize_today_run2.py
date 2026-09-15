@@ -51,7 +51,13 @@ HIT_FIELDNAMES = ["player", "market_label", "side", "line", "team", "matchup"]
 
 
 def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
-    """Copy file with retries to handle transient cloud sync locks ([WinError 32])."""
+    """Copy file with retries to handle transient cloud sync locks ([WinError 32]).
+
+    Staying non-fatal is deliberate -- one locked file must not abort the whole
+    export -- but the give-up must be visible: a silently skipped copy leaves the
+    Desktop / Drive ``today`` folder short a file with nothing in the run output
+    to say which one.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(retries):
         try:
@@ -63,8 +69,8 @@ def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> Non
             else:
                 try:
                     shutil.copyfile(str(src), str(dst))
-                except OSError:
-                    pass
+                except OSError as exc:
+                    print(f"WARNING: could not copy {src} -> {dst}: {exc}", file=sys.stderr)
 
 
 def safe_rmtree(path: Path, retries: int = 5, delay: float = 0.5) -> None:

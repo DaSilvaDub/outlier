@@ -2,7 +2,12 @@
 pytest>=9.0.0
 pytest-cov>=4.1.0
 ruff>=0.5.0
-mypy>=1.0.0
+# Floor at 2.3.1: earlier releases do not narrow `x not in (None, "")` on an
+# `Any | None`, so they report arg-type false positives in schema.py,
+# probable_pitchers.py and pack_publish.py that CI (which resolves 2.x) does
+# not. Unpinned, a local `make typecheck` disagreed with CI over whatever the
+# contributor happened to have installed.
+mypy>=2.3.1,<3
 pyright>=1.1.0
 types-python-dateutil
 
