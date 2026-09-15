@@ -827,3 +827,44 @@ def test_recovering_a_stranded_claim_never_deletes_it(tmp_path, monkeypatch):
     assert claim.read_text(encoding="utf-8").strip() == str(crashed_claimer_pid)
     # A run that read the same stranded marker loses the recovery outright.
     assert ds._claim_abandoned_daily_lock(stranded, seen, pid=os.getpid() + 4) is False
+
+
+def test_a_stranded_recovery_marker_is_itself_recoverable(tmp_path, monkeypatch):
+    """A recovery marker strands exactly the way the marker it recovered did.
+
+    A run that wins the recovery and then dies before rewriting owner.json
+    leaves both markers behind. owner.json still names the original dead owner,
+    so every later run derives the same two names, collides with both, and comes
+    away empty -- the lock is stranded forever, which is the deadlock recovery
+    exists to prevent. So the markers form a chain and every link is recoverable
+    on the same terms, each step still one exclusive create.
+    """
+    pack_dir = tmp_path / "packs" / "2026-09-01"
+    pack_dir.mkdir(parents=True)
+    stranded = ds.daily_lock_dir(pack_dir)
+    stranded.mkdir(parents=True)
+    dead_pid = os.getpid() + 1
+    crashed_claimer_pid = os.getpid() + 2
+    crashed_recoverer_pid = os.getpid() + 3
+    live_pid = os.getpid() + 4
+    other_live_pid = os.getpid() + 5
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    monkeypatch.setattr(
+        ds, "_pid_is_running", lambda pid: pid > 0 and pid in (live_pid, other_live_pid)
+    )
+
+    seen = ds._read_daily_owner(stranded)
+    claim = stranded / f"claim-{ds._daily_lock_generation(seen)}"
+    claim.write_text(f"{crashed_claimer_pid}\n", encoding="utf-8")
+
+    # Let a run win the recovery marker, then treat it as having died there.
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=crashed_recoverer_pid) is True
+    ds._write_daily_owner(stranded, pid=dead_pid, depth=1)
+    recovery_markers = [p for p in stranded.iterdir() if ".take-" in p.name]
+    assert len(recovery_markers) == 1
+
+    # A later run walks the chain and takes over instead of stranding.
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=live_pid) is True
+    assert ds._read_daily_owner(stranded)["pid"] == live_pid
+    # Exactly one winner still: a second live run that walked the same chain loses.
+    assert ds._claim_abandoned_daily_lock(stranded, seen, pid=other_live_pid) is False
