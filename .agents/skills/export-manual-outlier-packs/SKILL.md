@@ -52,6 +52,7 @@ Each run archives old pack files into an `archive/` subfolder.
 
 When the user requests to view or export playable props directly into the `today` folders:
 1. Extract candidate rows from `packs/YYYY-MM-DD/candidates.csv` across:
+   - **Actionable-only filter**: Filter strictly for `actionable == 'true'` (Board A qualified selections with recommended units > 0 and positive edge). Disqualified or flagged rows (`actionable == 'false'`) must never be exported as playable.
    - **Player Props (`SO`)**: Pitcher Strikeouts (full-game, whitelisted per House Rules).
    - **Team Props (`TEAM_PROP`)**: Team Run Totals.
    - **Game Lines (`GAMELINE`)**: Game Totals, Moneylines, and Spreads with edge.
@@ -80,9 +81,14 @@ When the user asks to check actual game stats against candidate props:
 1. Query the official MLB Stats API schedule and box scores:
    `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=YYYY-MM-DD&hydrate=boxscore,linescore`
 2. Extract actual starter pitcher strikeouts (`stats.pitching.strikeOuts`) and final team runs (`teams.<side>.score`).
-3. Grade each selection as **HIT (WIN)** or **MISS (LOSS)** against the line.
+3. Explicitly grade each selection against the line:
+   - **HIT (WIN)**: Over with actual > line, or Under with actual < line.
+   - **MISS (LOSS)**: Over with actual < line, or Under with actual > line.
+   - **PUSH**: Actual exactly equals the line (e.g. integer line push).
+   - **VOID**: Scheduled starting pitcher did not start/pitch, or game was cancelled/postponed prior to reaching official status.
+   - **UNFINISHED**: Game scheduled but not yet completed or currently in progress.
 4. Calculate and report:
-   - Strikeout prop hit count, loss count, and overall win percentage.
+   - Strikeout prop hit, miss, push, and void counts, plus net win percentage and ROI.
    - Board `A_FLAGGED` vs Board `B` win percentage and ROI.
-   - Team total under/over hit count and win percentage.
+   - Team total under/over hit, miss, and push counts and win percentage.
 
