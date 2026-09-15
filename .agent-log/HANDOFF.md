@@ -18,3 +18,9 @@
 - Files touched by merged PRs: sync hook/docs and AGENTS.md; NFL schema validation; stake calibration fingerprint helper and regression tests; feedback_reporting.py JSON writing. This session added only this handoff.
 - Verification: independent review found no blockers and zero review threads; hosted PR tests/typechecks passed. PR #162: 195 targeted Windows tests passed on rerun (initial run had one intermittent unchanged 50-thread contention failure). Ruff reported 12 pre-existing unused imports in unchanged challenger imports. PR #136: 69 feedback tests passed on integration with updated master; changed-file Ruff passed.
 - Next steps: review remaining PRs in batches. #149 needs explicit push/void/unfinished grading and actionable-only export semantics. Conflicting PRs require individual reconciliation; #159/#160 overlap #162 and should be compared for supersession before closing. #161 is a larger NFL review. No PRs closed as duplicates this session. Paid reasoning was not invoked.
+
+## PR #158 reconciliation - 2026-09-14
+- Base commit: 25e10917ecfc2f7563def87d40d8ae3f769eb028.
+- Files touched: pack_publish.py removes the second policy load and weaker duplicate enforce gate; test_pack.py adds missing-market_snapshots fail-closed regression. Handoff conflict resolved preserving current master notes.
+- Validation: 161 pack tests passed; Ruff passed for both changed Python files. Independent review found no blocker; prior review thread resolved.
+- Next: await fresh hosted CI before merging this PR. #159/#160 were closed as superseded by #162; #152 crash-recovery repair is in a separate worktree.
