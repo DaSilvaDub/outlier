@@ -738,3 +738,83 @@ def test_structured_refresh_success_does_not_fail_closed_on_missing_status_file(
         ],
     )
     assert payload["props_status"] == "ok"
+
+
+def test_league_has_confirmed_empty_slate_when_games_status_is_fresh_and_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
+    _write(
+        paths.reports / "games_status_latest.json",
+        {
+            "league": "MLB",
+            "status": "ok",
+            "generated_at": _stamp(),
+            "record_count": 0,
+            "target_event_count": 0,
+            "preserved_previous_latest": True,
+        },
+    )
+
+    assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is True
+
+
+def test_league_has_confirmed_empty_slate_rejects_a_stale_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status the check hasn't refreshed recently proves nothing about today."""
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
+    _write(
+        paths.reports / "games_status_latest.json",
+        {
+            "league": "MLB",
+            "status": "ok",
+            "generated_at": _stamp(NOW - timedelta(hours=48)),
+            "target_event_count": 0,
+        },
+    )
+
+    assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("nonzero_events", False),
+        ("error_status", False),
+        ("missing_field", False),
+        ("no_file", False),
+    ],
+)
+def test_league_has_confirmed_empty_slate_requires_a_clean_zero_event_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str, expected: bool
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
+    payload = {
+        "league": "MLB",
+        "status": "ok",
+        "generated_at": _stamp(),
+        "target_event_count": 0,
+    }
+    if mutation == "nonzero_events":
+        payload["target_event_count"] = 3
+    elif mutation == "error_status":
+        payload["status"] = "error"
+    elif mutation == "missing_field":
+        del payload["target_event_count"]
+    if mutation != "no_file":
+        _write(paths.reports / "games_status_latest.json", payload)
+
+    assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is expected
+
+
+def test_healthy_empty_slate_schema_is_unaffected_by_the_new_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The v1 feed_health payload contract must not gain a stray key."""
+    _seed_healthy(tmp_path, monkeypatch)
+    payload = feed_health.build_feed_health("MLB", now=NOW, write=False)
+    assert tuple(payload) == feed_health.SERIALIZED_KEYS

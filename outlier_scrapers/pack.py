@@ -23,7 +23,7 @@ import os
 import shutil
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -410,6 +410,19 @@ def build_pack_with_coverage(
             health_payload = feed_health.build_feed_health(lg, write=True)
         safe, reasons = feed_health.validate_feed_health(health_payload)
         if not safe:
+            # See build_feed_health_by_league: an out-of-season league is
+            # unsafe by this gate's own math every single day, and this loop
+            # runs across every requested league in one call, so raising
+            # here would abort every OTHER league's pack too, not just the
+            # empty one.
+            if feed_health.league_has_confirmed_empty_slate(lg, now=datetime.now(timezone.utc)):
+                logger.info(
+                    "%s feed health flagged unsafe (%s) but the league has no scheduled "
+                    "games today; skipping it rather than aborting the pack build.",
+                    lg,
+                    "; ".join(reasons),
+                )
+                continue
             raise RuntimeError(f"{lg} feed health unsafe: {'; '.join(reasons)}")
         lp = paths.league_paths(lg)
         cards_dir = lp.root / "cards"
@@ -567,7 +580,13 @@ def main(argv: Sequence[str] | None = None) -> Path:
         **build_kwargs,
     )
     props_norm_by_league = load_props_norm_by_league(leagues)
-    projection_records = load_projection_records(leagues, target_date)
+    # A league build_pack_with_coverage skipped for a confirmed empty slate
+    # never got its rows built, and its projections artifact was never
+    # rewritten for today either (export_projections treats that day as
+    # skipped, not an update) -- so it is still dated for whatever slate last
+    # actually ran. games_norm only has entries for leagues that WERE
+    # processed, so it is also the authoritative "what to validate" set here.
+    projection_records = load_projection_records(list(games_norm), target_date)
     freshness = build_freshness_section(leagues, feed_health_by_league)
     out_dir = paths.PROJECT_ROOT / "packs" / target_date
     if args.no_feedback_ledger:

@@ -1,0 +1,223 @@
+{
+  "props": [
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-mahomes-py-268-5",
+        "outcomeId": "o-mahomes-py-268-5-o",
+        "marketLabel": "Patrick Mahomes - Passing Yards",
+        "proposition": "PASSING_YARDS",
+        "position": "OVER",
+        "line": 268.5,
+        "teamId": "kc-chiefs",
+        "playerId": "p-mahomes-15",
+        "playerName": "Patrick Mahomes",
+        "bestOdds": -115,
+        "books": ["DRAFTKINGS", "FANDUEL", "BETMGM"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -115, "american": -115, "decimal": 1.87},
+          "FANDUEL": {"odds": -110, "american": -110, "decimal": 1.91},
+          "BETMGM": {"odds": -115, "american": -115, "decimal": 1.87}
+        }
+      },
+      "stats": {
+        "l5": 0.80,
+        "l10": 0.70,
+        "curSeason": 0.72,
+        "oppRank": 16
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-mahomes-py-268-5",
+        "outcomeId": "o-mahomes-py-268-5-u",
+        "marketLabel": "Patrick Mahomes - Passing Yards",
+        "proposition": "PASSING_YARDS",
+        "position": "UNDER",
+        "line": 268.5,
+        "teamId": "kc-chiefs",
+        "playerId": "p-mahomes-15",
+        "playerName": "Patrick Mahomes",
+        "bestOdds": -110,
+        "books": ["DRAFTKINGS", "FANDUEL"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -110, "american": -110, "decimal": 1.91},
+          "FANDUEL": {"odds": -115, "american": -115, "decimal": 1.87}
+        }
+      },
+      "stats": {
+        "l5": 0.20,
+        "l10": 0.30,
+        "curSeason": 0.28,
+        "oppRank": 16
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-mahomes-ptd-1-5",
+        "outcomeId": "o-mahomes-ptd-1-5-o",
+        "marketLabel": "Patrick Mahomes - Passing Touchdowns",
+        "proposition": "PASSING_TOUCHDOWNS",
+        "position": "OVER",
+        "line": 1.5,
+        "teamId": "kc-chiefs",
+        "playerId": "p-mahomes-15",
+        "playerName": "Patrick Mahomes",
+        "bestOdds": -135,
+        "books": ["DRAFTKINGS", "FANDUEL"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -135, "american": -135, "decimal": 1.74},
+          "FANDUEL": {"odds": -140, "american": -140, "decimal": 1.71}
+        }
+      },
+      "stats": {
+        "l5": 0.60,
+        "l10": 0.70,
+        "curSeason": 0.65
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-jackson-ruy-52-5",
+        "outcomeId": "o-jackson-ruy-52-5-o",
+        "marketLabel": "Lamar Jackson - Rushing Yards",
+        "proposition": "RUSHING_YARDS",
+        "position": "OVER",
+        "line": 52.5,
+        "teamId": "bal-ravens",
+        "playerId": "p-jackson-8",
+        "playerName": "Lamar Jackson",
+        "bestOdds": -110,
+        "books": ["DRAFTKINGS", "FANDUEL", "BETMGM"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -110, "american": -110, "decimal": 1.91},
+          "FANDUEL": {"odds": -110, "american": -110, "decimal": 1.91},
+          "BETMGM": {"odds": -115, "american": -115, "decimal": 1.87}
+        }
+      },
+      "stats": {
+        "l5": 0.80,
+        "l10": 0.60,
+        "curSeason": 0.68
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-henry-ruy-71-5",
+        "outcomeId": "o-henry-ruy-71-5-o",
+        "marketLabel": "Derrick Henry - Rushing Yards",
+        "proposition": "RUSHING_YARDS",
+        "position": "OVER",
+        "line": 71.5,
+        "teamId": "bal-ravens",
+        "playerId": "p-henry-22",
+        "playerName": "Derrick Henry",
+        "bestOdds": -115,
+        "books": ["DRAFTKINGS", "FANDUEL"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -115, "american": -115, "decimal": 1.87},
+          "FANDUEL": {"odds": -115, "american": -115, "decimal": 1.87}
+        }
+      },
+      "stats": {
+        "l5": 0.60,
+        "l10": 0.70,
+        "curSeason": 0.65
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-kelce-rey-64-5",
+        "outcomeId": "o-kelce-rey-64-5-o",
+        "marketLabel": "Travis Kelce - Receiving Yards",
+        "proposition": "RECEIVING_YARDS",
+        "position": "OVER",
+        "line": 64.5,
+        "teamId": "kc-chiefs",
+        "playerId": "p-kelce-87",
+        "playerName": "Travis Kelce",
+        "bestOdds": -110,
+        "books": ["DRAFTKINGS", "FANDUEL", "BETMGM"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -110, "american": -110, "decimal": 1.91},
+          "FANDUEL": {"odds": -112, "american": -112, "decimal": 1.89},
+          "BETMGM": {"odds": -110, "american": -110, "decimal": 1.91}
+        }
+      },
+      "stats": {
+        "l5": 0.80,
+        "l10": 0.70,
+        "curSeason": 0.75
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-kelce-rec-5-5",
+        "outcomeId": "o-kelce-rec-5-5-o",
+        "marketLabel": "Travis Kelce - Receptions",
+        "proposition": "RECEPTIONS",
+        "position": "OVER",
+        "line": 5.5,
+        "teamId": "kc-chiefs",
+        "playerId": "p-kelce-87",
+        "playerName": "Travis Kelce",
+        "bestOdds": -120,
+        "books": ["DRAFTKINGS", "FANDUEL"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -120, "american": -120, "decimal": 1.83},
+          "FANDUEL": {"odds": -118, "american": -118, "decimal": 1.85}
+        }
+      },
+      "stats": {
+        "l5": 0.60,
+        "l10": 0.60,
+        "curSeason": 0.62
+      }
+    },
+    {
+      "outcome": {
+        "active": true,
+        "eventId": "nfl-event-2026-w1-kc-bal",
+        "marketId": "m-henry-attd",
+        "outcomeId": "o-henry-attd-o",
+        "marketLabel": "Derrick Henry - Anytime Touchdown",
+        "proposition": "ANYTIME_TOUCHDOWN",
+        "position": "OVER",
+        "line": 0.5,
+        "teamId": "bal-ravens",
+        "playerId": "p-henry-22",
+        "playerName": "Derrick Henry",
+        "bestOdds": -140,
+        "books": ["DRAFTKINGS", "FANDUEL"],
+        "bookOdds": {
+          "DRAFTKINGS": {"odds": -140, "american": -140, "decimal": 1.71},
+          "FANDUEL": {"odds": -145, "american": -145, "decimal": 1.69}
+        }
+      },
+      "stats": {
+        "l5": 0.80,
+        "l10": 0.80,
+        "curSeason": 0.78
+      }
+    }
+  ],
+  "_page": {
+    "nextPageToken": null,
+    "pageNumber": 1,
+    "pages": 1,
+    "total": 8
+  }
+}

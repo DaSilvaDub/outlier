@@ -166,6 +166,8 @@ DISQUALIFYING_DQ_FLAGS = {
     "LOCKED_OR_UNVERIFIED_EVENT",
     "SIDE_RESOLUTION_CONFLICT",
     "UNINDEXED_SLATE_GAME",
+    "pitcher_identity_mismatch",
+    "pitcher_identity_unconfirmed",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
@@ -217,17 +219,15 @@ def _reconcile_candidates_with_totals_board(
     rejected: set[tuple[str, str, str, str, str, str]] = set()
     for total in [*totals_rows, *team_totals_rows]:
         key = _total_reconciliation_key(total)
-        if (
-            str(total.get("actionable") or "").strip().lower() != "true"
-            and all(key[:5])
-        ):
+        if str(total.get("actionable") or "").strip().lower() != "true" and all(key[:5]):
             rejected.add(key)
     for row in rows:
         if _total_reconciliation_key(row) not in rejected:
             continue
-        if str(row.get("actionable") or "").lower() != "true" and str(
-            row.get("board") or ""
-        ).upper() != "A":
+        if (
+            str(row.get("actionable") or "").lower() != "true"
+            and str(row.get("board") or "").upper() != "A"
+        ):
             continue
         flags = [
             flag.strip()
@@ -275,9 +275,7 @@ def _freeze_t30_originals(
     league_tokens = set((games_norm_by_league or {}).keys()) | set(
         (props_norm_by_league or {}).keys()
     )
-    leagues = sorted(
-        str(league).strip().upper() for league in league_tokens if str(league).strip()
-    )
+    leagues = sorted(str(league).strip().upper() for league in league_tokens if str(league).strip())
     from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
 
     for league in leagues:
@@ -312,8 +310,7 @@ def _freeze_t30_originals(
                     if str(candidate.get("sport") or "").upper()
                     == str(row.get("sport") or "").upper()
                     and str(candidate.get("event_id") or "") == str(row.get("event_id") or "")
-                    and str(candidate.get("market_id") or "")
-                    == str(row.get("market_id") or "")
+                    and str(candidate.get("market_id") or "") == str(row.get("market_id") or "")
                     and _to_float(candidate.get("line")) == _to_float(row.get("line"))
                     and total_side in str(candidate.get("selection") or "").upper()
                 ),
@@ -432,20 +429,35 @@ def _resolve_candidate_identity(
     )
     if tok_check in {"DD", "TD", "DOUBLEDOUBLE", "TRIPLEDOUBLE"} and headline_side == "UNDER":
         return None
-    scope = card.get("scope") or ref.get("scope")
     market_type_upper = str(market_type or "").upper()
+    if sport == "MLB" and market_type_upper == "GAME_PROP":
+        if not slate_quality.is_mlb_nrfi_yrfi_candidate(
+            proposition=proposition,
+            market_label=card.get("market_label") or ref.get("market_label"),
+            market_token=market_token,
+            period_label=card.get("period_label") or ref.get("period_label"),
+        ):
+            return None
+    scope = card.get("scope") or ref.get("scope")
     is_total_proposition = (
         market_type_upper == "TEAM_PROP" and is_team_total_proposition(proposition, sport=sport)
     ) or (market_type_upper == "GAMELINE" and str(proposition or "").upper() == "TOTAL")
-    if is_total_proposition and not is_full_game_total({"scope": scope}):
-        # Period/partial-game totals (quarters, first-5-innings, etc.) are the
-        # exclusive domain of the dedicated totals pipeline (game_totals.py),
-        # which already excludes them from its own totals projection outputs
-        # (Game/Team totals). Letting them through here — candidates.csv is
-        # built by this function, not game_totals.py — surfaces them unlabeled
-        # in the briefing's Top EV/signal cards, indistinguishable from the
-        # full-game market for the same team/game (see BETTING REPORTS/GENERIC
-        # /2026-08-08 review).
+    # period_identity prefers period_label over scope — games_norm historically
+    # stamps inning markets as scope=full_game while period_label is 8I/4I.
+    scope_rec = {
+        "scope": scope,
+        "period_label": card.get("period_label") or ref.get("period_label"),
+        "periods": card.get("periods") or ref.get("periods"),
+    }
+    if (is_total_proposition or market_type_upper == "GAMELINE") and not is_full_game_total(
+        scope_rec
+    ):
+        # Period/partial-game totals, spreads, and moneylines (quarters,
+        # first-5-innings, 8I run lines, etc.) must not enter candidates.csv.
+        # Totals already had this gate; unlabeled innings spreads leaked into
+        # Top signal as duplicate full-game-looking +0.5 rows (2026-09-06
+        # STL @ COL 8I vs 4I). Dedicated totals/alt-spread pipelines own
+        # period markets.
         return None
     return {
         "headline_side": headline_side,
@@ -654,11 +666,7 @@ def _apply_price_and_sizing(
             row["book"] = per_book[0].get("book")
         proxy_prob_pct = _to_float(proxy.get("fair_prob_pct")) if proxy else None
         proxy_decimal_price = row.get("decimal_price")
-        if (
-            proxy_prob_pct is not None
-            and proxy_decimal_price is not None
-            and push_prob is not None
-        ):
+        if proxy_prob_pct is not None and proxy_decimal_price is not None and push_prob is not None:
             model_prob = proxy_prob_pct / 100.0
             sizing = compute_sizing(
                 decimal_price=proxy_decimal_price, model_prob=model_prob, push_prob=push_prob
@@ -759,6 +767,7 @@ def _apply_quality_and_signal_flags(
     health_payload: dict[str, Any] | None,
     stream: str,
     blend_artifact: dict[str, Any] | None,
+    probable_pitchers: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[bool, list[str]]:
     """Build data-quality/signal flags and gates. Returns ``(disqualifying, dq_flags)``."""
 
@@ -776,9 +785,14 @@ def _apply_quality_and_signal_flags(
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),
     # so the desk sees the mismatch instead of silently trusting the shown line.
     dq_flags = [str(f) for f in (card.get("flags") or [])]
-    if (identity["has_player"] or market_type_upper == "PLAYER_PROP") and _projection_side_conflicts(
-        row, headline_side
-    ):
+    dq_flags += slate_quality.pitcher_identity_flags(
+        row,
+        probable_pitchers,
+        player_name=str(card.get("player") or ref.get("player") or row.get("player") or "") or None,
+    )
+    if (
+        identity["has_player"] or market_type_upper == "PLAYER_PROP"
+    ) and _projection_side_conflicts(row, headline_side):
         dq_flags.append("projection_side_conflict")
     if ev_probability_mismatch:
         dq_flags.append("ev_probability_mismatch")
@@ -835,6 +849,13 @@ def _apply_quality_and_signal_flags(
     )
     if slate_quality.usage_up_under(row, injury_view):
         dq_flags.append("usage_up_under")
+    returning_from_il = slate_quality.pitcher_returning_from_il(
+        row, injury_flags=str(row.get("injury_flags") or "")
+    )
+    if returning_from_il and headline_side == "OVER":
+        dq_flags.append(slate_quality.PITCHER_RETURNING_FROM_IL)
+        row["recommended_units_pre_news"] = ""
+        slate_quality._append_sizing_flag(row, slate_quality.PITCHER_REHAB_PITCH_LIMIT)
     line_with_side = slate_quality.signed_line_moved_with_side(row)
     if line_with_side:
         dq_flags = [flag for flag in dq_flags if flag != "reverse_line_movement"]
@@ -913,6 +934,8 @@ def _apply_quality_and_signal_flags(
             signal_flags.append("movement_against")
     if line_with_side:
         signal_flags.append("line_moved_with_side")
+    if returning_from_il and headline_side != "OVER":
+        signal_flags.append(slate_quality.PITCHER_REHAB_CONTEXT)
     if injury_view.own_star_out:
         signal_flags.append("own_star_out")
     if injury_view.opponent_star_out:
@@ -1031,6 +1054,7 @@ def build_row(
         health_payload,
         stream,
         blend_artifact,
+        probable_pitchers,
     )
 
     _finalize_actionable_row(row, card, identity, disqualifying, dq_flags)

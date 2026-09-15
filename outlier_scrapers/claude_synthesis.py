@@ -13,7 +13,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from outlier_scrapers import pack, paths, provider_executor
 from outlier_scrapers.environment import load_environment
@@ -200,8 +200,8 @@ def chunk_upstream_envelopes(
     chunk_size: int = 50
 ) -> list[dict[str, rc.PublishedEnvelope]]:
     import json
-    parsed_upstream = {}
-    all_outcomes = set()
+    parsed_upstream: dict[str, dict[str, Any]] = {}
+    all_outcomes: set[str] = set()
     for name, doc in upstream.items():
         data = json.loads(doc.envelope_json)
         parsed_upstream[name] = data
@@ -210,13 +210,13 @@ def chunk_upstream_envelopes(
             if "outcome_id" in rec:
                 all_outcomes.add(rec["outcome_id"])
                 
-    event_to_outcomes = {}
+    event_to_outcomes: dict[str, set[str]] = {}
     for outcome in all_outcomes:
         event_id = outcome_to_event.get(outcome, "UNKNOWN")
         event_to_outcomes.setdefault(event_id, set()).add(outcome)
         
-    chunks = []
-    current_chunk_outcomes = set()
+    chunks: list[set[str]] = []
+    current_chunk_outcomes: set[str] = set()
     current_size = 0
     for event_id, outcomes in event_to_outcomes.items():
         if current_size + len(outcomes) > chunk_size and current_size > 0:
@@ -228,9 +228,9 @@ def chunk_upstream_envelopes(
     if current_chunk_outcomes:
         chunks.append(current_chunk_outcomes)
         
-    chunked_upstreams = []
+    chunked_upstreams: list[dict[str, rc.PublishedEnvelope]] = []
     for chunk_outcomes in chunks:
-        chunk_dict = {}
+        chunk_dict: dict[str, rc.PublishedEnvelope] = {}
         for name, doc in upstream.items():
             data = parsed_upstream[name]
             chunk_data = dict(data)

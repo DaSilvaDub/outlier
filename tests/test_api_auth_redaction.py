@@ -27,6 +27,9 @@ class FakeResponse:
     def read(self):
         return self.payload
 
+    def getcode(self):
+        return self.status
+
 
 def storage_state():
     return {

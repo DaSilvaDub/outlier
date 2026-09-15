@@ -119,20 +119,43 @@ run_explicit_refresh.last_results = []  # type: ignore[attr-defined]
 
 def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
     logger.info("Checking unified feed health before building pack...")
-    task_results = getattr(run_explicit_refresh, "last_results", []) or []
+    reference_now = now or datetime.now(timezone.utc)
+    task_results: list[refresh_plan.RefreshTaskResult] = (
+        getattr(run_explicit_refresh, "last_results", []) or []
+    )
     all_safe = True
     for league in leagues:
         try:
-            health_kwargs = {"now": now, "write": True}
             if task_results:
-                health_kwargs["task_results"] = task_results
-            health = feed_health.build_feed_health(league, **health_kwargs)
+                health = feed_health.build_feed_health(
+                    league,
+                    now=now,
+                    write=True,
+                    task_results=task_results,
+                )
+            else:
+                health = feed_health.build_feed_health(league, now=now, write=True)
             safe, reasons = feed_health.validate_feed_health(health)
         except Exception as exc:
             logger.error("%s feed-health evaluation failed: %s", league, exc)
             all_safe = False
             continue
         if not safe:
+            # An out-of-season league is unsafe by this gate's own math every
+            # single day: games.py preserves the last real games snapshot on
+            # a zero-event day instead of overwriting it with an empty one,
+            # so that artifact's age -- and everything derived from it --
+            # never clears on its own. The producer's own fresh status is the
+            # authoritative "nothing scheduled today" signal; only that, not
+            # the stale-artifact symptom, makes this non-fatal.
+            if feed_health.league_has_confirmed_empty_slate(league, now=reference_now):
+                logger.info(
+                    "%s feed health flagged unsafe (%s) but the league has no scheduled "
+                    "games today; treating as non-fatal.",
+                    league,
+                    "; ".join(reasons),
+                )
+                continue
             logger.error("%s feed health is unsafe: %s", league, "; ".join(reasons))
             all_safe = False
         else:
@@ -457,6 +480,25 @@ def _run_pack_and_desk(
     return pack_dir, profile, pack_rows
 
 
+def _log_identity_audit(pack_dir: Path) -> None:
+    path = pack_dir / "identity_audit.json"
+    if not path.exists():
+        logger.info("Pitcher identity audit: identity_audit.json not written for %s", pack_dir.name)
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Pitcher identity audit: failed to read %s (%s)", path, exc)
+        return
+    logger.info(
+        "Pitcher identity audit: status=%s so=%s mismatch=%s unconfirmed=%s",
+        payload.get("status"),
+        payload.get("so_rows"),
+        payload.get("mismatch_count"),
+        payload.get("unconfirmed_count"),
+    )
+
+
 def _finalize_run(
     pack_dir: Path,
     args: argparse.Namespace,
@@ -495,6 +537,7 @@ def _finalize_run(
         },
     )
     _atomic_write_manifest(pack_dir, manifest)
+    _log_identity_audit(pack_dir)
     final_code = run_state.exit_code_for_overall(overall)
     logger.info(
         "Daily job completed (exit=%s, profile=%s, overall=%s).", final_code, profile, overall
@@ -529,6 +572,9 @@ def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from outlier_scrapers.database import init_db
+
+    init_db()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Daily Outlier Orchestration Job")
     parser.add_argument("--date", help="Specific target date (YYYY-MM-DD)")

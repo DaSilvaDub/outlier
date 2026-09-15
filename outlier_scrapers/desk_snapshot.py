@@ -12,6 +12,7 @@ See docs/plans/2026-08-12-structured-ai-verdicts.md
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -32,6 +33,9 @@ WRITER_LOCK_NAME = ".writer_lock"
 DAILY_LOCK_NAME = ".daily_job_lock"
 HISTORY_KEEP = 20
 STALE_LOCK_AFTER = timedelta(minutes=30)
+# mkdir and the owner file are two steps, so a lock with no owner yet may
+# simply be mid-acquisition. Past this grace it is abandoned, not young.
+DAILY_LOCK_OWNERLESS_GRACE = timedelta(seconds=30)
 DEFAULT_RETENTION_AGE = timedelta(days=7)
 PREVIEW_BANNER = (
     "NON-AUTHORITATIVE latest_preview — desk_snapshot.json is the source of truth."
@@ -167,10 +171,17 @@ def lock_breakable(
 
 
 def _rmdir_lock(lock_dir: Path) -> None:
-    owner = lock_dir / "owner.json"
-    if owner.exists():
+    # Clear every file the lock directory holds, not just owner.json: the
+    # daily lock also carries claim markers (see _claim_abandoned_daily_lock),
+    # and one leftover file turns the rmdir below into a silent no-op that
+    # strands the lock forever.
+    try:
+        entries = list(lock_dir.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
         try:
-            owner.unlink()
+            entry.unlink()
         except OSError:
             pass
     try:
@@ -254,6 +265,134 @@ def _write_daily_owner(lock_dir: Path, *, pid: int, depth: int) -> None:
     )
 
 
+def _daily_lock_is_abandoned(lock_dir: Path, owner: dict[str, Any] | None) -> bool:
+    """Whether a held daily lock can no longer belong to a live job.
+
+    This lock is pid-scoped -- ``release_daily_lock`` only removes it for the
+    owning process -- so a holder that died takes it to the grave, and every
+    later daily run fails with "another daily job running" until someone
+    deletes the directory by hand. Two states are recoverable: an owner whose
+    process is gone, and a directory with no owner at all (a crash between
+    ``mkdir`` and the owner write, or a removal the filesystem refused).
+    """
+    if owner is None:
+        return _now() - _dir_mtime(lock_dir) >= DAILY_LOCK_OWNERLESS_GRACE
+    try:
+        owner_pid = int(owner.get("pid") or 0)
+    except (TypeError, ValueError):
+        return True
+    return not _pid_is_running(owner_pid)
+
+
+def _daily_lock_generation(owner: dict[str, Any] | None) -> str:
+    """Filesystem-safe id for the exact lock state an abandonment was judged on.
+
+    Two processes that read the same abandoned owner derive the same id and so
+    contend for the same claim marker; a lock that has since been released and
+    re-taken has a different owner, hence a different id, and is not something
+    an older decision may act on.
+    """
+    if owner is None:
+        return "ownerless"
+    canonical = json.dumps(owner, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _claim_abandoned_daily_lock(
+    lock_dir: Path, owner: dict[str, Any] | None, *, pid: int
+) -> bool:
+    """Take over an abandoned daily lock in place; True if this process won it.
+
+    Breaking used to be ``rmdir`` then ``mkdir``, which is not one step: two
+    runs that both judged the same lock abandoned would both remove it, and
+    the second removal could delete a *live* lock a third run had already
+    created in the gap -- leaving two daily jobs writing the same pack and
+    ledger at once. So the directory is never removed here. Instead the winner
+    is decided by an exclusive create of a marker named for the lock state the
+    decision was made on (``O_CREAT|O_EXCL`` is atomic on POSIX and Windows
+    alike), and only the winner rewrites owner.json.
+
+    Claiming in place is also what already had to happen on Windows, where a
+    sync or AV filter can hold the directory open and refuse rmdir outright.
+    """
+    try:
+        identity_before = lock_dir.stat().st_ino
+    except OSError:
+        return False
+    claim = lock_dir / f"claim-{_daily_lock_generation(owner)}"
+    for _ in range(2):
+        try:
+            fd = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, f"{pid}\n".encode("utf-8"))
+            finally:
+                os.close(fd)
+            break
+        except OSError:
+            # Check if the existing claim marker belongs to a dead process.
+            # An interrupted takeover (e.g. killed before writing owner.json)
+            # would otherwise leave an abandoned claim marker that blocks
+            # future takeovers indefinitely.
+            claimant_pid: int | None = None
+            try:
+                content = claim.read_text(encoding="utf-8").strip()
+                if content:
+                    claimant_pid = int(content)
+                elif (time.time() - claim.stat().st_mtime) > 0.1:
+                    claimant_pid = -1  # Dead/orphaned empty claim marker
+            except (OSError, ValueError):
+                pass
+            if claimant_pid is not None and not _pid_is_running(claimant_pid):
+                try:
+                    claim.unlink()
+                    continue
+                except OSError:
+                    pass
+            return False
+    else:
+        return False
+
+    if _daily_lock_moved_on(lock_dir, owner, identity_before):
+        try:
+            claim.unlink()
+        except OSError:
+            pass
+        return False
+    _write_daily_owner(lock_dir, pid=pid, depth=1)
+    return True
+
+
+def _daily_lock_moved_on(
+    lock_dir: Path, owner: dict[str, Any] | None, identity_before: int
+) -> bool:
+    """Whether the lock stopped being the abandoned one the caller judged.
+
+    The lock can be released and legitimately re-taken between the read that
+    concluded "abandoned" and the claim above, and a claim must never overwrite
+    the live owner that now holds it. Directory identity catches a release and
+    re-``mkdir``; the owner comparison catches a re-take into the same
+    directory. Note that the ownerless grace in ``_daily_lock_is_abandoned``
+    cannot be re-run here -- writing the claim marker bumped the directory's
+    own mtime -- which is why identity is checked instead.
+    """
+    try:
+        identity_now = lock_dir.stat().st_ino
+    except OSError:
+        return True
+    # st_ino is 0 where the platform cannot report one; only compare real ids.
+    if identity_before and identity_now and identity_now != identity_before:
+        return True
+    current = _read_daily_owner(lock_dir)
+    if current != owner:
+        return True
+    if current is None:
+        return False
+    try:
+        return _pid_is_running(int(current.get("pid") or 0))
+    except (TypeError, ValueError):
+        return False
+
+
 def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
     lock_dir = daily_lock_dir(pack_dir)
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +407,10 @@ def acquire_daily_lock(pack_dir: Path, *, retries: int = 4) -> Path:
             if owner is not None and owner.get("pid") == pid:
                 depth = int(owner.get("depth") or 1) + 1
                 _write_daily_owner(lock_dir, pid=pid, depth=depth)
+                return lock_dir
+            if _daily_lock_is_abandoned(lock_dir, owner) and _claim_abandoned_daily_lock(
+                lock_dir, owner, pid=pid
+            ):
                 return lock_dir
             time.sleep(0.05 * (attempt + 1))
     raise LockBusy("another daily job is in progress (packs/.daily_job_lock)")

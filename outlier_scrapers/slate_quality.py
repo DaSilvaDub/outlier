@@ -9,18 +9,46 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Mapping, Sequence
 
 _OUT_STATUS = re.compile(
     r"\b(?:out(?:\s+for\s+season)?|ofs|inactive)\b",
     re.IGNORECASE,
 )
-_INJURY_CHUNK = re.compile(
-    r"\s*(?:(?P<team>[A-Z]{2,3}):\s*)?(?P<body>[^|]+)"
-)
+_INJURY_CHUNK = re.compile(r"\s*(?:(?P<team>[A-Z]{2,3}):\s*)?(?P<body>[^|]+)")
 _STATUS_PAREN = re.compile(r"\((?P<status>[^)]*)\)")
 _PLAYER_PROP_SIDES = re.compile(r"\b(OVER|UNDER)\b", re.IGNORECASE)
 _SIGNED_LINE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+_SELECTION_NAME_RE = re.compile(r"^(.*?)\s+(?:OVER|UNDER)\b", re.IGNORECASE)
+_TRAILING_SO_MARKET_RE = re.compile(r"\s+(?:SO|STRIKEOUTS?|K)$", re.IGNORECASE)
+_RETURNING_IL_STATUS_RE = re.compile(
+    r"\b(?:60|15|10|7)[- ]day\s+il\b|\binjured\s+list\b",
+    re.IGNORECASE,
+)
+_RETURNING_IL_NOTE_RE = re.compile(
+    r"\b(?:"
+    r"cleared\s+to\s+(?:start|pitch|take\s+the\s+mound)|"
+    r"first\s+start|"
+    r"pitch\s+(?:count|limit|restriction)|"
+    r"activated"
+    r")\b",
+    re.IGNORECASE,
+)
+_RETURNING_IL_NEGATED_RE = re.compile(
+    r"\b(?:has|have|is|are|was|were)\s+not\s+(?:been\s+)?cleared\b|"
+    r"\b(?:not|never)\s+(?:been\s+)?cleared\b",
+    re.IGNORECASE,
+)
+_RET_DATE_RE = re.compile(r"\bret\s+(\d{4}-\d{2}-\d{2})\b", re.IGNORECASE)
+_MLB_NRFI_YRFI_TOKEN_RE = re.compile(r"\b(?:NRFI|YRFI)\b", re.IGNORECASE)
+_MLB_FIRST_INNING_RE = re.compile(
+    r"\b(?:FIRST[ _-]?INNING|1ST[ _-]?(?:INNING|INN)|1I)\b",
+    re.IGNORECASE,
+)
+_MLB_RUNS_TOKEN_RE = re.compile(r"\bRUNS?\b", re.IGNORECASE)
+# ret date on/before slate date, and not older than this many days.
+IL_RETURN_WINDOW_DAYS = 21
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
@@ -37,6 +65,12 @@ ENABLE_INDEPENDENT_SO_SIZING = os.environ.get(
     "OUTLIER_PROMOTE_INDEPENDENT_SO", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
 GAMELINE_TYPES = {"GAMELINE", "SPREAD", "MONEYLINE", "RUN_LINE", "RUNLINE"}
+PITCHER_IDENTITY_MISMATCH = "pitcher_identity_mismatch"
+PITCHER_IDENTITY_UNCONFIRMED = "pitcher_identity_unconfirmed"
+PITCHER_RETURNING_FROM_IL = "pitcher_returning_from_il"
+PITCHER_REHAB_CONTEXT = "pitcher_rehab_context"
+PITCHER_REHAB_PITCH_LIMIT = "pitcher_rehab_pitch_limit"
+_MLB_SO_MARKETS = {"SO", "STRIKEOUTS", "PITCHER_STRIKEOUTS", "K"}
 PLAYER_PROP_HINTS = {
     "REB",
     "AST",
@@ -144,6 +178,211 @@ def is_player_prop(row: dict[str, Any]) -> bool:
     return " - " in str(row.get("selection") or "")
 
 
+def _normalize_person_name(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _so_player_name(row: Mapping[str, Any], player_name: str | None = None) -> str:
+    if player_name:
+        return _normalize_person_name(player_name)
+    player = str(row.get("player") or "").strip()
+    if player:
+        return _normalize_person_name(player)
+    selection = str(row.get("selection") or "")
+    if " - " in selection:
+        return _normalize_person_name(selection.split(" - ", 1)[0])
+    match = _SELECTION_NAME_RE.match(selection)
+    if not match:
+        return ""
+    return _normalize_person_name(_TRAILING_SO_MARKET_RE.sub("", match.group(1).strip()))
+
+
+def _is_mlb_so_row(row: Mapping[str, Any]) -> bool:
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market_type") or row.get("market") or "").upper()
+    if sport and sport != "MLB":
+        return False
+    if market in _MLB_SO_MARKETS:
+        return True
+    selection = str(row.get("selection") or "").upper()
+    return "STRIKEOUT" in selection or "STRIKEOUT" in market
+
+
+def pitcher_identity_flags(
+    row: Mapping[str, Any],
+    probable_pitchers: Mapping[str, Any] | None,
+    *,
+    player_name: str | None = None,
+) -> list[str]:
+    """Fail-closed MLB SO identity vs the probable-pitcher lookup.
+
+    A confirmed starter on team T must not ship as a clean card for team U
+    (2026-09-06 MacKenzie Gore on WSH while starting for TEX). Relievers on a
+    team with a confirmed starter are the same class of mismatch. A missing
+    or empty lookup is unconfirmed — it does not skip the gate.
+    """
+    if not _is_mlb_so_row(row):
+        return []
+    if not probable_pitchers:
+        return [PITCHER_IDENTITY_UNCONFIRMED]
+    player = _so_player_name(row, player_name)
+    team = str(row.get("team") or "").strip().upper()
+    if not player or not team:
+        return [PITCHER_IDENTITY_UNCONFIRMED]
+
+    listed_teams = [
+        str(code).strip().upper()
+        for code, info in probable_pitchers.items()
+        if isinstance(info, Mapping)
+        and bool(info.get("confirmed"))
+        and _normalize_person_name(info.get("pitcher")) == player
+    ]
+    if listed_teams:
+        if team in listed_teams:
+            return []
+        return [PITCHER_IDENTITY_MISMATCH]
+
+    listed = probable_pitchers.get(team)
+    if isinstance(listed, Mapping) and listed.get("confirmed"):
+        starter = _normalize_person_name(listed.get("pitcher"))
+        if starter and starter != player:
+            return [PITCHER_IDENTITY_MISMATCH]
+    return [PITCHER_IDENTITY_UNCONFIRMED]
+
+
+def _parse_date_value(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _row_slate_date(row: Mapping[str, Any]) -> date | None:
+    for key in ("_event_starts_at", "event_starts_at", "as_of"):
+        parsed = _parse_date_value(row.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _ret_date_in_return_window(ret_date: date, slate_date: date) -> bool:
+    if ret_date > slate_date:
+        return False
+    return (slate_date - ret_date).days <= IL_RETURN_WINDOW_DAYS
+
+
+def is_mlb_nrfi_yrfi_candidate(
+    *,
+    proposition: Any = "",
+    market_label: Any = "",
+    market_token: Any = "",
+    period_label: Any = "",
+) -> bool:
+    """True for MLB first-inning run props (NRFI/YRFI), not first-inning Hits."""
+    text = " ".join(
+        str(part or "") for part in (proposition, market_label, market_token, period_label)
+    )
+    if _MLB_NRFI_YRFI_TOKEN_RE.search(text):
+        return True
+    return bool(_MLB_FIRST_INNING_RE.search(text) and _MLB_RUNS_TOKEN_RE.search(text))
+
+
+def pitcher_returning_from_il(
+    row: Mapping[str, Any],
+    injury_flags: str | None = None,
+    *,
+    player_name: str | None = None,
+) -> bool:
+    """True when an MLB starter's IL note is a return for this start."""
+    if not _is_mlb_so_row(row):
+        return False
+    player = _so_player_name(row, player_name)
+    if not player:
+        return False
+    text = str(injury_flags if injury_flags is not None else row.get("injury_flags") or "").strip()
+    if not text:
+        return False
+    slate_date = _row_slate_date(row)
+
+    for match in _INJURY_CHUNK.finditer(text):
+        body = (match.group("body") or "").strip()
+        if not body:
+            continue
+        name_part = body.split("(", 1)[0].split(":", 1)[0].strip()
+        if not name_part:
+            continue
+        norm_name = _normalize_person_name(name_part)
+        if norm_name != player and player not in norm_name and norm_name not in player:
+            continue
+
+        status_match = _STATUS_PAREN.search(body)
+        status = status_match.group("status") if status_match else body
+        if not _RETURNING_IL_STATUS_RE.search(status):
+            continue
+        if _RETURNING_IL_NEGATED_RE.search(body):
+            continue
+
+        ret_match = _RET_DATE_RE.search(status) or _RET_DATE_RE.search(body)
+        ret_date = _parse_date_value(ret_match.group(1) if ret_match else None)
+        if ret_date is not None and slate_date is not None:
+            if _ret_date_in_return_window(ret_date, slate_date):
+                return True
+            continue
+        if _RETURNING_IL_NOTE_RE.search(body):
+            return True
+    return False
+
+
+def _identity_audit_entry(row: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "player": str(row.get("player") or row.get("selection") or ""),
+        "team": str(row.get("team") or ""),
+        "matchup": str(row.get("matchup") or ""),
+        "market_id": str(row.get("market_id") or ""),
+        "board": str(row.get("board") or ""),
+        "data_quality_flags": str(row.get("data_quality_flags") or ""),
+    }
+
+
+def summarize_pitcher_identity(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    so_rows = 0
+    mismatch: list[dict[str, str]] = []
+    unconfirmed: list[dict[str, str]] = []
+    for row in rows:
+        if not _is_mlb_so_row(row):
+            continue
+        so_rows += 1
+        flags = {
+            flag.strip()
+            for flag in str(row.get("data_quality_flags") or "").split(";")
+            if flag.strip()
+        }
+        if PITCHER_IDENTITY_MISMATCH in flags:
+            mismatch.append(_identity_audit_entry(row))
+        if PITCHER_IDENTITY_UNCONFIRMED in flags:
+            unconfirmed.append(_identity_audit_entry(row))
+    fail_closed_count = len(mismatch) + len(unconfirmed)
+    return {
+        "schema_version": "1.0",
+        "so_rows": so_rows,
+        "mismatch_count": len(mismatch),
+        "unconfirmed_count": len(unconfirmed),
+        "fail_closed_count": fail_closed_count,
+        "status": "fail_closed" if fail_closed_count else "ok",
+        "mismatch": mismatch,
+        "unconfirmed": unconfirmed,
+    }
+
+
 def usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
     """True when an UNDER player prop sits on a usage-up (own star out) card."""
     if not is_player_prop(row):
@@ -224,11 +463,7 @@ def apply_market_devig_unit_cap(row: dict[str, Any]) -> None:
 
 
 def _signal_flag_set(row: dict[str, Any]) -> set[str]:
-    return {
-        part.strip()
-        for part in str(row.get("signal_flags") or "").split(";")
-        if part.strip()
-    }
+    return {part.strip() for part in str(row.get("signal_flags") or "").split(";") if part.strip()}
 
 
 def has_predictive_signal(row: dict[str, Any]) -> bool:
@@ -281,9 +516,7 @@ def promote_independent_so_sizing(row: dict[str, Any]) -> bool:
     cfg = load_so_promotion_config()
     unit_cap = float(cfg.get("max_units") or INDEPENDENT_SO_UNIT_CAP)
     temper_weight = float(cfg.get("temper_independent_weight") or 0.55)
-    sizing_prob = temper_independent_prob(
-        independent, market, independent_weight=temper_weight
-    )
+    sizing_prob = temper_independent_prob(independent, market, independent_weight=temper_weight)
 
     push_prob = _to_float(row.get("independent_push_prob"))
     if push_prob is None:
@@ -329,12 +562,7 @@ def apply_predictor_gates(row: dict[str, Any]) -> None:
         _append_sizing_flag(row, "missing_predictive_signal")
     independent = _to_float(row.get("independent_model_prob"))
     edge = _to_float(row.get("edge_pct"))
-    if (
-        not promoted
-        and independent is None
-        and edge is not None
-        and edge >= PHANTOM_EDGE_THRESHOLD
-    ):
+    if not promoted and independent is None and edge is not None and edge >= PHANTOM_EDGE_THRESHOLD:
         _append_sizing_flag(row, "edge_suspect_no_independent_model")
         units = _to_float(row.get("recommended_units_pre_news"))
         if units is not None and units > MARKET_DEVIG_UNIT_CAP:
@@ -345,11 +573,7 @@ def apply_predictor_gates(row: dict[str, Any]) -> None:
     edge = _to_float(row.get("edge_pct"))
     missing_signal = "missing_predictive_signal" in str(row.get("sizing_flags") or "")
     is_actionable = (
-        units is not None
-        and units > 0
-        and edge is not None
-        and edge > 0
-        and not missing_signal
+        units is not None and units > 0 and edge is not None and edge > 0 and not missing_signal
     )
     row["actionable"] = "true" if is_actionable else "false"
     if not is_actionable:

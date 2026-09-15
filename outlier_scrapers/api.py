@@ -162,7 +162,9 @@ class OutlierApiClient:
                     body = response.read()
                     
                     latency_ms = (time.monotonic() - start_time) * 1000
-                    logger.info("api_request", url=url, attempt=attempt, status_code=response.getcode(), latency_ms=latency_ms, throttled=False)
+                    getcode_fn = getattr(response, "getcode", None)
+                    status_code = getcode_fn() if callable(getcode_fn) else getattr(response, "status", 200)
+                    logger.info("api_request", url=url, attempt=attempt, status_code=status_code, latency_ms=latency_ms, throttled=False)
                     
                     if body[:2] == b"\x1f\x8b":
                         body = gzip.decompress(body)

@@ -9,6 +9,8 @@ dependencies = [
     "google-genai>=2.10.0,<3",
     "python-dateutil>=2.9,<3",
     "structlog>=24.1.0",
+    "SQLAlchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
 ]
 
 [project.optional-dependencies]

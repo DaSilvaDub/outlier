@@ -13,7 +13,7 @@
               "-ExecutionPolicy",
               "Bypass",
               "-File",
-              "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\.claude\\hooks\\block-reasoning.ps1"
+              ".claude/hooks/block-reasoning.ps1"
             ],
             "timeout": 15,
             "statusMessage": "Checking reasoning house rule..."
@@ -32,7 +32,7 @@
               "-ExecutionPolicy",
               "Bypass",
               "-File",
-              "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\.claude\\hooks\\check-sync.ps1"
+              ".claude/hooks/check-sync.ps1"
             ],
             "timeout": 60,
             "statusMessage": "Verifying outlier sync state..."

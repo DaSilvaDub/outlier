@@ -433,6 +433,11 @@ def test_check_freshness_rejects_unsafe_unified_health(monkeypatch, field, value
     monkeypatch.setattr(
         daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
     )
+    monkeypatch.setattr(
+        daily_job.feed_health,
+        "league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: False,
+    )
 
     assert not daily_job.check_freshness(["MLB"])
 
@@ -446,6 +451,47 @@ def test_check_freshness_rejects_malformed_source(monkeypatch):
     monkeypatch.setattr(daily_job.feed_health, "build_feed_health", fail)
 
     assert not daily_job.check_freshness(["MLB"])
+
+
+def test_check_freshness_accepts_a_league_with_a_confirmed_empty_slate(monkeypatch):
+    """An out-of-season league flagging unsafe must not abort the whole run.
+
+    games.py preserves the last real games_normalized_latest.json on a
+    zero-event day rather than overwrite it with an empty one, so its age
+    grows without bound for a league that legitimately has nothing scheduled.
+    That alone must not fail the daily gate -- but a leaguethat DOES have a
+    slate and is genuinely unhealthy still must.
+    """
+    _require_daily_job()
+    health = _healthy_feed_health()
+    health["games_status"] = "stale"
+    health["coverage_pct"] = 85.71
+    monkeypatch.setattr(
+        daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        daily_job.feed_health, "league_has_confirmed_empty_slate", lambda _league, **_kwargs: True
+    )
+
+    assert daily_job.check_freshness(["WNBA"])
+
+
+def test_check_freshness_still_rejects_unsafe_health_without_a_confirmed_empty_slate(
+    monkeypatch,
+):
+    _require_daily_job()
+    health = _healthy_feed_health()
+    health["games_status"] = "stale"
+    monkeypatch.setattr(
+        daily_job.feed_health, "build_feed_health", lambda _league, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        daily_job.feed_health,
+        "league_has_confirmed_empty_slate",
+        lambda _league, **_kwargs: False,
+    )
+
+    assert not daily_job.check_freshness(["WNBA"])
 
 
 def test_writer_lock_conflict_prevents_every_pipeline_mutation(monkeypatch):
@@ -772,6 +818,7 @@ def test_refit_blend_weights_skips_without_a_ledger(tmp_path, monkeypatch):
 
 
 def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
+    _require_daily_job()
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
     calls = []
@@ -796,6 +843,7 @@ def test_maintain_feedback_ledger_runs_clv_and_retention(tmp_path, monkeypatch):
 
 
 def test_maintain_feedback_ledger_isolates_failures(tmp_path, monkeypatch):
+    _require_daily_job()
     db = tmp_path / "feedback.sqlite3"
     db.write_text("", encoding="utf-8")
     monkeypatch.setattr(
@@ -815,6 +863,7 @@ def test_maintain_feedback_ledger_isolates_failures(tmp_path, monkeypatch):
 
 
 def test_run_pack_forwards_date_and_feedback_db(monkeypatch, tmp_path):
+    _require_daily_job()
     calls = []
     monkeypatch.setattr(daily_job.pack, "main", lambda args: calls.append(args) or tmp_path)
     db = tmp_path / "feedback.sqlite3"
@@ -823,6 +872,7 @@ def test_run_pack_forwards_date_and_feedback_db(monkeypatch, tmp_path):
 
 
 def test_persist_desk_feedback_is_nonfatal(tmp_path, monkeypatch):
+    _require_daily_job()
     pack_dir = tmp_path / "pack"
     (pack_dir / "verdicts").mkdir(parents=True)
     (pack_dir / "verdicts" / "desk_snapshot.json").write_text("{}", encoding="utf-8")

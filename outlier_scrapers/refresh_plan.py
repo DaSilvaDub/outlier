@@ -58,7 +58,14 @@ REFRESH_TASKS: tuple[RefreshTask, ...] = (
     RefreshTask(name="insights", flag="--insights"),
     RefreshTask(name="games", flag="--games"),
     RefreshTask(name="probable_pitchers", flag="--probable-pitchers", depends_on=("games",)),
-    RefreshTask(name="projections", flag="--projections"),
+    # Projections read props_normalized_latest() and the probable-pitcher
+    # lookup. Without these edges they run alongside their producers and
+    # project the previous slate, which fails the slate-date check.
+    RefreshTask(
+        name="projections",
+        flag="--projections",
+        depends_on=("props", "probable_pitchers"),
+    ),
     RefreshTask(name="line_movement", flag="--line-movement", depends_on=("props",)),
     RefreshTask(
         name="game_line_movement",
@@ -171,11 +178,11 @@ def execute_refresh(
                     completed_results[(league, task.name)] = res
                     continue
                     
-                def _do_work(l=league, t=task) -> RefreshTaskResult:
-                    argv = ["--league", l, t.flag]
+                def _do_work(lg=league, t=task) -> RefreshTaskResult:
+                    argv = ["--league", lg, t.flag]
                     if target_date:
                         argv.extend(["--date", target_date])
-                    logger.info("Running %s for %s...", t.name.replace("_", " "), l)
+                    logger.info("Running %s for %s...", t.name.replace("_", " "), lg)
                     started = _utc_now()
                     try:
                         exit_code = int(run(argv))
@@ -186,7 +193,7 @@ def execute_refresh(
                     finished = _utc_now()
                     return RefreshTaskResult(
                         name=t.name,
-                        league=l,
+                        league=lg,
                         ok=exit_code == 0,
                         exit_code=exit_code,
                         error=error,
