@@ -50,14 +50,40 @@ def _replace_with_retry(
                 )
                 time.sleep(sleep_time)
                 continue
-            # If src still exists and replacement failed, try removing dst first then moving
+            # Last resort: the destination itself is what blocks the replace.
+            # Move it aside rather than delete it -- unlinking commits to losing
+            # the previous good file, and the retry that was supposed to put the
+            # new one in its place can fail too, leaving the destination missing
+            # entirely. Renamed aside, the old contents can be put back.
             if attempt == retries and dst.exists():
+                backup = dst.with_name(f".{dst.name}.{os.getpid()}.{time.time_ns()}.bak")
+                moved_aside = False
                 try:
-                    dst.unlink()
-                    src.replace(dst)
-                    return
-                except Exception:
+                    dst.replace(backup)
+                    moved_aside = True
+                except OSError:
                     pass
+                if moved_aside:
+                    try:
+                        src.replace(dst)
+                    except OSError:
+                        try:
+                            backup.replace(dst)
+                        except OSError:
+                            logger.error(
+                                "Could not restore %s after a failed replace; its previous "
+                                "contents are preserved in %s and must be moved back by hand.",
+                                dst,
+                                backup,
+                            )
+                    else:
+                        try:
+                            backup.unlink()
+                        except OSError:
+                            logger.warning(
+                                "Replaced %s but could not remove the backup %s.", dst, backup
+                            )
+                        return
             raise
 
 

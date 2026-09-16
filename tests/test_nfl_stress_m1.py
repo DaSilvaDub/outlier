@@ -520,6 +520,82 @@ class TestAtomicFileOperations:
         assert dst.exists()
         assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 1}
 
+    def test_last_resort_keeps_the_previous_file_when_its_retry_also_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Clearing the destination must not commit to losing it.
+
+        The last-resort branch runs once the retries are spent and the
+        destination is what is blocking the replace. Deleting it commits to
+        losing the previous good file on the bet that the immediate retry
+        lands -- and when that retry fails too (a delete-pending name on
+        Windows still refuses a rename), ``nfl_*_latest.json`` is gone with
+        nothing put in its place, and ``safe_write_json`` then removes the temp
+        file that held the new data. Moving the destination aside instead keeps
+        the old contents restorable.
+
+        Platform-independent: the sharing violation is injected rather than
+        provoked with a real Windows handle, so the branch is covered on POSIX
+        too.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_games_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def replace_onto_dst_always_fails(self: Path, target):
+            # Only src -> dst is blocked; moving dst aside and back is allowed,
+            # which is what a scanner holding the file with FILE_SHARE_DELETE
+            # permits.
+            if Path(self) == src and Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", replace_onto_dst_always_fails)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        # The previous good file survived, and the new data is still in src.
+        assert dst.exists()
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 1}
+        assert src.exists()
+        # Nothing stranded beside it.
+        assert list(tmp_path.glob("*.bak")) == []
+
+    def test_last_resort_still_replaces_once_the_destination_name_is_free(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Moving the destination aside must unblock the replace it used to unlink for.
+
+        The branch exists because freeing the destination name is sometimes the
+        only way the replace can land; that has to keep working now that the
+        old file is renamed rather than deleted.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_props_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def replace_blocked_while_dst_present(self: Path, target):
+            if Path(self) == src and Path(target) == dst and dst.exists():
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", replace_blocked_while_dst_present)
+
+        _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 2}
+        assert not src.exists()
+        assert list(tmp_path.glob("*.bak")) == []
+
     def test_safe_write_json_under_lock_and_cleanup(self, tmp_path: Path):
         """Verify safe_write_json writes atomically, retries on lock, and cleans .tmp."""
         target = tmp_path / "safe_target.json"
