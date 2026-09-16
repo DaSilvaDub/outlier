@@ -9,6 +9,7 @@ Stress-tests:
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -595,6 +596,82 @@ class TestAtomicFileOperations:
         assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 2}
         assert not src.exists()
         assert list(tmp_path.glob("*.bak")) == []
+
+    def test_rollback_does_not_clobber_a_write_that_landed_in_the_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Moving the destination aside frees the name, and someone else may take it.
+
+        Concurrent writers on one destination are explicitly supported (see
+        ``test_safe_write_json_concurrent_same_file``), so a second writer can
+        land its own file in the window between the move aside and the failed
+        retry. Rolling back over it would resurrect contents two versions stale
+        on top of a write that succeeded -- worse than the data loss the
+        rollback exists to prevent, because nothing looks wrong afterwards.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_games_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def a_concurrent_writer_wins_the_free_name(self: Path, target):
+            if Path(target).name.endswith(".bak"):
+                # The move aside frees the name; a second writer takes it
+                # before this one gets to retry.
+                result = real_replace(self, target)
+                dst.write_text('{"version": 3}', encoding="utf-8")
+                return result
+            if Path(self) == src and Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", a_concurrent_writer_wins_the_free_name)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        # The newer write stands; the superseded copy is not left lying around.
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 3}
+        assert list(tmp_path.glob("*.bak")) == []
+
+    def test_previous_contents_survive_a_restore_that_also_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The backup is the last line: if even the rollback fails it must stay put.
+
+        This is the branch that makes moving aside safer than unlinking, so it
+        is worth pinning: when the destination cannot be restored, the previous
+        bytes are still on disk under the backup name rather than deleted.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_props_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def nothing_may_take_the_dst_name(self: Path, target):
+            if Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        def no_hard_links(*_args, **_kwargs):
+            raise OSError(1, "hard links not supported here")
+
+        monkeypatch.setattr(Path, "replace", nothing_may_take_the_dst_name)
+        monkeypatch.setattr(os, "link", no_hard_links)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        backups = list(tmp_path.glob("*.bak"))
+        assert len(backups) == 1, "the previous contents were not preserved anywhere"
+        assert json.loads(backups[0].read_text(encoding="utf-8")) == {"version": 1}
+        assert src.exists()
 
     def test_safe_write_json_under_lock_and_cleanup(self, tmp_path: Path):
         """Verify safe_write_json writes atomically, retries on lock, and cleans .tmp."""

@@ -24,6 +24,60 @@ logger = logging.getLogger("outlier_nfl.utils")
 WIN_LOCK_ERRORS: frozenset[int] = frozenset({32, 33})
 
 
+def _unlink_with_retry(path: Path, retries: int = 5, delay: float = 0.2) -> bool:
+    """Remove a file, retrying on the same transient locks a replace hits.
+
+    Used for the backup the last resort below leaves behind. A scanner holding
+    that file open for a moment must not turn a one-off into a hidden sibling
+    that stays in the directory for good.
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            if attempt < retries:
+                time.sleep(delay * (1.5 ** (attempt - 1)))
+                continue
+            logger.warning("Could not remove %s: %s", path, exc)
+    return False
+
+
+def _restore_backup(backup: Path, dst: Path) -> None:
+    """Put the previous file back, but never over a newer one.
+
+    Moving ``dst`` aside frees the name, and a concurrent ``safe_write_json``
+    for the same destination -- which this module explicitly supports -- can
+    land its own write there before the rollback runs. Replacing
+    unconditionally would resurrect stale contents over that newer write.
+    ``os.link`` refuses a name that already exists, so it settles the question
+    in one step instead of a check that can go out of date.
+    """
+    try:
+        os.link(backup, dst)
+    except FileExistsError:
+        # A newer write got there first. It wins; the superseded copy goes.
+        pass
+    except OSError:
+        # No hard links here (another filesystem, or a platform without them),
+        # so there is nothing atomic to use and a check is the best available.
+        if not dst.exists():
+            try:
+                backup.replace(dst)
+                return  # the rename consumed the backup
+            except OSError:
+                logger.error(
+                    "Could not restore %s after a failed replace; its previous contents "
+                    "are preserved in %s and must be moved back by hand.",
+                    dst,
+                    backup,
+                )
+                return  # keep the backup: it is the only copy left
+    _unlink_with_retry(backup)
+
+
 def _replace_with_retry(
     src: Path,
     dst: Path,
@@ -67,22 +121,9 @@ def _replace_with_retry(
                     try:
                         src.replace(dst)
                     except OSError:
-                        try:
-                            backup.replace(dst)
-                        except OSError:
-                            logger.error(
-                                "Could not restore %s after a failed replace; its previous "
-                                "contents are preserved in %s and must be moved back by hand.",
-                                dst,
-                                backup,
-                            )
+                        _restore_backup(backup, dst)
                     else:
-                        try:
-                            backup.unlink()
-                        except OSError:
-                            logger.warning(
-                                "Replaced %s but could not remove the backup %s.", dst, backup
-                            )
+                        _unlink_with_retry(backup)
                         return
             raise
 
