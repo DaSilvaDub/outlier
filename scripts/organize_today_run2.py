@@ -50,27 +50,33 @@ DEFAULT_OUT_DIRS = [
 HIT_FIELDNAMES = ["player", "market_label", "side", "line", "team", "matchup"]
 
 
-def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> None:
+def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> bool:
     """Copy file with retries to handle transient cloud sync locks ([WinError 32]).
 
     Staying non-fatal is deliberate -- one locked file must not abort the whole
     export -- but the give-up must be visible: a silently skipped copy leaves the
     Desktop / Drive ``today`` folder short a file with nothing in the run output
     to say which one.
+
+    Returns whether the file actually landed. Callers that are *moving* a file
+    must check it: deleting the source after a copy that gave up destroys the
+    only remaining copy.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(retries):
         try:
             shutil.copy2(str(src), str(dst))
-            return
+            return True
         except OSError:
             if attempt < retries - 1:
                 time.sleep(delay)
             else:
                 try:
                     shutil.copyfile(str(src), str(dst))
+                    return True
                 except OSError as exc:
                     print(f"WARNING: could not copy {src} -> {dst}: {exc}", file=sys.stderr)
+    return False
 
 
 def safe_rmtree(path: Path, retries: int = 5, delay: float = 0.5) -> None:
@@ -331,42 +337,34 @@ def copy_prompt_outputs(
         for item in desk2_src.glob("*.txt"):
             safe_copy(item, desk2_prompts / item.name)
 
+    # Filing a loose prompt into its bucket is a move, so the source is only
+    # removed once the copy has actually landed. safe_copy is non-fatal by
+    # design; deleting regardless would turn a copy it gave up on into a file
+    # that exists in neither place.
+    def file_into(item: Path, bucket: Path | None) -> None:
+        # bucket None means this kind is not being exported: nothing to copy,
+        # and the loose leftover is cleaned up rather than filed.
+        if bucket is None or safe_copy(item, bucket / item.name):
+            try:
+                item.unlink()
+            except OSError:
+                pass
+
     for item in out_dir.glob("*.txt"):
         if "Cards" in item.name:
-            safe_copy(item, generic_prompts / item.name)
-            try:
-                item.unlink()
-            except OSError:
-                pass
+            file_into(item, generic_prompts)
         elif "HitRate" in item.name:
-            safe_copy(item, hitrate_prompts / item.name)
-            try:
-                item.unlink()
-            except OSError:
-                pass
+            file_into(item, hitrate_prompts)
         elif "Totals" in item.name:
-            safe_copy(item, totals_prompts / item.name)
-            try:
-                item.unlink()
-            except OSError:
-                pass
+            file_into(item, totals_prompts)
         elif item.name.startswith(
             ("claude", "grok", "copilot", "gemini", "chatgpt", "1_Master", "generic")
         ):
-            safe_copy(item, generic_prompts / item.name)
-            try:
-                item.unlink()
-            except OSError:
-                pass
+            file_into(item, generic_prompts)
         elif (len(item.name) > 1 and item.name[0] in "QRWXS" and item.name[1] == "_") or re.match(
             r"^\d+_Phase[QRWXS]_", item.name
         ):
-            if desk2_prompts is not None:
-                safe_copy(item, desk2_prompts / item.name)
-            try:
-                item.unlink()
-            except OSError:
-                pass
+            file_into(item, desk2_prompts)
 
 
 def organize_today_additive(
