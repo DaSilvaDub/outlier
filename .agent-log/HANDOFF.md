@@ -1,17 +1,15 @@
-1. **Last Commit SHA**: e79e625c276326693a9db9bb27a8cae6a9829241 (PR #161 on branch `feat/nfl-pipeline-execution`)
+1. **Last Commit SHA**: `0b6a2acd27f23f35c60d7d1412d25f1871ea125b`
 2. **Files Touched**:
-   - `outlier_nfl/games.py`: Game lines, spreads, moneylines, team totals extraction
-   - `outlier_nfl/props.py`: Player prop extraction with book mapping and label fallbacks
-   - `outlier_nfl/normalizer.py`: Push probability adjustment, team & schedule indexing
-   - `outlier_nfl/pipeline.py`: NflPipeline orchestrator (live API + fixture mode)
-   - `outlier_nfl/api.py`: Hardened Cognito JWT token extraction & target-host cookie filtering
-   - `outlier_nfl/schema.py`: Hardened book entry validation
-   - `outlier_nfl/__init__.py`: Exported public normalizer & pipeline interfaces
-   - `verify_nfl_pipeline.py`: Added support for pick'em signed lines
+   - `calibration/alerts/daily_pipeline_status.json`: Daily pipeline status receipt
+   - `calibration/blend_weights.json`: Blend weights refit from settlement collection
+   - `today/playable_props*` (Desktop & Google Drive): Consolidated playable props export
 3. **Next Steps**:
-   - Review and merge PR #161 (`feat/nfl-pipeline-execution`).
-   - NFL pipeline datasets successfully verified and saved under `data/NFL/normalized/` (470 game totals, 502 spreads, 453 team totals, 3,761 player props).
-   - 303/303 unit & adversarial stress tests passing cleanly with zero ruff or mypy errors.
+   - Slate for 2026-09-15 executed with paid reasoning strictly OFF (`daily_job.py --analysis-profile local --leagues MLB,WNBA`).
+   - Pitcher identity audit clean: `status=ok`, `so_rows=14`, 0 mismatches, 0 unconfirmed, 0 fail-closed.
+   - All prompt and dataset exports distributed to Desktop and Google Drive `today` folders.
+   - Consolidated `playable_props.md` and `playable_props.csv` generated: 0 actionable Board A plays qualified on tonight's 29-candidate evening slate; all 29 candidates logged with disqualification/status flags for full auditability.
+   - Run post-game accuracy audit tomorrow morning (`2026-09-16`) after evening games conclude.
+
 
 ## Codex merge batch - 2026-09-14
 - Last merged commit: 2e6e06400a7824d8b00b485bf6c1820f05cab8f4 (PR #136); prior merge dca927305e9905531891c951807450c37bdb5aa0 (PR #162).
