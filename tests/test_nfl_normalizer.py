@@ -280,6 +280,12 @@ def test_coerce_odds_and_coerce_float_reject_junk_instead_of_raising():
         assert coerce_float(junk) is None
     assert coerce_float(None) is None
 
+    # json parses an integer literal of any length, and float() raises
+    # OverflowError -- not ValueError -- for one too large to convert.
+    huge = json.loads('{"l5": 1' + "0" * 400 + "}")["l5"]
+    assert coerce_float(huge) is None
+    assert coerce_odds(huge) is None
+
 
 @pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
 @pytest.mark.parametrize("junk", ["EVEN", "N/A", "", "-110.5"])

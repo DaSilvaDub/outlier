@@ -195,12 +195,16 @@ def coerce_float(value: Any) -> float | None:
     (``"N/A"``, ``"-"``, ``""``). Junk in one optional field is one unusable
     value, never a reason to abort the slate, so this returns None rather than
     raising. ``bool`` is rejected: ``True`` is not a price or a hit rate.
+
+    ``OverflowError`` is caught alongside the parse errors: ``json`` parses an
+    integer literal of any length, and ``float()`` raises it -- not
+    ``ValueError`` -- for one too large to convert.
     """
     if value is None or isinstance(value, bool):
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return parsed if math.isfinite(parsed) else None
 
