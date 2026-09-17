@@ -1,3 +1,17 @@
+## Daily automated debug review (claude) - 2026-09-17
+
+- **Last Commit SHA**: `c4c5b12` on `claude/inspiring-fermat-b703ae`; PR #165 -> master.
+- **Files Touched**: `outlier_nfl/utils.py` (new `coerce_odds` / `coerce_float`), `outlier_nfl/games.py`, `outlier_nfl/props.py`, `tests/test_nfl_normalizer.py` (9 regression tests).
+- **Finding (High)**: `extract_game_lines` cast `outcome["bestOdds"]` with a bare `int()` and `extract_player_props` cast the `l5`/`l10`/`l20`/`curSeason` hit rates with a bare `float()`. Neither `normalize_game_markets` nor `normalize_player_props` is guarded at its `pipeline.py` call site, so one unparseable feed value (`"EVEN"`, `"N/A"`, `""`, a fractional price) aborted the entire slate - reproduced: 2 of 6 game lines survived, exception left `run()`. The `bestOdds` fallback four lines above the unguarded stats casts in `props.py` was *already* guarded, which settles the intended behaviour. All 9 tests confirmed failing on parent `1c48795`.
+- **Verification**: NFL suites 233 passed / 2 skipped; whole offline suite 826 passed (was 817); ruff clean on changed files; mypy clean on the three changed modules. Sandbox has no PyPI egress (403 on CONNECT), so `structlog`/`sqlalchemy`/provider SDKs are uninstallable - every other reported failure is a `ModuleNotFoundError` for one of those. Hosted CI is authoritative.
+- **Reported, not fixed**:
+  - `pipeline.py:119/169/122/184` call the two normalizers unguarded. Per-event `try/except` would contain any future extraction crash to one event, but partial-slate output is a behavioural call for a human.
+  - `requirements.lock` declares none of `structlog`, `SQLAlchemy`, `psycopg2-binary` (all in `pyproject.toml`) or `tzdata`; CI only works because the following `pip install -e .` resolves them unpinned, so they float every run. Needs PyPI access to regenerate. Also noted on #164.
+  - `outlier_scrapers/api.py:17` calls `structlog.configure()` at import time, which mutates global structlog state for whatever imports it first. Not reproducible here (structlog uninstallable), so reported rather than touched.
+- **Already covered, not duplicated**: PR #164 (open, all 4 checks green, `mergeable_state: clean`, rebased on current master) still carries the `outlier_nfl/utils.py` `_replace_with_retry` data-loss fix and the `organize_today_run2.py` counterpart. The handoff below recorded it as closed; it has since been reopened. Needs a human merge.
+- **Master CI**: green on `1c48795` (core, provider, typecheck).
+- **Next Steps**: review/merge #165 and #164. Paid reasoning / AI Research Desk was not invoked at any point.
+
 1. **Last Commit SHA**: `3b0288b6dfccaefc840b6e300b9d505fb9e606da` (merge of PR #163)
 2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `tests/test_desk_snapshot.py`
 3. **Next Steps**:
