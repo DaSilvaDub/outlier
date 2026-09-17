@@ -7,13 +7,18 @@ Stress-tests:
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from dataclasses import FrozenInstanceError
 import json
+import os
 from pathlib import Path
 import sys
 import threading
 import time
 from typing import Any
+import zoneinfo
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from outlier_nfl.models import (
@@ -30,6 +35,7 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.utils import (
+    _in_us_eastern_dst,
     _replace_with_retry,
     format_signed_line,
     safe_read_json,
@@ -520,6 +526,158 @@ class TestAtomicFileOperations:
         assert dst.exists()
         assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 1}
 
+    def test_last_resort_keeps_the_previous_file_when_its_retry_also_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Clearing the destination must not commit to losing it.
+
+        The last-resort branch runs once the retries are spent and the
+        destination is what is blocking the replace. Deleting it commits to
+        losing the previous good file on the bet that the immediate retry
+        lands -- and when that retry fails too (a delete-pending name on
+        Windows still refuses a rename), ``nfl_*_latest.json`` is gone with
+        nothing put in its place, and ``safe_write_json`` then removes the temp
+        file that held the new data. Moving the destination aside instead keeps
+        the old contents restorable.
+
+        Platform-independent: the sharing violation is injected rather than
+        provoked with a real Windows handle, so the branch is covered on POSIX
+        too.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_games_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def replace_onto_dst_always_fails(self: Path, target):
+            # Only src -> dst is blocked; moving dst aside and back is allowed,
+            # which is what a scanner holding the file with FILE_SHARE_DELETE
+            # permits.
+            if Path(self) == src and Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", replace_onto_dst_always_fails)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        # The previous good file survived, and the new data is still in src.
+        assert dst.exists()
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 1}
+        assert src.exists()
+        # Nothing stranded beside it.
+        assert list(tmp_path.glob("*.bak")) == []
+
+    def test_last_resort_still_replaces_once_the_destination_name_is_free(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Moving the destination aside must unblock the replace it used to unlink for.
+
+        The branch exists because freeing the destination name is sometimes the
+        only way the replace can land; that has to keep working now that the
+        old file is renamed rather than deleted.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_props_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def replace_blocked_while_dst_present(self: Path, target):
+            if Path(self) == src and Path(target) == dst and dst.exists():
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", replace_blocked_while_dst_present)
+
+        _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 2}
+        assert not src.exists()
+        assert list(tmp_path.glob("*.bak")) == []
+
+    def test_rollback_does_not_clobber_a_write_that_landed_in_the_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Moving the destination aside frees the name, and someone else may take it.
+
+        Concurrent writers on one destination are explicitly supported (see
+        ``test_safe_write_json_concurrent_same_file``), so a second writer can
+        land its own file in the window between the move aside and the failed
+        retry. Rolling back over it would resurrect contents two versions stale
+        on top of a write that succeeded -- worse than the data loss the
+        rollback exists to prevent, because nothing looks wrong afterwards.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_games_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def a_concurrent_writer_wins_the_free_name(self: Path, target):
+            if Path(target).name.endswith(".bak"):
+                # The move aside frees the name; a second writer takes it
+                # before this one gets to retry.
+                result = real_replace(self, target)
+                dst.write_text('{"version": 3}', encoding="utf-8")
+                return result
+            if Path(self) == src and Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", a_concurrent_writer_wins_the_free_name)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        # The newer write stands; the superseded copy is not left lying around.
+        assert json.loads(dst.read_text(encoding="utf-8")) == {"version": 3}
+        assert list(tmp_path.glob("*.bak")) == []
+
+    def test_previous_contents_survive_a_restore_that_also_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The backup is the last line: if even the rollback fails it must stay put.
+
+        This is the branch that makes moving aside safer than unlinking, so it
+        is worth pinning: when the destination cannot be restored, the previous
+        bytes are still on disk under the backup name rather than deleted.
+        """
+        src = tmp_path / "src.json"
+        dst = tmp_path / "nfl_props_latest.json"
+        src.write_text('{"version": 2}', encoding="utf-8")
+        dst.write_text('{"version": 1}', encoding="utf-8")
+
+        real_replace = Path.replace
+
+        def nothing_may_take_the_dst_name(self: Path, target):
+            if Path(target) == dst:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(self, target)
+
+        def no_hard_links(*_args, **_kwargs):
+            raise OSError(1, "hard links not supported here")
+
+        monkeypatch.setattr(Path, "replace", nothing_may_take_the_dst_name)
+        monkeypatch.setattr(os, "link", no_hard_links)
+
+        with pytest.raises(OSError):
+            _replace_with_retry(src, dst, retries=2, delay=0.01)
+
+        monkeypatch.undo()
+        backups = list(tmp_path.glob("*.bak"))
+        assert len(backups) == 1, "the previous contents were not preserved anywhere"
+        assert json.loads(backups[0].read_text(encoding="utf-8")) == {"version": 1}
+        assert src.exists()
+
     def test_safe_write_json_under_lock_and_cleanup(self, tmp_path: Path):
         """Verify safe_write_json writes atomically, retries on lock, and cleans .tmp."""
         target = tmp_path / "safe_target.json"
@@ -914,3 +1072,41 @@ class TestAdversarialEdgeCases:
         t.join()
         assert loaded == {"status": "ok", "val": 42}
 
+
+def test_the_no_tz_database_fallback_agrees_with_the_real_zone():
+    """The fallback must not be a standing winter offset.
+
+    ``to_eastern_date`` falls back to a fixed offset when zoneinfo has no tz
+    database -- the project declares tzdata so that should not happen, but the
+    offset it used was Eastern *Standard* time, wrong from the second Sunday in
+    March to the first Sunday in November. That covers nearly the whole NFL
+    season, and a slate date quietly off by one drops games from the slate.
+
+    Checked against the real zone hourly across a decade, which is the only way
+    a hand-written DST rule is worth trusting.
+    """
+    eastern = ZoneInfo("America/New_York")
+    moment = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    stop = datetime(2031, 1, 1, tzinfo=timezone.utc)
+    disagreements = []
+    while moment < stop:
+        want_dst = moment.astimezone(eastern).utcoffset() == timedelta(hours=-4)
+        if _in_us_eastern_dst(moment) != want_dst:
+            disagreements.append(moment)
+        moment += timedelta(hours=1)
+    assert not disagreements, f"disagrees with the real zone at {disagreements[:5]}"
+
+
+def test_a_september_kickoff_keeps_its_date_without_a_tz_database(monkeypatch):
+    """An EDT-season kickoff must land on the same date the real zone gives it."""
+
+    class _NoDatabase:
+        def __call__(self, *_args, **_kwargs):
+            raise zoneinfo.ZoneInfoNotFoundError("no tz database")
+
+    snf_utc = "2026-09-14T00:20:00Z"
+    expected = to_eastern_date(snf_utc)
+    assert expected == "2026-09-13"
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", _NoDatabase())
+    assert to_eastern_date(snf_utc) == expected

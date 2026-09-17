@@ -7,7 +7,7 @@ from OneDrive or file synchronizers.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import math
@@ -23,6 +23,60 @@ logger = logging.getLogger("outlier_nfl.utils")
 
 # Transient Windows file locking error codes (WinError 32: sharing violation, WinError 33: lock violation)
 WIN_LOCK_ERRORS: frozenset[int] = frozenset({32, 33})
+
+
+def _unlink_with_retry(path: Path, retries: int = 5, delay: float = 0.2) -> bool:
+    """Remove a file, retrying on the same transient locks a replace hits.
+
+    Used for the backup the last resort below leaves behind. A scanner holding
+    that file open for a moment must not turn a one-off into a hidden sibling
+    that stays in the directory for good.
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            if attempt < retries:
+                time.sleep(delay * (1.5 ** (attempt - 1)))
+                continue
+            logger.warning("Could not remove %s: %s", path, exc)
+    return False
+
+
+def _restore_backup(backup: Path, dst: Path) -> None:
+    """Put the previous file back, but never over a newer one.
+
+    Moving ``dst`` aside frees the name, and a concurrent ``safe_write_json``
+    for the same destination -- which this module explicitly supports -- can
+    land its own write there before the rollback runs. Replacing
+    unconditionally would resurrect stale contents over that newer write.
+    ``os.link`` refuses a name that already exists, so it settles the question
+    in one step instead of a check that can go out of date.
+    """
+    try:
+        os.link(backup, dst)
+    except FileExistsError:
+        # A newer write got there first. It wins; the superseded copy goes.
+        pass
+    except OSError:
+        # No hard links here (another filesystem, or a platform without them),
+        # so there is nothing atomic to use and a check is the best available.
+        if not dst.exists():
+            try:
+                backup.replace(dst)
+                return  # the rename consumed the backup
+            except OSError:
+                logger.error(
+                    "Could not restore %s after a failed replace; its previous contents "
+                    "are preserved in %s and must be moved back by hand.",
+                    dst,
+                    backup,
+                )
+                return  # keep the backup: it is the only copy left
+    _unlink_with_retry(backup)
 
 
 def _replace_with_retry(
@@ -51,14 +105,27 @@ def _replace_with_retry(
                 )
                 time.sleep(sleep_time)
                 continue
-            # If src still exists and replacement failed, try removing dst first then moving
+            # Last resort: the destination itself is what blocks the replace.
+            # Move it aside rather than delete it -- unlinking commits to losing
+            # the previous good file, and the retry that was supposed to put the
+            # new one in its place can fail too, leaving the destination missing
+            # entirely. Renamed aside, the old contents can be put back.
             if attempt == retries and dst.exists():
+                backup = dst.with_name(f".{dst.name}.{os.getpid()}.{time.time_ns()}.bak")
+                moved_aside = False
                 try:
-                    dst.unlink()
-                    src.replace(dst)
-                    return
-                except Exception:
+                    dst.replace(backup)
+                    moved_aside = True
+                except OSError:
                     pass
+                if moved_aside:
+                    try:
+                        src.replace(dst)
+                    except OSError:
+                        _restore_backup(backup, dst)
+                    else:
+                        _unlink_with_retry(backup)
+                        return
             raise
 
 
@@ -159,6 +226,28 @@ def parse_iso_datetime(ts: str | None) -> datetime | None:
         return None
 
 
+def _first_sunday(year: int, month: int) -> int:
+    """Day of the month the first Sunday falls on, for the US DST boundaries below."""
+    first_weekday = datetime(year, month, 1, tzinfo=timezone.utc).weekday()  # Mon=0
+    return 1 + (6 - first_weekday) % 7
+
+
+def _in_us_eastern_dst(moment: datetime) -> bool:
+    """Whether a moment falls in US Eastern daylight time, by the rule since 2007.
+
+    DST runs from 2am local on the second Sunday in March to 2am local on the
+    first Sunday in November. The boundaries are compared in UTC (07:00 UTC at
+    the spring start, when Eastern is still -5; 06:00 UTC at the autumn end,
+    when it is still -4), which avoids having to reason about the local clock
+    while it is the thing being determined.
+    """
+    utc = moment.astimezone(timezone.utc)
+    year = utc.year
+    start = datetime(year, 3, _first_sunday(year, 3) + 7, 7, tzinfo=timezone.utc)
+    end = datetime(year, 11, _first_sunday(year, 11), 6, tzinfo=timezone.utc)
+    return start <= utc < end
+
+
 def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     """Convert a UTC datetime or ISO timestamp to US Eastern calendar date (YYYY-MM-DD).
 
@@ -180,9 +269,13 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     try:
         eastern_tz = zoneinfo.ZoneInfo("America/New_York")
     except Exception:
-        # Fallback to standard US Eastern winter UTC-5 if zoneinfo database is unavailable
-        from datetime import timezone, timedelta
-        eastern_tz = timezone(timedelta(hours=-5))
+        # No tz database. The project declares tzdata so this should not happen,
+        # but the standing UTC-5 it used to fall back to is Eastern *Standard*
+        # time, which is the wrong offset from the second Sunday in March to the
+        # first Sunday in November -- nearly the whole NFL season. A date that is
+        # quietly off by one drops games from the slate, so derive the offset
+        # from the rule instead of assuming winter.
+        eastern_tz = timezone(timedelta(hours=-4 if _in_us_eastern_dst(dt) else -5))
 
     eastern_dt = dt.astimezone(eastern_tz)
     return eastern_dt.strftime("%Y-%m-%d")
