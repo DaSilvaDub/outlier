@@ -1,14 +1,10 @@
-1. **Last Commit SHA**: `0b6a2acd27f23f35c60d7d1412d25f1871ea125b`
-2. **Files Touched**:
-   - `calibration/alerts/daily_pipeline_status.json`: Daily pipeline status receipt
-   - `calibration/blend_weights.json`: Blend weights refit from settlement collection
-   - `today/playable_props*` (Desktop & Google Drive): Consolidated playable props export
+1. **Last Commit SHA**: `3b0288b6dfccaefc840b6e300b9d505fb9e606da` (merge of PR #163)
+2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `tests/test_desk_snapshot.py`
 3. **Next Steps**:
-   - Slate for 2026-09-15 executed with paid reasoning strictly OFF (`daily_job.py --analysis-profile local --leagues MLB,WNBA`).
-   - Pitcher identity audit clean: `status=ok`, `so_rows=14`, 0 mismatches, 0 unconfirmed, 0 fail-closed.
-   - All prompt and dataset exports distributed to Desktop and Google Drive `today` folders.
-   - Consolidated `playable_props.md` and `playable_props.csv` generated: 0 actionable Board A plays qualified on tonight's 29-candidate evening slate; all 29 candidates logged with disqualification/status flags for full auditability.
-   - Run post-game accuracy audit tomorrow morning (`2026-09-16`) after evening games conclude.
+   - PR #163 reopened and merged at the user's explicit request, superseding the 2026-09-16 closure sweep recorded below. The daily-lock double-acquire it fixes was still live on master at that point (verified: `desk_snapshot.py` untouched since the PR branched).
+   - On master now: claim-marker recovery is a chain of exclusive creates, a marker is never deleted to recover it, and an empty marker is only stranded past `DAILY_LOCK_OWNERLESS_GRACE` instead of 0.1s. Three regression tests landed with it. All CI green on the merged head (core, provider, typecheck, Codacy 0 issues).
+   - **Still open**: PR #164 (`fix: two paths that delete the only remaining copy of a file`, branch `claude/inspiring-fermat-l965uf`, head 37d72a0) was closed unmerged in the same sweep. It covers the `outlier_nfl/utils.py` `_replace_with_retry` data-loss path from the 2026-09-15 debug review plus a second instance of the same defect class, and that finding is still live on master. Reopen it if wanted.
+   - Repository clean and in sync with `origin/master`. Paid reasoning models were not invoked.
 
 
 ## Codex merge batch - 2026-09-14
@@ -50,6 +46,19 @@
 - **Verification**: All merged PRs passed local tests, lint, and full hosted GitHub Actions CI suites. Zero uncommitted changes. Paid reasoning models were not invoked.
 
 
+## Daily automated debug review (claude) - 2026-09-15
+- **Last Commit SHA**: 9c291980a79bd20abeaa61dea8ee3b762e7f5eca on `claude/inspiring-fermat-g7a512`; PR #163 -> master (green, `mergeable_state: clean`, awaiting human review).
+- **Files Touched**:
+  - `outlier_scrapers/desk_snapshot.py`: `_claim_abandoned_daily_lock` recovery no longer deletes a claim marker; new `_abandoned_claim_token` helper.
+  - `tests/test_desk_snapshot.py`: two regression tests (empty marker not stolen mid-claim; recovery never deletes the stranded marker).
+- **Finding**: `31cdd18` (merged via #152 on 2026-09-15) reintroduced the double-acquire it was meant to guard against. Recovering a stranded claim marker by unlink-then-recreate lets two runs both come away holding the daily lock, so two daily jobs write the same pack and ledger. Reproduced deterministically; both new tests fail on the pre-fix code.
+- **Sandbox constraint**: PyPI egress is blocked by proxy policy (403 on CONNECT), so `pytest`/`ruff`/`mypy` could not be installed. Verified by replaying the 8 existing daily-lock test bodies plus the 2 new ones against `desk_snapshot` loaded in isolation (intra-package imports stripped). Hosted CI on PR #163 is the authoritative check.
+- **Reported, not fixed** (needs a human call):
+  - `outlier_nfl/utils.py:54` `_replace_with_retry` last-ditch branch runs `dst.unlink()` then retries the replace; when that retry also fails the previous good `nfl_*_latest.json` is deleted and nothing replaces it. Confirmed by direct execution. Suggested fix: rename `dst` aside, replace, delete the backup on success and restore it on failure. Untestable from Linux, so left alone.
+  - `outlier_nfl/utils.py:183` `to_eastern_date` falls back to a fixed UTC-5 when `zoneinfo` has no tz database, which is wrong during EDT (most of the NFL season). Current kickoff times still bucket to the right date, so it is latent rather than active.
+- **Review round**: Copilot found a real defect in the first fix -- the recovery marker could itself strand (a run that won it and died before rewriting owner.json deadlocked the lock permanently, the same failure one level down). Reproduced, fixed in 9c29198: the markers now form a chain, every link recoverable on the same terms, each step still one exclusive create, name kept fixed-length via a hashed trail, walk bounded by MAX_CLAIM_RECOVERY_DEPTH. Thread resolved. Copilot's second (self-suppressed) point -- a claimer stalled past the 30s grace can still be taken over -- was left deliberately and answered on the thread: it is the same structural trade `_daily_lock_is_abandoned` already makes one level up, and closing it needs an atomic compare-and-swap on owner.json that the file-per-marker scheme cannot express. That is a good separate change if anyone wants it.
+- **Next Steps**: #163 was closed unmerged on 2026-09-16 in a PR-queue sweep, then reopened and merged on 2026-09-17 at the user's explicit request (master `3b0288b`). Nothing left on it. The two `outlier_nfl/utils.py` findings from this review remain unaddressed on master; PR #164 covers the first. Paid reasoning / AI Research Desk was not invoked at any point.
+
 ## Daily automated debug review (claude) - 2026-09-16
 - **Branch**: `claude/inspiring-fermat-l965uf`.
 - **Files Touched**:
@@ -64,5 +73,5 @@
   - `tzdata` is likewise undeclared, and `outlier_scrapers/results.py:42` builds `ZoneInfo("America/New_York")` at import with no fallback. Windows has no system tz database, so a clean Windows install from the lock cannot import `results.py`. Works today only because the canonical box happens to have `tzdata`.
   - `outlier_nfl/utils.py:183` `to_eastern_date` still falls back to a fixed UTC-5 when `zoneinfo` has no database, which is wrong during EDT (most of the NFL season). Latent: current kickoff times still bucket to the right date. Fixing it properly means declaring `tzdata`, above.
 - **Verification**: hosted CI on PR #164 green for the first fix (core, provider, typecheck, Codacy). PyPI egress is blocked by proxy policy (403 on CONNECT), so `pytest`/`ruff`/`mypy` could not be installed. Replayed the offline suite against a minimal pytest stand-in: 985 passed, 0 genuine failures; the 65 reported failures and 26 import errors are all `ModuleNotFoundError` for the uninstallable `sqlalchemy` / `google-genai`. The five provider suites were not run. `pyright outlier_nfl/utils.py` clean; `compileall` clean. Hosted CI on the PR is the authoritative check.
-- **PR #163** (2026-09-15 lock fix) is still open, all four checks green, `mergeable_state: clean` -- waiting on a human merge, nothing left for an agent.
-- **Next Steps**: merge #163; regenerate `requirements.lock` from a machine with PyPI access. Paid reasoning / AI Research Desk was not invoked at any point.
+- **PR #163** (2026-09-15 lock fix) was closed unmerged in the 2026-09-16 sweep, then reopened and merged on 2026-09-17 at the user's explicit request (master `3b0288b`).
+- **Next Steps**: #163 is merged. Regenerate `requirements.lock` from a machine with PyPI access. Paid reasoning / AI Research Desk was not invoked at any point.
