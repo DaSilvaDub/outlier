@@ -61,21 +61,46 @@ def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> boo
     Returns whether the file actually landed. Callers that are *moving* a file
     must check it: deleting the source after a copy that gave up destroys the
     only remaining copy.
+
+    The bytes are staged into a sibling of the destination and moved into place
+    once they are all there. ``shutil``'s copies truncate the destination before
+    they write, so copying straight onto it turns a lock or a disconnect partway
+    through into a truncated export that looks present -- worse than the missing
+    file this function already reports, because nothing flags it.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
-    for attempt in range(retries):
-        try:
-            shutil.copy2(str(src), str(dst))
-            return True
-        except OSError:
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
+    staged = dst.with_name(f".{dst.name}.{os.getpid()}.{time.time_ns()}.part")
+    try:
+        for attempt in range(retries):
+            last = attempt == retries - 1
+            try:
+                shutil.copy2(str(src), str(staged))
+            except OSError:
+                if not last:
+                    time.sleep(delay)
+                    continue
                 try:
-                    shutil.copyfile(str(src), str(dst))
-                    return True
+                    # copy2 also carries metadata across; the bytes alone are
+                    # worth more than the timestamps if that is what failed.
+                    shutil.copyfile(str(src), str(staged))
                 except OSError as exc:
                     print(f"WARNING: could not copy {src} -> {dst}: {exc}", file=sys.stderr)
+                    return False
+            try:
+                os.replace(str(staged), str(dst))
+                return True
+            except OSError as exc:
+                if not last:
+                    time.sleep(delay)
+                    continue
+                print(f"WARNING: could not copy {src} -> {dst}: {exc}", file=sys.stderr)
+                return False
+    finally:
+        if staged.exists():
+            try:
+                staged.unlink()
+            except OSError:
+                pass
     return False
 
 

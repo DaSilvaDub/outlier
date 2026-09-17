@@ -7,6 +7,7 @@ Stress-tests:
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from dataclasses import FrozenInstanceError
 import json
 import os
@@ -15,6 +16,9 @@ import sys
 import threading
 import time
 from typing import Any
+import zoneinfo
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from outlier_nfl.models import (
@@ -31,6 +35,7 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.utils import (
+    _in_us_eastern_dst,
     _replace_with_retry,
     format_signed_line,
     safe_read_json,
@@ -1067,3 +1072,41 @@ class TestAdversarialEdgeCases:
         t.join()
         assert loaded == {"status": "ok", "val": 42}
 
+
+def test_the_no_tz_database_fallback_agrees_with_the_real_zone():
+    """The fallback must not be a standing winter offset.
+
+    ``to_eastern_date`` falls back to a fixed offset when zoneinfo has no tz
+    database -- the project declares tzdata so that should not happen, but the
+    offset it used was Eastern *Standard* time, wrong from the second Sunday in
+    March to the first Sunday in November. That covers nearly the whole NFL
+    season, and a slate date quietly off by one drops games from the slate.
+
+    Checked against the real zone hourly across a decade, which is the only way
+    a hand-written DST rule is worth trusting.
+    """
+    eastern = ZoneInfo("America/New_York")
+    moment = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    stop = datetime(2031, 1, 1, tzinfo=timezone.utc)
+    disagreements = []
+    while moment < stop:
+        want_dst = moment.astimezone(eastern).utcoffset() == timedelta(hours=-4)
+        if _in_us_eastern_dst(moment) != want_dst:
+            disagreements.append(moment)
+        moment += timedelta(hours=1)
+    assert not disagreements, f"disagrees with the real zone at {disagreements[:5]}"
+
+
+def test_a_september_kickoff_keeps_its_date_without_a_tz_database(monkeypatch):
+    """An EDT-season kickoff must land on the same date the real zone gives it."""
+
+    class _NoDatabase:
+        def __call__(self, *_args, **_kwargs):
+            raise zoneinfo.ZoneInfoNotFoundError("no tz database")
+
+    snf_utc = "2026-09-14T00:20:00Z"
+    expected = to_eastern_date(snf_utc)
+    assert expected == "2026-09-13"
+
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", _NoDatabase())
+    assert to_eastern_date(snf_utc) == expected

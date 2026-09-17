@@ -7,7 +7,7 @@ from OneDrive or file synchronizers.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -225,6 +225,28 @@ def parse_iso_datetime(ts: str | None) -> datetime | None:
         return None
 
 
+def _first_sunday(year: int, month: int) -> int:
+    """Day of the month the first Sunday falls on, for the US DST boundaries below."""
+    first_weekday = datetime(year, month, 1, tzinfo=timezone.utc).weekday()  # Mon=0
+    return 1 + (6 - first_weekday) % 7
+
+
+def _in_us_eastern_dst(moment: datetime) -> bool:
+    """Whether a moment falls in US Eastern daylight time, by the rule since 2007.
+
+    DST runs from 2am local on the second Sunday in March to 2am local on the
+    first Sunday in November. The boundaries are compared in UTC (07:00 UTC at
+    the spring start, when Eastern is still -5; 06:00 UTC at the autumn end,
+    when it is still -4), which avoids having to reason about the local clock
+    while it is the thing being determined.
+    """
+    utc = moment.astimezone(timezone.utc)
+    year = utc.year
+    start = datetime(year, 3, _first_sunday(year, 3) + 7, 7, tzinfo=timezone.utc)
+    end = datetime(year, 11, _first_sunday(year, 11), 6, tzinfo=timezone.utc)
+    return start <= utc < end
+
+
 def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     """Convert a UTC datetime or ISO timestamp to US Eastern calendar date (YYYY-MM-DD).
 
@@ -246,9 +268,13 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     try:
         eastern_tz = zoneinfo.ZoneInfo("America/New_York")
     except Exception:
-        # Fallback to standard US Eastern winter UTC-5 if zoneinfo database is unavailable
-        from datetime import timezone, timedelta
-        eastern_tz = timezone(timedelta(hours=-5))
+        # No tz database. The project declares tzdata so this should not happen,
+        # but the standing UTC-5 it used to fall back to is Eastern *Standard*
+        # time, which is the wrong offset from the second Sunday in March to the
+        # first Sunday in November -- nearly the whole NFL season. A date that is
+        # quietly off by one drops games from the slate, so derive the offset
+        # from the rule instead of assuming winter.
+        eastern_tz = timezone(timedelta(hours=-4 if _in_us_eastern_dst(dt) else -5))
 
     eastern_dt = dt.astimezone(eastern_tz)
     return eastern_dt.strftime("%Y-%m-%d")

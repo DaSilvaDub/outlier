@@ -338,3 +338,36 @@ def test_a_loose_prompt_is_still_moved_when_the_copy_lands(tmp_path):
 
     assert not loose.exists()
     assert (generic / "1_Master_Cards.txt").read_text(encoding="utf-8") == "CARDS"
+
+
+def test_a_copy_that_dies_partway_does_not_truncate_the_previous_export(
+    tmp_path, monkeypatch, capsys
+):
+    """shutil's copies truncate the destination before writing.
+
+    Copying straight onto the destination means a lock or a disconnect partway
+    through leaves a truncated export sitting in the ``today`` folder. That is
+    worse than the missing file ``safe_copy`` already reports, because nothing
+    flags it: the file is there, it is just short. Staging the bytes into a
+    sibling and moving them into place keeps the previous export whole until
+    the new one is complete.
+    """
+    src = tmp_path / "briefing.md"
+    src.write_text("NEW COMPLETE PAYLOAD" * 50, encoding="utf-8")
+    dst = tmp_path / "out" / "briefing.md"
+    dst.parent.mkdir()
+    dst.write_text("PREVIOUS COMPLETE EXPORT", encoding="utf-8")
+
+    def _dies_partway(_src, destination, **_kwargs):
+        Path(destination).write_text("TRUNC", encoding="utf-8")
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(org.shutil, "copy2", _dies_partway)
+    monkeypatch.setattr(org.shutil, "copyfile", _dies_partway)
+    monkeypatch.setattr(org.time, "sleep", lambda _seconds: None)
+
+    assert org.safe_copy(src, dst, retries=2, delay=0) is False
+    assert dst.read_text(encoding="utf-8") == "PREVIOUS COMPLETE EXPORT"
+    # The staging file must not be left sitting in the export folder either.
+    assert [p.name for p in dst.parent.iterdir()] == ["briefing.md"]
+    assert "WARNING" in capsys.readouterr().err

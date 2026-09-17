@@ -8,6 +8,12 @@ dependencies = [
     "anthropic>=0.112.0,<1",
     "google-genai>=2.10.0,<3",
     "python-dateutil>=2.9,<3",
+    # zoneinfo reads the operating system's tz database and falls back to this
+    # package when there is none. Windows ships no such database, so without
+    # this a clean install cannot even import outlier_scrapers.results, which
+    # builds ZoneInfo("America/New_York") at module scope. Where the OS does
+    # carry a database this is inert -- zoneinfo prefers the system copy.
+    "tzdata>=2024.1",
     "structlog>=24.1.0",
     "SQLAlchemy>=2.0.0",
     "psycopg2-binary>=2.9.0",
