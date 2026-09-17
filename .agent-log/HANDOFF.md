@@ -1,9 +1,10 @@
-1. **Last Commit SHA**: `2bc5f9a2b58cfe8a1b83d48dfc6940bfcedeb19c`
-2. **Files Touched**: None (GitHub PR operational closure)
+1. **Last Commit SHA**: `3b0288b6dfccaefc840b6e300b9d505fb9e606da` (merge of PR #163)
+2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `tests/test_desk_snapshot.py`
 3. **Next Steps**:
-   - Closed PR #164 (`fix: two paths that delete the only remaining copy of a file`) and PR #163 (`fix(lock): settle claim-marker recovery with an exclusive create, not unlink`) per user request.
-   - Verified 0 open pull requests remain across `DaSilvaDub/outlier` and all other `DaSilvaDub` repositories (`nba-props-pipeline`, `NBA-SCRIPTS`, `Sports_Analytics`).
-   - Repository state clean and in sync with `origin/master`. Paid reasoning models were not invoked.
+   - PR #163 reopened and merged at the user's explicit request, superseding the 2026-09-16 closure sweep recorded below. The daily-lock double-acquire it fixes was still live on master at that point (verified: `desk_snapshot.py` untouched since the PR branched).
+   - On master now: claim-marker recovery is a chain of exclusive creates, a marker is never deleted to recover it, and an empty marker is only stranded past `DAILY_LOCK_OWNERLESS_GRACE` instead of 0.1s. Three regression tests landed with it. All CI green on the merged head (core, provider, typecheck, Codacy 0 issues).
+   - **Still open**: PR #164 (`fix: two paths that delete the only remaining copy of a file`, branch `claude/inspiring-fermat-l965uf`, head 37d72a0) was closed unmerged in the same sweep. It covers the `outlier_nfl/utils.py` `_replace_with_retry` data-loss path from the 2026-09-15 debug review plus a second instance of the same defect class, and that finding is still live on master. Reopen it if wanted.
+   - Repository clean and in sync with `origin/master`. Paid reasoning models were not invoked.
 
 
 ## Codex merge batch - 2026-09-14
@@ -56,4 +57,4 @@
   - `outlier_nfl/utils.py:54` `_replace_with_retry` last-ditch branch runs `dst.unlink()` then retries the replace; when that retry also fails the previous good `nfl_*_latest.json` is deleted and nothing replaces it. Confirmed by direct execution. Suggested fix: rename `dst` aside, replace, delete the backup on success and restore it on failure. Untestable from Linux, so left alone.
   - `outlier_nfl/utils.py:183` `to_eastern_date` falls back to a fixed UTC-5 when `zoneinfo` has no tz database, which is wrong during EDT (most of the NFL season). Current kickoff times still bucket to the right date, so it is latent rather than active.
 - **Review round**: Copilot found a real defect in the first fix -- the recovery marker could itself strand (a run that won it and died before rewriting owner.json deadlocked the lock permanently, the same failure one level down). Reproduced, fixed in 9c29198: the markers now form a chain, every link recoverable on the same terms, each step still one exclusive create, name kept fixed-length via a hashed trail, walk bounded by MAX_CLAIM_RECOVERY_DEPTH. Thread resolved. Copilot's second (self-suppressed) point -- a claimer stalled past the 30s grace can still be taken over -- was left deliberately and answered on the thread: it is the same structural trade `_daily_lock_is_abandoned` already makes one level up, and closing it needs an atomic compare-and-swap on owner.json that the file-per-marker scheme cannot express. That is a good separate change if anyone wants it.
-- **Next Steps**: land #163 (green; nothing left for an agent to do on it). Paid reasoning / AI Research Desk was not invoked at any point.
+- **Next Steps**: #163 was closed unmerged on 2026-09-16 in a PR-queue sweep, then reopened and merged on 2026-09-17 at the user's explicit request (master `3b0288b`). Nothing left on it. The two `outlier_nfl/utils.py` findings from this review remain unaddressed on master; PR #164 covers the first. Paid reasoning / AI Research Desk was not invoked at any point.
