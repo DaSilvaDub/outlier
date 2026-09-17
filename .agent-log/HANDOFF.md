@@ -1,9 +1,10 @@
-1. **Last Commit SHA**: `3b0288b6dfccaefc840b6e300b9d505fb9e606da` (merge of PR #163)
-2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `tests/test_desk_snapshot.py`
+1. **Last Commit SHA**: `7a9ac7deff2af2a2dfc33549efc5b217d59cd568` (merge of PR #164)
+2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `outlier_nfl/utils.py`, `scripts/organize_today_run2.py`, `pyproject.toml`, and their tests
 3. **Next Steps**:
-   - PR #163 reopened and merged at the user's explicit request, superseding the 2026-09-16 closure sweep recorded below. The daily-lock double-acquire it fixes was still live on master at that point (verified: `desk_snapshot.py` untouched since the PR branched).
-   - On master now: claim-marker recovery is a chain of exclusive creates, a marker is never deleted to recover it, and an empty marker is only stranded past `DAILY_LOCK_OWNERLESS_GRACE` instead of 0.1s. Three regression tests landed with it. All CI green on the merged head (core, provider, typecheck, Codacy 0 issues).
-   - **Still open**: PR #164 (`fix: two paths that delete the only remaining copy of a file`, branch `claude/inspiring-fermat-l965uf`, head 37d72a0) was closed unmerged in the same sweep. It covers the `outlier_nfl/utils.py` `_replace_with_retry` data-loss path from the 2026-09-15 debug review plus a second instance of the same defect class, and that finding is still live on master. Reopen it if wanted.
+   - PRs #163 and #164 were both closed unmerged in the 2026-09-16 sweep, then reopened and merged on 2026-09-17 at the user's explicit request (`3b0288b`, `7a9ac7d`). Every finding from the 2026-09-15 and 2026-09-16 debug reviews is now on master; verified against master rather than inferred from the merges.
+   - Landed: daily-lock claim recovery is a chain of exclusive creates and never deletes a marker; the NFL atomic write moves the destination aside instead of unlinking it and restores it on failure, without clobbering a newer concurrent write; filing a loose prompt only removes the source once the copy lands; export copies stage and move into place so a failure partway cannot truncate the previous export; `tzdata` is declared and `to_eastern_date`'s fallback derives the DST offset from the rule (checked hourly against the real zone across 2021-2030, zero disagreements).
+   - **Outstanding, needs a machine with PyPI access**: `requirements.lock` still omits `tzdata`, `structlog`, `SQLAlchemy` and `psycopg2-binary`. CI resolves them through the `pip install -e .` that follows the frozen install, so those four float on every run. Regenerate with `uv export --frozen --no-hashes --all-extras -o requirements.lock`. Hand-editing it was deliberately avoided.
+   - **Outstanding, own change**: the daily lock can still be taken over from a claimer stalled past the 30s `DAILY_LOCK_OWNERLESS_GRACE` between its `os.open` and `os.write`. Same structural trade `_daily_lock_is_abandoned` already makes one level up; closing it needs an atomic compare-and-swap on `owner.json` that the file-per-marker scheme cannot express.
    - Repository clean and in sync with `origin/master`. Paid reasoning models were not invoked.
 
 
