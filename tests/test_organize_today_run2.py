@@ -292,3 +292,82 @@ def test_safe_copy_reports_a_copy_it_had_to_give_up_on(tmp_path, monkeypatch, ca
     err = capsys.readouterr().err
     assert "briefing.md" in err
     assert "WARNING" in err
+
+
+def test_a_loose_prompt_survives_a_copy_that_gave_up(tmp_path, monkeypatch, capsys):
+    """Filing a loose prompt into its bucket is a move, so a failed copy keeps the source.
+
+    ``safe_copy`` is non-fatal on purpose -- one cloud-sync lock must not abort
+    the export -- so it can return having copied nothing. Removing the loose
+    file regardless leaves the prompt in neither place: not in the bucket the
+    copy never reached, and no longer in ``today`` where it was written.
+    """
+    out_dir = tmp_path / "today"
+    out_dir.mkdir()
+    loose = out_dir / "1_Master_Cards.txt"
+    loose.write_text("CARDS", encoding="utf-8")
+    generic = tmp_path / "generic"
+    hitrate = tmp_path / "hitrate"
+    totals = tmp_path / "totals"
+
+    def _always_locked(*_args, **_kwargs):
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(org.shutil, "copy2", _always_locked)
+    monkeypatch.setattr(org.shutil, "copyfile", _always_locked)
+    monkeypatch.setattr(org.time, "sleep", lambda _seconds: None)
+
+    org.copy_prompt_outputs(out_dir, generic, hitrate, totals)
+
+    assert loose.exists(), "the only remaining copy of the prompt was deleted"
+    assert loose.read_text(encoding="utf-8") == "CARDS"
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_a_loose_prompt_is_still_moved_when_the_copy_lands(tmp_path):
+    """The failure path must not come at the cost of the move itself."""
+    out_dir = tmp_path / "today"
+    out_dir.mkdir()
+    loose = out_dir / "1_Master_Cards.txt"
+    loose.write_text("CARDS", encoding="utf-8")
+    generic = tmp_path / "generic"
+    hitrate = tmp_path / "hitrate"
+    totals = tmp_path / "totals"
+
+    org.copy_prompt_outputs(out_dir, generic, hitrate, totals)
+
+    assert not loose.exists()
+    assert (generic / "1_Master_Cards.txt").read_text(encoding="utf-8") == "CARDS"
+
+
+def test_a_copy_that_dies_partway_does_not_truncate_the_previous_export(
+    tmp_path, monkeypatch, capsys
+):
+    """shutil's copies truncate the destination before writing.
+
+    Copying straight onto the destination means a lock or a disconnect partway
+    through leaves a truncated export sitting in the ``today`` folder. That is
+    worse than the missing file ``safe_copy`` already reports, because nothing
+    flags it: the file is there, it is just short. Staging the bytes into a
+    sibling and moving them into place keeps the previous export whole until
+    the new one is complete.
+    """
+    src = tmp_path / "briefing.md"
+    src.write_text("NEW COMPLETE PAYLOAD" * 50, encoding="utf-8")
+    dst = tmp_path / "out" / "briefing.md"
+    dst.parent.mkdir()
+    dst.write_text("PREVIOUS COMPLETE EXPORT", encoding="utf-8")
+
+    def _dies_partway(_src, destination, **_kwargs):
+        Path(destination).write_text("TRUNC", encoding="utf-8")
+        raise OSError(32, "The process cannot access the file because it is being used")
+
+    monkeypatch.setattr(org.shutil, "copy2", _dies_partway)
+    monkeypatch.setattr(org.shutil, "copyfile", _dies_partway)
+    monkeypatch.setattr(org.time, "sleep", lambda _seconds: None)
+
+    assert org.safe_copy(src, dst, retries=2, delay=0) is False
+    assert dst.read_text(encoding="utf-8") == "PREVIOUS COMPLETE EXPORT"
+    # The staging file must not be left sitting in the export folder either.
+    assert [p.name for p in dst.parent.iterdir()] == ["briefing.md"]
+    assert "WARNING" in capsys.readouterr().err
