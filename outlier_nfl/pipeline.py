@@ -72,6 +72,7 @@ class NflPipeline:
         date: str | None = None,
         offline_fixtures_dir: Path | str | None = None,
         generate_game_script: bool = False,
+        reports_dir: Path | str | None = None,
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -79,6 +80,8 @@ class NflPipeline:
             date: Target slate date (YYYY-MM-DD). If omitted, defaults to current Eastern date.
             offline_fixtures_dir: Optional path to JSON fixtures for offline execution.
             generate_game_script: If True, automatically synthesize game script report.
+            reports_dir: Directory the game script markdown is written to. Defaults to
+                ./reports/NFL relative to the working directory.
 
         Returns:
             NflExtractionSummary dictionary.
@@ -295,10 +298,10 @@ class NflPipeline:
                 profiles = generator.build_player_profiles(props_dict)
                 report_md = generator.generate_report(env, profiles)
 
-                reports_dir = Path("reports/NFL")
-                reports_dir.mkdir(parents=True, exist_ok=True)
+                report_root = Path(reports_dir) if reports_dir is not None else Path("reports/NFL")
+                report_root.mkdir(parents=True, exist_ok=True)
                 matchup_slug = (all_game_lines[0].matchup or "game").replace(" @ ", "_").replace(" ", "_")
-                report_file = reports_dir / f"{target_date}_{matchup_slug}_Game_Script.md"
+                report_file = report_root / f"{target_date}_{matchup_slug}_Game_Script.md"
                 with open(report_file, "w", encoding="utf-8") as f:
                     f.write(report_md)
                 summary["game_script_file"] = str(report_file)
