@@ -1,3 +1,21 @@
+## NFL Game Script & Calibration Upgrades (Gemini) - 2026-09-18
+1. **Last Commit SHA**: `446e718b577312db1e2634e40e6c518eb3074092` on branch `feat/nfl-game-script`
+2. **Files Touched**:
+   - `outlier_nfl/consensus.py` (NEW): Balanced two-way consensus line selector (-220 to +180) eliminating ladder distortions; touchdown line == 0.5 enforcement.
+   - `outlier_nfl/calibration.py` (NEW): Road underdog RB deficit risk haircut (-15%), two-high shell target divergence (+20% slot, +15% TE, -25% deep threat), empirical hit-rate tiering (`TIER_1_ANCHOR` / `TIER_2_STRONG`).
+   - `outlier_nfl/models.py`: Added `is_consensus_line`, `confidence_tier`, `calibration_tags`, `calibrated_volume_adjustment`.
+   - `outlier_nfl/normalizer.py`: Re-exports for consensus and calibration.
+   - `outlier_nfl/pipeline.py`: Integrated consensus and calibration into `run()`; persists `nfl_calibrated_props_*.json` and `nfl_high_prob_props_*.json`; added `--generate-game-script` flag and CLI summary counts.
+   - `scripts/nfl_game_script.py`: Full game script generator tool supporting dataclasses and dicts with on-the-fly calibration fallback and calibrated signals.
+   - `tests/test_nfl_calibration.py` (NEW): 9 unit/integration tests for consensus, push prob, deficit risk, haircuts, shells, tiering, and report generation.
+   - `.agents/skills/nfl-game-script/SKILL.md` (NEW) & `.agents/AGENTS.md`: Persistent rules and runbooks.
+   - `reports/NFL/2026-09-17_DET_BUF_Game_Script.md` & `reports/NFL/2026-09-17_DET_BUF_Postgame_Calibration.md`: Generated artifacts.
+3. **Next Steps**:
+   - Branch `feat/nfl-game-script` contains all implemented and verified work.
+   - All 22 NFL tests passing (`pytest tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py tests/test_nfl_calibration.py -v`).
+   - Ruff lint passing with zero errors. Paid reasoning was not invoked.
+
+## Previous Handoff (Claude) - 2026-09-17
 1. **Last Commit SHA**: `7a9ac7deff2af2a2dfc33549efc5b217d59cd568` (merge of PR #164)
 2. **Files Touched**: `outlier_scrapers/desk_snapshot.py`, `outlier_nfl/utils.py`, `scripts/organize_today_run2.py`, `pyproject.toml`, and their tests
 3. **Next Steps**:
