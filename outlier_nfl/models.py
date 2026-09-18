@@ -82,14 +82,21 @@ class NflPlayerProp:
     scope: str = "full_game"
     market_id: str | None = None
     outcome_id: str | None = None
+    is_consensus_line: bool = False
+    confidence_tier: str | None = None
+    calibration_tags: tuple[str, ...] | list[str] = ()
+    calibrated_volume_adjustment: float | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.books, list):
             object.__setattr__(self, "books", tuple(self.books))
+        if isinstance(self.calibration_tags, list):
+            object.__setattr__(self, "calibration_tags", tuple(self.calibration_tags))
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["books"] = [b.to_dict() if isinstance(b, BookPrice) else b for b in self.books]
+        result["calibration_tags"] = list(self.calibration_tags)
         return result
 
 
