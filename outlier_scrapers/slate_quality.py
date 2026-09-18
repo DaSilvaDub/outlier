@@ -56,7 +56,32 @@ INDEPENDENT_SO_UNIT_CAP = 2.0
 MARKET_DEVIG_SOURCES = frozenset({"local_devig", "outlier_devig"})
 INDEPENDENT_SO_SOURCE = "independent_gamelog_so"
 GAMELOG_FEATURE_HASH = "so-starter-gamelog-v2"
-PREDICTIVE_SIGNAL_FLAGS = frozenset({"insight_support", "movement_support", "orf_support"})
+PREDICTIVE_SIGNAL_FLAGS = frozenset({
+    "insight_support",
+    "movement_support",
+    "orf_support",
+    "september_pitcher_so_under",
+    "guard_rebound_over_support",
+})
+_3PT_MARKET_TOKENS = frozenset({
+    "3PT",
+    "3PTS",
+    "THREE_POINTERS_MADE",
+    "THREE_POINT_FIELD_GOALS_MADE",
+    "THREE_POINTERS",
+    "3_POINT_FIELD_GOALS",
+})
+HIGH_K_OPPONENTS_MLB = frozenset({
+    "LAA",
+    "COL",
+    "CWS",
+    "CHW",
+    "ATH",
+    "OAK",
+    "MIA",
+    "SEA",
+    "PIT",
+})
 PHANTOM_EDGE_THRESHOLD = 0.10
 # Live Kelly from gamelog independents stays off until so_eval prefers independent.
 # Force: OUTLIER_PROMOTE_INDEPENDENT_SO=1
@@ -392,6 +417,254 @@ def usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
     return injuries.own_star_out
 
 
+def star_scorer_usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
+    """True when an UNDER on points sits on a star scorer (line >= 20.0) with own star out."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "UNDER":
+        return False
+    market = str(row.get("market") or row.get("market_type") or "").upper()
+    prop = str(row.get("proposition") or "").upper()
+    label = str(row.get("market_label") or "").upper()
+    selection = str(row.get("selection") or "").upper()
+    is_points = (
+        market in {"PTS", "POINTS"}
+        or prop in {"PTS", "POINTS"}
+        or "POINTS" in market
+        or "POINTS" in label
+        or "POINTS" in selection
+        or " PTS" in selection
+        or "- PTS" in selection
+    )
+    if not is_points:
+        return False
+    line = _to_float(row.get("line"))
+    if line is None or line < 20.0:
+        return False
+    return injuries.own_star_out
+
+
+def is_3pt_market(
+    market: str | None = None,
+    proposition: str | None = None,
+    market_label: str | None = None,
+    selection: str | None = None,
+) -> bool:
+    """True when market, proposition, label, or selection corresponds to a 3-point field goal prop."""
+    tokens = [
+        str(market or "").upper(),
+        str(proposition or "").upper(),
+        str(market_label or "").upper(),
+        str(selection or "").upper(),
+    ]
+    for t in tokens:
+        if not t:
+            continue
+        if any(tok in t for tok in _3PT_MARKET_TOKENS):
+            return True
+        if "THREE_POINT" in t or "THREE-POINT" in t or "THREE POINT" in t or "THREEPOINTER" in t:
+            return True
+        if "3-POINT" in t or "3-PT" in t or "3PT" in t or "3PTS" in t:
+            return True
+    return False
+
+
+def low_volume_3pt_shooter(
+    row: dict[str, Any],
+    dq_flags: Sequence[str] | None = None,
+    *,
+    l5_pct: float | None = None,
+    l10_pct: float | None = None,
+) -> bool:
+    """True when an OVER 3PT prop targets a player with zero or near-zero recent 3s."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+    market = str(row.get("market") or row.get("market_type") or "")
+    prop = str(row.get("proposition") or "")
+    label = str(row.get("market_label") or "")
+    selection = str(row.get("selection") or "")
+    if not is_3pt_market(market=market, proposition=prop, market_label=label, selection=selection):
+        return False
+
+    hit_rates = row.get("hit_rates") if isinstance(row.get("hit_rates"), dict) else {}
+    l5_val = (
+        l5_pct
+        if l5_pct is not None
+        else (
+            row.get("l5_pct")
+            if row.get("l5_pct") is not None
+            else (
+                hit_rates.get("l5_pct")
+                if hit_rates.get("l5_pct") is not None
+                else row.get("hit_l5")
+            )
+        )
+    )
+    l10_val = (
+        l10_pct
+        if l10_pct is not None
+        else (
+            row.get("l10_pct")
+            if row.get("l10_pct") is not None
+            else (
+                hit_rates.get("l10_pct")
+                if hit_rates.get("l10_pct") is not None
+                else row.get("hit_l10")
+            )
+        )
+    )
+    l5 = _to_float(l5_val)
+    l10 = _to_float(l10_val)
+    flags = set(dq_flags or [])
+    if l5 is not None and l5 == 0.0:
+        return True
+    if l5 is not None and l5 <= 20.0:
+        if "thin_liquidity" in flags or (l10 is not None and l10 <= 30.0):
+            return True
+    return False
+
+
+def team_total_scoring_conflict(
+    row: dict[str, Any], team_total: float | None = None
+) -> bool:
+    """Flag player points OVER when line requires an unrealistic share of a low team total."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+    market = str(row.get("market") or row.get("market_type") or "").upper()
+    prop = str(row.get("proposition") or "").upper()
+    label = str(row.get("market_label") or "").upper()
+    selection = str(row.get("selection") or "").upper()
+    is_points = (
+        market in {"PTS", "POINTS"}
+        or prop in {"PTS", "POINTS"}
+        or "POINTS" in market
+        or "POINTS" in label
+        or "POINTS" in selection
+        or " PTS" in selection
+        or "- PTS" in selection
+    )
+    if not is_points:
+        return False
+
+    line = _to_float(row.get("line"))
+    if line is None:
+        return False
+
+    tt = team_total if team_total is not None else _to_float(row.get("team_total"))
+    if tt is None or tt <= 0:
+        return False
+
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    if sport in {"WNBA", "NBA", "BASKETBALL"}:
+        if tt <= 68.0 and (line / tt) >= 0.20:
+            return True
+        if tt <= 72.0 and (line / tt) >= 0.25:
+            return True
+    elif sport == "MLB":
+        if tt <= 3.5 and (line / tt) >= 0.35:
+            return True
+    return False
+
+
+def opponent_high_k_rate_conflict(row: dict[str, Any]) -> bool:
+    """True when Pitcher SO Under faces a top-tier strikeout-prone opponent with insufficient buffer."""
+    if not _is_mlb_so_row(row):
+        return False
+    if _selection_side(row) != "UNDER":
+        return False
+    opp = str(row.get("opponent") or "").strip().upper()
+    if opp not in HIGH_K_OPPONENTS_MLB:
+        return False
+
+    line = _to_float(row.get("line"))
+    proj_mean = _to_float(row.get("projection_mean"))
+    if line is None:
+        return False
+    if proj_mean is None:
+        return True
+    return (line - proj_mean) < 1.5
+
+
+def september_pitcher_so_under_signal(row: dict[str, Any]) -> bool:
+    """True for late-season MLB Pitcher SO Unders benefiting from shortened hooks/caps."""
+    if not _is_mlb_so_row(row):
+        return False
+    if _selection_side(row) != "UNDER":
+        return False
+    slate_d = _row_slate_date(row)
+    if slate_d and slate_d.month in (9, 10):
+        return True
+    return False
+
+
+def guard_rebound_over_signal(
+    row: dict[str, Any],
+    *,
+    l5_pct: float | None = None,
+    l10_pct: float | None = None,
+) -> bool:
+    """True for low/moderate line rebound overs on high-involvement perimeter players."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+    market = str(row.get("market") or row.get("market_type") or "").upper()
+    prop = str(row.get("proposition") or "").upper()
+    label = str(row.get("market_label") or "").upper()
+    selection = str(row.get("selection") or "").upper()
+    is_reb = (
+        market in {"REB", "REBOUNDS"}
+        or prop in {"REB", "REBOUNDS"}
+        or "REBOUND" in market
+        or "REBOUND" in label
+        or "REBOUND" in selection
+        or " REB" in selection
+        or "- REB" in selection
+    )
+    if not is_reb:
+        return False
+    line = _to_float(row.get("line"))
+    if line is None or line > 5.5:
+        return False
+
+    hit_rates = row.get("hit_rates") if isinstance(row.get("hit_rates"), dict) else {}
+    l5_val = (
+        l5_pct
+        if l5_pct is not None
+        else (
+            row.get("l5_pct")
+            if row.get("l5_pct") is not None
+            else (
+                hit_rates.get("l5_pct")
+                if hit_rates.get("l5_pct") is not None
+                else row.get("hit_l5")
+            )
+        )
+    )
+    l10_val = (
+        l10_pct
+        if l10_pct is not None
+        else (
+            row.get("l10_pct")
+            if row.get("l10_pct") is not None
+            else (
+                hit_rates.get("l10_pct")
+                if hit_rates.get("l10_pct") is not None
+                else row.get("hit_l10")
+            )
+        )
+    )
+    l5 = _to_float(l5_val)
+    l10 = _to_float(l10_val)
+    if (l5 is not None and l5 >= 60.0) or (l10 is not None and l10 >= 60.0):
+        return True
+    return False
+
+
 def _is_signed_margin_market(row: dict[str, Any]) -> bool:
     market = str(row.get("market_type") or "").upper()
     proposition = str(row.get("proposition") or "").upper()
@@ -584,9 +857,15 @@ def playable_prop_sort_key(row: dict[str, Any]) -> tuple[float, float, str]:
     """Greatest edge first; rank_value is the tie-break, not the primary key."""
     edge = _to_float(row.get("edge_pct"))
     rank = _to_float(row.get("_rank_value")) or 0.0
+    sig_flags = _signal_flag_set(row)
+    boost = 0.0
+    if "september_pitcher_so_under" in sig_flags:
+        boost += 1.0
+    if "guard_rebound_over_support" in sig_flags:
+        boost += 0.5
     return (
         -(edge if edge is not None else float("-inf")),
-        -rank,
+        -(rank + boost),
         str(row.get("market_id") or ""),
     )
 

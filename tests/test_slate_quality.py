@@ -3,10 +3,16 @@ from outlier_scrapers.slate_quality import (
     apply_local_devig_unit_cap,
     classify_injuries,
     dossier_injury_section,
+    guard_rebound_over_signal,
+    low_volume_3pt_shooter,
+    opponent_high_k_rate_conflict,
     pitcher_identity_flags,
     playable_prop_sort_key,
-    summarize_pitcher_identity,
+    september_pitcher_so_under_signal,
     signed_line_moved_with_side,
+    star_scorer_usage_up_under,
+    summarize_pitcher_identity,
+    team_total_scoring_conflict,
     usage_up_under,
 )
 
@@ -271,3 +277,126 @@ def test_summarize_pitcher_identity_ok_when_clean():
     )
     assert summary["status"] == "ok"
     assert summary["fail_closed_count"] == 0
+
+
+def test_star_scorer_usage_up_under_flags_superstar_points_under():
+    injuries = classify_injuries("LVA: Jackie Young (Out; Ankle)", "LVA")
+    aja_points_under = {
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "proposition": "POINTS",
+        "selection": "A'ja Wilson Under 27.5 Points",
+        "line": 27.5,
+        "team": "LVA",
+    }
+    assert star_scorer_usage_up_under(aja_points_under, injuries) is True
+
+    # Low-line scorer should not trigger star scorer gate
+    role_player = {
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "proposition": "POINTS",
+        "selection": "Sydney Colson Under 4.5 Points",
+        "line": 4.5,
+        "team": "LVA",
+    }
+    assert star_scorer_usage_up_under(role_player, injuries) is False
+
+
+def test_low_volume_3pt_shooter_flags_zero_recent_makes():
+    zero_l5_row = {
+        "market_type": "PLAYER_PROP",
+        "market": "3PTS",
+        "proposition": "3PTS",
+        "selection": "Dominique Malonga Over 0.5 Three Pointers",
+        "l5_pct": 0.0,
+    }
+    assert low_volume_3pt_shooter(zero_l5_row) is True
+
+    cold_with_thin_liq = {
+        "market_type": "PLAYER_PROP",
+        "market": "3PTS",
+        "proposition": "3PTS",
+        "selection": "Dominique Malonga Over 0.5 Three Pointers",
+        "l5_pct": 20.0,
+    }
+    assert low_volume_3pt_shooter(cold_with_thin_liq, dq_flags=["thin_liquidity"]) is True
+
+    shooter_row = {
+        "market_type": "PLAYER_PROP",
+        "market": "3PTS",
+        "proposition": "3PTS",
+        "selection": "Kelsey Plum Over 2.5 Three Pointers",
+        "l5_pct": 80.0,
+    }
+    assert low_volume_3pt_shooter(shooter_row) is False
+
+
+def test_team_total_scoring_conflict_flags_excessive_share():
+    conflict_row = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "proposition": "POINTS",
+        "selection": "Aaliyah Edwards Over 14.5 Points",
+        "line": 14.5,
+        "team_total": 67.5,
+    }
+    assert team_total_scoring_conflict(conflict_row) is True
+
+    normal_row = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "proposition": "POINTS",
+        "selection": "Aaliyah Edwards Over 11.5 Points",
+        "line": 11.5,
+        "team_total": 82.0,
+    }
+    assert team_total_scoring_conflict(normal_row) is False
+
+
+def test_opponent_high_k_rate_conflict_flags_low_buffer_whiff_under():
+    conflict_row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "market": "SO",
+        "selection": "Taj Bradley Under 5.5 Strikeouts",
+        "line": 5.5,
+        "opponent": "LAA",
+        "projection_mean": 4.8,
+    }
+    assert opponent_high_k_rate_conflict(conflict_row) is True
+
+    safe_buffer_row = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "market": "SO",
+        "selection": "Taj Bradley Under 6.5 Strikeouts",
+        "line": 6.5,
+        "opponent": "LAA",
+        "projection_mean": 4.5,
+    }
+    assert opponent_high_k_rate_conflict(safe_buffer_row) is False
+
+
+def test_september_pitcher_so_under_and_guard_rebound_signals():
+    so_under = {
+        "sport": "MLB",
+        "market_type": "SO",
+        "selection": "Tarik Skubal Under 6.5 Strikeouts",
+        "line": 6.5,
+        "as_of": "2026-09-17T18:00:00Z",
+    }
+    assert september_pitcher_so_under_signal(so_under) is True
+
+    guard_reb = {
+        "market_type": "PLAYER_PROP",
+        "market": "REB",
+        "proposition": "REBOUNDS",
+        "selection": "Julie Vanloo Over 2.5 Rebounds",
+        "line": 2.5,
+        "l5_pct": 80.0,
+    }
+    assert guard_rebound_over_signal(guard_reb) is True
+

@@ -168,6 +168,12 @@ DISQUALIFYING_DQ_FLAGS = {
     "UNINDEXED_SLATE_GAME",
     "pitcher_identity_mismatch",
     "pitcher_identity_unconfirmed",
+    "off_slate",
+    "low_volume_3pt_shooter",
+    "usage_up_under",
+    "star_scorer_usage_up_under",
+    "team_total_scoring_conflict",
+    "opponent_high_k_lineup",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
@@ -849,6 +855,42 @@ def _apply_quality_and_signal_flags(
     )
     if slate_quality.usage_up_under(row, injury_view):
         dq_flags.append("usage_up_under")
+    if slate_quality.star_scorer_usage_up_under(row, injury_view):
+        dq_flags.append("star_scorer_usage_up_under")
+
+    hit_rates = side_view.get("hit_rates") if isinstance(side_view.get("hit_rates"), dict) else {}
+    l5_rate = (
+        hit_rates.get("l5_pct")
+        if hit_rates.get("l5_pct") is not None
+        else (
+            card.get("l5_pct")
+            if card.get("l5_pct") is not None
+            else (
+                row.get("l5_pct")
+                if row.get("l5_pct") is not None
+                else row.get("hit_l5")
+            )
+        )
+    )
+    l10_rate = (
+        hit_rates.get("l10_pct")
+        if hit_rates.get("l10_pct") is not None
+        else (
+            card.get("l10_pct")
+            if card.get("l10_pct") is not None
+            else (
+                row.get("l10_pct")
+                if row.get("l10_pct") is not None
+                else row.get("hit_l10")
+            )
+        )
+    )
+    if slate_quality.low_volume_3pt_shooter(row, dq_flags, l5_pct=l5_rate, l10_pct=l10_rate):
+        dq_flags.append("low_volume_3pt_shooter")
+    if slate_quality.team_total_scoring_conflict(row):
+        dq_flags.append("team_total_scoring_conflict")
+    if slate_quality.opponent_high_k_rate_conflict(row):
+        dq_flags.append("opponent_high_k_lineup")
     returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
     )
@@ -945,6 +987,10 @@ def _apply_quality_and_signal_flags(
             row["research_leverage"] = "HIGH"
     if signal.get("insight_conflict"):
         signal_flags.append("insight_conflict")
+    if slate_quality.september_pitcher_so_under_signal(row):
+        signal_flags.append("september_pitcher_so_under")
+    if slate_quality.guard_rebound_over_signal(row, l5_pct=l5_rate, l10_pct=l10_rate):
+        signal_flags.append("guard_rebound_over_support")
     # Public-money flags live only on signal_flags — never card.flags /
     # data_quality_flags (those feed actionable=false via not dq_flags).
     from outlier_scrapers.cards import public_money_signal_flags
