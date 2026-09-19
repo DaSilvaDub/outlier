@@ -9,6 +9,7 @@ from outlier_nfl.config import (
     detect_scope,
 )
 from outlier_nfl.utils import format_signed_line
+from outlier_nfl.schema import validate_event_markets_payload
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 
 try:
@@ -332,3 +333,56 @@ def test_junk_hit_rate_stat_loses_one_stat_not_the_props_slate(
         if p.player_name == "Patrick Mahomes" and p.market == "PASS_YDS" and p.position == "OVER"
     )
     assert mahomes_py.line == 268.5, "the rest of the prop must still normalize"
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+def test_normalize_game_markets_keeps_markets_identified_by_id(
+    schedule_payload, event_markets_payload
+):
+    """A market carrying 'id' instead of 'marketId' must not look like a foreign event.
+
+    An event's own markets response need not repeat the event id on every
+    market, and validate_event_markets_payload accepts 'id' as the marketId
+    fallback -- so this payload is valid. The event-id guard used to fall back
+    to the same key, compare the market's own id against the event id, and drop
+    every market: the whole game line board lost, with nothing to flag it.
+    """
+    team_index = build_team_index(schedule_payload)
+    event = schedule_payload["events"][0]  # KC @ BAL
+
+    def _rename(market):
+        copied = dict(market)
+        copied["id"] = copied.pop("marketId")
+        copied.pop("eventId", None)
+        return copied
+
+    renamed = {"markets": [_rename(m) for m in event_markets_payload["markets"]]}
+    assert all("marketId" not in market for market in renamed["markets"])
+    assert validate_event_markets_payload(renamed) == []
+
+    baseline = normalize_game_markets(event, event_markets_payload, team_index)
+    lines = normalize_game_markets(event, renamed, team_index)
+
+    assert len(lines) == len(baseline) > 0
+    assert {line_item.market for line_item in lines} == {
+        line_item.market for line_item in baseline
+    }
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+def test_normalize_game_markets_still_drops_another_events_markets(
+    schedule_payload, event_markets_payload
+):
+    """The guard it replaces still has to do its job: a market that names a
+    different event is not this event's market."""
+    team_index = build_team_index(schedule_payload)
+    event = schedule_payload["events"][0]  # KC @ BAL
+
+    foreign = {
+        "markets": [
+            {**dict(market), "eventId": "nfl-event-2026-w1-some-other-game"}
+            for market in event_markets_payload["markets"]
+        ]
+    }
+
+    assert normalize_game_markets(event, foreign, team_index) == []
