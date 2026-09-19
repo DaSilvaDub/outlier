@@ -4091,3 +4091,137 @@ def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path
             write_pack([], out_dir)
     finally:
         P.PROJECT_ROOT = original_project_root
+
+
+def test_low_volume_3pt_shooter_disqualifies_actionable_board_a():
+    card = _ctx_card(
+        "SEA",
+        "LVA",
+        "SEA @ LVA",
+        headline_side="OVER",
+        player="Dominique Malonga",
+        market="3PTS",
+        market_raw="Three Pointers",
+        market_label="Dominique Malonga - Three Pointers",
+        sides={
+            "OVER": {
+                "outcome_id": "o1",
+                "line": 0.5,
+                "best_odds": -120,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 1.95,
+                    "best_ev_pct": 0.05,
+                    "kelly_pct": 0.02,
+                    "ev_source": "LOCAL",
+                },
+                "signal": {"insight_support": True, "movement_corroboration": 1.0},
+            }
+        },
+    )
+    card["l5_pct"] = 0.0
+    ev = [{"market_id": "c1", "outcome_id": "o1", "book": "FD", "book_odds": -120, "book_decimal_odds": 1.83}]
+    row = make_row(card, ev, sport="WNBA")
+    assert row is not None
+    assert "low_volume_3pt_shooter" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+
+
+def test_opponent_high_k_disqualifies_so_under():
+    card = _ctx_card(
+        "TB",
+        "LAA",
+        "TB @ LAA",
+        headline_side="UNDER",
+        player="Taj Bradley",
+        market="SO",
+        market_raw="Strikeouts",
+        market_label="Taj Bradley - Strikeouts",
+        sides={
+            "UNDER": {
+                "outcome_id": "o1",
+                "line": 5.5,
+                "best_odds": 105,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 2.05,
+                    "best_ev_pct": 0.04,
+                    "kelly_pct": 0.015,
+                    "ev_source": "LOCAL",
+                },
+                "signal": {"insight_support": True, "movement_corroboration": 1.0},
+            }
+        },
+    )
+    ev = [{"market_id": "c1", "outcome_id": "o1", "book": "FD", "book_odds": 105, "book_decimal_odds": 2.05}]
+    row = make_row(card, ev, sport="MLB", projections={"o1": {"projection_mean": 4.8}})
+    assert row is not None
+    assert "opponent_high_k_lineup" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+
+
+def test_off_slate_card_disqualifies_actionable_board_a():
+    card = _ctx_card(
+        "SEA",
+        "LVA",
+        "SEA @ LVA",
+        headline_side="OVER",
+        player="Active Player",
+        market="PTS",
+        market_raw="Points",
+        market_label="Active Player - Points",
+        flags=["off_slate"],
+        sides={
+            "OVER": {
+                "outcome_id": "o1",
+                "line": 15.5,
+                "best_odds": -110,
+                "ev": {
+                    "is_alt_line_fallback": False,
+                    "devig_decimal": 1.95,
+                    "best_ev_pct": 0.05,
+                    "kelly_pct": 0.02,
+                    "ev_source": "LOCAL",
+                },
+                "signal": {"insight_support": True, "movement_corroboration": 1.0},
+            }
+        },
+    )
+    ev = [{"market_id": "c1", "outcome_id": "o1", "book": "FD", "book_odds": -110, "book_decimal_odds": 1.91}]
+    row = make_row(card, ev, sport="WNBA")
+    assert row is not None
+    assert "off_slate" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["board"] == "A_FLAGGED"
+
+
+
+def test_production_stream_joins_team_total_before_quality_gate():
+    card = _ctx_card("SEA", "LVA", "SEA @ LVA", market="PTS", proposition="POINTS", market_label="Test Player - Points")
+    card["sides"]["OVER"]["line"] = 15.5
+    games = {"records": [{"market_type": "TEAM_PROP", "proposition": "POINTS", "event_id": "ev1", "team": "SEA", "line": 67.5, "scope": "full_game"}]}
+    rows = pack.process_stream({"board_a": [card]}, None, None, None, "WNBA", "props", {}, {}, games_context=games)
+    assert len(rows) == 1
+    assert rows[0]["team_total"] == 67.5
+    assert "team_total_scoring_conflict" in rows[0]["data_quality_flags"]
+    assert rows[0]["actionable"] == "false"
+    assert rows[0]["recommended_units_pre_news"] == ""
+
+
+def test_team_total_context_ignores_other_events_periods_and_ambiguous_ladders():
+    from outlier_scrapers.pack_context import build_team_total_context
+    base = {"market_type": "TEAM_PROP", "proposition": "POINTS", "event_id": "e1", "team": "SEA", "line": 67.5}
+    records = [base, {**base, "position": "UNDER"}, {**base, "period_label": "1st Half", "line": 30}, {**base, "event_id": "e2", "line": 80}]
+    assert build_team_total_context({"records": records}, "WNBA") == {("e1", "SEA"): 67.5, ("e2", "SEA"): 80}
+    assert ("e1", "SEA") not in build_team_total_context({"records": records + [{**base, "line": 68.5}]}, "WNBA")
+
+
+def test_pack_target_rechecks_stored_off_slate_card():
+    card = _ctx_card("SEA", "LVA", "SEA @ LVA", market="PTS", flags=["off_slate"], event_starts_at="2099-01-01T12:00:00")
+    rows = pack.process_stream({"board_a": [card]}, None, None, None, "WNBA", "props", {}, {}, expected_projection_date="2099-01-01")
+    assert "off_slate" not in rows[0]["data_quality_flags"]
+    rows = pack.process_stream({"board_a": [card]}, None, None, None, "WNBA", "props", {}, {}, expected_projection_date="2099-01-02")
+    assert "off_slate" in rows[0]["data_quality_flags"]
+    assert rows[0]["actionable"] == "false"

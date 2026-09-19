@@ -1191,3 +1191,170 @@ def test_strategy_conflict_is_scoped_to_event_id(tmp_path, monkeypatch):
     payload = build_cards_payload("WNBA")
     card = payload["board_a"][0]
     assert "strategy_conflict" not in card["flags"]
+
+
+def test_off_slate_cards_tagged_and_isolated(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+
+    root = tmp_path / "data" / "WNBA"
+    (root / "normalized").mkdir(parents=True)
+    (root / "reports").mkdir(parents=True)
+    monkeypatch.setattr(
+        cards,
+        "league_paths",
+        lambda lg: LeaguePaths(
+            league=lg,
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        ),
+    )
+
+    now_iso = "2026-09-17T19:00:00Z"
+    future_iso = "2026-09-20T19:00:00Z"
+
+    props_data = {
+        "generated_at": now_iso,
+        "records": [
+            {
+                "market_id": "m1",
+                "player": "Active Player",
+                "position": "OVER",
+                "side": "OVER",
+                "line": 15.5,
+                "books": [{"book": "FD", "odds": -110}],
+                "sport_context": {"event_starts_at": now_iso},
+            },
+            {
+                "market_id": "m2",
+                "player": "Future Player",
+                "position": "OVER",
+                "side": "OVER",
+                "line": 18.5,
+                "books": [{"book": "FD", "odds": -110}],
+                "sport_context": {"event_starts_at": future_iso},
+            },
+        ],
+    }
+    movement_data = {
+        "generated_at": now_iso,
+        "records": [],
+        "ev_records": [
+            {
+                "market_id": "m1",
+                "side": "OVER",
+                "current_line": 15.5,
+                "calculated_ev_pct": 0.05,
+                "ev_source": "NATIVE",
+                "calculated_ev_method": "AVERAGE",
+                "book": "FD",
+                "book_odds": -110,
+            },
+            {
+                "market_id": "m2",
+                "side": "OVER",
+                "current_line": 18.5,
+                "calculated_ev_pct": 0.06,
+                "ev_source": "NATIVE",
+                "calculated_ev_method": "AVERAGE",
+                "book": "FD",
+                "book_odds": -110,
+            },
+        ],
+    }
+    (root / "normalized" / "wnba_props_latest.json").write_text(json.dumps(props_data), encoding="utf-8")
+    (root / "normalized" / "wnba_line_movement_latest.json").write_text(json.dumps(movement_data), encoding="utf-8")
+
+    payload = build_cards_payload("WNBA", target_date="2026-09-17")
+    board_a_ids = [c["card_id"] for c in payload["board_a"]]
+    assert "m1" in board_a_ids
+    assert "m2" in board_a_ids
+
+    m2_card = next(c for c in payload["board_a"] if c["card_id"] == "m2")
+    assert m2_card.get("off_slate") is True
+    assert "off_slate" in m2_card.get("flags", [])
+
+    filtered_payload = build_cards_payload("WNBA", target_date="2026-09-17", exclude_off_slate=True)
+    filtered_ids = [c["card_id"] for c in filtered_payload["board_a"]]
+    assert "m1" in filtered_ids
+    assert "m2" not in filtered_ids
+
+
+def test_low_volume_3pt_shooter_flagged_on_card(tmp_path, monkeypatch):
+    from outlier_scrapers.paths import LeaguePaths
+
+    root = tmp_path / "data" / "WNBA"
+    (root / "normalized").mkdir(parents=True)
+    (root / "reports").mkdir(parents=True)
+    monkeypatch.setattr(
+        cards,
+        "league_paths",
+        lambda lg: LeaguePaths(
+            league=lg,
+            root=root,
+            raw=root / "raw",
+            normalized=root / "normalized",
+            reports=root / "reports",
+        ),
+    )
+
+    now_iso = "2026-09-17T19:00:00Z"
+    props_data = {
+        "generated_at": now_iso,
+        "records": [
+            {
+                "market_id": "m_3pt",
+                "player": "Non Shooter",
+                "market": "3PTS",
+                "proposition": "3PTS",
+                "position": "OVER",
+                "side": "OVER",
+                "line": 0.5,
+                "l5_pct": 0.0,
+                "l10_pct": 0.0,
+                "books": [{"book": "FD", "odds": 150}],
+                "sport_context": {"event_starts_at": now_iso},
+            }
+        ],
+    }
+    movement_data = {
+        "generated_at": now_iso,
+        "records": [],
+        "ev_records": [
+            {
+                "market_id": "m_3pt",
+                "side": "OVER",
+                "current_line": 0.5,
+                "calculated_ev_pct": 0.08,
+                "ev_source": "NATIVE",
+                "calculated_ev_method": "AVERAGE",
+                "book": "FD",
+                "book_odds": 150,
+            }
+        ],
+    }
+    (root / "normalized" / "wnba_props_latest.json").write_text(json.dumps(props_data), encoding="utf-8")
+    (root / "normalized" / "wnba_line_movement_latest.json").write_text(json.dumps(movement_data), encoding="utf-8")
+
+    payload = build_cards_payload("WNBA")
+    assert len(payload["board_a"]) == 1
+    card = payload["board_a"][0]
+    assert "low_volume_3pt_shooter" in card["flags"]
+
+
+
+def test_card_low_l5_threshold_unconditional():
+    assert "low_volume_3pt_shooter" in cards._board_a_flags("OVER", {"hit_rates": {"l5_pct": 10, "l10_pct": 50}}, {"market": "3PTS"})
+
+
+def test_default_card_slate_matches_pack_latest_date(monkeypatch):
+    from outlier_scrapers.pack import select_date
+    monkeypatch.setattr(cards, "load_latest", lambda *args: {"records": []})
+    monkeypatch.setattr(cards, "assemble_card", lambda mid, idx: {"card_id": mid, "board": "B", "event_starts_at": "2099-01-01T12:00:00" if mid == "earlier" else "2099-01-03T12:00:00"})
+    original = cards.load_latest
+    monkeypatch.setattr(cards, "load_latest", lambda league, feed: {"records": [{"market_id": "earlier", "player": "A"}, {"market_id": "later", "player": "B"}]} if feed == "props" else original(league, feed))
+    result = cards.build_cards_payload("WNBA")
+    _, expected = select_date([{"_event_starts_at": "2099-01-01T12:00:00"}, {"_event_starts_at": "2099-01-03T12:00:00"}], None)
+    assert result["slate_date"] == expected
+    assert "off_slate" not in next(c for c in result["board_b"] if c["card_id"] == "later").get("flags", [])
