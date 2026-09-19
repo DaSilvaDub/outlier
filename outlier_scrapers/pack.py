@@ -276,6 +276,7 @@ def process_stream(
     health_payload: dict[str, Any] | None = None,
     probable_pitchers: dict[str, dict[str, Any]] | None = None,
     expected_projection_date: str | None = None,
+    games_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not cards_payload:
         return []
@@ -296,8 +297,23 @@ def process_stream(
     ev_records = lm_payload.get("ev_records", []) if lm_payload else []
     by_outcome = index_ev_by_outcome(ev_records)
     projections_by_outcome = index_projections(projections_payload, expected_projection_date)
+    from outlier_scrapers.pack_context import build_team_total_context
+
+    team_totals = build_team_total_context(games_context, sport)
     rows: list[dict[str, Any]] = []
     for card in (cards_payload.get("board_a") or []) + (cards_payload.get("board_b") or []):
+        card = dict(card)
+        if expected_projection_date:
+            # A stored cards file may have been built for a different slate.
+            # Re-evaluate its date gate against the authoritative pack date.
+            card["flags"] = [flag for flag in card.get("flags", []) if flag != "off_slate"]
+            starts_at = event_starts.get(str(card.get("event_id") or "")) or card.get("event_starts_at")
+            event_date = _local_date(starts_at)
+            card["off_slate"] = event_date is not None and event_date != expected_projection_date
+            if card["off_slate"]:
+                card["flags"].append("off_slate")
+        context_key = (str(card.get("event_id") or ""), str(card.get("team") or "").strip().upper())
+        card["team_total"] = team_totals.get(context_key)
         row = build_row(
             card,
             ev_records,
@@ -453,6 +469,7 @@ def build_pack_with_coverage(
             health_payload,
             probable_pitchers,
             expected_slate_date,
+            games_context=games_norm,
         )
         games_rows = process_stream(
             games_cards,
@@ -468,6 +485,7 @@ def build_pack_with_coverage(
             health_payload,
             probable_pitchers,
             expected_slate_date,
+            games_context=games_norm,
         )
         if not games_cards:
             logger.warning("%s: no game-cards stream found", lg)

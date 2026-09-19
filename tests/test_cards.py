@@ -1342,3 +1342,19 @@ def test_low_volume_3pt_shooter_flagged_on_card(tmp_path, monkeypatch):
     card = payload["board_a"][0]
     assert "low_volume_3pt_shooter" in card["flags"]
 
+
+
+def test_card_low_l5_threshold_unconditional():
+    assert "low_volume_3pt_shooter" in cards._board_a_flags("OVER", {"hit_rates": {"l5_pct": 10, "l10_pct": 50}}, {"market": "3PTS"})
+
+
+def test_default_card_slate_matches_pack_latest_date(monkeypatch):
+    from outlier_scrapers.pack import select_date
+    monkeypatch.setattr(cards, "load_latest", lambda *args: {"records": []})
+    monkeypatch.setattr(cards, "assemble_card", lambda mid, idx: {"card_id": mid, "board": "B", "event_starts_at": "2099-01-01T12:00:00" if mid == "earlier" else "2099-01-03T12:00:00"})
+    original = cards.load_latest
+    monkeypatch.setattr(cards, "load_latest", lambda league, feed: {"records": [{"market_id": "earlier", "player": "A"}, {"market_id": "later", "player": "B"}]} if feed == "props" else original(league, feed))
+    result = cards.build_cards_payload("WNBA")
+    _, expected = select_date([{"_event_starts_at": "2099-01-01T12:00:00"}, {"_event_starts_at": "2099-01-03T12:00:00"}], None)
+    assert result["slate_date"] == expected
+    assert "off_slate" not in next(c for c in result["board_b"] if c["card_id"] == "later").get("flags", [])

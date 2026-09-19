@@ -60,8 +60,6 @@ PREDICTIVE_SIGNAL_FLAGS = frozenset({
     "insight_support",
     "movement_support",
     "orf_support",
-    "september_pitcher_so_under",
-    "guard_rebound_over_support",
 })
 _3PT_MARKET_TOKENS = frozenset({
     "3PT",
@@ -128,6 +126,7 @@ class InjuryView:
     own_outs: tuple[str, ...]
     opponent_outs: tuple[str, ...]
     unscoped_outs: tuple[str, ...]
+    own_star_doubtful: bool = False
 
 
 def _to_float(value: Any) -> float | None:
@@ -156,6 +155,7 @@ def classify_injuries(injury_flags: str, team: str | None) -> InjuryView:
     chunks stay in ``unscoped_outs`` so they cannot invent a side.
     """
     own: list[str] = []
+    own_doubtful = False
     opp: list[str] = []
     unscoped: list[str] = []
     team_token = str(team or "").strip().upper()
@@ -165,9 +165,11 @@ def classify_injuries(injury_flags: str, team: str | None) -> InjuryView:
             continue
         status_match = _STATUS_PAREN.search(body)
         status = status_match.group("status") if status_match else body
+        prefix = (match.group("team") or "").strip().upper()
+        if prefix == team_token and team_token and re.search(r"\bdoubtful\b", status, re.I):
+            own_doubtful = True
         if not _is_out_status(status):
             continue
-        prefix = (match.group("team") or "").strip().upper()
         if prefix and team_token and prefix == team_token:
             own.append(body)
         elif prefix and team_token and prefix != team_token:
@@ -180,6 +182,7 @@ def classify_injuries(injury_flags: str, team: str | None) -> InjuryView:
         own_outs=tuple(own),
         opponent_outs=tuple(opp),
         unscoped_outs=tuple(unscoped),
+        own_star_doubtful=own_doubtful,
     )
 
 
@@ -417,31 +420,29 @@ def usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
     return injuries.own_star_out
 
 
+def _is_points_market(row: dict[str, Any]) -> bool:
+    """Only standalone basketball points; combo markets are not scoring shares."""
+    if str(row.get("sport") or row.get("league") or "").upper() not in {"", "NBA", "WNBA", "BASKETBALL"}:
+        return False
+    market = str(row.get("proposition") or row.get("market") or row.get("market_type") or "").upper()
+    if market not in {"", "PLAYER_PROP"}:
+        return market in {"PTS", "POINTS"}
+    label = str(row.get("market_label") or row.get("selection") or "").upper()
+    return bool(re.search(r"\b(?:POINTS|PTS)\s*$", label)) and not re.search(r"REBOUND|ASSIST|\+|PRA|PR\b|PA\b", label)
+
+
 def star_scorer_usage_up_under(row: dict[str, Any], injuries: InjuryView) -> bool:
     """True when an UNDER on points sits on a star scorer (line >= 20.0) with own star out."""
     if not is_player_prop(row):
         return False
     if _selection_side(row) != "UNDER":
         return False
-    market = str(row.get("market") or row.get("market_type") or "").upper()
-    prop = str(row.get("proposition") or "").upper()
-    label = str(row.get("market_label") or "").upper()
-    selection = str(row.get("selection") or "").upper()
-    is_points = (
-        market in {"PTS", "POINTS"}
-        or prop in {"PTS", "POINTS"}
-        or "POINTS" in market
-        or "POINTS" in label
-        or "POINTS" in selection
-        or " PTS" in selection
-        or "- PTS" in selection
-    )
-    if not is_points:
+    if not _is_points_market(row):
         return False
     line = _to_float(row.get("line"))
     if line is None or line < 20.0:
         return False
-    return injuries.own_star_out
+    return injuries.own_star_out or injuries.own_star_doubtful
 
 
 def is_3pt_market(
@@ -488,7 +489,8 @@ def low_volume_3pt_shooter(
     if not is_3pt_market(market=market, proposition=prop, market_label=label, selection=selection):
         return False
 
-    hit_rates = row.get("hit_rates") if isinstance(row.get("hit_rates"), dict) else {}
+    raw_hit_rates = row.get("hit_rates")
+    hit_rates = raw_hit_rates if isinstance(raw_hit_rates, dict) else {}
     l5_val = (
         l5_pct
         if l5_pct is not None
@@ -502,28 +504,8 @@ def low_volume_3pt_shooter(
             )
         )
     )
-    l10_val = (
-        l10_pct
-        if l10_pct is not None
-        else (
-            row.get("l10_pct")
-            if row.get("l10_pct") is not None
-            else (
-                hit_rates.get("l10_pct")
-                if hit_rates.get("l10_pct") is not None
-                else row.get("hit_l10")
-            )
-        )
-    )
     l5 = _to_float(l5_val)
-    l10 = _to_float(l10_val)
-    flags = set(dq_flags or [])
-    if l5 is not None and l5 == 0.0:
-        return True
-    if l5 is not None and l5 <= 20.0:
-        if "thin_liquidity" in flags or (l10 is not None and l10 <= 30.0):
-            return True
-    return False
+    return l5 is not None and 0.0 <= l5 <= 20.0
 
 
 def team_total_scoring_conflict(
@@ -534,22 +516,8 @@ def team_total_scoring_conflict(
         return False
     if _selection_side(row) != "OVER":
         return False
-    market = str(row.get("market") or row.get("market_type") or "").upper()
-    prop = str(row.get("proposition") or "").upper()
-    label = str(row.get("market_label") or "").upper()
-    selection = str(row.get("selection") or "").upper()
-    is_points = (
-        market in {"PTS", "POINTS"}
-        or prop in {"PTS", "POINTS"}
-        or "POINTS" in market
-        or "POINTS" in label
-        or "POINTS" in selection
-        or " PTS" in selection
-        or "- PTS" in selection
-    )
-    if not is_points:
+    if not _is_points_market(row):
         return False
-
     line = _to_float(row.get("line"))
     if line is None:
         return False
@@ -563,9 +531,6 @@ def team_total_scoring_conflict(
         if tt <= 68.0 and (line / tt) >= 0.20:
             return True
         if tt <= 72.0 and (line / tt) >= 0.25:
-            return True
-    elif sport == "MLB":
-        if tt <= 3.5 and (line / tt) >= 0.35:
             return True
     return False
 
@@ -612,6 +577,11 @@ def guard_rebound_over_signal(
         return False
     if _selection_side(row) != "OVER":
         return False
+    if str(row.get("sport") or row.get("league") or "").upper() not in {"", "WNBA", "NBA", "BASKETBALL"}:
+        return False
+    role = str(row.get("player_position") or row.get("player_role") or "").strip().upper()
+    if role not in {"G", "PG", "SG", "SF", "G-F", "F-G", "GUARD", "WING", "POINT GUARD", "SHOOTING GUARD", "SMALL FORWARD"}:
+        return False
     market = str(row.get("market") or row.get("market_type") or "").upper()
     prop = str(row.get("proposition") or "").upper()
     label = str(row.get("market_label") or "").upper()
@@ -631,7 +601,8 @@ def guard_rebound_over_signal(
     if line is None or line > 5.5:
         return False
 
-    hit_rates = row.get("hit_rates") if isinstance(row.get("hit_rates"), dict) else {}
+    raw_hit_rates = row.get("hit_rates")
+    hit_rates = raw_hit_rates if isinstance(raw_hit_rates, dict) else {}
     l5_val = (
         l5_pct
         if l5_pct is not None

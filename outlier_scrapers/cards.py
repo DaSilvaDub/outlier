@@ -626,6 +626,7 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
             out = {
                 "player": row.get("player"),
                 "player_id": row.get("player_id"),
+                "player_position": row.get("player_position"),
                 "market": row.get("market") or row.get("market_raw"),
                 "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
@@ -1345,10 +1346,7 @@ def _board_a_flags(side: str, view: dict[str, Any], card: dict[str, Any] | None 
     if side == "OVER" and is_3pt_market(market=market, proposition=prop, market_label=label):
         hit_rates = view.get("hit_rates") or {}
         l5 = _to_float(hit_rates.get("l5_pct") if hit_rates.get("l5_pct") is not None else card_dict.get("l5_pct"))
-        l10 = _to_float(hit_rates.get("l10_pct") if hit_rates.get("l10_pct") is not None else card_dict.get("l10_pct"))
-        if l5 is not None and l5 == 0.0:
-            flags.append("low_volume_3pt_shooter")
-        elif l5 is not None and l5 <= 20.0 and ("thin_liquidity" in flags or (l10 is not None and l10 <= 30.0)):
+        if l5 is not None and 0.0 <= l5 <= 20.0:
             flags.append("low_volume_3pt_shooter")
     return flags
 
@@ -1450,7 +1448,7 @@ def build_cards_payload(
     active_date = target_date
     if active_date is None and card_dates:
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
-        active_date = today if today in card_dates else min(card_dates)
+        active_date = today if today in card_dates else max(card_dates)
 
     if active_date:
         for c in cards:
@@ -1604,7 +1602,7 @@ def build_game_cards_payload(
     active_date = target_date
     if active_date is None and card_dates:
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
-        active_date = today if today in card_dates else min(card_dates)
+        active_date = today if today in card_dates else max(card_dates)
 
     if active_date:
         for c in cards:

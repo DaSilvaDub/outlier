@@ -565,6 +565,8 @@ def _build_base_row(
         card.get("market_label"), ref.get("market_label"), card.get("market_raw"), market_token
     )
     row["line"] = line
+    row["player_position"] = card.get("player_position") or ref.get("player_position")
+    row["team_total"] = card.get("team_total")
     if str(proposition or "").strip().upper() in SIGNED_MARGIN_PROPOSITIONS:
         signed_line = _fmt_signed_line(line, proposition)
         if signed_line:
@@ -858,7 +860,8 @@ def _apply_quality_and_signal_flags(
     if slate_quality.star_scorer_usage_up_under(row, injury_view):
         dq_flags.append("star_scorer_usage_up_under")
 
-    hit_rates = side_view.get("hit_rates") if isinstance(side_view.get("hit_rates"), dict) else {}
+    raw_hit_rates = side_view.get("hit_rates")
+    hit_rates = raw_hit_rates if isinstance(raw_hit_rates, dict) else {}
     l5_rate = (
         hit_rates.get("l5_pct")
         if hit_rates.get("l5_pct") is not None

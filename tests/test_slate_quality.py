@@ -395,8 +395,39 @@ def test_september_pitcher_so_under_and_guard_rebound_signals():
         "market": "REB",
         "proposition": "REBOUNDS",
         "selection": "Julie Vanloo Over 2.5 Rebounds",
+        "player_position": "PG",
         "line": 2.5,
         "l5_pct": 80.0,
     }
     assert guard_rebound_over_signal(guard_reb) is True
 
+
+
+def test_heuristic_boosts_do_not_satisfy_predictor_gate():
+    from outlier_scrapers.slate_quality import has_predictive_signal
+    for flag in ("september_pitcher_so_under", "guard_rebound_over_support"):
+        assert not has_predictive_signal({"signal_flags": flag})
+        assert has_predictive_signal({"signal_flags": flag + ";insight_support"})
+
+
+def test_low_l5_gate_does_not_need_liquidity_or_l10_confirmation():
+    row = {"market_type": "PLAYER_PROP", "market": "3PTS", "selection": "Player Over 1.5 Three Pointers", "l5_pct": 10, "l10_pct": 50}
+    assert low_volume_3pt_shooter(row)
+    assert not low_volume_3pt_shooter({**row, "l5_pct": 40})
+
+
+def test_doubtful_star_scoring_under_and_combo_exclusions():
+    row = {"sport": "WNBA", "market_type": "PLAYER_PROP", "market": "PTS", "selection": "Player Under 24.5 Points", "line": 24.5}
+    doubtful = classify_injuries("LVA: Jackie Young (Doubtful; Ankle)", "LVA")
+    assert star_scorer_usage_up_under(row, doubtful)
+    assert not star_scorer_usage_up_under(row, classify_injuries("LVA: Jackie Young (Questionable; Ankle)", "LVA"))
+    combo = {**row, "market": "POINTS_REBOUNDS_ASSISTS", "selection": "Player Over 24.5 Points + Rebounds + Assists", "team_total": 65}
+    assert not team_total_scoring_conflict(combo)
+    assert not star_scorer_usage_up_under({**combo, "selection": "Player Under 24.5 Points + Rebounds + Assists"}, doubtful)
+
+
+def test_guard_rebound_boost_requires_verified_perimeter_role():
+    row = {"sport": "WNBA", "market_type": "PLAYER_PROP", "market": "REB", "selection": "Player Over 4.5 Rebounds", "line": 4.5, "l5_pct": 80}
+    for role in (None, "", "C", "PF", "F"):
+        assert not guard_rebound_over_signal({**row, "player_position": role})
+    assert guard_rebound_over_signal({**row, "player_position": "SG"})
