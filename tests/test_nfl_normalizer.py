@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import pytest
@@ -250,6 +251,88 @@ def test_normalize_player_props(schedule_payload, player_props_payload):
     henry_td = next(p for p in props if p.player_name == "Derrick Henry" and p.market == "ANYTIME_TD")
     assert henry_td.line == 0.5
     assert henry_td.best_odds == -140
+
+
+# ---------------------------------------------------------------------------
+# Malformed feed values degrade one field, never the whole slate.
+#
+# Every one of these used to raise out of extraction: a single junk value in
+# one outcome aborted normalize_game_markets / normalize_player_props, and
+# neither pipeline call site guards them, so the run lost the entire slate.
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_odds_and_coerce_float_reject_junk_instead_of_raising():
+    from outlier_nfl.utils import coerce_float, coerce_odds
+
+    assert coerce_odds(-110) == -110
+    assert coerce_odds("+150") == 150
+    assert coerce_odds(" -105 ") == -105
+    assert coerce_odds(-110.0) == -110, "JSON often carries a whole price as a float"
+    # A fractional price is not American odds: reject it rather than truncate.
+    for junk in ("EVEN", "N/A", "", "-110.5", -110.5, True, object(), float("nan")):
+        assert coerce_odds(junk) is None
+    assert coerce_odds(None) is None
+
+    assert coerce_float(0.8) == 0.8
+    assert coerce_float("0.72") == 0.72
+    assert coerce_float(0) == 0.0, "zero is a real hit rate, not a missing one"
+    for junk in ("N/A", "-", "", True, object(), float("inf"), float("nan")):
+        assert coerce_float(junk) is None
+    assert coerce_float(None) is None
+
+    # json parses an integer literal of any length, and float() raises
+    # OverflowError -- not ValueError -- for one too large to convert.
+    huge = json.loads('{"l5": 1' + "0" * 400 + "}")["l5"]
+    assert coerce_float(huge) is None
+    assert coerce_odds(huge) is None
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+@pytest.mark.parametrize("junk", ["EVEN", "N/A", "", "-110.5"])
+def test_junk_best_odds_loses_one_price_not_the_event(
+    schedule_payload, event_markets_payload, junk
+):
+    team_index = build_team_index(schedule_payload)
+    event = schedule_payload["events"][0]
+    expected = len(normalize_game_markets(event, event_markets_payload, team_index))
+
+    payload = copy.deepcopy(event_markets_payload)
+    # Strip the per-book prices so the bestOdds fallback is what gets used.
+    target = payload["markets"][0]["outcomes"][0]
+    target.pop("odds", None)
+    target.pop("bookOdds", None)
+    target["bestOdds"] = junk
+
+    lines = normalize_game_markets(event, payload, team_index)
+
+    assert len(lines) == expected, "a junk price dropped other lines from the event"
+    damaged = next(line_item for line_item in lines if line_item.outcome_id == "o-spread-kc")
+    assert damaged.best_odds is None
+    assert damaged.implied_probability is None
+    assert damaged.line == -3.5, "the rest of the outcome must still normalize"
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+@pytest.mark.parametrize("field", ["l5", "l10", "l20", "curSeason"])
+def test_junk_hit_rate_stat_loses_one_stat_not_the_props_slate(
+    schedule_payload, player_props_payload, field
+):
+    sched_index = build_schedule_index(schedule_payload)
+    expected = len(normalize_player_props(player_props_payload, sched_index))
+
+    payload = copy.deepcopy(player_props_payload)
+    payload["props"][0].setdefault("stats", {})[field] = "N/A"
+
+    props = normalize_player_props(payload, sched_index)
+
+    assert len(props) == expected, "a junk hit rate dropped other props from the slate"
+    mahomes_py = next(
+        p
+        for p in props
+        if p.player_name == "Patrick Mahomes" and p.market == "PASS_YDS" and p.position == "OVER"
+    )
+    assert mahomes_py.line == 268.5, "the rest of the prop must still normalize"
 
 
 @pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")

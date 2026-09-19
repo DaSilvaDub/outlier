@@ -1,3 +1,17 @@
+## Daily automated debug review (claude) - 2026-09-17
+
+- **Last Commit SHA**: `85d440a` on `claude/inspiring-fermat-b703ae` (plus a merge of `origin/master` `6e490a4`); PR #165 -> master.
+- **Files Touched**: `outlier_nfl/utils.py` (new `coerce_odds` / `coerce_float`), `outlier_nfl/games.py`, `outlier_nfl/props.py`, `tests/test_nfl_normalizer.py` (9 regression tests).
+- **Finding (High)**: `extract_game_lines` cast `outcome["bestOdds"]` with a bare `int()` and `extract_player_props` cast the `l5`/`l10`/`l20`/`curSeason` hit rates with a bare `float()`. Neither `normalize_game_markets` nor `normalize_player_props` is guarded at its `pipeline.py` call site, so one unparseable feed value (`"EVEN"`, `"N/A"`, `""`, a fractional price) aborted the entire slate - reproduced: 2 of 6 game lines survived, exception left `run()`. The `bestOdds` fallback four lines above the unguarded stats casts in `props.py` was *already* guarded, which settles the intended behaviour. All 9 tests confirmed failing on parent `1c48795`.
+- **Verification**: NFL suites 233 passed / 2 skipped; whole offline suite 826 passed (was 817); ruff clean on changed files; mypy clean on the three changed modules. Sandbox has no PyPI egress (403 on CONNECT), so `structlog`/`sqlalchemy`/provider SDKs are uninstallable - every other reported failure is a `ModuleNotFoundError` for one of those. Hosted CI is authoritative.
+- **Reported, not fixed**:
+  - `pipeline.py:119/169/122/184` call the two normalizers unguarded. Per-event `try/except` would contain any future extraction crash to one event, but partial-slate output is a behavioural call for a human.
+  - `requirements.lock` declares none of `structlog`, `SQLAlchemy`, `psycopg2-binary` (all in `pyproject.toml`) or `tzdata`; CI only works because the following `pip install -e .` resolves them unpinned, so they float every run. Needs PyPI access to regenerate. Also noted on #164.
+  - `outlier_scrapers/api.py:17` calls `structlog.configure()` at import time, which mutates global structlog state for whatever imports it first. Not reproducible here (structlog uninstallable), so reported rather than touched.
+- **Review round**: Copilot found a real gap in the first fix - `float()` raises `OverflowError` (an `ArithmeticError`, not a `ValueError`) for an integer too large to convert, and `json` parses an integer literal of any length, so that input still escaped the guard the helper exists to provide. Reproduced with a 401-digit JSON integer, fixed in `85d440a`, thread answered and resolved.
+- **Not duplicated**: PR #164 was merged while this review was in flight (`7a9ac7d`). Its `outlier_nfl/utils.py` `_replace_with_retry` fix and the `organize_today_run2.py` counterpart are on master; `origin/master` `6e490a4` is merged into this branch and the auto-merge of `utils.py` was verified additive against master, with nothing from #164 lost.
+- **CI**: all 4 checks green on `85d440a` (core, provider, typecheck, Codacy 0 issues) before the base merge.
+- **Next Steps**: review/merge #165. Paid reasoning / AI Research Desk was not invoked at any point.
 ## Daily Debug Review (Claude) - 2026-09-18
 1. **Branch**: `claude/inspiring-fermat-rcb6v7` (from `5d2b30a`), reviewing the NFL consensus/calibration work in `446e718`.
 2. **Files Touched**: `tests/test_nfl_calibration.py`, `outlier_nfl/pipeline.py`, `outlier_nfl/consensus.py`.

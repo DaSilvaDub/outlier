@@ -29,7 +29,7 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import BookPrice, NflGameLine
-from outlier_nfl.utils import format_signed_line
+from outlier_nfl.utils import coerce_odds, format_signed_line
 
 logger = logging.getLogger("outlier_nfl.games")
 
@@ -238,7 +238,7 @@ def extract_game_lines(
             best_odds = (
                 max((b.odds for b in books), default=None)
                 if books
-                else (int(outcome["bestOdds"]) if outcome.get("bestOdds") is not None else None)
+                else coerce_odds(outcome.get("bestOdds"))
             )
             implied_prob = american_to_implied_probability(best_odds)
 
