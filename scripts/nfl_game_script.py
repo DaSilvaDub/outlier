@@ -283,8 +283,10 @@ class NflGameScriptGenerator:
                 continue
             best_over = max(overs, key=lambda x: len(_get(x, "books") or []))
             best_under = max(unders, key=lambda x: len(_get(x, "books") or []))
-            o_odds = _get(best_over, "best_odds") or 0
-            u_odds = _get(best_under, "best_odds") or 0
+            o_odds = _get(best_over, "best_odds")
+            u_odds = _get(best_under, "best_odds")
+            if o_odds is None or u_odds is None:
+                continue
             if -220 <= o_odds <= 180 and -220 <= u_odds <= 180:
                 books_count = len(_get(best_over, "books") or []) + len(_get(best_under, "books") or [])
                 balance = abs(o_odds - (-110)) + abs(u_odds - (-110))

@@ -175,6 +175,51 @@ def test_extract_game_script_context_deficit_risk():
     assert ctx["home_team_total"] == 30.5
 
 
+def test_context_reports_quoted_team_totals_below_defaults():
+    """A quoted team total below the fallback default must be reported, not the default."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+        _make_game_line("TOTAL", 20.5, market_type="TEAM_PROP", team="BUF"),
+        _make_game_line("TOTAL", 17.5, market_type="TEAM_PROP", team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 20.5
+    assert ctx["away_team_total"] == 17.5
+    # A low-scoring home environment must not read as deficit risk for the road dog.
+    assert ctx["away_deficit_risk"] is False
+
+
+def test_context_falls_back_when_no_team_total_is_quoted():
+    """With no team totals on the board the documented defaults still apply."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 27.0
+    assert ctx["away_team_total"] == 21.0
+
+
+def test_consensus_never_selects_an_unpriced_line():
+    """A line with no book quotes on either side must not win the consensus."""
+    ladder_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "OVER", best_odds=+450, books_count=8)
+    ladder_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "UNDER", best_odds=-800, books_count=8)
+    unpriced_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "OVER", best_odds=None, books_count=0)
+    unpriced_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "UNDER", best_odds=None, books_count=0)
+
+    targets = identify_consensus_lines_for_group(
+        [ladder_over, ladder_under, unpriced_over, unpriced_under]
+    )
+
+    assert (87.5, "OVER") not in targets
+    assert (87.5, "UNDER") not in targets
+    # No balanced line exists, so selection falls back to the most-quoted line.
+    assert targets == {(110.5, "OVER"), (110.5, "UNDER")}
+
+
 def test_underdog_rb_deficit_haircut_and_resilient_targets():
     """Underdog RB rushing overs get -15% volume haircut and DEFICIT_VOLUME_RISK tag."""
     lines = [
@@ -282,10 +327,30 @@ def test_pipeline_calibrated_and_high_prob_artifacts(tmp_path):
     assert (normalized_dir / "nfl_high_prob_props_2026-09-13.json").exists()
 
 
-def test_game_script_generator_output():
+def test_game_script_generator_output(tmp_path):
     """NflGameScriptGenerator must generate report with calibration signals and Section 3.5."""
-    generator = NflGameScriptGenerator(data_dir="data/NFL/normalized")
-    games, props = generator.load_data("2026-09-17")
+    # Built in-test rather than read from data/NFL/normalized: that directory is
+    # gitignored, so sourcing the report from it made this test pass only on a
+    # machine that had already run the pipeline, and fail everywhere else.
+    games = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+        _make_game_line("TOTAL", 30.5, market_type="TEAM_PROP", team="BUF"),
+        _make_game_line("TOTAL", 24.5, market_type="TEAM_PROP", team="DET"),
+    ]
+    raw_props = []
+    for player, market, line in (
+        ("Jahmyr Gibbs", "RUSH_YDS", 87.5),
+        ("Amon-Ra St. Brown", "REC_YDS", 79.5),
+        ("Sam LaPorta", "REC", 2.5),
+        ("Jared Goff", "PASS_YDS", 249.5),
+    ):
+        raw_props.append(_make_prop(player, market, line, "OVER", best_odds=-112, team="DET"))
+        raw_props.append(_make_prop(player, market, line, "UNDER", best_odds=-108, team="DET"))
+
+    props = apply_game_script_calibration(games, select_consensus_player_props(raw_props))
+
+    generator = NflGameScriptGenerator(data_dir=tmp_path)
     env = generator.extract_game_environment(games, home_team="BUF", away_team="DET")
     profiles = generator.build_player_profiles(props)
     report = generator.generate_report(env, profiles)

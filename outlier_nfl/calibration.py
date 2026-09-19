@@ -91,13 +91,21 @@ def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict
             ln for ln in lines
             if ln.market_type == "TEAM_PROP" and ln.proposition in ("POINTS", "TOTAL_POINTS", "TEAM_TOTAL", "TOTAL")
         ]
-        home_tt = 27.0
-        away_tt = 21.0
+        # Seeding the accumulator with the default made the default a floor, so a
+        # team total genuinely below it was reported as the default instead.
+        home_tt_quoted: float | None = None
+        away_tt_quoted: float | None = None
         for tt in team_totals:
-            if tt.team == home_team and tt.line is not None:
-                home_tt = max(home_tt, float(tt.line))
-            elif tt.team == away_team and tt.line is not None:
-                away_tt = max(away_tt, float(tt.line))
+            if tt.line is None:
+                continue
+            tt_line = float(tt.line)
+            if tt.team == home_team:
+                home_tt_quoted = tt_line if home_tt_quoted is None else max(home_tt_quoted, tt_line)
+            elif tt.team == away_team:
+                away_tt_quoted = tt_line if away_tt_quoted is None else max(away_tt_quoted, tt_line)
+
+        home_tt = home_tt_quoted if home_tt_quoted is not None else 27.0
+        away_tt = away_tt_quoted if away_tt_quoted is not None else 21.0
 
         # Road underdog deficit risk trigger: away underdog >= +4.5 and home total >= 28.0
         away_deficit_risk = (away_spread_val >= 4.5) and (home_tt >= 28.0)
