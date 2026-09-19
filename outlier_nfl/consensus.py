@@ -85,9 +85,12 @@ def select_consensus_player_props(props: list[NflPlayerProp]) -> list[NflPlayerP
 
     Returns a new list of NflPlayerProp instances with is_consensus_line populated.
     """
-    by_player_market: dict[tuple[str, str, str], list[NflPlayerProp]] = {}
+    # Scope is part of the key: a first-half line is a different market from the
+    # full-game line of the same proposition, so they must not compete for -- or
+    # be excluded by -- the same consensus selection.
+    by_player_market: dict[tuple[str, str, str, str], list[NflPlayerProp]] = {}
     for p in props:
-        key = (p.event_id, p.player_name, p.market)
+        key = (p.event_id, p.player_name, p.market, p.scope)
         by_player_market.setdefault(key, []).append(p)
 
     updated_props: list[NflPlayerProp] = []
