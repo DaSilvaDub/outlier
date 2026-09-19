@@ -341,3 +341,58 @@ def test_last_name_suffix_does_not_match_longer_name():
     )
     assert results._player_boxscore_key(event, "A. Berg - Hits OVER 0.5") is None
     assert results._player_event_candidates([event], "A. Berg - Hits OVER 0.5") == []
+
+
+def test_nyl_alias_matches_espn_new_york_wnba_event():
+    event = results.FinalEvent(
+        provider_event_id="401857196",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="NY",
+        home="MIN",
+        away_score=93,
+        home_score=81,
+        players={},
+    )
+    assert results._event_match(event, "NYL @ MIN Total O/U UNDER 176.5")
+    assert results._team_total_event_match(event, "NYL Team Total UNDER 88.5")
+    assert results._grade_row(
+        {
+            "selection": "NYL Team Total OVER 88.5",
+            "line": "88.5",
+            "market_type": "TEAM_PROP",
+        },
+        event,
+    ) == (93, "W")
+
+
+def test_matchup_prefixed_team_totals_grade_correctly():
+    event = results.FinalEvent(
+        provider_event_id="401857195",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="IND",
+        home="TOR",
+        away_score=103,
+        home_score=85,
+        players={},
+    )
+    assert results._team_total_event_match(
+        event, "IND @ TOR Indiana Fever - Points UNDER 100.5"
+    )
+    assert results._grade_row(
+        {
+            "selection": "IND @ TOR Indiana Fever - Points UNDER 100.5",
+            "line": "100.5",
+            "market_type": "PTS",
+        },
+        event,
+    ) == (103, "L")
+    assert results._grade_row(
+        {
+            "selection": "IND @ TOR Toronto Tempo - Points UNDER 86.5",
+            "line": "86.5",
+            "market_type": "PTS",
+        },
+        event,
+    ) == (85, "W")

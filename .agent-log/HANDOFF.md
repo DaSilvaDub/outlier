@@ -1,3 +1,17 @@
+## Settlement Team Aliases, Totals Parsing & Heavy-Dog Spread Cap (Gemini) - 2026-09-19
+1. **Last Commit SHA**: `a326f62` on branch `fix/settlement-team-aliases-and-totals` (PR #171: https://github.com/DaSilvaDub/outlier/pull/171)
+2. **Files Touched**:
+   - `outlier_scrapers/results.py`: Added `"NYL": "NY"` and `"CONN": "CON"` to `TEAM_ALIASES`; updated `_team_total_event_match` and `_grade_row` to support matchup-prefixed team totals (`IND @ TOR Indiana Fever - Points UNDER 100.5`) and excluded matchup strings from player prop matching.
+   - `outlier_scrapers/slate_quality.py`: Added `apply_wnba_heavy_dog_spread_cap` capping WNBA double-digit dogs (+12.0+) at 0.5u (or 0.25u when multiple starters are out) with flag `wnba_heavy_dog_deficit_cap`.
+   - `outlier_scrapers/pack_selection.py`: Wired `apply_wnba_heavy_dog_spread_cap(row, injury_view)` right after `apply_local_devig_unit_cap(row)`.
+   - `tests/test_results.py`: Added regression tests for `NYL` alias and matchup-prefixed team totals (13/13 passed).
+   - `tests/test_slate_quality.py`: Added unit tests for `apply_wnba_heavy_dog_spread_cap` (17/17 passed).
+3. **Verification**:
+   - Targeted unit tests: 13 results tests, 17 slate quality tests, 161 pack integration tests passed.
+   - Ruff lint clean on all modified files.
+4. **Next Steps**:
+   - Paid reasoning models were not invoked.
+
 ## Daily Debug Review — master CI red + NFL calibration inputs (Claude) - 2026-09-19
 1. **Last Commit SHA**: `0063058` on branch `claude/inspiring-fermat-v8n34k` — **MERGED** as `cbcad6f` (PR #169: https://github.com/DaSilvaDub/outlier/pull/169). master is green again: run 598 on `fdb3398` passed.
 2. **Files Touched**:
@@ -32,6 +46,7 @@
 5. **Environment note**: PyPI is blocked in this sandbox (403), so `structlog`/`sqlalchemy`/`google-genai` could not be installed; 48 collection errors and 50 dependency-only failures are environment, not repo. NFL/offline-stdlib tests all pass. Also: GitHub Actions has not run on master since 2026-09-05, so nothing caught the broken test.
 6. **Next Steps**: merge the PR; decide on the alternate-ladder selection rule; PRs #165, #166, #167 remain open. Paid reasoning was not invoked.
 
+>>>>>>> origin/master
 ## Board A Calibration Hardening & Predictor Gates (Gemini) - 2026-09-18
 1. **Last Commit SHA**: `b6942e8` on branch `feat/board-a-calibration-hardening` (PR #167: https://github.com/DaSilvaDub/outlier/pull/167)
 2. **Files Touched**:
