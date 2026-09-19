@@ -9,10 +9,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from outlier_nfl.calibration import apply_game_script_calibration
 from outlier_nfl.config import (
     get_team_display_name,
     normalize_team,
 )
+from outlier_nfl.consensus import select_consensus_player_props
 from outlier_nfl.games import (
     american_to_implied_probability,
     extract_game_lines,
@@ -25,10 +27,12 @@ logger = logging.getLogger("outlier_nfl.normalizer")
 __all__ = [
     "adjust_push_probability",
     "american_to_implied_probability",
+    "apply_game_script_calibration",
     "build_schedule_index",
     "build_team_index",
     "normalize_game_markets",
     "normalize_player_props",
+    "select_consensus_player_props",
 ]
 
 

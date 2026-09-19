@@ -14,6 +14,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
+# Ensure Windows stdout handles UTF-8 gracefully
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from outlier_nfl.api import OutlierNflApiClient
 from outlier_nfl.constants import (
     MARKET_TYPE_GAMELINE,
@@ -21,10 +25,12 @@ from outlier_nfl.constants import (
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.normalizer import (
+    apply_game_script_calibration,
     build_schedule_index,
     build_team_index,
     normalize_game_markets,
     normalize_player_props,
+    select_consensus_player_props,
 )
 from outlier_nfl.schema import (
     validate_event_markets_payload,
@@ -65,12 +71,14 @@ class NflPipeline:
         self,
         date: str | None = None,
         offline_fixtures_dir: Path | str | None = None,
+        generate_game_script: bool = False,
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
         Args:
             date: Target slate date (YYYY-MM-DD). If omitted, defaults to current Eastern date.
             offline_fixtures_dir: Optional path to JSON fixtures for offline execution.
+            generate_game_script: If True, automatically synthesize game script report.
 
         Returns:
             NflExtractionSummary dictionary.
@@ -188,6 +196,18 @@ class NflPipeline:
                 all_player_props = []
 
         # =====================================================================
+        # 1.5 Consensus Selection & Game Script Calibration Phase
+        # =====================================================================
+        if all_player_props:
+            consensus_props = select_consensus_player_props(all_player_props)
+            calibrated_props = apply_game_script_calibration(all_game_lines, consensus_props)
+        else:
+            consensus_props = []
+            calibrated_props = []
+
+        all_player_props = calibrated_props
+
+        # =====================================================================
         # 2. Schema Validation Phase
         # =====================================================================
         games_dict = [g.to_dict() for g in all_game_lines]
@@ -224,10 +244,26 @@ class NflPipeline:
         safe_write_json(self.normalized_dir / f"nfl_games_{target_date}.json", games_payload)
         safe_write_json(self.normalized_dir / f"nfl_props_{target_date}.json", props_payload)
 
+        # Write calibrated and high-probability datasets
+        safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
+        safe_write_json(self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload)
+
+        anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
+        anchors_payload = {
+            "date": target_date,
+            "updated_at": now_utc,
+            "count": len(anchors),
+            "records": anchors,
+        }
+        safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
+        safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload)
+
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
         totals_count = sum(1 for g in all_game_lines if g.market == "TOTAL")
         team_totals_count = sum(1 for g in all_game_lines if g.market_type == "TEAM_PROP")
+        consensus_props_count = sum(1 for p in calibrated_props if p.is_consensus_line)
+        tier_1_anchors_count = len(anchors)
 
         prop_breakdown: dict[str, int] = {}
         for p in all_player_props:
@@ -244,20 +280,44 @@ class NflPipeline:
             "team_totals_count": team_totals_count,
             "player_props_count": len(all_player_props),
             "props_count": len(all_player_props),
+            "consensus_props_count": consensus_props_count,
+            "tier_1_anchors_count": tier_1_anchors_count,
             "player_props_breakdown": prop_breakdown,
             "errors": errors,
         }
+
+        # Optional Game Script Generation
+        if generate_game_script and all_game_lines:
+            try:
+                from scripts.nfl_game_script import NflGameScriptGenerator
+                generator = NflGameScriptGenerator(data_dir=self.normalized_dir)
+                env = generator.extract_game_environment(games_dict)
+                profiles = generator.build_player_profiles(props_dict)
+                report_md = generator.generate_report(env, profiles)
+
+                reports_dir = Path("reports/NFL")
+                reports_dir.mkdir(parents=True, exist_ok=True)
+                matchup_slug = (all_game_lines[0].matchup or "game").replace(" @ ", "_").replace(" ", "_")
+                report_file = reports_dir / f"{target_date}_{matchup_slug}_Game_Script.md"
+                with open(report_file, "w", encoding="utf-8") as f:
+                    f.write(report_md)
+                summary["game_script_file"] = str(report_file)
+                logger.info("Generated game script at %s", report_file)
+            except Exception as exc:
+                logger.warning("Failed generating game script: %s", exc)
 
         safe_write_json(self.normalized_dir / "summary_latest.json", summary)
         safe_write_json(self.normalized_dir / f"summary_{target_date}.json", summary)
 
         logger.info(
-            "NFL Pipeline run completed successfully: %d games, %d spreads, %d totals, %d team totals, %d props",
+            "NFL Pipeline run completed successfully: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
             len(all_game_lines),
             spreads_count,
             totals_count,
             team_totals_count,
             len(all_player_props),
+            consensus_props_count,
+            tier_1_anchors_count,
         )
         return summary
 
@@ -290,6 +350,11 @@ def main() -> int:
         help="Output root directory for NFL data. Default: ./data",
     )
     parser.add_argument(
+        "--generate-game-script",
+        action="store_true",
+        help="Automatically generate structured betting game script markdown report.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable detailed logging.",
@@ -304,17 +369,22 @@ def main() -> int:
         summary = pipeline.run(
             date=args.date,
             offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
+            generate_game_script=args.generate_game_script,
         )
         print("=" * 60)
         print("OUTLIER NFL PIPELINE EXECUTION SUMMARY")
-        print(f"Date:               {summary.get('date')}")
-        print(f"Status:             {summary.get('status')}")
-        print(f"Events Count:       {summary.get('events_count')}")
-        print(f"Game Lines Count:   {summary.get('game_lines_count')}")
-        print(f"  - Spreads:        {summary.get('spreads_count')}")
-        print(f"  - Totals:         {summary.get('totals_count')}")
-        print(f"  - Team Totals:    {summary.get('team_totals_count')}")
-        print(f"Player Props Count: {summary.get('player_props_count')}")
+        print(f"Date:                   {summary.get('date')}")
+        print(f"Status:                 {summary.get('status')}")
+        print(f"Events Count:           {summary.get('events_count')}")
+        print(f"Game Lines Count:       {summary.get('game_lines_count')}")
+        print(f"  - Spreads:            {summary.get('spreads_count')}")
+        print(f"  - Totals:             {summary.get('totals_count')}")
+        print(f"  - Team Totals:        {summary.get('team_totals_count')}")
+        print(f"Player Props Count:     {summary.get('player_props_count')}")
+        print(f"Consensus Props Count:  {summary.get('consensus_props_count')}")
+        print(f"Tier-1 Anchors Count:   {summary.get('tier_1_anchors_count')}")
+        if summary.get("game_script_file"):
+            print(f"Game Script Generated:  {summary.get('game_script_file')}")
         print("=" * 60)
         return 0
     except Exception as exc:
