@@ -251,7 +251,9 @@ class NflGameScriptGenerator:
         if market in ("ANYTIME_TD", "FIRST_TD", "LAST_TOUCHDOWN"):
             td_candidates = [
                 c for c in candidates
-                if float(_get(c, "line") or 0) == 0.5 and _get(c, "position") in ("OVER", "YES")
+                if float(_get(c, "line") or 0) == 0.5
+                and _get(c, "position") in ("OVER", "YES")
+                and _get(c, "best_odds") is not None
             ]
             if td_candidates:
                 best = max(td_candidates, key=lambda x: len(_get(x, "books") or []))
@@ -313,9 +315,18 @@ class NflGameScriptGenerator:
                 "l10_hit_rate": _get(best_over, "l10_hit_rate"),
             }
 
-        # Fallback: line with most book quotes
+        # Fallback: line with most book quotes, among lines carrying a price
+        # anywhere. A player market entirely off the board yields no profile
+        # rather than a row built on an arbitrary unpriced line.
+        priced_lines = [
+            line_val for line_val, rows in by_line.items()
+            if any(_get(r, "best_odds") is not None for r in rows)
+        ]
+        if not priced_lines:
+            return None
+
         best_line = max(
-            by_line.keys(),
+            priced_lines,
             key=lambda k: sum(len(_get(x, "books") or []) for x in by_line[k]),
         )
         rows = by_line[best_line]

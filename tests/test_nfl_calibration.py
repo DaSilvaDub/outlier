@@ -220,6 +220,33 @@ def test_consensus_never_selects_an_unpriced_line():
     assert targets == {(110.5, "OVER"), (110.5, "UNDER")}
 
 
+def test_consensus_is_empty_when_the_whole_market_is_unpriced():
+    """A player market entirely off the board yields no consensus line at all."""
+    off_board = [
+        _make_prop("Jahmyr Gibbs", "RUSH_YDS", line, pos, best_odds=None, books_count=0)
+        for line in (87.5, 99.5)
+        for pos in ("OVER", "UNDER")
+    ]
+    assert identify_consensus_lines_for_group(off_board) == set()
+
+    # Touchdown markets take a separate path and must behave the same way.
+    off_board_td = [_make_prop("Josh Allen", "ANYTIME_TD", 0.5, "OVER", best_odds=None, books_count=0)]
+    assert identify_consensus_lines_for_group(off_board_td) == set()
+
+
+def test_generator_load_data_reads_pipeline_output(tmp_path):
+    """load_data must pick up the normalized files a pipeline run writes."""
+    pipeline = NflPipeline(data_dir=tmp_path)
+    pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR)
+
+    generator = NflGameScriptGenerator(data_dir=tmp_path / "NFL" / "normalized")
+    games, props = generator.load_data("2026-09-13")
+
+    assert games and props
+    assert all("market" in g for g in games)
+    assert all("player_name" in p for p in props)
+
+
 def test_underdog_rb_deficit_haircut_and_resilient_targets():
     """Underdog RB rushing overs get -15% volume haircut and DEFICIT_VOLUME_RISK tag."""
     lines = [
