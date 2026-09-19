@@ -1,5 +1,5 @@
 ## Daily Debug Review — master CI red + NFL calibration inputs (Claude) - 2026-09-19
-1. **Last Commit SHA**: `0063058` on branch `claude/inspiring-fermat-v8n34k` (PR #169: https://github.com/DaSilvaDub/outlier/pull/169)
+1. **Last Commit SHA**: `0063058` on branch `claude/inspiring-fermat-v8n34k` — **MERGED** as `cbcad6f` (PR #169: https://github.com/DaSilvaDub/outlier/pull/169). master is green again: run 598 on `fdb3398` passed.
 2. **Files Touched**:
    - `tests/test_nfl_calibration.py`: `test_game_script_generator_output` no longer sources its report from the gitignored `data/NFL/normalized`; it builds games/props in-test from the existing helpers and keeps every assertion. Added 3 regression tests (quoted team totals below the default, default fallback when none quoted, consensus never selects an unpriced line).
    - `outlier_nfl/calibration.py`: `extract_game_script_context` no longer seeds its team-total accumulators with the fallback defaults, so a quoted total below the default is reported instead of the default. The `>= 28.0` deficit trigger is unchanged.
@@ -9,6 +9,7 @@
 3. **Verification**: 29/29 NFL tests pass. Each new regression test confirmed to fail against pre-fix source. Pipeline re-run offline: status OK, 10 game lines, 8 props, 8 consensus, 0 errors. Hosted CI green on core, provider, typecheck, Codacy.
 4. **Root cause of red master**: `.gitignore:35` excludes `data/*`, so `test_game_script_generator_output` passed only on a machine that had already run the pipeline.
 5. **Next Steps / Outstanding**:
+   - **Concurrency note for the next ent**: PR #168 ("make the game script test and its report path independent of the machine") fixed the same red test as this PR, from another session, and merged ~40 minutes earlier; a human had to reconcile the two (`3afb638`, `a6c4bd8`). #168 also fixed the CWD-relative `reports/NFL` path that this review reported but deliberately left alone. STEP 0 verifies branch/commit *visibility* but says nothing about which PRs are already open and in flight — check open PRs for the area you are about to touch before starting, not just the sync report.
    - Paid reasoning models were not invoked.
 
 ## Daily automated debug review (claude) - 2026-09-17
