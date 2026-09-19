@@ -13,6 +13,16 @@
    - Related: that block writes to a CWD-relative `Path("reports/NFL")`, ignoring `data_dir`, so `test_pipeline_calibrated_and_high_prob_artifacts` drops a file into the repo on every run despite using `tmp_path`.
    - **Still outstanding from 2026-09-17, needs PyPI access**: `requirements.lock` still omits `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary` (re-verified today). Regenerate with `uv export --frozen --no-hashes --all-extras -o requirements.lock`.
    - Paid reasoning models were not invoked.
+## Daily Debug Review (Claude) - 2026-09-18
+1. **Branch**: `claude/inspiring-fermat-rcb6v7` (from `5d2b30a`), reviewing the NFL consensus/calibration work in `446e718`.
+2. **Files Touched**: `tests/test_nfl_calibration.py`, `outlier_nfl/pipeline.py`, `outlier_nfl/consensus.py`.
+3. **Fixed**:
+   - `test_game_script_generator_output` read `data/NFL/normalized` (gitignored, cwd-relative) and hard-coded 2026-09-17, so it failed in every clean checkout and in CI. It now builds its own DET @ BUF dataset under `tmp_path`; the assertions are unchanged and verified data-driven.
+   - `NflPipeline.run(generate_game_script=True)` always wrote into cwd `reports/NFL`, so the test suite left an untracked report in the repo. `run()` now takes `reports_dir` (default unchanged) and the test points it at `tmp_path`.
+   - `select_consensus_player_props` keyed groups on (event, player, market) only, letting a 1H/1Q line take the consensus flag away from the full-game line. `scope` is now part of the key, with a regression test.
+4. **Reported, not fixed** (see PR body): alternate-ladder `max()` selection for away spread / home team total in `extract_game_script_context`; `--generate-game-script` renders the DET @ BUF narrative and fabricated fallback lines for any slate; `best_odds or 0` treats a missing price as balanced; 2 pre-existing mypy errors and 17 pre-existing ruff F401s.
+5. **Environment note**: PyPI is blocked in this sandbox (403), so `structlog`/`sqlalchemy`/`google-genai` could not be installed; 48 collection errors and 50 dependency-only failures are environment, not repo. NFL/offline-stdlib tests all pass. Also: GitHub Actions has not run on master since 2026-09-05, so nothing caught the broken test.
+6. **Next Steps**: merge the PR; decide on the alternate-ladder selection rule; PRs #165, #166, #167 remain open. Paid reasoning was not invoked.
 
 ## Board A Calibration Hardening & Predictor Gates (Gemini) - 2026-09-18
 1. **Last Commit SHA**: `b6942e8` on branch `feat/board-a-calibration-hardening` (PR #167: https://github.com/DaSilvaDub/outlier/pull/167)

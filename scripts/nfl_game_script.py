@@ -20,7 +20,7 @@ import json
 import logging
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, TypedDict
 
 # Ensure repository root is in sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +68,13 @@ def _get(item: Any, key: str, default: Any = None) -> Any:
     if isinstance(item, dict):
         return item.get(key, default)
     return getattr(item, key, default)
+
+
+class _PlayerConfig(TypedDict):
+    name: str
+    team: str
+    pos: str
+    aliases: list[str]
 
 
 class NflGameScriptGenerator:
@@ -353,7 +360,7 @@ class NflGameScriptGenerator:
 
     def build_player_profiles(self, props: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Extract full prop profiles for all key stars."""
-        players_config = [
+        players_config: list[_PlayerConfig] = [
             # Buffalo Bills
             {"name": "Josh Allen", "team": "BUF", "pos": "QB", "aliases": ["Josh Allen", "J. Allen"]},
             {"name": "James Cook III", "team": "BUF", "pos": "RB", "aliases": ["James Cook III", "J. Cook"]},
