@@ -16,6 +16,7 @@ from outlier_nfl.config import (
 )
 from outlier_nfl.games import american_to_implied_probability, extract_book_prices
 from outlier_nfl.models import NflPlayerProp
+from outlier_nfl.utils import coerce_float, coerce_odds
 
 logger = logging.getLogger("outlier_nfl.props")
 
@@ -104,21 +105,18 @@ def extract_player_props(
             if books
             else None
         )
-        if best_odds is None and outcome.get("bestOdds") is not None:
-            try:
-                best_odds = int(str(outcome["bestOdds"]).replace("+", ""))
-            except (ValueError, TypeError):
-                best_odds = None
+        if best_odds is None:
+            best_odds = coerce_odds(outcome.get("bestOdds"))
         implied_prob = american_to_implied_probability(best_odds)
 
         # Hit rate statistics
         raw_stats = item.get("stats")
         stats: dict[str, Any] = raw_stats if isinstance(raw_stats, dict) else {}
-        l5 = float(stats["l5"]) if stats.get("l5") is not None else None
-        l10 = float(stats["l10"]) if stats.get("l10") is not None else None
-        l20 = float(stats["l20"]) if stats.get("l20") is not None else None
+        l5 = coerce_float(stats.get("l5"))
+        l10 = coerce_float(stats.get("l10"))
+        l20 = coerce_float(stats.get("l20"))
         season_val = stats.get("curSeason") if stats.get("curSeason") is not None else stats.get("season")
-        season = float(season_val) if season_val is not None else None
+        season = coerce_float(season_val)
 
         scope = detect_scope(outcome.get("periodLabel"), outcome.get("marketLabel"))
         market_id = outcome.get("marketId") or outcome.get("id")

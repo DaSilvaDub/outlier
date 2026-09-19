@@ -29,7 +29,7 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import BookPrice, NflGameLine
-from outlier_nfl.utils import format_signed_line
+from outlier_nfl.utils import coerce_odds, format_signed_line
 
 logger = logging.getLogger("outlier_nfl.games")
 
@@ -203,8 +203,13 @@ def extract_game_lines(
         if not isinstance(market, dict):
             continue
 
-        # Optional eventId guard if market payload is heterogeneous
-        m_event_id = market.get("eventId") or market.get("id")
+        # Optional eventId guard if market payload is heterogeneous. Only keys
+        # that actually carry an event id count: ``id`` on a market is the
+        # market's own identifier (validate_event_markets_payload accepts it as
+        # the ``marketId`` fallback, and it is read as one below), so treating
+        # it as an event id made every market of such a payload look like it
+        # belonged to another event and dropped the whole game line board.
+        m_event_id = market.get("eventId") or market.get("event_id")
         if m_event_id and event_id and str(m_event_id) != event_id:
             continue
 
@@ -233,7 +238,7 @@ def extract_game_lines(
             best_odds = (
                 max((b.odds for b in books), default=None)
                 if books
-                else (int(outcome["bestOdds"]) if outcome.get("bestOdds") is not None else None)
+                else coerce_odds(outcome.get("bestOdds"))
             )
             implied_prob = american_to_implied_probability(best_odds)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import threading
@@ -278,6 +279,41 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
 
     eastern_dt = dt.astimezone(eastern_tz)
     return eastern_dt.strftime("%Y-%m-%d")
+
+
+def coerce_float(value: Any) -> float | None:
+    """Float from feed data, or None when the value is not a finite number.
+
+    Feed fields arrive as numbers, as numeric strings, and occasionally as junk
+    (``"N/A"``, ``"-"``, ``""``). Junk in one optional field is one unusable
+    value, never a reason to abort the slate, so this returns None rather than
+    raising. ``bool`` is rejected: ``True`` is not a price or a hit rate.
+
+    ``OverflowError`` is caught alongside the parse errors: ``json`` parses an
+    integer literal of any length, and ``float()`` raises it -- not
+    ``ValueError`` -- for one too large to convert.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def coerce_odds(value: Any) -> int | None:
+    """American odds as an int, or None when the feed value is not one.
+
+    Same contract as :func:`coerce_float`. Leading ``+`` is accepted
+    (``"+150"``), and a whole-number float (``-110.0``, which is how JSON often
+    carries a price) keeps its value; a fractional one is not American odds and
+    is rejected rather than silently truncated.
+    """
+    parsed = coerce_float(value)
+    if parsed is None or parsed != int(parsed):
+        return None
+    return int(parsed)
 
 
 def format_signed_line(line: float | int | None) -> str | None:

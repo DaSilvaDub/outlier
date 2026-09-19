@@ -226,3 +226,24 @@ def build_feed_health_by_league(leagues: Sequence[str]) -> dict[str, dict[str, A
                 raise RuntimeError(f"{league} feed health unsafe: {'; '.join(reasons)}")
         health_by_league[league] = health
     return health_by_league
+
+
+def build_team_total_context(payload: dict[str, Any] | None, sport: str) -> dict[tuple[str, str], float]:
+    """Unambiguous full-game team totals keyed by event and team.
+
+    Alternate ladders with conflicting lines are unknown, never reduced to an
+    arbitrary extreme. Missing totals do not fabricate a scoring-share input.
+    """
+    from outlier_scrapers.game_totals import is_team_total_record
+    from outlier_scrapers.slate_quality import _to_float
+
+    values: dict[tuple[str, str], set[float]] = {}
+    for rec in (payload or {}).get("records", []):
+        if not isinstance(rec, dict) or not is_team_total_record(rec, sport=sport):
+            continue
+        event = str(rec.get("event_id") or "")
+        team = str(rec.get("team") or "").strip().upper()
+        line = _to_float(rec.get("line"))
+        if event and team and line is not None and line > 0:
+            values.setdefault((event, team), set()).add(line)
+    return {key: next(iter(lines)) for key, lines in values.items() if len(lines) == 1}

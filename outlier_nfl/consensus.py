@@ -34,7 +34,9 @@ def identify_consensus_lines_for_group(
     if market in TOUCHDOWN_MARKETS:
         td_candidates = [
             p for p in group
-            if float(p.line) == 0.5 and p.position in ("OVER", "YES")
+            if float(p.line) == 0.5
+            and p.position in ("OVER", "YES")
+            and p.best_odds is not None
         ]
         if td_candidates:
             best_td = max(
@@ -58,8 +60,12 @@ def identify_consensus_lines_for_group(
 
         best_over = max(overs, key=lambda x: len(x.books))
         best_under = max(unders, key=lambda x: len(x.books))
-        o_odds = best_over.best_odds or 0
-        u_odds = best_under.best_odds or 0
+        o_odds = best_over.best_odds
+        u_odds = best_under.best_odds
+        # An unpriced side is not a balanced market. Coercing it to 0 put it
+        # inside the band and let a line nobody quoted win the consensus.
+        if o_odds is None or u_odds is None:
+            continue
 
         # Balanced betting line filter
         if BALANCED_MIN_ODDS <= o_odds <= BALANCED_MAX_ODDS and BALANCED_MIN_ODDS <= u_odds <= BALANCED_MAX_ODDS:
@@ -72,9 +78,18 @@ def identify_consensus_lines_for_group(
         _, _, best_line = scored[0]
         return {(best_line, "OVER"), (best_line, "UNDER")}
 
-    # Fallback: Line with most total book quotes across all outcomes
+    # Fallback: Line with most total book quotes across all outcomes. Only lines
+    # carrying a price anywhere are eligible, so a market that is entirely off the
+    # board yields no consensus at all rather than an arbitrary unpriced line.
+    priced_lines = [
+        line_val for line_val, rows in by_line.items()
+        if any(r.best_odds is not None for r in rows)
+    ]
+    if not priced_lines:
+        return set()
+
     best_fallback_line = max(
-        by_line.keys(),
+        priced_lines,
         key=lambda k: sum(len(x.books) for x in by_line[k]),
     )
     return {(best_fallback_line, "OVER"), (best_fallback_line, "UNDER")}
@@ -85,9 +100,12 @@ def select_consensus_player_props(props: list[NflPlayerProp]) -> list[NflPlayerP
 
     Returns a new list of NflPlayerProp instances with is_consensus_line populated.
     """
-    by_player_market: dict[tuple[str, str, str], list[NflPlayerProp]] = {}
+    # Scope is part of the key: a first-half line is a different market from the
+    # full-game line of the same proposition, so they must not compete for -- or
+    # be excluded by -- the same consensus selection.
+    by_player_market: dict[tuple[str, str, str, str], list[NflPlayerProp]] = {}
     for p in props:
-        key = (p.event_id, p.player_name, p.market)
+        key = (p.event_id, p.player_name, p.market, p.scope)
         by_player_market.setdefault(key, []).append(p)
 
     updated_props: list[NflPlayerProp] = []

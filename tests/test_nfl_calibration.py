@@ -12,6 +12,7 @@ Validates:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from outlier_nfl.calibration import (
@@ -42,6 +43,7 @@ def _make_prop(
     event_id: str = "evt-det-buf-01",
     l5: float | None = None,
     l10: float | None = None,
+    scope: str = "full_game",
 ) -> NflPlayerProp:
     books = tuple(
         BookPrice(book=f"Book_{i}", odds=best_odds, odds_raw=str(best_odds), decimal=1.91)
@@ -64,6 +66,7 @@ def _make_prop(
         implied_probability=52.38,
         l5_hit_rate=l5,
         l10_hit_rate=l10,
+        scope=scope,
     )
 
 
@@ -125,6 +128,26 @@ def test_consensus_selection_balanced_vs_extreme_ladders():
             assert p.is_consensus_line is False
 
 
+def test_consensus_selection_keeps_period_scopes_apart():
+    """A first-half line must not compete with the full-game line of the same market."""
+    fg_over = _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "OVER", best_odds=-112, books_count=4)
+    fg_under = _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "UNDER", best_odds=-108, books_count=4)
+    h1_over = _make_prop(
+        "Amon-Ra St. Brown", "REC_YDS", 32.5, "OVER", best_odds=-115, books_count=6, scope="first_half"
+    )
+    h1_under = _make_prop(
+        "Amon-Ra St. Brown", "REC_YDS", 32.5, "UNDER", best_odds=-105, books_count=6, scope="first_half"
+    )
+
+    annotated = select_consensus_player_props([fg_over, fg_under, h1_over, h1_under])
+
+    # Both scopes keep their own consensus line; the better-quoted half line does
+    # not strip the full-game line of its flag.
+    by_scope_line = {(p.scope, p.line): p.is_consensus_line for p in annotated}
+    assert by_scope_line[("full_game", 68.5)] is True
+    assert by_scope_line[("first_half", 32.5)] is True
+
+
 def test_consensus_selection_touchdown_scorer():
     """Touchdown scorer market must strictly select line == 0.5 and OVER."""
     td_05 = _make_prop("Josh Allen", "ANYTIME_TD", 0.5, "OVER", best_odds=+102, books_count=6)
@@ -173,6 +196,78 @@ def test_extract_game_script_context_deficit_risk():
     assert ctx["home_deficit_risk"] is False
     assert ctx["away_spread"] == 5.5
     assert ctx["home_team_total"] == 30.5
+
+
+def test_context_reports_quoted_team_totals_below_defaults():
+    """A quoted team total below the fallback default must be reported, not the default."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+        _make_game_line("TOTAL", 20.5, market_type="TEAM_PROP", team="BUF"),
+        _make_game_line("TOTAL", 17.5, market_type="TEAM_PROP", team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 20.5
+    assert ctx["away_team_total"] == 17.5
+    # A low-scoring home environment must not read as deficit risk for the road dog.
+    assert ctx["away_deficit_risk"] is False
+
+
+def test_context_falls_back_when_no_team_total_is_quoted():
+    """With no team totals on the board the documented defaults still apply."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 27.0
+    assert ctx["away_team_total"] == 21.0
+
+
+def test_consensus_never_selects_an_unpriced_line():
+    """A line with no book quotes on either side must not win the consensus."""
+    ladder_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "OVER", best_odds=+450, books_count=8)
+    ladder_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "UNDER", best_odds=-800, books_count=8)
+    unpriced_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "OVER", best_odds=None, books_count=0)
+    unpriced_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "UNDER", best_odds=None, books_count=0)
+
+    targets = identify_consensus_lines_for_group(
+        [ladder_over, ladder_under, unpriced_over, unpriced_under]
+    )
+
+    assert (87.5, "OVER") not in targets
+    assert (87.5, "UNDER") not in targets
+    # No balanced line exists, so selection falls back to the most-quoted line.
+    assert targets == {(110.5, "OVER"), (110.5, "UNDER")}
+
+
+def test_consensus_is_empty_when_the_whole_market_is_unpriced():
+    """A player market entirely off the board yields no consensus line at all."""
+    off_board = [
+        _make_prop("Jahmyr Gibbs", "RUSH_YDS", line, pos, best_odds=None, books_count=0)
+        for line in (87.5, 99.5)
+        for pos in ("OVER", "UNDER")
+    ]
+    assert identify_consensus_lines_for_group(off_board) == set()
+
+    # Touchdown markets take a separate path and must behave the same way.
+    off_board_td = [_make_prop("Josh Allen", "ANYTIME_TD", 0.5, "OVER", best_odds=None, books_count=0)]
+    assert identify_consensus_lines_for_group(off_board_td) == set()
+
+
+def test_generator_load_data_reads_pipeline_output(tmp_path):
+    """load_data must pick up the normalized files a pipeline run writes."""
+    pipeline = NflPipeline(data_dir=tmp_path)
+    pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR)
+
+    generator = NflGameScriptGenerator(data_dir=tmp_path / "NFL" / "normalized")
+    games, props = generator.load_data("2026-09-13")
+
+    assert games and props
+    assert all("market" in g for g in games)
+    assert all("player_name" in p for p in props)
 
 
 def test_underdog_rb_deficit_haircut_and_resilient_targets():
@@ -265,10 +360,12 @@ def test_empirical_hit_rate_tiering():
 def test_pipeline_calibrated_and_high_prob_artifacts(tmp_path):
     """Pipeline run must output calibrated and high probability datasets."""
     pipeline = NflPipeline(data_dir=tmp_path)
+    reports_dir = tmp_path / "reports" / "NFL"
     summary = pipeline.run(
         date="2026-09-13",
         offline_fixtures_dir=FIXTURES_DIR,
         generate_game_script=True,
+        reports_dir=reports_dir,
     )
 
     assert summary["status"] == "OK"
@@ -281,10 +378,59 @@ def test_pipeline_calibrated_and_high_prob_artifacts(tmp_path):
     assert (normalized_dir / "nfl_high_prob_props_latest.json").exists()
     assert (normalized_dir / "nfl_high_prob_props_2026-09-13.json").exists()
 
+    # The game script must land under the caller's reports directory -- generation
+    # failures are swallowed by run(), so the file's absence is the only signal.
+    assert summary["game_script_file"] == str(reports_dir / "2026-09-13_BAL_KC_Game_Script.md")
+    assert (reports_dir / "2026-09-13_BAL_KC_Game_Script.md").exists()
 
-def test_game_script_generator_output():
+
+def _write_normalized_dataset(target_dir: Path, date: str) -> None:
+    """Write a DET @ BUF normalized dataset the game script generator can read."""
+    games = [
+        _make_game_line("ML", 0.0, proposition="MONEYLINE", position="HOME", team="BUF", best_odds=-225),
+        _make_game_line("ML", 0.0, proposition="MONEYLINE", position="AWAY", team="DET", best_odds=185),
+        _make_game_line("SPREAD", -5.5, proposition="SPREAD", position="HOME", team="BUF", best_odds=-108),
+        _make_game_line("SPREAD", 5.5, proposition="SPREAD", position="AWAY", team="DET", best_odds=-112),
+        _make_game_line("TOTAL", 54.5, proposition="TOTAL", position="OVER", best_odds=-112),
+        _make_game_line("TOTAL", 54.5, proposition="TOTAL", position="UNDER", best_odds=-108),
+        _make_game_line(
+            "TEAM_TOTAL", 30.5, market_type="TEAM_PROP", position="OVER", team="BUF", best_odds=-115
+        ),
+        _make_game_line(
+            "TEAM_TOTAL", 24.5, market_type="TEAM_PROP", position="OVER", team="DET", best_odds=-110
+        ),
+    ]
+
+    props = [
+        # Detroit: road underdog running back exposed to deficit volume risk.
+        _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "OVER", best_odds=-112),
+        _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "UNDER", best_odds=-108),
+        # Detroit: slot receiver upgraded by the two-high shell divergence.
+        _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "OVER", best_odds=-114),
+        _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "UNDER", best_odds=-106),
+        # Buffalo: untouched by the away-team calibrations.
+        _make_prop("Josh Allen", "PASS_YDS", 248.5, "OVER", best_odds=-110, team="BUF", opponent="DET"),
+        _make_prop("Josh Allen", "PASS_YDS", 248.5, "UNDER", best_odds=-110, team="BUF", opponent="DET"),
+    ]
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / f"nfl_games_{date}.json").write_text(
+        json.dumps({"date": date, "records": [g.to_dict() for g in games]}),
+        encoding="utf-8",
+    )
+    # Written uncalibrated on purpose: the generator must calibrate on load.
+    (target_dir / f"nfl_props_{date}.json").write_text(
+        json.dumps({"date": date, "records": [p.to_dict() for p in props]}),
+        encoding="utf-8",
+    )
+
+
+def test_game_script_generator_output(tmp_path):
     """NflGameScriptGenerator must generate report with calibration signals and Section 3.5."""
-    generator = NflGameScriptGenerator(data_dir="data/NFL/normalized")
+    normalized_dir = tmp_path / "NFL" / "normalized"
+    _write_normalized_dataset(normalized_dir, "2026-09-17")
+
+    generator = NflGameScriptGenerator(data_dir=normalized_dir)
     games, props = generator.load_data("2026-09-17")
     env = generator.extract_game_environment(games, home_team="BUF", away_team="DET")
     profiles = generator.build_player_profiles(props)

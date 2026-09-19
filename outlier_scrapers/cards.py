@@ -611,12 +611,22 @@ def _slim_insight(i: dict[str, Any]) -> dict[str, Any]:
 
 def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Best-effort player/market identity from whichever feed rows exist."""
+    starts_at = None
+    for r in rows:
+        if not r:
+            continue
+        sctx = r.get("sport_context") or {}
+        starts_at = r.get("event_starts_at") or sctx.get("event_starts_at") or starts_at
+        if starts_at:
+            break
+
     for row in rows:
         if row and row.get("player"):
             sctx = row.get("sport_context") or {}
-            return {
+            out = {
                 "player": row.get("player"),
                 "player_id": row.get("player_id"),
+                "player_position": row.get("player_position"),
                 "market": row.get("market") or row.get("market_raw"),
                 "market_type": row.get("market_type"),
                 "market_raw": row.get("market_raw"),
@@ -630,13 +640,16 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
                 "event_id": row.get("event_id"),
             }
+            if starts_at:
+                out["event_starts_at"] = starts_at
+            return out
     # Game/team-market rows carry no player; key on the event + proposition.
     # ``proposition`` must be present so assemble_game_card can resolve the valid
     # sides via game_sides() instead of falling back to positional sides.
     for row in rows:
         if row and (row.get("proposition") or row.get("position")):
             sctx = row.get("sport_context") or {}
-            return {
+            out = {
                 "event_id": row.get("event_id"),
                 "proposition": row.get("proposition"),
                 "market": row.get("market") or row.get("market_raw"),
@@ -650,6 +663,9 @@ def _identity(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "opponent": row.get("opponent"),
                 "matchup": row.get("matchup") or row.get("matchup_raw"),
             }
+            if starts_at:
+                out["event_starts_at"] = starts_at
+            return out
     return {}
 
 
@@ -1239,7 +1255,7 @@ def _route_and_rank(
         card["rank_value"] = ev.get("best_ev_pct")
         card["rank_metric"] = "calculated_ev_pct"
         card["bucket"] = _bucket(ev.get("best_ev_pct"), EV_BUCKETS, "Pass")
-        flags = _board_a_flags(headline, sides[headline])
+        flags = _board_a_flags(headline, sides[headline], card)
         if _strategy_conflict(card, headline, strategy_directions):
             flags.append("strategy_conflict")
         card["flags"] = flags
@@ -1262,7 +1278,42 @@ def _route_and_rank(
         card["flags"] = _board_b_flags(headline, sides[headline])
 
 
-def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
+_3PT_MARKET_TOKENS = frozenset({
+    "3PT",
+    "3PTS",
+    "THREE_POINTERS_MADE",
+    "THREE_POINT_FIELD_GOALS_MADE",
+    "THREE_POINTERS",
+    "3_POINT_FIELD_GOALS",
+})
+
+
+def is_3pt_market(
+    market: str | None = None,
+    proposition: str | None = None,
+    market_label: str | None = None,
+    selection: str | None = None,
+) -> bool:
+    """True when market, proposition, label, or selection corresponds to a 3-point field goal prop."""
+    tokens = [
+        str(market or "").upper(),
+        str(proposition or "").upper(),
+        str(market_label or "").upper(),
+        str(selection or "").upper(),
+    ]
+    for t in tokens:
+        if not t:
+            continue
+        if any(tok in t for tok in _3PT_MARKET_TOKENS):
+            return True
+        if "THREE_POINT" in t or "THREE-POINT" in t or "THREE POINT" in t or "THREEPOINTER" in t:
+            return True
+        if "3-POINT" in t or "3-PT" in t or "3PT" in t or "3PTS" in t:
+            return True
+    return False
+
+
+def _board_a_flags(side: str, view: dict[str, Any], card: dict[str, Any] | None = None) -> list[str]:
     flags: list[str] = []
     ev = view.get("ev") or {}
     corro = movement_corroboration(side, _expand_movement(view))
@@ -1286,6 +1337,17 @@ def _board_a_flags(side: str, view: dict[str, Any]) -> list[str]:
         flags.append("high_vig")
     if ev.get("is_alt_line_fallback"):
         flags.append("ev_line_fallback")
+
+    # Flag low-volume 3PT shooters on OVER bets (e.g. non-shooters with synthetic devig)
+    card_dict = card or {}
+    market = str(card_dict.get("market") or card_dict.get("market_type") or view.get("market") or "")
+    prop = str(card_dict.get("proposition") or view.get("proposition") or "")
+    label = str(card_dict.get("market_label") or view.get("market_label") or "")
+    if side == "OVER" and is_3pt_market(market=market, proposition=prop, market_label=label):
+        hit_rates = view.get("hit_rates") or {}
+        l5 = _to_float(hit_rates.get("l5_pct") if hit_rates.get("l5_pct") is not None else card_dict.get("l5_pct"))
+        if l5 is not None and 0.0 <= l5 <= 20.0:
+            flags.append("low_volume_3pt_shooter")
     return flags
 
 
@@ -1318,7 +1380,24 @@ def _expand_movement(view: dict[str, Any]) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 
 
-def build_cards_payload(league: str) -> dict[str, Any]:
+def _local_date(ts: str | None) -> str | None:
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        clean = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean)
+        return dt.astimezone().strftime("%Y-%m-%d")
+    except Exception:
+        if len(ts) >= 10 and ts[:4].isdigit() and ts[4] == "-" and ts[7] == "-":
+            return ts[:10]
+        return None
+
+
+def build_cards_payload(
+    league: str,
+    target_date: str | None = None,
+    exclude_off_slate: bool = False,
+) -> dict[str, Any]:
     paths = league_paths(league)
     lg = paths.league
     props_payload = load_latest(lg, "props")
@@ -1365,13 +1444,30 @@ def build_cards_payload(league: str) -> dict[str, Any]:
     market_ids = sorted(set(idx.props_by_market) | set(idx.ev_by_market))
     cards = [assemble_card(mid, idx) for mid in market_ids]
 
+    card_dates = {d for c in cards if (d := _local_date(c.get("event_starts_at"))) is not None}
+    active_date = target_date
+    if active_date is None and card_dates:
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        active_date = today if today in card_dates else max(card_dates)
+
+    if active_date:
+        for c in cards:
+            c_date = _local_date(c.get("event_starts_at"))
+            if c_date is not None and c_date != active_date:
+                c["off_slate"] = True
+                flags = c.setdefault("flags", [])
+                if "off_slate" not in flags:
+                    flags.append("off_slate")
+
+    filtered_cards = [c for c in cards if not (exclude_off_slate and c.get("off_slate"))]
+
     board_a = sorted(
-        (c for c in cards if c.get("board") == "A"),
+        (c for c in filtered_cards if c.get("board") == "A"),
         key=lambda c: c.get("rank_value") if c.get("rank_value") is not None else float("-inf"),
         reverse=True,
     )
     board_b = sorted(
-        (c for c in cards if c.get("board") == "B"),
+        (c for c in filtered_cards if c.get("board") == "B"),
         key=lambda c: c.get("rank_value") or 0.0,
         reverse=True,
     )
@@ -1388,6 +1484,7 @@ def build_cards_payload(league: str) -> dict[str, Any]:
         "league": lg,
         "source_method": "join",
         "generated_at": datetime.now().astimezone().isoformat(),
+        "slate_date": active_date,
         "missing_feeds": ["insights"] if not insights_payload else [],
         "snapshot_skew": skew,
         "coverage": {
@@ -1423,12 +1520,21 @@ def build_cards_payload(league: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def export_cards_for_league(league: str) -> dict[str, Any]:
+def export_cards_for_league(
+    league: str,
+    target_date: str | None = None,
+    exclude_off_slate: bool = False,
+) -> dict[str, Any]:
     paths = league_paths(league)
     cards_dir = paths.root / "cards"
     cards_dir.mkdir(parents=True, exist_ok=True)
 
-    payload = build_cards_payload(paths.league)
+    kwargs: dict[str, Any] = {}
+    if target_date is not None:
+        kwargs["target_date"] = target_date
+    if exclude_off_slate:
+        kwargs["exclude_off_slate"] = exclude_off_slate
+    payload = build_cards_payload(paths.league, **kwargs)
 
     latest_json = cards_dir / f"{paths.league.lower()}_cards_latest.json"
     archive_json = paths.timestamped(cards_dir, "cards")
@@ -1453,7 +1559,11 @@ def export_cards_for_league(league: str) -> dict[str, Any]:
     return status
 
 
-def build_game_cards_payload(league: str) -> dict[str, Any]:
+def build_game_cards_payload(
+    league: str,
+    target_date: str | None = None,
+    exclude_off_slate: bool = False,
+) -> dict[str, Any]:
     paths = league_paths(league)
     lg = paths.league
     games_payload = load_latest(lg, "games")
@@ -1488,13 +1598,30 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
 
     cards = [assemble_game_card(mid, idx) for mid in filtered_market_ids]
 
+    card_dates = {d for c in cards if (d := _local_date(c.get("event_starts_at"))) is not None}
+    active_date = target_date
+    if active_date is None and card_dates:
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        active_date = today if today in card_dates else max(card_dates)
+
+    if active_date:
+        for c in cards:
+            c_date = _local_date(c.get("event_starts_at"))
+            if c_date is not None and c_date != active_date:
+                c["off_slate"] = True
+                flags = c.setdefault("flags", [])
+                if "off_slate" not in flags:
+                    flags.append("off_slate")
+
+    filtered_cards = [c for c in cards if not (exclude_off_slate and c.get("off_slate"))]
+
     board_a = sorted(
-        (c for c in cards if c.get("board") == "A"),
+        (c for c in filtered_cards if c.get("board") == "A"),
         key=lambda c: c.get("rank_value") if c.get("rank_value") is not None else float("-inf"),
         reverse=True,
     )
     board_b = sorted(
-        (c for c in cards if c.get("board") == "B"),
+        (c for c in filtered_cards if c.get("board") == "B"),
         key=lambda c: c.get("rank_value") or 0.0,
         reverse=True,
     )
@@ -1512,6 +1639,7 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
         "league": lg,
         "source_method": "join",
         "generated_at": datetime.now().astimezone().isoformat(),
+        "slate_date": active_date,
         "missing_feeds": ["line_movement"] if not movement_payload else [],
         "snapshot_skew": skew,
         "coverage": {
@@ -1542,12 +1670,21 @@ def build_game_cards_payload(league: str) -> dict[str, Any]:
     return payload
 
 
-def export_game_cards_for_league(league: str) -> dict[str, Any]:
+def export_game_cards_for_league(
+    league: str,
+    target_date: str | None = None,
+    exclude_off_slate: bool = False,
+) -> dict[str, Any]:
     paths = league_paths(league)
     cards_dir = paths.root / "cards"
     cards_dir.mkdir(parents=True, exist_ok=True)
 
-    payload = build_game_cards_payload(paths.league)
+    kwargs: dict[str, Any] = {}
+    if target_date is not None:
+        kwargs["target_date"] = target_date
+    if exclude_off_slate:
+        kwargs["exclude_off_slate"] = exclude_off_slate
+    payload = build_game_cards_payload(paths.league, **kwargs)
 
     latest_json = cards_dir / f"{paths.league.lower()}_games_cards_latest.json"
     archive_json = paths.timestamped(cards_dir, "games_cards")
@@ -1585,6 +1722,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Accepted for parity with other modules; cards always use latest files.",
     )
+    parser.add_argument("--date", help="Optional target slate date (YYYY-MM-DD)")
     return parser.parse_args(argv)
 
 
@@ -1592,7 +1730,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     paths = league_paths(args.league)
     try:
-        status = export_cards_for_league(paths.league)
+        status = export_cards_for_league(paths.league, target_date=args.date)
     except FileNotFoundError as exc:
         report = {
             "league": paths.league,
