@@ -1,3 +1,19 @@
+## Settlement Team Aliases, Totals Parsing & Heavy-Dog Spread Cap (Gemini) - 2026-09-19
+1. **Last Commit SHA**: `a326f62` on branch `fix/settlement-team-aliases-and-totals` (PR #171: https://github.com/DaSilvaDub/outlier/pull/171)
+2. **Files Touched**:
+   - `outlier_scrapers/results.py`: Added `"NYL": "NY"` and `"CONN": "CON"` to `TEAM_ALIASES`; updated `_team_total_event_match` and `_grade_row` to support matchup-prefixed team totals (`IND @ TOR Indiana Fever - Points UNDER 100.5`) and excluded matchup strings from player prop matching.
+   - `outlier_scrapers/slate_quality.py`: Added `apply_wnba_heavy_dog_spread_cap` capping WNBA double-digit dogs (+12.0+) at 0.5u (or 0.25u when multiple starters are out) with flag `wnba_heavy_dog_deficit_cap`.
+   - `outlier_scrapers/pack_selection.py`: Wired `apply_wnba_heavy_dog_spread_cap(row, injury_view)` right after `apply_local_devig_unit_cap(row)`.
+   - `tests/test_results.py`: Added regression tests for `NYL` alias and matchup-prefixed team totals (13/13 passed).
+   - `tests/test_slate_quality.py`: Added unit tests for `apply_wnba_heavy_dog_spread_cap` (17/17 passed).
+3. **Verification**:
+   - Targeted unit tests: 13 results tests, 17 slate quality tests, 161 pack integration tests passed.
+   - Ruff lint clean on all modified files.
+   - PR #171 opened targeting `master`.
+4. **Next Steps**:
+   - Merge PR #171 when review completes.
+   - Paid reasoning models were not invoked.
+
 ## Board A Calibration Hardening & Predictor Gates (Gemini) - 2026-09-18
 1. **Last Commit SHA**: `b6942e8` on branch `feat/board-a-calibration-hardening` (PR #167: https://github.com/DaSilvaDub/outlier/pull/167)
 2. **Files Touched**:
