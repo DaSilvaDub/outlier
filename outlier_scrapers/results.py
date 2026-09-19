@@ -43,11 +43,13 @@ EASTERN = ZoneInfo("America/New_York")
 TEAM_ALIASES = {
     "ARI": "AZ",
     "CHW": "CWS",
+    "CONN": "CON",
     "CWS": "CWS",
     "GSV": "GS",
     "KCR": "KC",
     "LAS": "LA",
     "LVA": "LV",
+    "NYL": "NY",
     "PDX": "POR",
     "POR": "POR",
     "SDP": "SD",
@@ -369,9 +371,23 @@ def _event_match(event: FinalEvent, selection: str) -> bool:
 
 def _team_total_event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"^([A-Za-z0-9]+)\s+Team Total\b", selection, re.IGNORECASE)
-    return bool(
-        match and _team_token(match.group(1)) in {_team_token(event.away), _team_token(event.home)}
+    if match and _team_token(match.group(1)) in {_team_token(event.away), _team_token(event.home)}:
+        return True
+    matchup_match = re.search(
+        r"\b(?:[A-Za-z0-9]+)\s+@\s+(?:[A-Za-z0-9]+)\s+(.+?)\s+-\s+(?:Points|Runs|PTS|R)\b",
+        selection,
+        re.IGNORECASE,
     )
+    if matchup_match and _event_match(event, selection):
+        raw_team = _token(matchup_match.group(1))
+        away_tok = _token(event.away)
+        home_tok = _token(event.home)
+        return (
+            away_tok in raw_team
+            or home_tok in raw_team
+            or _team_token(raw_team) in {_team_token(event.away), _team_token(event.home)}
+        )
+    return False
 
 
 def _side_result(actual: float, line: float, side: str) -> str:
@@ -466,8 +482,10 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     player_match = re.fullmatch(
         r"(.+?)\s+-\s+(.+?)\s+(OVER|UNDER)\s+(-?\d+(?:\.\d+)?)", selection, re.IGNORECASE
     )
-    if player_match and (
-        market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"}
+    if (
+        player_match
+        and not re.match(r"^[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+", selection)
+        and (market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"})
     ):
         player_key = _player_boxscore_key(event, selection) or _token(player_match.group(1))
         stats = event.players.get(player_key)
@@ -495,6 +513,21 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             if actual is None
             else (actual, _side_result(actual, line, team_total.group(2).upper()))
         )
+
+    matchup_team_total = re.search(
+        r"\b(?:[A-Za-z0-9]+)\s+@\s+(?:[A-Za-z0-9]+)\s+(.+?)\s+-\s+(?:Points|Runs|PTS|R)\s+(OVER|UNDER)\b",
+        selection,
+        re.IGNORECASE,
+    )
+    if matchup_team_total and _event_match(event, selection):
+        raw_team = _token(matchup_team_total.group(1))
+        actual = None
+        if _team_token(raw_team) == _team_token(event.away) or _token(event.away) in raw_team:
+            actual = event.away_score
+        elif _team_token(raw_team) == _team_token(event.home) or _token(event.home) in raw_team:
+            actual = event.home_score
+        if actual is not None:
+            return (actual, _side_result(actual, line, matchup_team_total.group(2).upper()))
 
     if not _event_match(event, selection):
         return None

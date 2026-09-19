@@ -1,6 +1,7 @@
 from outlier_scrapers.slate_quality import (
     LOCAL_DEVIG_UNIT_CAP,
     apply_local_devig_unit_cap,
+    apply_wnba_heavy_dog_spread_cap,
     classify_injuries,
     dossier_injury_section,
     pitcher_identity_flags,
@@ -271,3 +272,55 @@ def test_summarize_pitcher_identity_ok_when_clean():
     )
     assert summary["status"] == "ok"
     assert summary["fail_closed_count"] == 0
+
+
+def test_apply_wnba_heavy_dog_spread_cap():
+    # 1. Non-WNBA is unaffected
+    mlb_row = {
+        "sport": "MLB",
+        "market_type": "SPREAD",
+        "line": 14.5,
+        "recommended_units_pre_news": 1.0,
+    }
+    apply_wnba_heavy_dog_spread_cap(mlb_row)
+    assert mlb_row["recommended_units_pre_news"] == 1.0
+
+    # 2. WNBA spread below 12.0 is unaffected
+    wnba_under_12 = {
+        "sport": "WNBA",
+        "market_type": "SPREAD",
+        "line": 8.5,
+        "recommended_units_pre_news": 1.0,
+    }
+    apply_wnba_heavy_dog_spread_cap(wnba_under_12)
+    assert wnba_under_12["recommended_units_pre_news"] == 1.0
+
+    # 3. WNBA double-digit dog with own star out capped at 0.5u
+    injury_one_out = classify_injuries("TOR: Marina Mabrey (Out; Hip)", "TOR")
+    wnba_dog_one_out = {
+        "sport": "WNBA",
+        "market_type": "GAMELINE",
+        "selection": "IND @ TOR Spread HOME +14.5",
+        "line": 14.5,
+        "recommended_units_pre_news": 1.0,
+        "team": "TOR",
+    }
+    apply_wnba_heavy_dog_spread_cap(wnba_dog_one_out, injury_one_out)
+    assert wnba_dog_one_out["recommended_units_pre_news"] == 0.5
+    assert "wnba_heavy_dog_deficit_cap" in wnba_dog_one_out["sizing_flags"]
+
+    # 4. WNBA double-digit dog with multiple rotation pieces out capped at 0.25u
+    injury_multi_out = classify_injuries(
+        "TOR: Brittney Sykes (Out; Foot) | TOR: Marina Mabrey (Out; Hip)", "TOR"
+    )
+    wnba_dog_multi_out = {
+        "sport": "WNBA",
+        "market_type": "GAMELINE",
+        "selection": "IND @ TOR Spread HOME +14.5",
+        "line": 14.5,
+        "recommended_units_pre_news": 0.5,
+        "team": "TOR",
+    }
+    apply_wnba_heavy_dog_spread_cap(wnba_dog_multi_out, injury_multi_out)
+    assert wnba_dog_multi_out["recommended_units_pre_news"] == 0.25
+    assert "wnba_heavy_dog_deficit_cap" in wnba_dog_multi_out["sizing_flags"]

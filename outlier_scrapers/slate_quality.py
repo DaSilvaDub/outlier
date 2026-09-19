@@ -52,6 +52,9 @@ IL_RETURN_WINDOW_DAYS = 21
 
 LOCAL_DEVIG_UNIT_CAP = 1.0
 MARKET_DEVIG_UNIT_CAP = 1.0
+WNBA_HEAVY_DOG_SPREAD_THRESHOLD = 12.0
+WNBA_HEAVY_DOG_UNIT_CAP = 0.5
+WNBA_SHORTHANDED_DOG_UNIT_CAP = 0.25
 INDEPENDENT_SO_UNIT_CAP = 2.0
 MARKET_DEVIG_SOURCES = frozenset({"local_devig", "outlier_devig"})
 INDEPENDENT_SO_SOURCE = "independent_gamelog_so"
@@ -460,6 +463,38 @@ def apply_market_devig_unit_cap(row: dict[str, Any]) -> None:
     _append_sizing_flag(row, "market_devig_unit_cap")
     if source == "local_devig":
         _append_sizing_flag(row, "local_devig_unit_cap")
+
+
+def apply_wnba_heavy_dog_spread_cap(
+    row: dict[str, Any], injuries: InjuryView | None = None
+) -> None:
+    """Cap WNBA double-digit underdog spreads (+12.0 or higher) when facing key absences.
+
+    In WNBA, large double-digit underdogs missing rotational starters face high
+    4th-quarter blowout risk (garbage time variance), capping upside of positive spreads.
+    Cap recommendation at 0.5 units (or 0.25u if multiple starters are out) to protect capital.
+    """
+    sport = str(row.get("sport") or "").upper()
+    if sport != "WNBA":
+        return
+    if not _is_signed_margin_market(row):
+        return
+    line = _to_float(row.get("line"))
+    if line is None or line < WNBA_HEAVY_DOG_SPREAD_THRESHOLD:
+        return
+    units = _to_float(row.get("recommended_units_pre_news"))
+    if units is None or units <= 0:
+        return
+
+    if injuries and injuries.own_star_out:
+        target_cap = (
+            WNBA_SHORTHANDED_DOG_UNIT_CAP
+            if len(injuries.own_outs) >= 2
+            else WNBA_HEAVY_DOG_UNIT_CAP
+        )
+        if units > target_cap:
+            row["recommended_units_pre_news"] = target_cap
+            _append_sizing_flag(row, "wnba_heavy_dog_deficit_cap")
 
 
 def _signal_flag_set(row: dict[str, Any]) -> set[str]:

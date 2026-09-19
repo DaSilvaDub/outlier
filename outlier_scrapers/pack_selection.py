@@ -868,6 +868,7 @@ def _apply_quality_and_signal_flags(
         dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
     slate_quality.apply_local_devig_unit_cap(row)
+    slate_quality.apply_wnba_heavy_dog_spread_cap(row, injury_view)
     edge_pct_val = _to_float(row.get("edge_pct"))
     if edge_pct_val is not None and edge_pct_val <= 0.035 and "thin_liquidity" in dq_flags:
         dq_flags.append("edge_suspect_thin_liquidity")
