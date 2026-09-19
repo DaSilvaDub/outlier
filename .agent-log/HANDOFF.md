@@ -1,3 +1,18 @@
+## Daily Debug Review — master CI red + NFL calibration inputs (Claude) - 2026-09-19
+1. **Last Commit SHA**: `8764412` on branch `claude/inspiring-fermat-v8n34k` (PR #169: https://github.com/DaSilvaDub/outlier/pull/169)
+2. **Files Touched**:
+   - `tests/test_nfl_calibration.py`: `test_game_script_generator_output` no longer sources its report from the gitignored `data/NFL/normalized`; it builds games/props in-test from the existing helpers and keeps every assertion. Added 3 regression tests (quoted team totals below the default, default fallback when none quoted, consensus never selects an unpriced line).
+   - `outlier_nfl/calibration.py`: `extract_game_script_context` no longer seeds its team-total accumulators with the fallback defaults, so a quoted total below the default is reported instead of the default. The `>= 28.0` deficit trigger is unchanged.
+   - `outlier_nfl/consensus.py`: the balanced-line filter skips a side with no `best_odds` instead of coercing it to 0 (which sat inside the -220..180 band and let an unquoted line win the consensus).
+   - `scripts/nfl_game_script.py`: same unpriced-side fix in the generator's copy of that filter.
+3. **Verification**: No PyPI access in the review sandbox, so pytest/ruff/mypy could not be installed; tests were run with a stdlib runner plus a small pytest shim. 27/27 NFL tests pass. Each new regression test was confirmed to fail against the pre-fix source and to fail only the two intended tests. Pipeline re-run offline against `tests/fixtures/nfl`: status OK, 10 game lines, 8 props, 8 consensus, 0 errors. Hosted CI on PR #169 is the authoritative check.
+4. **Root cause of red master**: `.gitignore:35` excludes `data/*`, so `test_game_script_generator_output` passed only on a machine that had already run the pipeline. Last green master was `6e490a4`; runs 586 (`8eacedf`) and 588 (`5d2b30a`) failed on that single test, 1791 others passing.
+5. **Next Steps / Outstanding**:
+   - **Needs a human decision**: `scripts/nfl_game_script.py::generate_report` is a hardcoded DET @ BUF / 2026-09-17 artifact (title, date, venue, scorelines, odds), but `NflPipeline.run(generate_game_script=True)` wires it as a generic per-slate generator. A BAL @ KC fixture run for 2026-09-19 produced a report titled "DETROIT LIONS @ BUFFALO BILLS" carrying real BAL/KC numbers, and the tables print hardcoded defaults (249.5, 99.5) for absent players. Either generalize the writer or unwire the flag.
+   - Related: that block writes to a CWD-relative `Path("reports/NFL")`, ignoring `data_dir`, so `test_pipeline_calibrated_and_high_prob_artifacts` drops a file into the repo on every run despite using `tmp_path`.
+   - **Still outstanding from 2026-09-17, needs PyPI access**: `requirements.lock` still omits `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary` (re-verified today). Regenerate with `uv export --frozen --no-hashes --all-extras -o requirements.lock`.
+   - Paid reasoning models were not invoked.
+
 ## Board A Calibration Hardening & Predictor Gates (Gemini) - 2026-09-18
 1. **Last Commit SHA**: `b6942e8` on branch `feat/board-a-calibration-hardening` (PR #167: https://github.com/DaSilvaDub/outlier/pull/167)
 2. **Files Touched**:
