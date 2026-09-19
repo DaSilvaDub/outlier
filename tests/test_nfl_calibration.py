@@ -198,6 +198,78 @@ def test_extract_game_script_context_deficit_risk():
     assert ctx["home_team_total"] == 30.5
 
 
+def test_context_reports_quoted_team_totals_below_defaults():
+    """A quoted team total below the fallback default must be reported, not the default."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+        _make_game_line("TOTAL", 20.5, market_type="TEAM_PROP", team="BUF"),
+        _make_game_line("TOTAL", 17.5, market_type="TEAM_PROP", team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 20.5
+    assert ctx["away_team_total"] == 17.5
+    # A low-scoring home environment must not read as deficit risk for the road dog.
+    assert ctx["away_deficit_risk"] is False
+
+
+def test_context_falls_back_when_no_team_total_is_quoted():
+    """With no team totals on the board the documented defaults still apply."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 27.0
+    assert ctx["away_team_total"] == 21.0
+
+
+def test_consensus_never_selects_an_unpriced_line():
+    """A line with no book quotes on either side must not win the consensus."""
+    ladder_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "OVER", best_odds=+450, books_count=8)
+    ladder_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 110.5, "UNDER", best_odds=-800, books_count=8)
+    unpriced_over = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "OVER", best_odds=None, books_count=0)
+    unpriced_under = _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "UNDER", best_odds=None, books_count=0)
+
+    targets = identify_consensus_lines_for_group(
+        [ladder_over, ladder_under, unpriced_over, unpriced_under]
+    )
+
+    assert (87.5, "OVER") not in targets
+    assert (87.5, "UNDER") not in targets
+    # No balanced line exists, so selection falls back to the most-quoted line.
+    assert targets == {(110.5, "OVER"), (110.5, "UNDER")}
+
+
+def test_consensus_is_empty_when_the_whole_market_is_unpriced():
+    """A player market entirely off the board yields no consensus line at all."""
+    off_board = [
+        _make_prop("Jahmyr Gibbs", "RUSH_YDS", line, pos, best_odds=None, books_count=0)
+        for line in (87.5, 99.5)
+        for pos in ("OVER", "UNDER")
+    ]
+    assert identify_consensus_lines_for_group(off_board) == set()
+
+    # Touchdown markets take a separate path and must behave the same way.
+    off_board_td = [_make_prop("Josh Allen", "ANYTIME_TD", 0.5, "OVER", best_odds=None, books_count=0)]
+    assert identify_consensus_lines_for_group(off_board_td) == set()
+
+
+def test_generator_load_data_reads_pipeline_output(tmp_path):
+    """load_data must pick up the normalized files a pipeline run writes."""
+    pipeline = NflPipeline(data_dir=tmp_path)
+    pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR)
+
+    generator = NflGameScriptGenerator(data_dir=tmp_path / "NFL" / "normalized")
+    games, props = generator.load_data("2026-09-13")
+
+    assert games and props
+    assert all("market" in g for g in games)
+    assert all("player_name" in p for p in props)
+
+
 def test_underdog_rb_deficit_haircut_and_resilient_targets():
     """Underdog RB rushing overs get -15% volume haircut and DEFICIT_VOLUME_RISK tag."""
     lines = [

@@ -20,7 +20,7 @@ import json
 import logging
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, TypedDict
 
 # Ensure repository root is in sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +68,13 @@ def _get(item: Any, key: str, default: Any = None) -> Any:
     if isinstance(item, dict):
         return item.get(key, default)
     return getattr(item, key, default)
+
+
+class _PlayerConfig(TypedDict):
+    name: str
+    team: str
+    pos: str
+    aliases: list[str]
 
 
 class NflGameScriptGenerator:
@@ -251,7 +258,9 @@ class NflGameScriptGenerator:
         if market in ("ANYTIME_TD", "FIRST_TD", "LAST_TOUCHDOWN"):
             td_candidates = [
                 c for c in candidates
-                if float(_get(c, "line") or 0) == 0.5 and _get(c, "position") in ("OVER", "YES")
+                if float(_get(c, "line") or 0) == 0.5
+                and _get(c, "position") in ("OVER", "YES")
+                and _get(c, "best_odds") is not None
             ]
             if td_candidates:
                 best = max(td_candidates, key=lambda x: len(_get(x, "books") or []))
@@ -283,8 +292,10 @@ class NflGameScriptGenerator:
                 continue
             best_over = max(overs, key=lambda x: len(_get(x, "books") or []))
             best_under = max(unders, key=lambda x: len(_get(x, "books") or []))
-            o_odds = _get(best_over, "best_odds") or 0
-            u_odds = _get(best_under, "best_odds") or 0
+            o_odds = _get(best_over, "best_odds")
+            u_odds = _get(best_under, "best_odds")
+            if o_odds is None or u_odds is None:
+                continue
             if -220 <= o_odds <= 180 and -220 <= u_odds <= 180:
                 books_count = len(_get(best_over, "books") or []) + len(_get(best_under, "books") or [])
                 balance = abs(o_odds - (-110)) + abs(u_odds - (-110))
@@ -311,9 +322,18 @@ class NflGameScriptGenerator:
                 "l10_hit_rate": _get(best_over, "l10_hit_rate"),
             }
 
-        # Fallback: line with most book quotes
+        # Fallback: line with most book quotes, among lines carrying a price
+        # anywhere. A player market entirely off the board yields no profile
+        # rather than a row built on an arbitrary unpriced line.
+        priced_lines = [
+            line_val for line_val, rows in by_line.items()
+            if any(_get(r, "best_odds") is not None for r in rows)
+        ]
+        if not priced_lines:
+            return None
+
         best_line = max(
-            by_line.keys(),
+            priced_lines,
             key=lambda k: sum(len(_get(x, "books") or []) for x in by_line[k]),
         )
         rows = by_line[best_line]
@@ -340,7 +360,7 @@ class NflGameScriptGenerator:
 
     def build_player_profiles(self, props: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Extract full prop profiles for all key stars."""
-        players_config = [
+        players_config: list[_PlayerConfig] = [
             # Buffalo Bills
             {"name": "Josh Allen", "team": "BUF", "pos": "QB", "aliases": ["Josh Allen", "J. Allen"]},
             {"name": "James Cook III", "team": "BUF", "pos": "RB", "aliases": ["James Cook III", "J. Cook"]},
