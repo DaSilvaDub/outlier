@@ -20,3 +20,15 @@ When extracting player props from `data/NFL/normalized/nfl_props_*.json`, the Ou
 1. **Avoid Complex Quotes in Terminal One-Liners:** In Windows PowerShell, running inline Python scripts (`python -c "..."`) with nested quotes or `$()` frequently fails with parser errors. Write scratch scripts to `<appDataDir>\brain\<conversation-id>/scratch/` instead.
 2. **Stdout Encoding Constraint:** Python on Windows defaults stdout to `cp1252`, which raises `UnicodeEncodeError` when printing Unicode characters like `↳` (`\u21b3`) or em-dashes `—`. Scripts that print formatted output must call `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` and favor standard ASCII text.
 
+## Codebase Quirk: Feedback Database Path (`feedback.sqlite3`)
+The authoritative SQLite database for Outlier decisions, snapshots, and settlements is `calibration/feedback.sqlite3` (NOT `feedback.db`). Always use `outlier_scrapers.feedback_db.DEFAULT_DB_PATH` or specify `calibration/feedback.sqlite3` when querying or running raw diagnostics.
+
+## Codebase Quirk: Test Pack Fixtures & Directory Naming Invariant
+Never create test or benchmark directories in `packs/` using pure date digits (e.g., `packs/2099-07-07`). `organize_today_run2.py` scans `packs/` for all directories matching `d.name.replace("-", "").isdigit()` and selects `subdirs[-1]` as the latest slate. Any test fixture directory in `packs/` MUST be prefixed with an underscore or text (e.g., `_test_fixture_2099-07-07`) so production export scripts ignore it.
+
+## MLB Strikeout Modeling Heuristics: Opponent Handedness K-Rate Split
+When projecting pitcher strikeouts or auditing candidate edges, always check the opposing lineup's specific strikeout rate against the pitcher's handedness (vs LHP or vs RHP), rather than their overall team K-rate. Teams with pronounced splits (e.g., strikeout-heavy righty-dominant lineups facing a soft-tossing southpaw) consistently outperform baseline projections by +0.5 to +1.0 Ks.
+
+## Exchange Alpha vs. Thin Liquidity Filter Calibration
+When an exchange book (Prophetx or Novig) offers a player prop line that is a full integer/rung lower than consensus retail sportsbooks (e.g., 4.5 on Prophetx vs. 5.5 on DraftKings/FanDuel), do not treat this solely as a disqualifying `thin_liquidity` trap. Cross-reference whether the consensus higher line also carries positive projection support; if so, the discounted exchange line represents genuine market alpha.
+
