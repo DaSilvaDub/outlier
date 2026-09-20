@@ -248,12 +248,8 @@ def _in_us_eastern_dst(moment: datetime) -> bool:
     return start <= utc < end
 
 
-def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
-    """Convert a UTC datetime or ISO timestamp to US Eastern calendar date (YYYY-MM-DD).
-
-    Essential for NFL slates where late night games (Thursday, Sunday, Monday)
-    kick off at 00:15–01:15 UTC of the next day.
-    """
+def to_eastern_datetime(dt_or_iso: datetime | str | None) -> datetime | None:
+    """Convert a UTC datetime or ISO timestamp to US Eastern timezone-aware datetime."""
     if dt_or_iso is None:
         return None
 
@@ -269,16 +265,46 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     try:
         eastern_tz = zoneinfo.ZoneInfo("America/New_York")
     except Exception:
-        # No tz database. The project declares tzdata so this should not happen,
-        # but the standing UTC-5 it used to fall back to is Eastern *Standard*
-        # time, which is the wrong offset from the second Sunday in March to the
-        # first Sunday in November -- nearly the whole NFL season. A date that is
-        # quietly off by one drops games from the slate, so derive the offset
-        # from the rule instead of assuming winter.
         eastern_tz = timezone(timedelta(hours=-4 if _in_us_eastern_dst(dt) else -5))
 
-    eastern_dt = dt.astimezone(eastern_tz)
-    return eastern_dt.strftime("%Y-%m-%d")
+    return dt.astimezone(eastern_tz)
+
+
+def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
+    """Convert a UTC datetime or ISO timestamp to US Eastern calendar date (YYYY-MM-DD).
+
+    Essential for NFL slates where late night games (Thursday, Sunday, Monday)
+    kick off at 00:15–01:15 UTC of the next day.
+    """
+    eastern_dt = to_eastern_datetime(dt_or_iso)
+    return eastern_dt.strftime("%Y-%m-%d") if eastern_dt else None
+
+
+def matches_kickoff_window(dt_or_iso: datetime | str | None, window: str | None) -> bool:
+    """Check if an event's kickoff time falls into a specific window (e.g. '1pm', '4pm', 'snf')."""
+    if not window:
+        return True
+    w = window.strip().lower()
+    eastern_dt = to_eastern_datetime(dt_or_iso)
+    if not eastern_dt:
+        return False
+    hour = eastern_dt.hour
+    minute = eastern_dt.minute
+
+    if w in ("1pm", "early", "13:00", "1:00", "13", "1"):
+        return hour == 13
+    elif w in ("4pm", "late", "16:00", "4:00", "16", "4", "afternoon"):
+        return hour in (16, 17)
+    elif w in ("snf", "night", "prime", "primetime", "8pm", "20:00", "8:00"):
+        return hour in (20, 21)
+    elif ":" in w:
+        parts = w.split(":")
+        try:
+            target_h, target_m = int(parts[0]), int(parts[1])
+            return hour == target_h and abs(minute - target_m) <= 15
+        except ValueError:
+            return False
+    return True
 
 
 def coerce_float(value: Any) -> float | None:

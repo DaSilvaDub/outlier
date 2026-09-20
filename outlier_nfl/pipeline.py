@@ -39,6 +39,7 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.utils import (
+    matches_kickoff_window,
     safe_read_json,
     safe_write_json,
     to_eastern_date,
@@ -70,6 +71,7 @@ class NflPipeline:
     def run(
         self,
         date: str | None = None,
+        window: str | None = None,
         offline_fixtures_dir: Path | str | None = None,
         generate_game_script: bool = False,
         reports_dir: Path | str | None = None,
@@ -78,6 +80,7 @@ class NflPipeline:
 
         Args:
             date: Target slate date (YYYY-MM-DD). If omitted, defaults to current Eastern date.
+            window: Optional kickoff window filter (e.g. '1pm', 'early', '4pm', 'late', 'snf').
             offline_fixtures_dir: Optional path to JSON fixtures for offline execution.
             generate_game_script: If True, automatically synthesize game script report.
             reports_dir: Directory the game script markdown is written to. Defaults to
@@ -89,7 +92,8 @@ class NflPipeline:
         now_utc = datetime.now(timezone.utc).isoformat()
         target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
 
-        logger.info("Starting Outlier NFL Pipeline run for date: %s", target_date)
+        window_label = f" (window: {window})" if window else ""
+        logger.info("Starting Outlier NFL Pipeline run for date: %s%s", target_date, window_label)
         self.normalized_dir.mkdir(parents=True, exist_ok=True)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,10 +124,11 @@ class NflPipeline:
             slate_events = [
                 e for e in events
                 if to_eastern_date(e.get("scheduledTime") or e.get("startTime")) == target_date
+                and matches_kickoff_window(e.get("scheduledTime") or e.get("startTime"), window)
             ]
 
             # If no events matched target date exactly, fall back to all events in fixture mode
-            if not slate_events and events:
+            if not slate_events and events and not window:
                 slate_events = events
 
             for event in slate_events:
@@ -156,8 +161,9 @@ class NflPipeline:
             slate_events = [
                 e for e in events
                 if to_eastern_date(e.get("scheduledTime") or e.get("startTime")) == target_date
+                and matches_kickoff_window(e.get("scheduledTime") or e.get("startTime"), window)
             ]
-            logger.info("Found %d scheduled events for slate date %s", len(slate_events), target_date)
+            logger.info("Found %d scheduled events for slate date %s%s", len(slate_events), target_date, window_label)
 
             # Extract markets per slate event
             for event in slate_events:
@@ -254,12 +260,20 @@ class NflPipeline:
         anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
         anchors_payload = {
             "date": target_date,
+            "window": window,
             "updated_at": now_utc,
             "count": len(anchors),
             "records": anchors,
         }
         safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
         safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload)
+
+        if window:
+            window_slug = window.strip().lower()
+            safe_write_json(self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload)
+            safe_write_json(self.normalized_dir / f"nfl_props_{target_date}_{window_slug}.json", props_payload)
+            safe_write_json(self.normalized_dir / f"nfl_calibrated_props_{target_date}_{window_slug}.json", props_payload)
+            safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}_{window_slug}.json", anchors_payload)
 
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
@@ -275,6 +289,7 @@ class NflPipeline:
         summary: dict[str, Any] = {
             "status": "OK",
             "date": target_date,
+            "window": window,
             "timestamp_utc": now_utc,
             "events_count": len(slate_events),
             "game_lines_count": len(all_game_lines),
@@ -311,6 +326,8 @@ class NflPipeline:
 
         safe_write_json(self.normalized_dir / "summary_latest.json", summary)
         safe_write_json(self.normalized_dir / f"summary_{target_date}.json", summary)
+        if window:
+            safe_write_json(self.normalized_dir / f"summary_{target_date}_{window_slug}.json", summary)
 
         logger.info(
             "NFL Pipeline run completed successfully: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
@@ -333,6 +350,12 @@ def main() -> int:
         type=str,
         default=None,
         help="Target NFL slate date (YYYY-MM-DD). Default: current Eastern date.",
+    )
+    parser.add_argument(
+        "--window",
+        type=str,
+        default=None,
+        help="Kickoff window filter (e.g. '1pm', 'early', '4pm', 'late', 'snf'). Default: all windows.",
     )
     parser.add_argument(
         "--mode",
@@ -371,12 +394,15 @@ def main() -> int:
         pipeline = NflPipeline(data_dir=args.data_dir)
         summary = pipeline.run(
             date=args.date,
+            window=args.window,
             offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
             generate_game_script=args.generate_game_script,
         )
         print("=" * 60)
         print("OUTLIER NFL PIPELINE EXECUTION SUMMARY")
         print(f"Date:                   {summary.get('date')}")
+        if summary.get("window"):
+            print(f"Kickoff Window:         {summary.get('window')}")
         print(f"Status:                 {summary.get('status')}")
         print(f"Events Count:           {summary.get('events_count')}")
         print(f"Game Lines Count:       {summary.get('game_lines_count')}")
