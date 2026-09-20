@@ -11,10 +11,16 @@ When using `json.loads()` to parse raw responses from the Outlier API (e.g., in 
 ## Codebase Quirk: NFL Consensus Line Selection vs. Alternate Ladders
 When extracting player props from `data/NFL/normalized/nfl_props_*.json`, the Outlier dataset often contains multiple alternate ladder lines (e.g., +750 to -900 odds) and exchange quotes for the same player and market. Never pick the consensus line solely by `sum(len(books))`, as alternate ladders can aggregate large book counts across non-standard lines. Always enforce a balanced two-way market check: both `OVER` and `UNDER` must exist within normal betting juice (`-220 <= odds <= +180`), minimizing the deviation from -110. For touchdown markets (`ANYTIME_TD`), select `line == 0.5` and `position == 'OVER'`.
 
-## NFL Game Script Calibration Heuristics (Learned from BUF 41 - DET 31)
+## NFL Game Script Calibration Heuristics (Learned from BUF 41 - DET 31 & Slate Re-Basing)
 1. **Deficit-Risk Discount on Road Underdog RB Rushing Lines:** If a team is a road underdog (+4.5 or greater) facing a high-scoring favorite (Team Total >= 28.0), apply a **15% downward volume haircut** to the running back's projected rushing attempts and yardage. When an underdog falls behind by two scores, run volume collapses; pivot exposure to **Anytime TD** or **Receiving Props**, which remain active in catch-up mode.
 2. **Two-High Shell Target Divergence in Comeback Mode:** When a favorite establishes a multi-score lead, defenses play deep two-high Cover-2/Cover-4 shells. This neutralizes vertical perimeter deep threats (aDOT >= 14.0, e.g. Jameson Williams), while funneling increased target volume (+20%) to intermediate slot receivers (e.g. Amon-Ra St. Brown) and pass-catching tight ends (e.g. Sam LaPorta).
-3. **Empirical Hit Rate Priority (L5/L10):** Props passing strict filters of L5 Hit Rate = 100% and L10 Hit Rate >= 80% across multi-book consensus consistently outperform pure algorithmic projection models; allocate Tier-1 staking priority to these anchors.
+3. **Multi-Window Hit Rate Re-Basing & Multi-Book Liquidity:** Never select or recommend a prop based solely on an isolated L5 hit rate (avoiding small-sample noise and alternate-ladder bait). A valid selection requires:
+   - **Hit Rate Convergence:** L5 >= 80% *and* L10 >= 70%–80%, anchored by stable season snap/usage baselines.
+   - **Balanced Line Movement & Consensus:** Quoted across multi-book consensus (minimum 3–5 regulated books) within standard two-way juice (-145 to +115), confirming sharp market validation rather than synthetic bookmaker ladders.
+4. **Compiled Situational Factors (Injuries, Matchups, Weather):** Every prediction must cross-reference:
+   - **Vacated Usage:** Reallocated target/rush share when key personnel are inactive or on IR.
+   - **Opponent Defensive Efficiency:** Matchups against specific coverage shells and defensive front weaknesses (e.g., zone run defense vs. man perimeter).
+   - **Environmental Calibration:** Outdoor wind (>12–15 mph) or precipitation haircuts on vertical passing vs. dome/controlled venue pace upgrades.
 
 ## Windows PowerShell Python Execution & UTF-8 Console Encoding
 1. **Avoid Complex Quotes in Terminal One-Liners:** In Windows PowerShell, running inline Python scripts (`python -c "..."`) with nested quotes or `$()` frequently fails with parser errors. Write scratch scripts to `<appDataDir>\brain\<conversation-id>/scratch/` instead.
