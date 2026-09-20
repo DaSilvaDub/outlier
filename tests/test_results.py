@@ -425,3 +425,54 @@ def test_matchup_team_total_skips_when_both_codes_match_the_named_team():
         )
         is None
     )
+
+
+def test_matchup_prefixed_team_total_reaches_the_grader_in_the_collector(tmp_path):
+    """The " - " in a matchup team total must not route it to the player-prop lookup.
+
+    collect_settlement_rows() overwrote candidates with _player_event_candidates() for
+    every selection containing " - ", so "ATL @ WSH Atlanta Dream - Points OVER 84.5"
+    was discarded as unmatched and the matchup team-total grader never ran at all.
+    """
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    with feedback.open_database(db) as conn:
+        _seed(
+            conn,
+            "matchup-tt",
+            "ATL @ WSH Atlanta Dream - Points OVER 84.5",
+            "TEAM_PROP",
+            "84.5",
+        )
+
+        def fake_fetch(url: str) -> dict:
+            return _summary() if "/summary?" in url else _scoreboard()
+
+        rows, summary = results.collect_settlement_rows(
+            conn, ["WNBA"], lookback_days=3, now=NOW, fetch_json=fake_fetch
+        )
+
+    assert summary["unmatched_event_count"] == 0
+    assert summary["settlement_rows"] == 1
+    # ATL is the away side and scored 91, so OVER 84.5 wins.
+    assert rows[0]["actual_result"] == "91"
+    assert rows[0]["win_loss_push"] == "W"
+
+
+def test_player_prop_selections_still_route_to_the_player_lookup(tmp_path):
+    """The matchup carve-out must not divert ordinary "Player - Market" selections."""
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    with feedback.open_database(db) as conn:
+        _seed(conn, "plyr", "Allisha Gray - Points OVER 18.5", "PLAYER_PROP", "18.5")
+
+        def fake_fetch(url: str) -> dict:
+            return _summary() if "/summary?" in url else _scoreboard()
+
+        rows, summary = results.collect_settlement_rows(
+            conn, ["WNBA"], lookback_days=3, now=NOW, fetch_json=fake_fetch
+        )
+
+    assert summary["settlement_rows"] == 1
+    assert rows[0]["actual_result"] == "20"
+    assert rows[0]["win_loss_push"] == "W"

@@ -360,6 +360,16 @@ def _player_event_candidates(events: Sequence[FinalEvent], selection: str) -> li
     return [event for event in events if _player_boxscore_key(event, selection)]
 
 
+def _is_matchup_prefixed(selection: str) -> bool:
+    """True for selections that open with a matchup ("IND @ TOR Indiana Fever - Points ...").
+
+    These carry a " - " but name a team, not a player, so the player-prop paths must
+    stand aside for them: _grade_row already refuses to grade one as a player prop,
+    and collect_settlement_rows must not hand one to _player_event_candidates.
+    """
+    return bool(re.match(r"^[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+", selection))
+
+
 def _event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"\b([A-Za-z0-9]+)\s+@\s+([A-Za-z0-9]+)\b", selection)
     return bool(
@@ -508,7 +518,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     )
     if (
         player_match
-        and not re.match(r"^[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+", selection)
+        and not _is_matchup_prefixed(selection)
         and (market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"})
     ):
         player_key = _player_boxscore_key(event, selection) or _token(player_match.group(1))
@@ -720,7 +730,7 @@ def collect_settlement_rows(
                 ]
             else:
                 candidates = [event for event in events if _event_match(event, selection)]
-            if " - " in selection:
+            if " - " in selection and not _is_matchup_prefixed(selection):
                 candidates = _player_event_candidates(events, selection)
             if len(candidates) != 1:
                 summary["unmatched_event_count"] += 1
