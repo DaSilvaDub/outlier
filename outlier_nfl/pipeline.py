@@ -38,6 +38,7 @@ from outlier_nfl.schema import (
     validate_player_props_payload,
     validate_schedule_payload,
 )
+from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.utils import (
     matches_kickoff_window,
     safe_read_json,
@@ -268,12 +269,25 @@ class NflPipeline:
         safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
         safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload)
 
+        # Build verified active roster index
+        rosters = build_team_roster_index(all_player_props)
+        rosters_payload = {
+            "date": target_date,
+            "window": window,
+            "updated_at": now_utc,
+            "teams_count": len(rosters),
+            "rosters": rosters,
+        }
+        safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
+        safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}.json", rosters_payload)
+
         if window:
             window_slug = window.strip().lower()
             safe_write_json(self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload)
             safe_write_json(self.normalized_dir / f"nfl_props_{target_date}_{window_slug}.json", props_payload)
             safe_write_json(self.normalized_dir / f"nfl_calibrated_props_{target_date}_{window_slug}.json", props_payload)
             safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}_{window_slug}.json", anchors_payload)
+            safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}_{window_slug}.json", rosters_payload)
 
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
@@ -285,6 +299,8 @@ class NflPipeline:
         prop_breakdown: dict[str, int] = {}
         for p in all_player_props:
             prop_breakdown[p.market] = prop_breakdown.get(p.market, 0) + 1
+
+        starting_qbs = {t: r["starting_qb"] for t, r in rosters.items() if r.get("starting_qb")}
 
         summary: dict[str, Any] = {
             "status": "OK",
@@ -301,6 +317,7 @@ class NflPipeline:
             "consensus_props_count": consensus_props_count,
             "tier_1_anchors_count": tier_1_anchors_count,
             "player_props_breakdown": prop_breakdown,
+            "starting_qbs": starting_qbs,
             "errors": errors,
         }
 
@@ -414,6 +431,11 @@ def main() -> int:
         print(f"Tier-1 Anchors Count:   {summary.get('tier_1_anchors_count')}")
         if summary.get("game_script_file"):
             print(f"Game Script Generated:  {summary.get('game_script_file')}")
+        if summary.get("starting_qbs"):
+            print("-" * 60)
+            print("VERIFIED ACTIVE STARTING QUARTERBACKS (FROM FEED):")
+            for t, qb in sorted(summary["starting_qbs"].items()):
+                print(f"  {t:4s}: {qb}")
         print("=" * 60)
         return 0
     except Exception as exc:
