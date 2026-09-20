@@ -1,3 +1,15 @@
+## Pitcher Handedness Splits (Gemini) - 2026-09-20
+1. **Last Commit SHA**: 81b16c4 on branch eat/pitcher-handedness-splits (PR #174: https://github.com/DaSilvaDub/outlier/pull/174)
+2. **Files Touched**:
+   - outlier_scrapers/projections.py: Added etch_pitcher_handedness, modified etch_team_batter_k_rate to fetch s LHP / s RHP splits and fallback to global season stats if PA < 50, and updated nrich_probable_with_so_features to cache the splits correctly.
+3. **Verification**:
+   - 34/34 	est_projections.py tests passed.
+   - Offline test suite (1,892 tests) passed (excluding one known pre-existing intermittent multithread contention failure).
+   - PR #174 opened targeting master.
+4. **Next Steps**:
+   - Review and merge PR #174.
+   - Run the full pipeline when new probable pitchers are listed to observe the split projections.
+   - No paid reasoning models were invoked.
 ## NFL Slate Extraction, Multi-Window Prop Re-Basing & Situational Calibration (Gemini) - 2026-09-20
 1. **Last Commit SHA**: `34a225b` on branch `feat/nfl-prop-rebasing-protocol` (PR #173: https://github.com/DaSilvaDub/outlier/pull/173)
 2. **Files Touched**:
@@ -204,3 +216,4 @@
 - **Verification**: PyPI egress is still blocked by proxy policy (403 on CONNECT), confirmed directly. Ran the real `pytest` 9.0.2 (a uv tool in the image) against the repo with sandbox-only import shims for `structlog` and `sqlalchemy` kept outside the tree -- the sqlalchemy shim raises on any actual session use, so a test that needs the database fails loudly instead of passing against a fake. Offline suite (`-m "not provider"`): **1686 passed, 45 skipped**; the 23 failures and 9 collection errors are all `ModuleNotFoundError`/`SandboxSQLAlchemyUnavailable` for uninstallable dependencies, and are identical to the pre-change baseline. `ruff check` clean on both changed files (12 pre-existing F401s in `tests/test_challenger_adversarial.py` are untouched and outside the Makefile's changed-file lint). `pyright outlier_nfl/games.py` clean. `mypy outlier_scrapers` reports 2 arg-type errors in `schema.py`/`probable_pitchers.py` -- the known pre-2.3.1 false positives `requirements.txt` documents; the sandbox image carries mypy 1.19.1, below the declared floor, so this is the sandbox and not the code. Hosted CI on #166 is the authoritative check.
 - **Outcome**: PR #166 merged to master on 2026-09-19 (`2e2c3fb`). All four checks were green on the head (`core`, `provider`, `typecheck`, Codacy: 0 new issues), `mergeable_state: clean`, and no review threads were opened on it. Verified against master rather than inferred from the merge: `outlier_nfl/games.py` carries the corrected guard.
 - **Next Steps**: the three "reported, not fixed" items above are still open on master and are the natural next pickups; `requirements.lock` still needs regenerating from a machine with PyPI access. Open PRs at the time of writing: #165 (another session's NFL slate-abort fix), #167 (board A calibration hardening), #169 (green master / invented calibration inputs) -- none of them this session's. Paid reasoning / AI Research Desk was not invoked at any point.
+
