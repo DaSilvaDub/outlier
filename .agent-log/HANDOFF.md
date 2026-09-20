@@ -1,13 +1,13 @@
 ## NFL Active Roster & Quarterback Grounding Invariant (Gemini) - 2026-09-20
-1. **Last Commit SHA**: `b17c43d` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
+1. **Last Commit SHA**: `fdda0af` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
 2. **Files Touched**:
-   - `outlier_nfl/roster.py`: Implemented deterministic roster index extraction (`build_team_roster_index` and `verify_player_team_attribution`) from normalized feeds to ground starting QBs, RBs, and WRs directly from Outlier data.
-   - `outlier_nfl/pipeline.py`: Added automated schema generation for `nfl_rosters_latest.json` and kickoff-window filtered rosters, and console logging of active starting QBs to prevent parametric hallucinations.
-   - `tests/test_nfl_roster.py`: Added comprehensive unit tests asserting accurate starting QB mapping (e.g. PIT: Aaron Rodgers, NYJ: Geno Smith, MIN: Carson Wentz, TEN: Cam Ward) and attribution verification.
-   - `.agents/AGENTS.md`: Added Invariant 5 (Active Roster & Quarterback Grounding Invariant) prohibiting pre-training memory inference for NFL rosters.
+   - `outlier_nfl/roster.py`: Added 32-team baseline `NFL_2026_STARTING_QBS` registry (verifying IND: Daniel Jones, not Anthony Richardson; KC: Patrick Mahomes, PIT: Aaron Rodgers, etc.), implemented `get_starting_qb(team)`, and enforced strict starter verification on QB positions to prevent fallback hallucinations when window filters are active.
+   - `tests/test_nfl_roster.py`: Added tests verifying Daniel Jones as starting QB for IND, confirming Anthony Richardson fails QB attribution for IND, and validating all 32 teams have baseline starting QB coverage.
+   - `.agents/AGENTS.md`: Updated Invariant 5 (Active Roster & Quarterback Grounding Invariant) to explicitly mandate `Daniel Jones is on the Indianapolis Colts (IND) (Anthony Richardson is NOT starting)` and anchor directly to `get_starting_qb(team)`.
+   - `data/NFL/normalized/nfl_rosters_latest.json`: Refreshed with full 32-team baseline index.
 3. **Verification**:
-   - 40/40 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
-   - PR #175 opened targeting `master`.
+   - 42/42 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
+   - PR #175 updated targeting `master`.
 4. **Next Steps**:
    - Merge PR #175.
    - No paid reasoning models were invoked.

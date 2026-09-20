@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from outlier_nfl.models import BookPrice, NflPlayerProp
-from outlier_nfl.roster import build_team_roster_index, verify_player_team_attribution
+from outlier_nfl.roster import (
+    NFL_2026_STARTING_QBS,
+    build_team_roster_index,
+    get_starting_qb,
+    verify_player_team_attribution,
+)
 
 
 def test_build_team_roster_index_and_attribution() -> None:
@@ -109,3 +116,34 @@ def test_build_team_roster_index_and_attribution() -> None:
     assert verify_player_team_attribution("Geno Smith", "NYJ", rosters) is True
     assert verify_player_team_attribution("Geno Smith", "PIT", rosters) is False
     assert verify_player_team_attribution("Breece Hall", "NYJ", rosters) is True
+
+
+def test_colts_daniel_jones_starting_qb_registry() -> None:
+    """Explicitly verify Daniel Jones is the 2026 starting QB for the Colts, not Anthony Richardson."""
+    rosters = build_team_roster_index([], include_league_baseline=True)
+
+    assert "IND" in rosters
+    assert rosters["IND"]["starting_qb"] == "Daniel Jones"
+    assert get_starting_qb("IND", rosters) == "Daniel Jones"
+    assert get_starting_qb("KC", rosters) == "Patrick Mahomes"
+
+    # Strict QB position attribution check
+    assert verify_player_team_attribution("Daniel Jones", "IND", rosters, position="QB") is True
+    assert verify_player_team_attribution("Anthony Richardson", "IND", rosters, position="QB") is False
+
+    # Rodgers & Smith checks
+    assert get_starting_qb("PIT", rosters) == "Aaron Rodgers"
+    assert get_starting_qb("NYJ", rosters) == "Geno Smith"
+    assert get_starting_qb("MIN", rosters) == "Carson Wentz"
+    assert get_starting_qb("TEN", rosters) == "Cam Ward"
+
+    # All 32 teams are indexed
+    assert len(rosters) >= 32
+    for team, qb in NFL_2026_STARTING_QBS.items():
+        assert rosters[team]["starting_qb"] == qb
+        assert get_starting_qb(team) == qb
+
+
+def test_unknown_team_starting_qb_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown or unverified"):
+        get_starting_qb("FAKE_TEAM")
