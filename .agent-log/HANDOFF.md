@@ -1,3 +1,17 @@
+## NFL Slate Extraction, Multi-Window Prop Re-Basing & Situational Calibration (Gemini) - 2026-09-20
+1. **Last Commit SHA**: `34a225b` on branch `feat/nfl-prop-rebasing-protocol` (PR #173: https://github.com/DaSilvaDub/outlier/pull/173)
+2. **Files Touched**:
+   - `.agents/AGENTS.md`: Updated NFL game script calibration heuristics to mandate multi-window hit rate convergence (L5 >= 80% and L10 >= 70-80%), balanced line movement / multi-book consensus (-145 to +115), and compiled situational analysis (injuries, matchups, weather).
+   - `.agents/skills/nfl-game-script/SKILL.md`: Expanded runbook with 5-pillar evaluation framework (multi-window hit rate re-basing, line movement & steam auditing, compiled Outlier stats, injury/personnel vacancy redistribution, and weather/venue calibration).
+3. **Verification**:
+   - Extracted 2026-09-20 NFL slate (14 games, 19,335 game lines, 48,425 props, 12,996 consensus lines, 567 Tier-1 anchors).
+   - 39/39 NFL tests passed in 1.95s (`pytest tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
+   - `ruff check .agents/` clean (all checks passed).
+   - PR #173 opened targeting `master`.
+4. **Next Steps**:
+   - Review and merge PR #173 when hosted CI passes.
+   - Paid reasoning models were not invoked.
+
 ## Nightly Calibration, Results Audit & Learning Invariants (Gemini) - 2026-09-20
 1. **Last Commit SHA**: `ff641e8` on branch `feat/nightly-recalibration-and-learn-audit` (PR #172: https://github.com/DaSilvaDub/outlier/pull/172)
 2. **Files Touched**:
