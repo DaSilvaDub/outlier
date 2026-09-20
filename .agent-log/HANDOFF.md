@@ -1,3 +1,19 @@
+## Nightly Calibration, Results Audit & Learning Invariants (Gemini) - 2026-09-20
+1. **Last Commit SHA**: `ff641e8` on branch `feat/nightly-recalibration-and-learn-audit` (PR #172: https://github.com/DaSilvaDub/outlier/pull/172)
+2. **Files Touched**:
+   - `.agents/AGENTS.md`: Documented codebase quirks and heuristics (`calibration/feedback.sqlite3` DB path invariant, `_test_fixture_*` directory naming invariant, MLB opponent handedness K% split heuristics, and exchange discount vs thin liquidity calibration rules).
+   - `.agents/skills/nightly-calibration-audit/SKILL.md`: Added step 1 for automated results grading (`python -m outlier_scrapers.results`) and updated feedback database references.
+   - `calibration/alerts/nightly_audit_status.json`: Nightly audit status tracking.
+   - `calibration/blend_weights.json`: Re-fitted segment blend weights across updated settled history.
+   - `calibration/stake_calibration.json`: Re-fitted empirical reliability factors across 19,560 eligible samples trained through 2026-09-19 slate.
+3. **Verification**:
+   - 2026-09-19 results graded (434 decisions settled): Published Board A plays went 3W - 1L (+1.227u, +35.05% ROI). Rejected Board A props (37 total) contained 19 losses, 9 pushes, 9 hits (blocked 2.1 losses per missed win).
+   - Replay portfolio confirmed positive expectation (+4.54u net profit on 144 plays; 28,779 stand-downs filtered out -2,254.93u of losses).
+   - 67/67 feedback tests passed in 22.10s (`pytest tests/test_feedback.py`).
+4. **Next Steps**:
+   - Merge PR #172 when hosted CI checks pass.
+   - Paid reasoning models were not invoked.
+
 ## Settlement Team Aliases, Totals Parsing & Heavy-Dog Spread Cap (Gemini) - 2026-09-19
 1. **Last Commit SHA**: `a326f62` on branch `fix/settlement-team-aliases-and-totals` (PR #171: https://github.com/DaSilvaDub/outlier/pull/171)
 2. **Files Touched**:
