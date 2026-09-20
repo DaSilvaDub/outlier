@@ -1,3 +1,19 @@
+## Daily Debug Review: Identity-Matching Defects (Claude) - 2026-09-20
+1. **Last Commit SHA**: `0b32909` on branch `claude/inspiring-fermat-acss4f` (PR #176: https://github.com/DaSilvaDub/outlier/pull/176)
+2. **Files Touched**:
+   - `outlier_scrapers/results.py`: Added `_matchup_team_score()`. The matchup-prefixed team-total grader tested the away side first with plain containment, and one team's code is regularly a substring of the other team's display name ("LA" inside "ATLANTADREAM"), so `LA @ ATL Atlanta Dream - Points OVER 84.5` settled against Los Angeles' 71 points (loss) instead of Atlanta's 88 (win). Now prefers an exact alias match and requires the containment fallback to be unambiguous, skipping rather than guessing.
+   - `outlier_nfl/roster.py`: `verify_player_team_attribution` failed open when a team had no indexed starting QB (`"" in name` is always True), passing every player on that team; fixed via `_names_overlap()`. `"most" in name.lower()` dropped the real surname Mostert along with `Most Passing Yards` aggregate labels; now `\bmost\b`. Passer tuple listed `PASS_COMPLETIONS`/`PASS_TDS`, which `normalize_market` never emits; canonical `PASS_COMP`/`PASS_TD` added.
+   - `tests/test_nfl_roster.py`, `tests/test_results.py`: 4 regression tests.
+3. **Verification**:
+   - 337 passed / 2 skipped across the NFL suites; 18 passed on the two changed test files.
+   - Full offline suite 1,077 passed / 43 skipped; every remaining failure is `ModuleNotFoundError` for a third-party dependency. PyPI is blocked in the cloud sandbox (`x-deny-reason: host_not_allowed`), so `structlog`, `sqlalchemy`, `openai`, `anthropic`, `google-genai` and `dateutil` could not be installed; `outlier_scrapers` tests were run against a local logging shim outside the repo.
+   - `ruff check` clean on changed files; `mypy outlier_scrapers` shows the same 3 pre-existing findings as master (2 are the known old-mypy false positives requirements.txt documents).
+4. **Next Steps**:
+   - Review and merge PR #176.
+   - Open, not fixed (behavioural/ambiguous, see PR body): `--window` runs clobber the canonical `*_latest.json` with a partial slate; `matches_kickoff_window` silently returns True for an unrecognized token; matchup team totals for multi-word-city codes (NY/GS/LA) go unsettled and need a display-name to code map.
+   - Repo-wide `ruff check` reports 17 pre-existing F401 unused imports (`append_feedback.py`, `scratch.py`, `script.py`, `tests/test_challenger_adversarial.py`); left alone as unrelated cleanup, and `make lint-check` only lints changed files so CI never sees them.
+   - No paid reasoning models were invoked.
+
 ## NFL Active Roster & Quarterback Grounding Invariant (Gemini) - 2026-09-20
 1. **Last Commit SHA**: `b17c43d` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
 2. **Files Touched**:
