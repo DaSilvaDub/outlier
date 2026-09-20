@@ -1,5 +1,19 @@
+## NFL Active Roster & Quarterback Grounding Invariant (Gemini) - 2026-09-20
+1. **Last Commit SHA**: `b17c43d` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
+2. **Files Touched**:
+   - `outlier_nfl/roster.py`: Implemented deterministic roster index extraction (`build_team_roster_index` and `verify_player_team_attribution`) from normalized feeds to ground starting QBs, RBs, and WRs directly from Outlier data.
+   - `outlier_nfl/pipeline.py`: Added automated schema generation for `nfl_rosters_latest.json` and kickoff-window filtered rosters, and console logging of active starting QBs to prevent parametric hallucinations.
+   - `tests/test_nfl_roster.py`: Added comprehensive unit tests asserting accurate starting QB mapping (e.g. PIT: Aaron Rodgers, NYJ: Geno Smith, MIN: Carson Wentz, TEN: Cam Ward) and attribution verification.
+   - `.agents/AGENTS.md`: Added Invariant 5 (Active Roster & Quarterback Grounding Invariant) prohibiting pre-training memory inference for NFL rosters.
+3. **Verification**:
+   - 40/40 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
+   - PR #175 opened targeting `master`.
+4. **Next Steps**:
+   - Merge PR #175.
+   - No paid reasoning models were invoked.
+
 ## Pitcher Handedness Splits (Gemini) - 2026-09-20
-1. **Last Commit SHA**: 81b16c4 on branch eat/pitcher-handedness-splits (PR #174: https://github.com/DaSilvaDub/outlier/pull/174)
+1. **Last Commit SHA**: 81b16c4 on branch feat/pitcher-handedness-splits (PR #174: https://github.com/DaSilvaDub/outlier/pull/174)
 2. **Files Touched**:
    - outlier_scrapers/projections.py: Added etch_pitcher_handedness, modified etch_team_batter_k_rate to fetch s LHP / s RHP splits and fallback to global season stats if PA < 50, and updated nrich_probable_with_so_features to cache the splits correctly.
 3. **Verification**:
