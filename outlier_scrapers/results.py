@@ -473,6 +473,30 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
     return None
 
 
+def _matchup_team_score(event: FinalEvent, raw_team: str) -> float | None:
+    """Resolve the final score of the team named in a matchup-prefixed team total.
+
+    ``raw_team`` is the tokenized display name ("ATLANTADREAM"); the event only
+    carries codes, so an exact alias match is tried first and containment only as a
+    fallback. Containment alone is not decisive: one team's code is regularly a
+    substring of the other team's name ("LA" sits inside "ATLANTADREAM"), and testing
+    the away side first then graded an Atlanta Dream total against Los Angeles' score.
+    Where both sides match -- or neither does -- skip rather than guess, per this
+    collector's contract.
+    """
+    canonical = _team_token(raw_team)
+    away_exact = canonical == _team_token(event.away)
+    home_exact = canonical == _team_token(event.home)
+    if away_exact != home_exact:
+        return event.away_score if away_exact else event.home_score
+
+    away_hit = _token(event.away) in raw_team
+    home_hit = _token(event.home) in raw_team
+    if away_hit != home_hit:
+        return event.away_score if away_hit else event.home_score
+    return None
+
+
 def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     selection = str(row["selection"] or "")
     line = _number(row["line"])
@@ -520,12 +544,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         re.IGNORECASE,
     )
     if matchup_team_total and _event_match(event, selection):
-        raw_team = _token(matchup_team_total.group(1))
-        actual = None
-        if _team_token(raw_team) == _team_token(event.away) or _token(event.away) in raw_team:
-            actual = event.away_score
-        elif _team_token(raw_team) == _team_token(event.home) or _token(event.home) in raw_team:
-            actual = event.home_score
+        actual = _matchup_team_score(event, _token(matchup_team_total.group(1)))
         if actual is not None:
             return (actual, _side_result(actual, line, matchup_team_total.group(2).upper()))
 

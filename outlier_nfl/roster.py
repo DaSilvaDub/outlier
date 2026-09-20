@@ -8,11 +8,19 @@ primary ball-carriers, and top pass-catchers directly from normalized Outlier ma
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Mapping
 
 from outlier_nfl.models import NflPlayerProp
 
 logger = logging.getLogger("outlier_nfl.roster")
+
+# Aggregate "Most Passing Yards"-style markets carry no playerName, so props.py falls
+# back to the market label and they arrive here as a player. Match "most" as a whole
+# word: a bare substring test also swallows real surnames that contain it (Raheem
+# Mostert), dropping an active ball-carrier from the index and then reporting him as
+# a mis-attribution.
+_AGGREGATE_NAME_RE = re.compile(r"\bmost\b", re.IGNORECASE)
 
 
 def build_team_roster_index(props: list[NflPlayerProp] | list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -42,13 +50,23 @@ def build_team_roster_index(props: list[NflPlayerProp] | list[dict[str, Any]]) -
                 continue
 
             name = p.player_name if isinstance(p, NflPlayerProp) else p.get("player_name")
-            if not name or "most" in name.lower():
+            if not name or _AGGREGATE_NAME_RE.search(name):
                 continue
 
             mkt = p.market if isinstance(p, NflPlayerProp) else p.get("market")
             books_count = len(p.books) if isinstance(p, NflPlayerProp) else len(p.get("books", []))
 
-            if mkt in ("PASS_YDS", "PASS_ATTEMPTS", "PASS_ATT", "PASS_COMPLETIONS", "PASS_TDS"):
+            # PASS_COMP / PASS_TD are the codes normalize_market actually emits
+            # (config.PROP_PASS_COMP / PROP_PASS_TDS); the longer spellings never match.
+            if mkt in (
+                "PASS_YDS",
+                "PASS_ATTEMPTS",
+                "PASS_ATT",
+                "PASS_COMP",
+                "PASS_COMPLETIONS",
+                "PASS_TD",
+                "PASS_TDS",
+            ):
                 passers[name] = passers.get(name, 0) + max(1, books_count)
             elif mkt in ("RUSH_YDS", "RUSH_ATTEMPTS", "RUSH_ATT"):
                 rushers[name] = rushers.get(name, 0) + max(1, books_count)
@@ -69,6 +87,18 @@ def build_team_roster_index(props: list[NflPlayerProp] | list[dict[str, Any]]) -
     return rosters
 
 
+def _names_overlap(candidate: str, indexed: str) -> bool:
+    """Substring match between two already-lowercased names, both required non-empty.
+
+    A team with no indexed starting QB stores ``None``; without the emptiness guard
+    ``"" in candidate`` is always True and the verifier passes every player on that
+    team, which is the exact hallucination this module exists to catch.
+    """
+    if not candidate or not indexed:
+        return False
+    return candidate in indexed or indexed in candidate
+
+
 def verify_player_team_attribution(
     player_name: str,
     expected_team: str,
@@ -81,16 +111,19 @@ def verify_player_team_attribution(
         return True  # Team not in current slate index
 
     p_clean = player_name.strip().lower()
-    qb = str(team_info.get("starting_qb") or "").lower()
-    if p_clean in qb or qb in p_clean:
+    if not p_clean:
+        return False
+
+    qb = str(team_info.get("starting_qb") or "").strip().lower()
+    if _names_overlap(p_clean, qb):
         return True
 
     for rb in team_info.get("key_rbs", []):
-        if p_clean in str(rb).lower() or str(rb).lower() in p_clean:
+        if _names_overlap(p_clean, str(rb).strip().lower()):
             return True
 
     for wr in team_info.get("key_pass_catchers", []):
-        if p_clean in str(wr).lower() or str(wr).lower() in p_clean:
+        if _names_overlap(p_clean, str(wr).strip().lower()):
             return True
 
     return False

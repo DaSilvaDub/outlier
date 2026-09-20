@@ -396,3 +396,32 @@ def test_matchup_prefixed_team_totals_grade_correctly():
         },
         event,
     ) == (85, "W")
+
+
+def test_matchup_team_total_skips_when_both_codes_match_the_named_team():
+    """The code "LA" is a substring of "ATLANTADREAM", so containment cannot pick a side.
+
+    Grading the away team here settled an Atlanta Dream total against Los Angeles'
+    score; an ambiguous identity must be skipped rather than guessed.
+    """
+    event = results.FinalEvent(
+        provider_event_id="401857200",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="LA",
+        home="ATL",
+        away_score=71,
+        home_score=88,
+        players={},
+    )
+    assert (
+        results._grade_row(
+            {
+                "selection": "LA @ ATL Atlanta Dream - Points OVER 84.5",
+                "line": "84.5",
+                "market_type": "PTS",
+            },
+            event,
+        )
+        is None
+    )
