@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from outlier_nfl.config import normalize_team
+from outlier_nfl.config import is_team_total, normalize_team
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 
@@ -230,15 +230,17 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
     else:
         total = 45.5
 
-    tt_markets = {"POINTS", "TOTAL_POINTS", "TEAM_TOTAL", "TOTAL"}
-    home_tts = [
-        g for g in lines
-        if g.market_type == "TEAM_PROP" and g.proposition in tt_markets and g.team == home
+    # `proposition` carries the raw feed string (normalizer sets
+    # `proposition=str(raw_prop)`), so compare it through the canonical
+    # is_team_total() predicate rather than against a handful of literal
+    # spellings -- "TEAM_TOTAL_POINTS" / "Team Total Points" are real team
+    # totals that a literal set silently drops, falling back to the 24/21
+    # placeholder scores.
+    team_totals = [
+        g for g in lines if g.market_type == "TEAM_PROP" and is_team_total(g.proposition)
     ]
-    away_tts = [
-        g for g in lines
-        if g.market_type == "TEAM_PROP" and g.proposition in tt_markets and g.team == away
-    ]
+    home_tts = [g for g in team_totals if g.team == home]
+    away_tts = [g for g in team_totals if g.team == away]
 
     home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line or 24.0) if home_tts else 24.0
     away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line or 21.0) if away_tts else 21.0

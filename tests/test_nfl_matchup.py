@@ -454,3 +454,78 @@ def test_pickem_spread_leans_neutral():
     assert script.spread_lean == "NEUTRAL"
     assert script.script_type == "COMPETITIVE"
 
+
+def test_team_totals_are_read_through_canonical_proposition_spellings():
+    """A team total must drive the projected score whatever the feed calls it.
+
+    ``NflGameLine.proposition`` holds the raw feed string, so matching it
+    against literal spellings dropped real team totals ("TEAM_TOTAL_POINTS",
+    "Team Total Points") and silently projected the 24/21 placeholder.
+    """
+    from outlier_nfl.matchup import build_matchup_script
+
+    for proposition in (
+        "POINTS",
+        "TEAM_TOTAL",
+        "TEAM_TOTAL_POINTS",
+        "Team Total Points",
+        "team_total",
+    ):
+        lines = [
+            _line(market="SPREAD", line=-3.0, position="HOME", team="KC"),
+            _line(market="SPREAD", line=3.0, position="AWAY", team="IND"),
+            _line(market="TOTAL", line=47.0, position="OVER", team=None, proposition="TOTAL"),
+            _line(
+                market="POINTS",
+                line=27.0,
+                position="OVER",
+                team="KC",
+                market_type="TEAM_PROP",
+                proposition=proposition,
+            ),
+            _line(
+                market="POINTS",
+                line=20.0,
+                position="OVER",
+                team="IND",
+                market_type="TEAM_PROP",
+                proposition=proposition,
+            ),
+        ]
+        script = build_matchup_script(
+            event_id="evt-ind-kc-tt",
+            home_team="KC",
+            away_team="IND",
+            game_lines=lines,
+            tapes={},
+        )
+        assert script.home_score == 27.0, proposition
+        assert script.away_score == 20.0, proposition
+
+
+def test_non_points_team_props_do_not_become_projected_scores():
+    """A TEAM_PROP that is not a points total must not set the score."""
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=-3.0, position="HOME", team="KC"),
+        _line(market="SPREAD", line=3.0, position="AWAY", team="IND"),
+        _line(market="TOTAL", line=47.0, position="OVER", team=None, proposition="TOTAL"),
+        _line(
+            market="POINTS",
+            line=3.5,
+            position="OVER",
+            team="KC",
+            market_type="TEAM_PROP",
+            proposition="TEAM_TOTAL_TOUCHDOWNS",
+        ),
+    ]
+    script = build_matchup_script(
+        event_id="evt-ind-kc-tt-td",
+        home_team="KC",
+        away_team="IND",
+        game_lines=lines,
+        tapes={},
+    )
+    assert script.home_score != 4.0
+
