@@ -1,3 +1,20 @@
+## Daily Debug Review: Matchup Team-Total Reader (Claude) - 2026-09-21
+1. **Last Commit SHA**: `7d5fe20` on branch `claude/inspiring-fermat-xdn5p3` (PR #182: https://github.com/DaSilvaDub/outlier/pull/182).
+2. **Files Touched**:
+   - `outlier_nfl/matchup.py`: `_market_context()` selected a game's team totals by testing `NflGameLine.proposition` against four literal spellings, but `proposition` carries the raw feed string (`games.py` sets `proposition=str(raw_prop)` while pinning the canonical code on `market`). The sibling SPREAD and TOTAL filters in the same function already match on canonical `market`; team totals were the one exception. A feed spelling the market `TEAM_TOTAL_POINTS` / `Team Total Points` / `team_total` -- all of which normalize into real TEAM_PROP lines carrying real numbers -- was dropped, and the script published the hardcoded 24.0/21.0 placeholder as the projected score into `nfl_matchup_scripts_*.json` and `reports/NFL/*_Game_Script.md`. Now matched through `outlier_nfl.config.is_team_total()`, the predicate the normalizer itself uses: it accepts every points-total spelling and still rejects non-points TEAM_PROPs (TEAM_TOTAL_TOUCHDOWNS). Strict widening -- the four old spellings all still match.
+   - `tests/test_nfl_matchup.py`: 2 regression tests (score follows the team total across five proposition spellings; a team TD total never becomes the projected score).
+3. **Verification**:
+   - 278 passed / 2 skipped across `tests/test_nfl_*.py` (was 276/2). The widening test fails on the pre-fix predicate and passes after.
+   - Full offline suite 1,060 passed (was 1,058), with the same dependency-driven collection errors as before the change. PyPI is unreachable in this cloud sandbox (`pytest`, `ruff` and `mypy` cannot be installed), so the suite was run under a local minimal pytest-compatible runner plus a `structlog` stand-in, both kept outside the repo; `sqlalchemy`, `openai` and `google-genai` modules stay uncollectable. **Hosted CI is authoritative.**
+   - End-to-end offline pipeline run against `tests/fixtures/nfl`: status OK, 3 matchup scripts, 3 game-script reports, 0 errors.
+   - `python -m compileall` clean across `outlier_nfl`, `outlier_scrapers`, `scripts`, `tests`.
+   - Roster registry cross-checked programmatically: 32 teams, no player on two depth charts, no `OFFSEASON_MOVES_2026` entry contradicting a chart.
+   - No paid reasoning models were invoked (house rule respected).
+4. **Next Steps**:
+   - PR #182 open against master, awaiting CI + human review.
+   - **Reported, not fixed** (report-semantics call for a human): when a game genuinely has no team totals or total in the feed, `_market_context()` still returns hardcoded 24.0/21.0/45.5 and `render_matchup_markdown()` prints them as real lines ("**Total lean:** UNDER 45.5") with nothing marking them as defaults. Both committed live reports (`2026-09-20_IND_KC`, `2026-09-21_NYG_LAR`) show projected scores that came from the spread/total fallback rather than team totals.
+   - Minor, no change made: `build_matchup_script()` derives projected scores with `round()`, whose banker's rounding turns a 25.5/22.5 team-total pair into 26-22 (margin 4 against a 3.5 spread). Cosmetic; intended tie-breaking is not clear from the code.
+
 ## Daily Pipeline Execution (Local Profile, Reasoning Off) (Gemini) - 2026-09-21
 1. **Last Commit SHA**: `4a32516` (master)
 2. **Files Touched**:
