@@ -214,6 +214,56 @@ def test_context_reports_quoted_team_totals_below_defaults():
     assert ctx["away_deficit_risk"] is False
 
 
+def test_context_reads_team_totals_through_canonical_proposition_spellings():
+    """A quoted team total must reach the context whatever the feed calls it.
+
+    ``NflGameLine.proposition`` holds the raw feed string, so matching it
+    against literal spellings dropped real team totals ("TEAM_TOTAL_POINTS",
+    "Team Total Points"). That pinned ``home_team_total`` at the 27.0 default,
+    which sits below the 28.0 deficit-risk threshold, silently disabling the
+    road-underdog haircut.
+    """
+    for proposition in (
+        "POINTS",
+        "TOTAL_POINTS",
+        "TEAM_TOTAL",
+        "TOTAL",
+        "TEAM_TOTAL_POINTS",
+        "Team Total Points",
+        "team_total",
+    ):
+        lines = [
+            _make_game_line("SPREAD", -5.5, team="BUF"),
+            _make_game_line("SPREAD", 5.5, team="DET"),
+            _make_game_line(
+                "TOTAL", 30.5, market_type="TEAM_PROP", proposition=proposition, team="BUF"
+            ),
+            _make_game_line(
+                "TOTAL", 24.5, market_type="TEAM_PROP", proposition=proposition, team="DET"
+            ),
+        ]
+        ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+        assert ctx["home_team_total"] == 30.5, proposition
+        assert ctx["away_team_total"] == 24.5, proposition
+        assert ctx["away_deficit_risk"] is True, proposition
+
+
+def test_context_ignores_non_points_team_props():
+    """A team touchdown total is not a points total and must not set the context."""
+    lines = [
+        _make_game_line("SPREAD", -5.5, team="BUF"),
+        _make_game_line("SPREAD", 5.5, team="DET"),
+        _make_game_line(
+            "TOTAL", 3.5, market_type="TEAM_PROP", proposition="TEAM_TOTAL_TOUCHDOWNS", team="BUF"
+        ),
+    ]
+    ctx = extract_game_script_context(lines)["evt-det-buf-01"]
+
+    assert ctx["home_team_total"] == 27.0
+    assert ctx["away_team_total"] == 21.0
+
+
 def test_context_falls_back_when_no_team_total_is_quoted():
     """With no team totals on the board the documented defaults still apply."""
     lines = [

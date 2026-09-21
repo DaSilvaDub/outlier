@@ -465,8 +465,12 @@ def test_team_totals_are_read_through_canonical_proposition_spellings():
     from outlier_nfl.matchup import build_matchup_script
 
     for proposition in (
+        # the four spellings the literal set already accepted ...
         "POINTS",
+        "TOTAL_POINTS",
         "TEAM_TOTAL",
+        "TOTAL",
+        # ... and the ones it silently dropped.
         "TEAM_TOTAL_POINTS",
         "Team Total Points",
         "team_total",

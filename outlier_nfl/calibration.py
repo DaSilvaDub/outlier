@@ -12,6 +12,7 @@ from dataclasses import replace
 import logging
 from typing import Any
 
+from outlier_nfl.config import is_team_total
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 
 logger = logging.getLogger("outlier_nfl.calibration")
@@ -86,10 +87,15 @@ def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict
             if s.team == away_team and float(s.line or 0) > 0:
                 away_spread_val = max(away_spread_val, float(s.line or 0))
 
-        # Extract Team Totals
+        # Extract Team Totals. `proposition` carries the raw feed string, so
+        # compare it through the canonical is_team_total() predicate rather than
+        # against literal spellings: "TEAM_TOTAL_POINTS" / "Team Total Points"
+        # are real team totals, and dropping them pins home_tt at the 27.0
+        # default, which sits below the 28.0 deficit-risk threshold and so
+        # silently disables the haircut entirely.
         team_totals = [
             ln for ln in lines
-            if ln.market_type == "TEAM_PROP" and ln.proposition in ("POINTS", "TOTAL_POINTS", "TEAM_TOTAL", "TOTAL")
+            if ln.market_type == "TEAM_PROP" and is_team_total(ln.proposition)
         ]
         # Seeding the accumulator with the default made the default a floor, so a
         # team total genuinely below it was reported as the default instead.
