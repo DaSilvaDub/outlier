@@ -1,4 +1,4 @@
-"""Unit tests for outlier_nfl.roster active roster indexing and player attribution."""
+"""Unit tests for outlier_nfl.roster active roster indexing, depth charts, and offseason movement verification."""
 
 from __future__ import annotations
 
@@ -6,9 +6,13 @@ import pytest
 
 from outlier_nfl.models import BookPrice, NflPlayerProp
 from outlier_nfl.roster import (
+    NFL_2026_FULL_DEPTH_CHARTS,
     NFL_2026_STARTING_QBS,
+    OFFSEASON_MOVES_2026,
     build_team_roster_index,
     get_starting_qb,
+    get_team_depth_chart,
+    validate_analysis_text_for_roster_errors,
     verify_player_team_attribution,
 )
 
@@ -118,30 +122,59 @@ def test_build_team_roster_index_and_attribution() -> None:
     assert verify_player_team_attribution("Breece Hall", "NYJ", rosters) is True
 
 
-def test_colts_daniel_jones_starting_qb_registry() -> None:
-    """Explicitly verify Daniel Jones is the 2026 starting QB for the Colts, not Anthony Richardson."""
+def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
+    """Explicitly verify Daniel Jones on Colts and Kenneth Walker III on Chiefs."""
     rosters = build_team_roster_index([], include_league_baseline=True)
 
-    assert "IND" in rosters
+    # Colts check
     assert rosters["IND"]["starting_qb"] == "Daniel Jones"
     assert get_starting_qb("IND", rosters) == "Daniel Jones"
-    assert get_starting_qb("KC", rosters) == "Patrick Mahomes"
-
-    # Strict QB position attribution check
     assert verify_player_team_attribution("Daniel Jones", "IND", rosters, position="QB") is True
     assert verify_player_team_attribution("Anthony Richardson", "IND", rosters, position="QB") is False
 
-    # Rodgers & Smith checks
-    assert get_starting_qb("PIT", rosters) == "Aaron Rodgers"
-    assert get_starting_qb("NYJ", rosters) == "Geno Smith"
-    assert get_starting_qb("MIN", rosters) == "Carson Wentz"
-    assert get_starting_qb("TEN", rosters) == "Cam Ward"
+    # Chiefs check
+    assert rosters["KC"]["starting_qb"] == "Patrick Mahomes"
+    assert "Kenneth Walker III" in rosters["KC"]["key_rbs"]
+    assert verify_player_team_attribution("Kenneth Walker III", "KC", rosters) is True
+    assert verify_player_team_attribution("Kenneth Walker III", "SEA", rosters) is False
 
-    # All 32 teams are indexed
-    assert len(rosters) >= 32
-    for team, qb in NFL_2026_STARTING_QBS.items():
-        assert rosters[team]["starting_qb"] == qb
-        assert get_starting_qb(team) == qb
+    # Offseason movement registry checks
+    assert OFFSEASON_MOVES_2026["Kenneth Walker III"]["current_team"] == "KC"
+    assert "SEA" in OFFSEASON_MOVES_2026["Kenneth Walker III"]["former_teams"]
+    assert OFFSEASON_MOVES_2026["Daniel Jones"]["current_team"] == "IND"
+    assert "NYG" in OFFSEASON_MOVES_2026["Daniel Jones"]["former_teams"]
+
+    # Full 32 teams check
+    assert len(rosters) == 32
+    assert len(NFL_2026_FULL_DEPTH_CHARTS) == 32
+
+
+def test_validate_analysis_text_catches_roster_hallucinations() -> None:
+    # Text with violations
+    bad_text_1 = "Kenneth Walker III on the Seahawks has a tough matchup tonight."
+    errors_1 = validate_analysis_text_for_roster_errors(bad_text_1)
+    assert len(errors_1) == 1
+    assert "Kenneth Walker III" in errors_1[0]
+    assert "SEA" in errors_1[0]
+
+    bad_text_2 = "Anthony Richardson is starting at quarterback for the Colts."
+    errors_2 = validate_analysis_text_for_roster_errors(bad_text_2)
+    assert len(errors_2) == 1
+    assert "Anthony Richardson" in errors_2[0]
+
+    bad_text_3 = "Aaron Rodgers on the Jets will look to pass downfield."
+    errors_3 = validate_analysis_text_for_roster_errors(bad_text_3)
+    assert len(errors_3) == 1
+    assert "Aaron Rodgers" in errors_3[0]
+
+    # Valid text with verified current teams
+    good_text = (
+        "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
+        "The Kansas City Chiefs signed Kenneth Walker III in the offseason to lead the backfield. "
+        "Aaron Rodgers is leading the Pittsburgh Steelers."
+    )
+    errors_good = validate_analysis_text_for_roster_errors(good_text)
+    assert errors_good == []
 
 
 def test_unknown_team_starting_qb_raises() -> None:

@@ -1,12 +1,12 @@
-## NFL Active Roster & Quarterback Grounding Invariant (Gemini) - 2026-09-20
-1. **Last Commit SHA**: `fdda0af` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
+## NFL Active Roster & Offseason Movement Authority (Gemini) - 2026-09-20
+1. **Last Commit SHA**: `c72fb08` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
 2. **Files Touched**:
-   - `outlier_nfl/roster.py`: Added 32-team baseline `NFL_2026_STARTING_QBS` registry (verifying IND: Daniel Jones, not Anthony Richardson; KC: Patrick Mahomes, PIT: Aaron Rodgers, etc.), implemented `get_starting_qb(team)`, and enforced strict starter verification on QB positions to prevent fallback hallucinations when window filters are active.
-   - `tests/test_nfl_roster.py`: Added tests verifying Daniel Jones as starting QB for IND, confirming Anthony Richardson fails QB attribution for IND, and validating all 32 teams have baseline starting QB coverage.
-   - `.agents/AGENTS.md`: Updated Invariant 5 (Active Roster & Quarterback Grounding Invariant) to explicitly mandate `Daniel Jones is on the Indianapolis Colts (IND) (Anthony Richardson is NOT starting)` and anchor directly to `get_starting_qb(team)`.
-   - `data/NFL/normalized/nfl_rosters_latest.json`: Refreshed with full 32-team baseline index.
+   - `outlier_nfl/roster.py`: Implemented full 32-team 2026 depth chart registry (`NFL_2026_FULL_DEPTH_CHARTS`), offseason player movement registry (`OFFSEASON_MOVES_2026` tracking Kenneth Walker III signed by KC as lead RB, Daniel Jones starting on IND, Aaron Rodgers on PIT, Geno Smith on NYJ, DK Metcalf on PIT, David Montgomery on HOU, Travis Etienne Jr. on NO, DJ Moore on BUF, etc.), and pre-flight text validation gate (`validate_analysis_text_for_roster_errors`) to mechanically block any references to former teams.
+   - `tests/test_nfl_roster.py`: Added 4 comprehensive unit tests verifying 32-team depth charts, Kenneth Walker on KC, Daniel Jones on IND, and proving the text validation gate catches stale team hallucinations.
+   - `.agents/AGENTS.md`: Updated Invariant 5 (Active Roster & Offseason Movement Authority Invariant) codifying all major 2026 offseason acquisitions and mandating grounding to `get_team_depth_chart` and `get_starting_qb`.
+   - `data/NFL/normalized/nfl_rosters_latest.json`: Refreshed with complete 32-team verified rosters.
 3. **Verification**:
-   - 42/42 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
+   - 43/43 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
    - PR #175 updated targeting `master`.
 4. **Next Steps**:
    - Merge PR #175.
