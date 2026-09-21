@@ -5,6 +5,8 @@ __pycache__/
 venv/
 *.log
 *.log.err
+.coverage
+.coverage.*
 
 # Stray debug/scratch/report artifacts previously committed by accident at repo
 # root. Removed from tracking; ignored here so they don't get re-added.
