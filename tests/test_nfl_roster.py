@@ -222,6 +222,30 @@ def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     assert "PHI" in OFFSEASON_MOVES_2026["A.J. Brown"]["former_teams"]
     assert OFFSEASON_MOVES_2026["AJ Brown"]["current_team"] == "NE"
 
+    # Newly audited 2026 moves
+    assert verify_player_team_attribution("Keenan Allen", "IND", rosters) is True
+    assert verify_player_team_attribution("Keenan Allen", "CHI", rosters) is False
+    assert verify_player_team_attribution("Romeo Doubs", "NE", rosters) is True
+    assert verify_player_team_attribution("Romeo Doubs", "GB", rosters) is False
+    assert verify_player_team_attribution("Rico Dowdle", "PIT", rosters) is True
+    assert verify_player_team_attribution("Rico Dowdle", "DAL", rosters) is False
+    assert verify_player_team_attribution("Kenneth Gainwell", "TB", rosters) is True
+    assert verify_player_team_attribution("Kenneth Gainwell", "PHI", rosters) is False
+    assert verify_player_team_attribution("Michael Pittman Jr.", "PIT", rosters) is True
+    assert verify_player_team_attribution("Michael Pittman Jr.", "IND", rosters) is False
+    assert verify_player_team_attribution("Wan'Dale Robinson", "TEN", rosters) is True
+    assert verify_player_team_attribution("Wan'Dale Robinson", "NYG", rosters) is False
+    assert verify_player_team_attribution("Tank Bigsby", "PHI", rosters) is True
+    assert verify_player_team_attribution("Tank Bigsby", "JAX", rosters) is False
+    assert verify_player_team_attribution("Jonnu Smith", "GB", rosters) is True
+    assert verify_player_team_attribution("Jonnu Smith", "MIA", rosters) is False
+    assert verify_player_team_attribution("Jordan Mason", "MIN", rosters) is True
+    assert verify_player_team_attribution("Jordan Mason", "SF", rosters) is False
+    assert verify_player_team_attribution("Jauan Jennings", "MIN", rosters) is True
+    assert verify_player_team_attribution("Jauan Jennings", "SF", rosters) is False
+    assert verify_player_team_attribution("Noah Fant", "NO", rosters) is True
+    assert verify_player_team_attribution("Noah Fant", "SEA", rosters) is False
+
     # Full 32 teams check
     assert len(rosters) == 32
     assert len(NFL_2026_FULL_DEPTH_CHARTS) == 32
@@ -257,13 +281,20 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
     assert "A.J. Brown" in errors_5[0]
     assert "NE" in errors_5[0]
 
+    bad_text_6 = "Keenan Allen on the Bears will lead their receiver room."
+    errors_6 = validate_analysis_text_for_roster_errors(bad_text_6)
+    assert len(errors_6) == 1
+    assert "Keenan Allen" in errors_6[0]
+    assert "IND" in errors_6[0]
+
     # Valid text with verified current teams
     good_text = (
         "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
         "The Kansas City Chiefs signed Kenneth Walker III in the offseason to lead the backfield. "
         "Aaron Rodgers is leading the Pittsburgh Steelers. "
         "Hollywood Brown is playing for the Philadelphia Eagles. "
-        "A.J. Brown is the top wide receiver for the New England Patriots."
+        "A.J. Brown is the top wide receiver for the New England Patriots. "
+        "Keenan Allen plays wide receiver for the Indianapolis Colts."
     )
     errors_good = validate_analysis_text_for_roster_errors(good_text)
     assert errors_good == []
