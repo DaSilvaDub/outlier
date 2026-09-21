@@ -152,6 +152,15 @@ def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     assert OFFSEASON_MOVES_2026["Hollywood Brown"]["current_team"] == "PHI"
     assert "KC" in OFFSEASON_MOVES_2026["Hollywood Brown"]["former_teams"]
 
+    # A.J. Brown checks
+    assert "A.J. Brown" in rosters["NE"]["key_pass_catchers"]
+    assert "A.J. Brown" not in rosters["PHI"]["key_pass_catchers"]
+    assert verify_player_team_attribution("A.J. Brown", "NE", rosters) is True
+    assert verify_player_team_attribution("A.J. Brown", "PHI", rosters) is False
+    assert OFFSEASON_MOVES_2026["A.J. Brown"]["current_team"] == "NE"
+    assert "PHI" in OFFSEASON_MOVES_2026["A.J. Brown"]["former_teams"]
+    assert OFFSEASON_MOVES_2026["AJ Brown"]["current_team"] == "NE"
+
     # Full 32 teams check
     assert len(rosters) == 32
     assert len(NFL_2026_FULL_DEPTH_CHARTS) == 32
@@ -181,12 +190,19 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
     assert "Hollywood Brown" in errors_4[0]
     assert "PHI" in errors_4[0]
 
+    bad_text_5 = "A.J. Brown on the Eagles is their top target."
+    errors_5 = validate_analysis_text_for_roster_errors(bad_text_5)
+    assert len(errors_5) == 1
+    assert "A.J. Brown" in errors_5[0]
+    assert "NE" in errors_5[0]
+
     # Valid text with verified current teams
     good_text = (
         "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
         "The Kansas City Chiefs signed Kenneth Walker III in the offseason to lead the backfield. "
         "Aaron Rodgers is leading the Pittsburgh Steelers. "
-        "Hollywood Brown is playing for the Philadelphia Eagles."
+        "Hollywood Brown is playing for the Philadelphia Eagles. "
+        "A.J. Brown is the top wide receiver for the New England Patriots."
     )
     errors_good = validate_analysis_text_for_roster_errors(good_text)
     assert errors_good == []
