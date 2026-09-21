@@ -1,10 +1,10 @@
 ## NFL Active Roster & Offseason Movement Authority (Gemini) - 2026-09-20
-1. **Last Commit SHA**: `c72fb08` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
+1. **Last Commit SHA**: `085d40f` on branch `fix/nfl-active-roster-grounding` (PR #175: https://github.com/DaSilvaDub/outlier/pull/175)
 2. **Files Touched**:
-   - `outlier_nfl/roster.py`: Implemented full 32-team 2026 depth chart registry (`NFL_2026_FULL_DEPTH_CHARTS`), offseason player movement registry (`OFFSEASON_MOVES_2026` tracking Kenneth Walker III signed by KC as lead RB, Daniel Jones starting on IND, Aaron Rodgers on PIT, Geno Smith on NYJ, DK Metcalf on PIT, David Montgomery on HOU, Travis Etienne Jr. on NO, DJ Moore on BUF, etc.), and pre-flight text validation gate (`validate_analysis_text_for_roster_errors`) to mechanically block any references to former teams.
-   - `tests/test_nfl_roster.py`: Added 4 comprehensive unit tests verifying 32-team depth charts, Kenneth Walker on KC, Daniel Jones on IND, and proving the text validation gate catches stale team hallucinations.
-   - `.agents/AGENTS.md`: Updated Invariant 5 (Active Roster & Offseason Movement Authority Invariant) codifying all major 2026 offseason acquisitions and mandating grounding to `get_team_depth_chart` and `get_starting_qb`.
-   - `data/NFL/normalized/nfl_rosters_latest.json`: Refreshed with complete 32-team verified rosters.
+   - `outlier_nfl/roster.py`: Implemented full 32-team 2026 depth chart registry (`NFL_2026_FULL_DEPTH_CHARTS`), offseason player movement registry (`OFFSEASON_MOVES_2026` tracking Kenneth Walker III on KC, Daniel Jones on IND, Hollywood Brown on PHI, Aaron Rodgers on PIT, Geno Smith on NYJ, DK Metcalf on PIT, David Montgomery on HOU, Travis Etienne Jr. on NO, DJ Moore on BUF, etc.), and pre-flight text validation gate (`validate_analysis_text_for_roster_errors`) to mechanically block any references to former teams.
+   - `tests/test_nfl_roster.py`: Added comprehensive unit tests verifying 32-team depth charts, Kenneth Walker on KC, Daniel Jones on IND, Hollywood Brown on PHI, and proving the text validation gate catches stale team hallucinations.
+   - `.agents/AGENTS.md`: Updated Invariant 5 (Active Roster & Offseason Movement Authority Invariant) codifying all major 2026 offseason acquisitions (including Hollywood Brown on PHI) and mandating grounding to `get_team_depth_chart` and `get_starting_qb`.
+   - `data/NFL/normalized/nfl_rosters_latest.json`: Refreshed with complete 32-team verified rosters (KC WRs: Rashee Rice, Xavier Worthy, Justin Watson; PHI WRs: A.J. Brown, DeVonta Smith, Hollywood Brown, Dontayvion Wicks).
 3. **Verification**:
    - 43/43 NFL tests passing (`pytest tests/test_nfl_roster.py tests/test_nfl_calibration.py tests/test_nfl_normalizer.py tests/test_nfl_pipeline.py`).
    - PR #175 updated targeting `master`.

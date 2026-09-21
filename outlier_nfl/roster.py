@@ -138,6 +138,20 @@ OFFSEASON_MOVES_2026: dict[str, dict[str, Any]] = {
         "role": "Featured Wide Receiver",
         "notes": "Signed by Washington Commanders.",
     },
+    "Hollywood Brown": {
+        "current_team": "PHI",
+        "former_teams": ["KC", "Chiefs", "Kansas City", "ARI", "Cardinals", "BAL", "Ravens"],
+        "pos": "WR",
+        "role": "Starting Wide Receiver",
+        "notes": "Acquired by Philadelphia Eagles. Is NOT on the Kansas City Chiefs.",
+    },
+    "Marquise Brown": {
+        "current_team": "PHI",
+        "former_teams": ["KC", "Chiefs", "Kansas City", "ARI", "Cardinals", "BAL", "Ravens"],
+        "pos": "WR",
+        "role": "Starting Wide Receiver",
+        "notes": "Acquired by Philadelphia Eagles. Is NOT on the Kansas City Chiefs.",
+    },
     "Dontayvion Wicks": {
         "current_team": "PHI",
         "former_teams": ["GB", "Packers", "Green Bay"],
@@ -265,7 +279,7 @@ NFL_2026_FULL_DEPTH_CHARTS: dict[str, dict[str, Any]] = {
         "name": "Kansas City Chiefs",
         "starting_qb": "Patrick Mahomes",
         "rbs": ["Kenneth Walker III", "Carson Steele", "Kareem Hunt"],
-        "wrs": ["Rashee Rice", "Xavier Worthy", "Hollywood Brown"],
+        "wrs": ["Rashee Rice", "Xavier Worthy", "Justin Watson"],
         "te": "Travis Kelce",
     },
     "LAC": {
@@ -335,7 +349,7 @@ NFL_2026_FULL_DEPTH_CHARTS: dict[str, dict[str, Any]] = {
         "name": "Philadelphia Eagles",
         "starting_qb": "Jalen Hurts",
         "rbs": ["Saquon Barkley", "Kenneth Gainwell"],
-        "wrs": ["A.J. Brown", "DeVonta Smith", "Dontayvion Wicks"],
+        "wrs": ["A.J. Brown", "DeVonta Smith", "Hollywood Brown", "Dontayvion Wicks"],
         "te": "Dallas Goedert",
     },
     "PIT": {

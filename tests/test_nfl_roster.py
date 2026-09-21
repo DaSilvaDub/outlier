@@ -144,6 +144,14 @@ def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     assert OFFSEASON_MOVES_2026["Daniel Jones"]["current_team"] == "IND"
     assert "NYG" in OFFSEASON_MOVES_2026["Daniel Jones"]["former_teams"]
 
+    # Hollywood Brown checks
+    assert "Hollywood Brown" in rosters["PHI"]["key_pass_catchers"]
+    assert "Hollywood Brown" not in rosters["KC"]["key_pass_catchers"]
+    assert verify_player_team_attribution("Hollywood Brown", "PHI", rosters) is True
+    assert verify_player_team_attribution("Hollywood Brown", "KC", rosters) is False
+    assert OFFSEASON_MOVES_2026["Hollywood Brown"]["current_team"] == "PHI"
+    assert "KC" in OFFSEASON_MOVES_2026["Hollywood Brown"]["former_teams"]
+
     # Full 32 teams check
     assert len(rosters) == 32
     assert len(NFL_2026_FULL_DEPTH_CHARTS) == 32
@@ -167,11 +175,18 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
     assert len(errors_3) == 1
     assert "Aaron Rodgers" in errors_3[0]
 
+    bad_text_4 = "Hollywood Brown on the Chiefs is a key receiving target tonight."
+    errors_4 = validate_analysis_text_for_roster_errors(bad_text_4)
+    assert len(errors_4) == 1
+    assert "Hollywood Brown" in errors_4[0]
+    assert "PHI" in errors_4[0]
+
     # Valid text with verified current teams
     good_text = (
         "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
         "The Kansas City Chiefs signed Kenneth Walker III in the offseason to lead the backfield. "
-        "Aaron Rodgers is leading the Pittsburgh Steelers."
+        "Aaron Rodgers is leading the Pittsburgh Steelers. "
+        "Hollywood Brown is playing for the Philadelphia Eagles."
     )
     errors_good = validate_analysis_text_for_roster_errors(good_text)
     assert errors_good == []
