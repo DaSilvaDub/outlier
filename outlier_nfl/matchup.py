@@ -86,6 +86,7 @@ def load_prior_week_tape(nfl_dir: Path | str) -> dict[str, dict[str, Any]]:
     search_paths = [
         root / "tape" / "prior_week.json",
         root / "tape" / "latest.json",
+        Path(__file__).resolve().parent / "tape" / "prior_week_tape.json",
         Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "nfl" / "prior_week_tape.json",
     ]
     for path in search_paths:
@@ -460,35 +461,52 @@ def build_matchup_script(
     rush_mismatch(away, home)
     pass_suppress(home, away)
     pass_suppress(away, home)
-    favorite_is_home = ctx["home_spread"] < 0
-    favorite = home if favorite_is_home else away
-    coverage_leak(home, away, favorite=favorite_is_home)
-    coverage_leak(away, home, favorite=not favorite_is_home)
+    home_spread = ctx["home_spread"]
+    if home_spread < 0:
+        favorite_is_home: bool | None = True
+        favorite: str | None = home
+    elif home_spread > 0:
+        favorite_is_home = False
+        favorite = away
+    else:
+        favorite_is_home = None
+        favorite = None
 
-    abs_spread = abs(ctx["home_spread"])
+    coverage_leak(home, away, favorite=(favorite_is_home is True))
+    coverage_leak(away, home, favorite=(favorite_is_home is False))
+
+    abs_spread = abs(home_spread)
     total = ctx["total"]
-    has_fav_rush = any(
-        s.tag == "MATCHUP_RUSH_MISMATCH" and s.team == favorite and s.market == "RUSH_YDS"
-        for s in signals
+    has_fav_rush = (
+        any(
+            s.tag == "MATCHUP_RUSH_MISMATCH" and s.team == favorite and s.market == "RUSH_YDS"
+            for s in signals
+        )
+        if favorite
+        else False
     )
-    if abs_spread >= FAVORITE_SPREAD and total <= GRIND_TOTAL and (has_fav_rush or not tape_map):
+    if favorite and abs_spread >= FAVORITE_SPREAD and total <= GRIND_TOTAL and (has_fav_rush or not tape_map):
         script_type = "FRONT_RUNNER_GRIND"
         spread_lean = "HOME" if favorite_is_home else "AWAY"
         total_lean = "UNDER"
         notes.append("Favorite grind: run the ball, cap opponent pass yards, under total.")
     elif total >= SHOOTOUT_TOTAL:
         script_type = "SHOOTOUT"
-        spread_lean = "HOME" if favorite_is_home else "AWAY"
+        spread_lean = (
+            "HOME" if (favorite_is_home is True) else ("AWAY" if (favorite_is_home is False) else "NEUTRAL")
+        )
         total_lean = "OVER"
         notes.append("High total: both pass games stay on schedule.")
     else:
         script_type = "COMPETITIVE"
-        spread_lean = "HOME" if favorite_is_home else "AWAY"
+        spread_lean = (
+            "HOME" if (favorite_is_home is True) else ("AWAY" if (favorite_is_home is False) else "NEUTRAL")
+        )
         total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
 
     home_score = round(ctx["home_tt"])
     away_score = round(ctx["away_tt"])
-    if home_score == away_score and abs_spread > 0:
+    if home_score == away_score and abs_spread > 0 and favorite:
         fav_pts = round((total + abs_spread) / 2.0)
         dog_pts = round((total - abs_spread) / 2.0)
         if favorite_is_home:
@@ -497,9 +515,9 @@ def build_matchup_script(
             away_score, home_score = fav_pts, dog_pts
 
     if script_type == "FRONT_RUNNER_GRIND":
-        if favorite_is_home and home_score <= away_score:
+        if favorite_is_home is True and home_score <= away_score:
             home_score = away_score + 7
-        elif not favorite_is_home and away_score <= home_score:
+        elif favorite_is_home is False and away_score <= home_score:
             away_score = home_score + 7
 
     return MatchupScript(
@@ -737,10 +755,16 @@ def render_matchup_markdown(
             )
 
     if script:
-        fav = home if script.spread_lean == "HOME" else away
-        dog = away if fav == home else home
-        fav_score = script.home_score if fav == home else script.away_score
-        dog_score = script.away_score if fav == home else script.home_score
+        if script.spread_lean == "AWAY":
+            fav = away
+            dog = home
+            fav_score = script.away_score
+            dog_score = script.home_score
+        else:
+            fav = home
+            dog = away
+            fav_score = script.home_score
+            dog_score = script.away_score
         lines.extend(["", "## 5. Three canonical scripts", ""])
         lines.append(
             f"### Scenario 1: Front-runner grind ({'BASE' if script.script_type == 'FRONT_RUNNER_GRIND' else 'ALT'})"

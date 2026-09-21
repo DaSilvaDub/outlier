@@ -434,3 +434,23 @@ def test_pipeline_analyzes_every_matchup_and_tags_props(tmp_path: Path):
     assert (reports_dir / "2026-09-13_BAL_KC_Game_Script.md").exists()
     assert (reports_dir / "2026-09-13_SF_LAR_Game_Script.md").exists()
     assert (reports_dir / "2026-09-13_DAL_PHI_Game_Script.md").exists()
+
+
+def test_pickem_spread_leans_neutral():
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=0.0, position="HOME", team="KC"),
+        _line(market="SPREAD", line=0.0, position="AWAY", team="IND"),
+        _line(market="TOTAL", line=47.0, position="OVER", team=None, proposition="TOTAL"),
+    ]
+    script = build_matchup_script(
+        event_id="evt-ind-kc-pickem",
+        home_team="KC",
+        away_team="IND",
+        game_lines=lines,
+        tapes={},
+    )
+    assert script.spread_lean == "NEUTRAL"
+    assert script.script_type == "COMPETITIVE"
+
