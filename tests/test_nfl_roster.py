@@ -122,6 +122,67 @@ def test_build_team_roster_index_and_attribution() -> None:
     assert verify_player_team_attribution("Breece Hall", "NYJ", rosters) is True
 
 
+def _prop(team: str, player_name: str, market: str) -> NflPlayerProp:
+    return NflPlayerProp(
+        event_id="e1",
+        event_starts_at="2026-09-20T17:00:00Z",
+        matchup="MIA @ NE",
+        team=team,
+        opponent="NE",
+        player_name=player_name,
+        player_id=None,
+        market=market,
+        market_raw=market,
+        position="OVER",
+        line=40.5,
+        books=(BookPrice(book="DRAFTKINGS", odds=-110, odds_raw="-110"),),
+        best_odds=-110,
+        implied_probability=52.38,
+    )
+
+
+def test_surname_containing_most_is_not_treated_as_an_aggregate_market() -> None:
+    """'Most Passing Yards' is an aggregate label; 'Mostert' is an active ball-carrier.
+
+    Baseline off so the assertion covers what the feed produced, not the static
+    depth chart merged in on top of it.
+    """
+    rosters = build_team_roster_index(
+        [
+            _prop("MIA", "Raheem Mostert", "RUSH_YDS"),
+            _prop("MIA", "Most Rushing Yards", "RUSH_YDS"),
+            _prop("MIA", "Tua Tagovailoa", "PASS_YDS"),
+        ],
+        include_league_baseline=False,
+    )
+
+    assert rosters["MIA"]["key_rbs"] == ["Raheem Mostert"]
+    assert verify_player_team_attribution("Raheem Mostert", "MIA", rosters) is True
+
+
+def test_attribution_fails_closed_when_a_team_has_no_indexed_starting_qb() -> None:
+    """An empty QB slot must not make every player verify as correctly attributed.
+
+    Baseline off is what leaves the slot empty: with it on, every team inherits a
+    starter and this path is never exercised.
+    """
+    rosters = build_team_roster_index(
+        [_prop("NE", "Rhamondre Stevenson", "RUSH_YDS")],
+        include_league_baseline=False,
+    )
+
+    assert rosters["NE"]["starting_qb"] is None
+    assert verify_player_team_attribution("Patrick Mahomes", "NE", rosters) is False
+    assert verify_player_team_attribution("Rhamondre Stevenson", "NE", rosters) is True
+
+
+def test_qb_priced_only_on_completions_or_passing_tds_is_still_indexed() -> None:
+    """PASS_COMP / PASS_TD are the canonical codes normalize_market emits."""
+    rosters = build_team_roster_index(
+        [_prop("GB", "Jordan Love", "PASS_COMP"), _prop("GB", "Jordan Love", "PASS_TD")]
+    )
+
+    assert rosters["GB"]["starting_qb"] == "Jordan Love"
 def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     """Explicitly verify Daniel Jones on Colts and Kenneth Walker III on Chiefs."""
     rosters = build_team_roster_index([], include_league_baseline=True)

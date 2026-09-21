@@ -18,6 +18,13 @@ from outlier_nfl.models import NflPlayerProp
 
 logger = logging.getLogger("outlier_nfl.roster")
 
+# Aggregate "Most Passing Yards"-style markets carry no playerName, so props.py falls
+# back to the market label and they arrive here as a player. Match "most" as a whole
+# word: a bare substring test also swallows real surnames that contain it (Raheem
+# Mostert), dropping an active ball-carrier from the index and then reporting him as
+# a mis-attribution.
+_AGGREGATE_NAME_RE = re.compile(r"\bmost\b", re.IGNORECASE)
+
 
 class RosterIntegrityError(ValueError):
     """Raised when analysis text or data feeds violate verified 2026 NFL roster truth."""
@@ -529,13 +536,23 @@ def build_team_roster_index(
                 continue
 
             name = p.player_name if isinstance(p, NflPlayerProp) else p.get("player_name")
-            if not name or "most" in name.lower():
+            if not name or _AGGREGATE_NAME_RE.search(name):
                 continue
 
             mkt = p.market if isinstance(p, NflPlayerProp) else p.get("market")
             books_count = len(p.books) if isinstance(p, NflPlayerProp) else len(p.get("books", []))
 
-            if mkt in ("PASS_YDS", "PASS_ATTEMPTS", "PASS_ATT", "PASS_COMPLETIONS", "PASS_TDS"):
+            # PASS_COMP / PASS_TD are the codes normalize_market actually emits
+            # (config.PROP_PASS_COMP / PROP_PASS_TDS); the longer spellings never match.
+            if mkt in (
+                "PASS_YDS",
+                "PASS_ATTEMPTS",
+                "PASS_ATT",
+                "PASS_COMP",
+                "PASS_COMPLETIONS",
+                "PASS_TD",
+                "PASS_TDS",
+            ):
                 passers[name] = passers.get(name, 0) + max(1, books_count)
             elif mkt in ("RUSH_YDS", "RUSH_ATTEMPTS", "RUSH_ATT"):
                 rushers[name] = rushers.get(name, 0) + max(1, books_count)
@@ -563,6 +580,18 @@ def build_team_roster_index(
     return rosters
 
 
+def _names_overlap(candidate: str, indexed: str) -> bool:
+    """Substring match between two already-lowercased names, both required non-empty.
+
+    A team with no indexed starting QB stores ``None``; without the emptiness guard
+    ``"" in candidate`` is always True and the verifier passes every player on that
+    team, which is the exact hallucination this module exists to catch.
+    """
+    if not candidate or not indexed:
+        return False
+    return candidate in indexed or indexed in candidate
+
+
 def verify_player_team_attribution(
     player_name: str,
     expected_team: str,
@@ -576,35 +605,40 @@ def verify_player_team_attribution(
     """
     t_clean = expected_team.strip().upper()
     team_info = rosters.get(t_clean)
+    # `or ""` rather than str(None): an absent starter must read as empty so the
+    # emptiness guard in _names_overlap() catches it. "none" is a truthy sentinel
+    # that silently re-opens the hole.
     verified_qb = str(
-        team_info.get("starting_qb") if team_info else NFL_2026_STARTING_QBS.get(t_clean, "")
-    ).lower()
+        (team_info.get("starting_qb") if team_info else NFL_2026_STARTING_QBS.get(t_clean)) or ""
+    ).strip().lower()
 
     p_clean = player_name.strip().lower()
+    if not p_clean:
+        return False
 
     # Check for known former-team violations
     for move_player, move_meta in OFFSEASON_MOVES_2026.items():
-        if move_player.lower() in p_clean or p_clean in move_player.lower():
+        if _names_overlap(p_clean, move_player.strip().lower()):
             if t_clean != move_meta["current_team"]:
                 return False
             return True
 
     # If position is quarterback, enforce strict starter match
     if position and position.upper() == "QB":
-        return bool(p_clean in verified_qb or verified_qb in p_clean)
+        return _names_overlap(p_clean, verified_qb)
 
     # Check QB match
-    if verified_qb and (p_clean in verified_qb or verified_qb in p_clean):
+    if _names_overlap(p_clean, verified_qb):
         return True
 
     # Check known RBs/WRs from depth chart
     if team_info:
         for rb in team_info.get("key_rbs", []):
-            if p_clean in str(rb).lower() or str(rb).lower() in p_clean:
+            if _names_overlap(p_clean, str(rb).strip().lower()):
                 return True
 
         for wr in team_info.get("key_pass_catchers", []):
-            if p_clean in str(wr).lower() or str(wr).lower() in p_clean:
+            if _names_overlap(p_clean, str(wr).strip().lower()):
                 return True
 
     return False

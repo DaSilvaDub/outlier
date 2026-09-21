@@ -360,6 +360,16 @@ def _player_event_candidates(events: Sequence[FinalEvent], selection: str) -> li
     return [event for event in events if _player_boxscore_key(event, selection)]
 
 
+def _is_matchup_prefixed(selection: str) -> bool:
+    """True for selections that open with a matchup ("IND @ TOR Indiana Fever - Points ...").
+
+    These carry a " - " but name a team, not a player, so the player-prop paths must
+    stand aside for them: _grade_row already refuses to grade one as a player prop,
+    and collect_settlement_rows must not hand one to _player_event_candidates.
+    """
+    return bool(re.match(r"^[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+", selection))
+
+
 def _event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"\b([A-Za-z0-9]+)\s+@\s+([A-Za-z0-9]+)\b", selection)
     return bool(
@@ -473,6 +483,30 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
     return None
 
 
+def _matchup_team_score(event: FinalEvent, raw_team: str) -> float | None:
+    """Resolve the final score of the team named in a matchup-prefixed team total.
+
+    ``raw_team`` is the tokenized display name ("ATLANTADREAM"); the event only
+    carries codes, so an exact alias match is tried first and containment only as a
+    fallback. Containment alone is not decisive: one team's code is regularly a
+    substring of the other team's name ("LA" sits inside "ATLANTADREAM"), and testing
+    the away side first then graded an Atlanta Dream total against Los Angeles' score.
+    Where both sides match -- or neither does -- skip rather than guess, per this
+    collector's contract.
+    """
+    canonical = _team_token(raw_team)
+    away_exact = canonical == _team_token(event.away)
+    home_exact = canonical == _team_token(event.home)
+    if away_exact != home_exact:
+        return event.away_score if away_exact else event.home_score
+
+    away_hit = _token(event.away) in raw_team
+    home_hit = _token(event.home) in raw_team
+    if away_hit != home_hit:
+        return event.away_score if away_hit else event.home_score
+    return None
+
+
 def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     selection = str(row["selection"] or "")
     line = _number(row["line"])
@@ -484,7 +518,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     )
     if (
         player_match
-        and not re.match(r"^[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+", selection)
+        and not _is_matchup_prefixed(selection)
         and (market_type == "PLAYERPROP" or market_type not in {"GAMELINE", "TEAMPROP"})
     ):
         player_key = _player_boxscore_key(event, selection) or _token(player_match.group(1))
@@ -520,12 +554,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         re.IGNORECASE,
     )
     if matchup_team_total and _event_match(event, selection):
-        raw_team = _token(matchup_team_total.group(1))
-        actual = None
-        if _team_token(raw_team) == _team_token(event.away) or _token(event.away) in raw_team:
-            actual = event.away_score
-        elif _team_token(raw_team) == _team_token(event.home) or _token(event.home) in raw_team:
-            actual = event.home_score
+        actual = _matchup_team_score(event, _token(matchup_team_total.group(1)))
         if actual is not None:
             return (actual, _side_result(actual, line, matchup_team_total.group(2).upper()))
 
@@ -701,7 +730,7 @@ def collect_settlement_rows(
                 ]
             else:
                 candidates = [event for event in events if _event_match(event, selection)]
-            if " - " in selection:
+            if " - " in selection and not _is_matchup_prefixed(selection):
                 candidates = _player_event_candidates(events, selection)
             if len(candidates) != 1:
                 summary["unmatched_event_count"] += 1
