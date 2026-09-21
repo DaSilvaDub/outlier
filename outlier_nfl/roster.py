@@ -568,7 +568,6 @@ def validate_analysis_text_for_roster_errors(text: str) -> list[str]:
         if p_name not in text_lower:
             continue
 
-        curr_team = meta["current_team"].lower()
         former_teams = [f.lower() for f in meta["former_teams"]]
 
         player_violation_found = False
@@ -633,9 +632,9 @@ def build_team_roster_index(
 
     teams: set[str] = set()
     for p in props:
-        t = p.team if isinstance(p, NflPlayerProp) else p.get("team")
-        if t:
-            teams.add(str(t).strip().upper())
+        team_val = p.team if isinstance(p, NflPlayerProp) else p.get("team")
+        if team_val:
+            teams.add(str(team_val).strip().upper())
 
     for t in sorted(teams):
         passers: dict[str, int] = {}

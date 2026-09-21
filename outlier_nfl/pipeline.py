@@ -24,6 +24,13 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
+from outlier_nfl.matchup import (
+    apply_matchup_signals,
+    build_matchup_scripts,
+    load_prior_week_tape,
+    render_matchup_markdown,
+    scripts_to_records,
+)
 from outlier_nfl.normalizer import (
     apply_game_script_calibration,
     build_schedule_index,
@@ -110,7 +117,9 @@ class NflPipeline:
             fix_path = Path(offline_fixtures_dir)
             logger.info("Loading offline fixtures from %s", fix_path)
             schedule_raw = safe_read_json(fix_path / "schedule.json", default={"events": []})
-            event_markets_raw = safe_read_json(fix_path / "event_markets.json", default={"markets": []})
+            event_markets_raw = safe_read_json(
+                fix_path / "event_markets.json", default={"markets": []}
+            )
             player_props_raw = safe_read_json(fix_path / "player_props.json", default={"props": []})
 
             sched_errs = validate_schedule_payload(schedule_raw)
@@ -123,7 +132,8 @@ class NflPipeline:
 
             events = schedule_raw.get("events", [])
             slate_events = [
-                e for e in events
+                e
+                for e in events
                 if to_eastern_date(e.get("scheduledTime") or e.get("startTime")) == target_date
                 and matches_kickoff_window(e.get("scheduledTime") or e.get("startTime"), window)
             ]
@@ -139,7 +149,9 @@ class NflPipeline:
             props = normalize_player_props(player_props_raw, schedule_index)
             slate_event_ids = {str(e.get("eventId") or e.get("id")) for e in slate_events}
             if slate_event_ids:
-                all_player_props = [p for p in props if p.event_id in slate_event_ids or not p.event_id]
+                all_player_props = [
+                    p for p in props if p.event_id in slate_event_ids or not p.event_id
+                ]
                 if not all_player_props and props:
                     all_player_props = props
             else:
@@ -160,11 +172,17 @@ class NflPipeline:
             schedule_index = build_schedule_index(schedule_raw)
 
             slate_events = [
-                e for e in events
+                e
+                for e in events
                 if to_eastern_date(e.get("scheduledTime") or e.get("startTime")) == target_date
                 and matches_kickoff_window(e.get("scheduledTime") or e.get("startTime"), window)
             ]
-            logger.info("Found %d scheduled events for slate date %s%s", len(slate_events), target_date, window_label)
+            logger.info(
+                "Found %d scheduled events for slate date %s%s",
+                len(slate_events),
+                target_date,
+                window_label,
+            )
 
             # Extract markets per slate event
             for event in slate_events:
@@ -178,11 +196,17 @@ class NflPipeline:
                         mkt_payload = client.fetch_event_markets(event_id, market_type=m_type)
                         val_errs = validate_event_markets_payload(mkt_payload)
                         if val_errs:
-                            logger.warning("Market payload errors for %s (%s): %s", event_id, m_type, val_errs)
-                        if isinstance(mkt_payload, dict) and isinstance(mkt_payload.get("markets"), list):
+                            logger.warning(
+                                "Market payload errors for %s (%s): %s", event_id, m_type, val_errs
+                            )
+                        if isinstance(mkt_payload, dict) and isinstance(
+                            mkt_payload.get("markets"), list
+                        ):
                             event_markets.extend(mkt_payload["markets"])
                     except Exception as exc:
-                        logger.warning("Failed fetching %s markets for event %s: %s", m_type, event_id, exc)
+                        logger.warning(
+                            "Failed fetching %s markets for event %s: %s", m_type, event_id, exc
+                        )
 
                 lines = normalize_game_markets(event, {"markets": event_markets}, team_index)
                 all_game_lines.extend(lines)
@@ -206,11 +230,25 @@ class NflPipeline:
                 all_player_props = []
 
         # =====================================================================
-        # 1.5 Consensus Selection & Game Script Calibration Phase
+        # 1.5 Per-matchup tape analysis, then consensus + calibration
         # =====================================================================
+        tapes = load_prior_week_tape(self.nfl_dir)
+        matchup_scripts = build_matchup_scripts(
+            all_game_lines,
+            tapes,
+            slate_events=slate_events,
+        )
+        if matchup_scripts:
+            logger.info(
+                "Built %d matchup scripts from prior-week tape (%d teams)",
+                len(matchup_scripts),
+                len(tapes),
+            )
+
         if all_player_props:
             consensus_props = select_consensus_player_props(all_player_props)
             calibrated_props = apply_game_script_calibration(all_game_lines, consensus_props)
+            calibrated_props = apply_matchup_signals(calibrated_props, matchup_scripts)
         else:
             consensus_props = []
             calibrated_props = []
@@ -227,10 +265,14 @@ class NflPipeline:
         prop_errs = validate_normalized_dataset(props_dict, dataset_type="props")
         if game_errs:
             errors.extend(game_errs)
-            logger.error("Validation failed on %d game line records: %s", len(game_errs), game_errs[:5])
+            logger.error(
+                "Validation failed on %d game line records: %s", len(game_errs), game_errs[:5]
+            )
         if prop_errs:
             errors.extend(prop_errs)
-            logger.error("Validation failed on %d player prop records: %s", len(prop_errs), prop_errs[:5])
+            logger.error(
+                "Validation failed on %d player prop records: %s", len(prop_errs), prop_errs[:5]
+            )
 
         # =====================================================================
         # 3. Persistence Phase
@@ -256,7 +298,9 @@ class NflPipeline:
 
         # Write calibrated and high-probability datasets
         safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
-        safe_write_json(self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload)
+        safe_write_json(
+            self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload
+        )
 
         anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
         anchors_payload = {
@@ -267,7 +311,9 @@ class NflPipeline:
             "records": anchors,
         }
         safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
-        safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload)
+        safe_write_json(
+            self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload
+        )
 
         # Build verified active roster index
         rosters = build_team_roster_index(all_player_props)
@@ -281,13 +327,67 @@ class NflPipeline:
         safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
         safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}.json", rosters_payload)
 
+        scripts_payload = {
+            "date": target_date,
+            "window": window,
+            "updated_at": now_utc,
+            "count": len(matchup_scripts),
+            "records": scripts_to_records(matchup_scripts),
+        }
+        safe_write_json(self.normalized_dir / "nfl_matchup_scripts_latest.json", scripts_payload)
+        safe_write_json(
+            self.normalized_dir / f"nfl_matchup_scripts_{target_date}.json",
+            scripts_payload,
+        )
+
+        matchup_prop_records = [
+            p.to_dict()
+            for p in calibrated_props
+            if any(str(tag).startswith("MATCHUP_") for tag in p.calibration_tags)
+        ]
+        matchup_props_payload = {
+            "date": target_date,
+            "window": window,
+            "updated_at": now_utc,
+            "count": len(matchup_prop_records),
+            "records": matchup_prop_records,
+        }
+        safe_write_json(
+            self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
+        )
+        safe_write_json(
+            self.normalized_dir / f"nfl_matchup_props_{target_date}.json",
+            matchup_props_payload,
+        )
+
         if window:
             window_slug = window.strip().lower()
-            safe_write_json(self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload)
-            safe_write_json(self.normalized_dir / f"nfl_props_{target_date}_{window_slug}.json", props_payload)
-            safe_write_json(self.normalized_dir / f"nfl_calibrated_props_{target_date}_{window_slug}.json", props_payload)
-            safe_write_json(self.normalized_dir / f"nfl_high_prob_props_{target_date}_{window_slug}.json", anchors_payload)
-            safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}_{window_slug}.json", rosters_payload)
+            safe_write_json(
+                self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_props_{target_date}_{window_slug}.json", props_payload
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_calibrated_props_{target_date}_{window_slug}.json",
+                props_payload,
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_high_prob_props_{target_date}_{window_slug}.json",
+                anchors_payload,
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_rosters_{target_date}_{window_slug}.json",
+                rosters_payload,
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_matchup_scripts_{target_date}_{window_slug}.json",
+                scripts_payload,
+            )
+            safe_write_json(
+                self.normalized_dir / f"nfl_matchup_props_{target_date}_{window_slug}.json",
+                matchup_props_payload,
+            )
 
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
@@ -318,33 +418,53 @@ class NflPipeline:
             "tier_1_anchors_count": tier_1_anchors_count,
             "player_props_breakdown": prop_breakdown,
             "starting_qbs": starting_qbs,
+            "matchup_scripts_count": len(matchup_scripts),
+            "matchup_tagged_props_count": len(matchup_prop_records),
             "errors": errors,
         }
 
-        # Optional Game Script Generation
+        # Optional Game Script Generation — one markdown file per matchup
         if generate_game_script and all_game_lines:
             try:
                 from scripts.nfl_game_script import NflGameScriptGenerator
-                generator = NflGameScriptGenerator(data_dir=self.normalized_dir)
-                env = generator.extract_game_environment(games_dict)
-                profiles = generator.build_player_profiles(props_dict)
-                report_md = generator.generate_report(env, profiles)
 
+                generator = NflGameScriptGenerator(data_dir=self.normalized_dir)
                 report_root = Path(reports_dir) if reports_dir is not None else Path("reports/NFL")
                 report_root.mkdir(parents=True, exist_ok=True)
-                matchup_slug = (all_game_lines[0].matchup or "game").replace(" @ ", "_").replace(" ", "_")
-                report_file = report_root / f"{target_date}_{matchup_slug}_Game_Script.md"
-                with open(report_file, "w", encoding="utf-8") as f:
-                    f.write(report_md)
-                summary["game_script_file"] = str(report_file)
-                logger.info("Generated game script at %s", report_file)
+                written: list[str] = []
+                for script in matchup_scripts:
+                    slug = f"{script.away_team}_{script.home_team}".replace(" ", "_")
+                    report_file = report_root / f"{target_date}_{slug}_Game_Script.md"
+                    event_games = [g for g in games_dict if g.get("event_id") == script.event_id]
+                    event_props = [p for p in props_dict if p.get("event_id") == script.event_id]
+                    env = generator.extract_game_environment(
+                        event_games,
+                        home_team=script.home_team,
+                        away_team=script.away_team,
+                    )
+                    report_md = render_matchup_markdown(
+                        script,
+                        env=env,
+                        props=event_props,
+                        date=target_date,
+                    )
+                    report_file.write_text(report_md, encoding="utf-8")
+                    written.append(str(report_file))
+                if written:
+                    summary["game_script_file"] = written[0]
+                    summary["game_script_files"] = written
+                    logger.info(
+                        "Generated %d matchup game scripts under %s", len(written), report_root
+                    )
             except Exception as exc:
                 logger.warning("Failed generating game script: %s", exc)
 
         safe_write_json(self.normalized_dir / "summary_latest.json", summary)
         safe_write_json(self.normalized_dir / f"summary_{target_date}.json", summary)
         if window:
-            safe_write_json(self.normalized_dir / f"summary_{target_date}_{window_slug}.json", summary)
+            safe_write_json(
+                self.normalized_dir / f"summary_{target_date}_{window_slug}.json", summary
+            )
 
         logger.info(
             "NFL Pipeline run completed successfully: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
@@ -429,6 +549,8 @@ def main() -> int:
         print(f"Player Props Count:     {summary.get('player_props_count')}")
         print(f"Consensus Props Count:  {summary.get('consensus_props_count')}")
         print(f"Tier-1 Anchors Count:   {summary.get('tier_1_anchors_count')}")
+        print(f"Matchup Scripts:        {summary.get('matchup_scripts_count')}")
+        print(f"Matchup-Tagged Props:   {summary.get('matchup_tagged_props_count')}")
         if summary.get("game_script_file"):
             print(f"Game Script Generated:  {summary.get('game_script_file')}")
         if summary.get("starting_qbs"):
