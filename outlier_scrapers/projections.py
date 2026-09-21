@@ -719,42 +719,80 @@ def fetch_pitcher_pitching_game_logs(
     return [dict(split) for split in splits if isinstance(split, Mapping)]
 
 
+def fetch_pitcher_handedness(
+    pitcher_id: int | str,
+    *,
+    fetch_json: Any | None = None,
+) -> str | None:
+    """Fetch pitcher throwing arm ('L' or 'R') from MLB Stats API."""
+    person_id = str(pitcher_id).strip()
+    if not person_id.isdigit():
+        return None
+    url = f"{MLB_STATS_API_BASE}/people/{person_id}"
+    loader = fetch_json or _default_stats_fetch_json
+    payload = loader(url)
+    people = payload.get("people")
+    if not isinstance(people, list) or not people:
+        return None
+    person = people[0]
+    if not isinstance(person, Mapping):
+        return None
+    pitch_hand = person.get("pitchHand")
+    if not isinstance(pitch_hand, Mapping):
+        return None
+    code = str(pitch_hand.get("code") or "").strip().upper()
+    return code if code in ("L", "R") else None
+
+
 def fetch_team_batter_k_rate(
     team_code: str,
     *,
     season: int,
+    pitcher_handedness: str | None = None,
     fetch_json: Any | None = None,
 ) -> float | None:
     """Season batter K rate (SO/PA) for one MLB team abbreviation."""
     team_id = MLB_TEAM_STATS_IDS.get(str(team_code or "").strip().upper())
     if team_id is None:
         return None
-    url = (
+
+    loader = fetch_json or _default_stats_fetch_json
+
+    def _fetch_k_rate(url: str) -> tuple[float | None, float | None]:
+        payload = loader(url)
+        stats = payload.get("stats")
+        if not isinstance(stats, list) or not stats:
+            return None, None
+        splits = stats[0].get("splits") if isinstance(stats[0], Mapping) else None
+        if not isinstance(splits, list) or not splits:
+            return None, None
+        stat = splits[0].get("stat") if isinstance(splits[0], Mapping) else None
+        if not isinstance(stat, Mapping):
+            return None, None
+        return _float_stat(stat.get("strikeOuts")), _float_stat(stat.get("plateAppearances"))
+
+    if pitcher_handedness in ("L", "R"):
+        sit_code = "vl" if pitcher_handedness == "L" else "vr"
+        split_url = (
+            f"{MLB_STATS_API_BASE}/teams/{team_id}/stats"
+            f"?stats=statSplits&group=hitting&season={int(season)}&sitCodes={sit_code}"
+        )
+        try:
+            so, pa = _fetch_k_rate(split_url)
+            if so is not None and pa is not None and pa >= 50 and 0 <= so <= pa:
+                return so / pa
+        except Exception as exc:
+            logger.warning("Failed to fetch split K-rate for team=%s handedness=%s: %s", team_code, pitcher_handedness, exc)
+
+    # Fallback to global season stats
+    global_url = (
         f"{MLB_STATS_API_BASE}/teams/{team_id}/stats"
         f"?stats=season&group=hitting&season={int(season)}"
     )
-    loader = fetch_json or _default_stats_fetch_json
-    payload = loader(url)
-    stats = payload.get("stats")
-    if not isinstance(stats, list) or not stats:
+    so, pa = _fetch_k_rate(global_url)
+    if so is None or pa is None or pa <= 0 or so < 0 or so > pa:
         return None
-    splits = stats[0].get("splits") if isinstance(stats[0], Mapping) else None
-    if not isinstance(splits, list) or not splits:
-        return None
-    stat = splits[0].get("stat") if isinstance(splits[0], Mapping) else None
-    if not isinstance(stat, Mapping):
-        return None
-    strikeouts = _float_stat(stat.get("strikeOuts"))
-    plate_appearances = _float_stat(stat.get("plateAppearances"))
-    if (
-        strikeouts is None
-        or plate_appearances is None
-        or plate_appearances <= 0
-        or strikeouts < 0
-        or strikeouts > plate_appearances
-    ):
-        return None
-    return strikeouts / plate_appearances
+    return so / pa
 
 
 def park_k_factor_for_venue_team(team_code: str | None) -> float | None:
@@ -780,11 +818,19 @@ def enrich_probable_with_so_features(
     """Attach starter SO + opponent/park context onto a probable-pitcher lookup."""
     enriched: dict[str, dict[str, object]] = {}
     cache: dict[str, dict[str, object] | None] = {}
-    opponent_cache: dict[str, float | None] = {}
+    opponent_cache: dict[tuple[str, str | None], float | None] = {}
     for team, info in by_team.items():
         row = dict(info) if isinstance(info, Mapping) else {}
         pitcher_id = str(row.get("pitcher_id") or "").strip()
+        handedness: str | None = None
         if row.get("confirmed") and pitcher_id:
+            try:
+                handedness = fetch_pitcher_handedness(pitcher_id, fetch_json=fetch_json)
+            except Exception as exc:
+                logger.warning("Failed to fetch handedness for pitcher_id=%s: %s", pitcher_id, exc)
+            if handedness:
+                row["pitcher_handedness"] = handedness
+
             if pitcher_id not in cache:
                 try:
                     logs = fetch_pitcher_pitching_game_logs(
@@ -817,10 +863,11 @@ def enrich_probable_with_so_features(
 
             opponent = str(row.get("opponent") or "").strip().upper()
             if opponent:
-                if opponent not in opponent_cache:
+                cache_key = (opponent, handedness)
+                if cache_key not in opponent_cache:
                     try:
-                        opponent_cache[opponent] = fetch_team_batter_k_rate(
-                            opponent, season=season, fetch_json=fetch_json
+                        opponent_cache[cache_key] = fetch_team_batter_k_rate(
+                            opponent, season=season, pitcher_handedness=handedness, fetch_json=fetch_json
                         )
                     except (
                         HTTPError,
@@ -831,15 +878,16 @@ def enrich_probable_with_so_features(
                         json.JSONDecodeError,
                     ) as exc:
                         logger.warning(
-                            "Opponent K%% fetch failed for team=%s season=%s: %s",
+                            "Opponent K%% fetch failed for team=%s handedness=%s season=%s: %s",
                             opponent,
+                            handedness,
                             season,
                             exc,
                         )
-                        opponent_cache[opponent] = None
-                if opponent_cache[opponent] is not None:
-                    row["opponent_k_rate"] = opponent_cache[opponent]
-                    row["opponent_k_source"] = "mlb_stats_team_hitting"
+                        opponent_cache[cache_key] = None
+                if opponent_cache[cache_key] is not None:
+                    row["opponent_k_rate"] = opponent_cache[cache_key]
+                    row["opponent_k_source"] = f"mlb_stats_team_hitting_vs_{handedness}" if handedness else "mlb_stats_team_hitting"
 
             home_away = str(row.get("home_away") or "").strip().upper()
             venue_team = str(team).strip().upper() if home_away == "HOME" else opponent
@@ -848,7 +896,7 @@ def enrich_probable_with_so_features(
                 row["park_k_factor"] = park_factor
                 row["park_k_source"] = "curated_home_park_so"
                 row["park_team"] = venue_team
-        enriched[str(team)] = row
+        enriched[team] = row
     return enriched
 
 

@@ -1,9 +1,20 @@
-"""Unit tests for outlier_nfl.roster active roster indexing and player attribution."""
+"""Unit tests for outlier_nfl.roster active roster indexing, depth charts, and offseason movement verification."""
 
 from __future__ import annotations
 
+import pytest
+
 from outlier_nfl.models import BookPrice, NflPlayerProp
-from outlier_nfl.roster import build_team_roster_index, verify_player_team_attribution
+from outlier_nfl.roster import (
+    NFL_2026_FULL_DEPTH_CHARTS,
+    NFL_2026_STARTING_QBS,
+    OFFSEASON_MOVES_2026,
+    build_team_roster_index,
+    get_starting_qb,
+    get_team_depth_chart,
+    validate_analysis_text_for_roster_errors,
+    verify_player_team_attribution,
+)
 
 
 def test_build_team_roster_index_and_attribution() -> None:
@@ -131,13 +142,18 @@ def _prop(team: str, player_name: str, market: str) -> NflPlayerProp:
 
 
 def test_surname_containing_most_is_not_treated_as_an_aggregate_market() -> None:
-    """'Most Passing Yards' is an aggregate label; 'Mostert' is an active ball-carrier."""
+    """'Most Passing Yards' is an aggregate label; 'Mostert' is an active ball-carrier.
+
+    Baseline off so the assertion covers what the feed produced, not the static
+    depth chart merged in on top of it.
+    """
     rosters = build_team_roster_index(
         [
             _prop("MIA", "Raheem Mostert", "RUSH_YDS"),
             _prop("MIA", "Most Rushing Yards", "RUSH_YDS"),
             _prop("MIA", "Tua Tagovailoa", "PASS_YDS"),
-        ]
+        ],
+        include_league_baseline=False,
     )
 
     assert rosters["MIA"]["key_rbs"] == ["Raheem Mostert"]
@@ -145,8 +161,15 @@ def test_surname_containing_most_is_not_treated_as_an_aggregate_market() -> None
 
 
 def test_attribution_fails_closed_when_a_team_has_no_indexed_starting_qb() -> None:
-    """An empty QB slot must not make every player verify as correctly attributed."""
-    rosters = build_team_roster_index([_prop("NE", "Rhamondre Stevenson", "RUSH_YDS")])
+    """An empty QB slot must not make every player verify as correctly attributed.
+
+    Baseline off is what leaves the slot empty: with it on, every team inherits a
+    starter and this path is never exercised.
+    """
+    rosters = build_team_roster_index(
+        [_prop("NE", "Rhamondre Stevenson", "RUSH_YDS")],
+        include_league_baseline=False,
+    )
 
     assert rosters["NE"]["starting_qb"] is None
     assert verify_player_team_attribution("Patrick Mahomes", "NE", rosters) is False
@@ -160,3 +183,92 @@ def test_qb_priced_only_on_completions_or_passing_tds_is_still_indexed() -> None
     )
 
     assert rosters["GB"]["starting_qb"] == "Jordan Love"
+def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
+    """Explicitly verify Daniel Jones on Colts and Kenneth Walker III on Chiefs."""
+    rosters = build_team_roster_index([], include_league_baseline=True)
+
+    # Colts check
+    assert rosters["IND"]["starting_qb"] == "Daniel Jones"
+    assert get_starting_qb("IND", rosters) == "Daniel Jones"
+    assert verify_player_team_attribution("Daniel Jones", "IND", rosters, position="QB") is True
+    assert verify_player_team_attribution("Anthony Richardson", "IND", rosters, position="QB") is False
+
+    # Chiefs check
+    assert rosters["KC"]["starting_qb"] == "Patrick Mahomes"
+    assert "Kenneth Walker III" in rosters["KC"]["key_rbs"]
+    assert verify_player_team_attribution("Kenneth Walker III", "KC", rosters) is True
+    assert verify_player_team_attribution("Kenneth Walker III", "SEA", rosters) is False
+
+    # Offseason movement registry checks
+    assert OFFSEASON_MOVES_2026["Kenneth Walker III"]["current_team"] == "KC"
+    assert "SEA" in OFFSEASON_MOVES_2026["Kenneth Walker III"]["former_teams"]
+    assert OFFSEASON_MOVES_2026["Daniel Jones"]["current_team"] == "IND"
+    assert "NYG" in OFFSEASON_MOVES_2026["Daniel Jones"]["former_teams"]
+
+    # Hollywood Brown checks
+    assert "Hollywood Brown" in rosters["PHI"]["key_pass_catchers"]
+    assert "Hollywood Brown" not in rosters["KC"]["key_pass_catchers"]
+    assert verify_player_team_attribution("Hollywood Brown", "PHI", rosters) is True
+    assert verify_player_team_attribution("Hollywood Brown", "KC", rosters) is False
+    assert OFFSEASON_MOVES_2026["Hollywood Brown"]["current_team"] == "PHI"
+    assert "KC" in OFFSEASON_MOVES_2026["Hollywood Brown"]["former_teams"]
+
+    # A.J. Brown checks
+    assert "A.J. Brown" in rosters["NE"]["key_pass_catchers"]
+    assert "A.J. Brown" not in rosters["PHI"]["key_pass_catchers"]
+    assert verify_player_team_attribution("A.J. Brown", "NE", rosters) is True
+    assert verify_player_team_attribution("A.J. Brown", "PHI", rosters) is False
+    assert OFFSEASON_MOVES_2026["A.J. Brown"]["current_team"] == "NE"
+    assert "PHI" in OFFSEASON_MOVES_2026["A.J. Brown"]["former_teams"]
+    assert OFFSEASON_MOVES_2026["AJ Brown"]["current_team"] == "NE"
+
+    # Full 32 teams check
+    assert len(rosters) == 32
+    assert len(NFL_2026_FULL_DEPTH_CHARTS) == 32
+
+
+def test_validate_analysis_text_catches_roster_hallucinations() -> None:
+    # Text with violations
+    bad_text_1 = "Kenneth Walker III on the Seahawks has a tough matchup tonight."
+    errors_1 = validate_analysis_text_for_roster_errors(bad_text_1)
+    assert len(errors_1) == 1
+    assert "Kenneth Walker III" in errors_1[0]
+    assert "SEA" in errors_1[0]
+
+    bad_text_2 = "Anthony Richardson is starting at quarterback for the Colts."
+    errors_2 = validate_analysis_text_for_roster_errors(bad_text_2)
+    assert len(errors_2) == 1
+    assert "Anthony Richardson" in errors_2[0]
+
+    bad_text_3 = "Aaron Rodgers on the Jets will look to pass downfield."
+    errors_3 = validate_analysis_text_for_roster_errors(bad_text_3)
+    assert len(errors_3) == 1
+    assert "Aaron Rodgers" in errors_3[0]
+
+    bad_text_4 = "Hollywood Brown on the Chiefs is a key receiving target tonight."
+    errors_4 = validate_analysis_text_for_roster_errors(bad_text_4)
+    assert len(errors_4) == 1
+    assert "Hollywood Brown" in errors_4[0]
+    assert "PHI" in errors_4[0]
+
+    bad_text_5 = "A.J. Brown on the Eagles is their top target."
+    errors_5 = validate_analysis_text_for_roster_errors(bad_text_5)
+    assert len(errors_5) == 1
+    assert "A.J. Brown" in errors_5[0]
+    assert "NE" in errors_5[0]
+
+    # Valid text with verified current teams
+    good_text = (
+        "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
+        "The Kansas City Chiefs signed Kenneth Walker III in the offseason to lead the backfield. "
+        "Aaron Rodgers is leading the Pittsburgh Steelers. "
+        "Hollywood Brown is playing for the Philadelphia Eagles. "
+        "A.J. Brown is the top wide receiver for the New England Patriots."
+    )
+    errors_good = validate_analysis_text_for_roster_errors(good_text)
+    assert errors_good == []
+
+
+def test_unknown_team_starting_qb_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown or unverified"):
+        get_starting_qb("FAKE_TEAM")
