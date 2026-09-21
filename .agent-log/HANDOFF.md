@@ -1,3 +1,17 @@
+## Daily Pipeline Execution (Local Profile, Reasoning Off) (Gemini) - 2026-09-21
+1. **Last Commit SHA**: `4a32516` (master)
+2. **Files Touched**:
+   - `packs/2026-09-21/*`: Built complete daily briefing pack, candidates (`candidates.csv`), decisions (`decisions.csv`), projections (`projections.jsonl`), game totals, team totals, and identity audit (`identity_audit.json`: status=ok, 3 SO rows, 0 mismatches, 0 unconfirmed).
+   - `C:\Users\dasil\OneDrive\Desktop\today` & `G:\My Drive\today`: Exported prompt suites, candidate sets, and extracted data files via `organize_today_run2.py`.
+3. **Verification**:
+   - Mandatory STEP 0 `report-sync.ps1` completed with `REPORT STATUS: OK` (RUN-NONCE: `f6e0c7cbdae1432f`).
+   - `python -m outlier_scrapers.daily_job --analysis-profile local --leagues MLB,WNBA` exited with code 0.
+   - `organize_today_run2.py` completed and organized all export folders.
+   - House rules respected: paid AI reasoning models were kept strictly OFF.
+   - Git working tree clean on `master`.
+4. **Next Steps**:
+   - Slate data and prompt files are ready in Desktop `today` and Drive `today` folders for manual review or export.
+
 ## NFL Matchup Prior-Week Tape Analysis & Per-Game Script Modeling (Grok & Gemini) - 2026-09-20
 1. **Last Commit SHA**: `4697b86` (Merged PR #181: https://github.com/DaSilvaDub/outlier/pull/181 and PR #180: https://github.com/DaSilvaDub/outlier/pull/180)
 2. **Files Touched**:
