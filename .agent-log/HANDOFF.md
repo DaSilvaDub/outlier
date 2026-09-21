@@ -1,21 +1,23 @@
 ## NFL Matchup Prior-Week Tape Analysis & Per-Game Script Modeling (Grok & Gemini) - 2026-09-20
-1. **Last Commit SHA**: `cffd5fb` on branch `feat/nfl-matchup-prior-week-tape` (PR #181: https://github.com/DaSilvaDub/outlier/pull/181)
+1. **Last Commit SHA**: `4697b86` (Merged PR #181: https://github.com/DaSilvaDub/outlier/pull/181 and PR #180: https://github.com/DaSilvaDub/outlier/pull/180)
 2. **Files Touched**:
-   - `outlier_nfl/matchup.py`: Implemented prior-week unit tape evaluator (`load_prior_week_tape`, `build_matchup_script`, `build_matchup_scripts`, `apply_matchup_signals`, `render_matchup_markdown`) analyzing rush vs run defense, pass rush vs weak QB, coverage leak into slot/TE, and game scripts (Front-Runner Grind, Competitive, Shootout). Fixed consensus selection in `_market_context` to select lines with maximum book consensus and standard juice, eliminating arbitrary alternate ladder capture.
+   - `outlier_nfl/matchup.py`: Implemented prior-week unit tape evaluator (`load_prior_week_tape`, `build_matchup_script`, `build_matchup_scripts`, `apply_matchup_signals`, `render_matchup_markdown`) analyzing rush vs run defense, pass rush vs weak QB, coverage leak into slot/TE, and game scripts (Front-Runner Grind, Competitive, Shootout). Selected lines with maximum book consensus and standard juice in `_market_context`. Resolved Copilot review findings: decoupled from tests fixtures with in-package tape fallback (`outlier_nfl/tape/prior_week_tape.json`), and handled pick'em/zero spreads as `NEUTRAL` spread lean.
    - `outlier_nfl/pipeline.py`: Wired matchup script generation and prop tagging into the live NFL pipeline; persists `nfl_matchup_scripts_*.json` and `nfl_matchup_props_*.json`; generates per-matchup markdown game scripts under `reports/NFL/`.
    - `outlier_nfl/roster.py`: Mypy type-narrowing cleanup and removed unused local variable.
-   - `tests/fixtures/nfl/prior_week_tape.json`: 32-team 2026 week 1 unit tape fixture for full offline test reproducibility.
-   - `tests/test_nfl_matchup.py`: 12 regression and integration tests covering mismatch triggers, volume adjustments, and pipeline generation.
+   - `outlier_nfl/tape/prior_week_tape.json` & `tests/fixtures/nfl/prior_week_tape.json`: 32-team 2026 week 1 unit tape fixture for full offline test and production fallback reproducibility.
+   - `tests/test_nfl_matchup.py`: 13 regression and integration tests covering mismatch triggers, volume adjustments, pick'em spread neutrality, and pipeline generation.
    - `reports/NFL/2026-09-20_IND_KC_Game_Script.md` & `reports/NFL/2026-09-21_NYG_LAR_Game_Script.md`: Generated game script reports.
+   - `.agents/AGENTS.md` & `.agents/skills/nfl-game-script/SKILL.md`: Codified 32-team active roster verification gate and 2026 core starting anchors directly into invariants (PR #180).
    - `.gitignore`: Added `.coverage*`.
 3. **Verification**:
-   - 277/277 NFL tests passed (`pytest tests/test_nfl_*.py`).
+   - 278/278 NFL tests passed (`pytest tests/test_nfl_*.py`).
    - `mypy outlier_nfl/matchup.py outlier_nfl/pipeline.py outlier_nfl/roster.py`: 0 errors.
    - `ruff check`: clean across all modified files.
-   - Live pipeline executed for 2026-09-20 SNF: 102 game lines, 361 props, 91 consensus, 52 matchup-tagged props, 1 matchup script rendered.
+   - All GitHub Actions CI checks (core, provider, typecheck, Codacy) green on both PR #180 and #181.
+   - 0 open PRs remaining in repository.
 4. **Next Steps**:
-   - Review and merge PR #181.
-   - Paid reasoning models were not invoked.
+   - Both PRs merged to master.
+   - No paid reasoning models were invoked.
 
 ## NFL Complete 32-Team Roster Accuracy Audit (Gemini) - 2026-09-20
 1. **Last Commit SHA**: (pending commit on branch `fix/nfl-32-team-roster-accuracy-audit`)
