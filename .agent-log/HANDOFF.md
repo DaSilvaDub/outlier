@@ -17,6 +17,22 @@
    - **Reported, not fixed** (report-semantics call for a human): when a game genuinely has no team totals or total in the feed, `_market_context()` still returns hardcoded 24.0/21.0/45.5 and `render_matchup_markdown()` prints them as real lines ("**Total lean:** UNDER 45.5") with nothing marking them as defaults. Both committed live reports (`2026-09-20_IND_KC`, `2026-09-21_NYG_LAR`) show projected scores that came from the spread/total fallback rather than team totals.
    - Minor, no change made: `build_matchup_script()` derives projected scores with `round()`, whose banker's rounding turns a 25.5/22.5 team-total pair into 26-22 (margin 4 against a 3.5 spread). Cosmetic; intended tie-breaking is not clear from the code.
 
+## NFL Roster Accuracy: Dolphins Starting QB Malik Willis & Tua Tagovailoa Relocation (Gemini) - 2026-09-21
+1. **Last Commit SHA**: `827ce4e` on branch `fix/roster-tua-dolphins-update` (PR #183: https://github.com/DaSilvaDub/outlier/pull/183)
+2. **Files Touched**:
+   - `outlier_nfl/roster.py`: Mapped Malik Willis as starting QB for MIA in `NFL_2026_FULL_DEPTH_CHARTS`. Registered Tua Tagovailoa on ATL with former team MIA and registered Malik Willis on MIA with former teams GB/TEN in `OFFSEASON_MOVES_2026`.
+   - `outlier_nfl/tape/prior_week_tape.json` & `tests/fixtures/nfl/prior_week_tape.json`: Updated MIA unit tape qb to Malik Willis and te to Julian Hill.
+   - `tests/test_nfl_roster.py`: Added assertions verifying Malik Willis on MIA, Tua Tagovailoa on ATL, and text validation catching Tua on Dolphins hallucinations.
+   - `.agents/AGENTS.md` & `.agents/skills/nfl-game-script/SKILL.md`: Added MIA Core Anchor to documentation and skill invariants.
+   - `reports/NFL/2026-09-21_NYG_LAR_Game_Script.md`: Re-rendered with verified active starters.
+3. **Verification**:
+   - 294/294 tests passed (`pytest -k nfl`).
+   - `validate_analysis_text_for_roster_errors` confirmed 0 errors on generated game scripts.
+   - PR #183 opened targeting `master`.
+4. **Next Steps**:
+   - Review and merge PR #183.
+   - House rules respected: paid reasoning models kept strictly OFF.
+
 ## Daily Pipeline Execution (Local Profile, Reasoning Off) (Gemini) - 2026-09-21
 1. **Last Commit SHA**: `4a32516` (master)
 2. **Files Touched**:

@@ -42,6 +42,7 @@ When extracting player props from `data/NFL/normalized/nfl_props_*.json`, the Ou
      - **CLE:** Starting QB Deshaun Watson; RBs Quinshon Judkins, Jaleel McLaughlin; WRs KC Concepcion Jr., Jerry Jeudy; TE Harold Fannin Jr.
      - **ATL:** Starting QB Cooper Rush; RBs Bijan Robinson, Tyler Allgeier; WRs Drake London, Darnell Mooney, Jahan Dotson; TE Kyle Pitts Sr.
      - **GB:** Starting QB Jordan Love; RBs MarShawn Lloyd, Josh Jacobs; WRs Christian Watson, Jayden Reed; TEs Tucker Kraft, Jonnu Smith.
+     - **MIA:** Starting QB Malik Willis (Tua Tagovailoa is NOT on Miami; signed with ATL); RBs De'Von Achane, Jaylen Wright, Raheem Mostert; WRs Tyreek Hill, Jaylen Waddle, Malik Washington; TE Julian Hill.
 
 ## Windows PowerShell Python Execution & UTF-8 Console Encoding
 1. **Avoid Complex Quotes in Terminal One-Liners:** In Windows PowerShell, running inline Python scripts (`python -c "..."`) with nested quotes or `$()` frequently fails with parser errors. Write scratch scripts to `<appDataDir>\brain\<conversation-id>/scratch/` instead.

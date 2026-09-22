@@ -89,6 +89,20 @@ OFFSEASON_MOVES_2026: dict[str, dict[str, Any]] = {
         "role": "Starting Quarterback",
         "notes": "Starting QB for the New Orleans Saints.",
     },
+    "Tua Tagovailoa": {
+        "current_team": "ATL",
+        "former_teams": ["MIA", "Dolphins", "Miami"],
+        "pos": "QB",
+        "role": "Quarterback",
+        "notes": "Released by Miami Dolphins in 2026 offseason; signed with Atlanta Falcons. Is NOT on the Miami Dolphins.",
+    },
+    "Malik Willis": {
+        "current_team": "MIA",
+        "former_teams": ["GB", "Packers", "Green Bay", "TEN", "Titans"],
+        "pos": "QB",
+        "role": "Starting Quarterback",
+        "notes": "Signed with Miami Dolphins in 2026 free agency and named starting QB.",
+    },
     "DK Metcalf": {
         "current_team": "PIT",
         "former_teams": ["SEA", "Seahawks", "Seattle"],
@@ -438,7 +452,7 @@ NFL_2026_FULL_DEPTH_CHARTS: dict[str, dict[str, Any]] = {
     },
     "MIA": {
         "name": "Miami Dolphins",
-        "starting_qb": "Tua Tagovailoa",
+        "starting_qb": "Malik Willis",
         "rbs": ["De'Von Achane", "Jaylen Wright", "Raheem Mostert"],
         "wrs": ["Tyreek Hill", "Jaylen Waddle", "Malik Washington"],
         "te": "Julian Hill",

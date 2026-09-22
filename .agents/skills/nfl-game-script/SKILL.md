@@ -18,7 +18,7 @@ Before executing any game script generation, prop recommendation, or qualitative
    - Verify starting quarterbacks, primary ball-carriers, slot/perimeter receivers, and tight ends against `data/NFL/normalized/nfl_rosters_latest.json`.
 2. **Cross-Check Offseason Player Movements:**
    - Consult `OFFSEASON_MOVES_2026` in `outlier_nfl/roster.py` for any player who changed teams.
-   - Enforce that no player is referred to by their former franchise or depth chart role (e.g. Kenneth Walker III is on KC, Daniel Jones is starting on IND, A.J. Brown is on NE, Hollywood Brown is on PHI, Keenan Allen is on IND, Romeo Doubs is on NE, Rico Dowdle & Michael Pittman Jr. are on PIT).
+   - Enforce that no player is referred to by their former franchise or depth chart role (e.g. Kenneth Walker III is on KC, Daniel Jones is starting on IND, A.J. Brown is on NE, Hollywood Brown is on PHI, Keenan Allen is on IND, Romeo Doubs is on NE, Rico Dowdle & Michael Pittman Jr. are on PIT, Tua Tagovailoa is on ATL / Malik Willis starting on MIA).
 3. **Automated Markdown Text Gate:**
    - Prior to writing or rendering the final game script report markdown:
      ```python
