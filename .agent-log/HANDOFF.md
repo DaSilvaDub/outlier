@@ -62,6 +62,17 @@ All under `data/NFL/normalized/`:
    - Review and merge PR #185 once rebase checks are green.
    - Open, not fixed: repo-wide `ruff check` F401 unused imports; `--window` runs clobber `*_latest.json`; `matches_kickoff_window()` returns True for unrecognized tokens.
    - **New, flagged not fixed (schema decision, not a bug fix):** `games.py` branch 3 stamps `market=PROP_TEAM_TOTAL_POINTS` on any `TEAM_PROP` market, so a team touchdown/other non-points team prop is published carrying `market="POINTS"`. Nothing is broken today because the readers filter on `proposition` after #182, but it is a live trap for any future code that filters team props on `market`. Closing it properly needs real canonical codes for non-points team props.
+## Daily Automated Debug & Code-Health Review (Claude) - 2026-09-22
+1. **Last Commit SHA**: rebased onto master after #185; branch `claude/inspiring-fermat-yd5et4` (PR #184: https://github.com/DaSilvaDub/outlier/pull/184).
+2. **Files Touched**:
+   - `outlier_nfl/utils.py`: `to_eastern_datetime()` now stamps a naive datetime as UTC before `astimezone()`. Previously a naive value was read as the *host's* local clock, so the Eastern slate date depended on the machine: a Sunday 8:15pm ET kickoff (00:15 UTC Monday) resolved to `2026-09-13` on a UTC runner and `2026-09-14` on a US Pacific workstation. `parse_iso_datetime()` already normalised the ISO-string path; this closes the same hole on the datetime-object path. Every current caller passes a string or an aware datetime, so no existing behaviour changes.
+   - `tests/test_nfl_stress.py`: two tests. `test_to_eastern_datetime_naive_is_utc_under_a_non_utc_host_tz` is the real regression guard — it runs the assertion in a subprocess with `TZ` forced, because on a UTC host the pre-fix and post-fix behaviour are indistinguishable. `test_to_eastern_datetime_reads_a_naive_datetime_as_utc` covers the host-independent assertions.
+3. **Verification** (pre-rebase): regression fails against pre-fix utils on TZ=UTC; `pytest tests/test_nfl_*.py` 278 passed / 2 skipped; prior CI green on `00d8d0e`.
+4. **Gotcha for the next agent**: `git stash push -- <path>` silently no-ops once a change is committed, so a "stash, run, pop" red-before/green-after check quietly tests the *fixed* code and reports a false pass. Use `git show <base-sha>:<path>` to materialise the pre-fix file instead.
+5. **Next Steps**:
+   - Review and merge PR #184 once rebase checks are green.
+   - Reported, not fixed: `matches_kickoff_window()` falls through to `return True` for an unrecognised window token.
+   - Also open: `--window` CLI flag advertised but no argparse wiring exists.
 
 ## Daily Debug Review: Matchup Team-Total Reader (Claude) - 2026-09-21
 1. **Last Commit SHA**: `a38d4b3` on branch `claude/inspiring-fermat-xdn5p3` (PR #182: https://github.com/DaSilvaDub/outlier/pull/182).
