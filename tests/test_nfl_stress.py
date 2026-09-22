@@ -21,7 +21,10 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 import gzip
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import MagicMock
 import urllib.error
 import pytest
@@ -790,6 +793,11 @@ def test_to_eastern_datetime_reads_a_naive_datetime_as_utc():
     Monday slate while the same value on a UTC runner landed on Sunday. Pin the
     naive input against the equivalent aware one so the slate date no longer
     depends on where the pipeline runs.
+
+    These assertions hold on any host, but only
+    test_to_eastern_datetime_naive_is_utc_under_a_non_utc_host_tz below actually
+    fails against the pre-fix implementation: where the host clock already *is*
+    UTC the old and new behaviour are indistinguishable.
     """
     # SNF: 8:15 PM Eastern on Sunday Sept 13 is 00:15 UTC on Monday Sept 14.
     naive = datetime(2026, 9, 14, 0, 15)
@@ -804,6 +812,43 @@ def test_to_eastern_datetime_reads_a_naive_datetime_as_utc():
     assert to_eastern_date(pacific) == "2026-09-13"
     eastern = to_eastern_datetime(pacific)
     assert eastern is not None and eastern.hour == 20
+
+
+def test_to_eastern_datetime_naive_is_utc_under_a_non_utc_host_tz():
+    """The naive-is-UTC rule holds when the host clock is *not* UTC.
+
+    This is the assertion that actually guards the regression. CI runners sit on
+    UTC, where reading a naive datetime as "local" and reading it as UTC give
+    the same answer, so an in-process check passes against the buggy code too.
+    Forcing the zone needs a fresh interpreter: TZ is read by the C runtime at
+    startup and time.tzset() does not exist on Windows.
+
+    ``PST8PDT`` is a POSIX zone string rather than an IANA name so that both
+    glibc and the Windows CRT honour it.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    snippet = (
+        "from datetime import datetime, timezone\n"
+        "from outlier_nfl.utils import to_eastern_date\n"
+        "naive = datetime(2026, 9, 14, 0, 15)\n"
+        "aware = datetime(2026, 9, 14, 0, 15, tzinfo=timezone.utc)\n"
+        "print(to_eastern_date(naive), to_eastern_date(aware))\n"
+    )
+    env = dict(os.environ, TZ="PST8PDT")
+    # A stale PYTHONPATH entry must not shadow the tree under test.
+    env.pop("PYTHONPATH", None)
+    proc = subprocess.run(
+        [sys.executable, "-c", snippet],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    # Under the old behaviour the naive value was read as 00:15 Pacific, which is
+    # 03:15 UTC on the 14th and so resolved to the Monday slate: "2026-09-14".
+    assert proc.stdout.split() == ["2026-09-13", "2026-09-13"]
 
 
 def test_format_signed_line_values():
