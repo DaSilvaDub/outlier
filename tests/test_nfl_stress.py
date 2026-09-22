@@ -18,6 +18,7 @@ Tests:
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timedelta, timezone
 import gzip
 import json
 from pathlib import Path
@@ -59,6 +60,7 @@ from outlier_nfl.utils import (
     safe_read_json,
     safe_write_json,
     to_eastern_date,
+    to_eastern_datetime,
 )
 
 
@@ -778,6 +780,30 @@ def test_to_eastern_date_cross_midnight_kickoffs():
     assert to_eastern_date(None) is None
     assert to_eastern_date("") is None
     assert to_eastern_date("not-a-date") is None
+
+
+def test_to_eastern_datetime_reads_a_naive_datetime_as_utc():
+    """A naive datetime is UTC, not the host's local clock.
+
+    astimezone() on a naive value silently substitutes the machine's local zone,
+    so a Sunday-night kickoff resolved on a US Pacific workstation landed on the
+    Monday slate while the same value on a UTC runner landed on Sunday. Pin the
+    naive input against the equivalent aware one so the slate date no longer
+    depends on where the pipeline runs.
+    """
+    # SNF: 8:15 PM Eastern on Sunday Sept 13 is 00:15 UTC on Monday Sept 14.
+    naive = datetime(2026, 9, 14, 0, 15)
+    aware = datetime(2026, 9, 14, 0, 15, tzinfo=timezone.utc)
+
+    assert to_eastern_date(naive) == to_eastern_date(aware) == "2026-09-13"
+    assert to_eastern_datetime(naive) == to_eastern_datetime(aware)
+
+    # An already-aware non-UTC datetime keeps its own offset rather than being
+    # re-stamped as UTC.
+    pacific = datetime(2026, 9, 13, 17, 15, tzinfo=timezone(timedelta(hours=-7)))
+    assert to_eastern_date(pacific) == "2026-09-13"
+    eastern = to_eastern_datetime(pacific)
+    assert eastern is not None and eastern.hour == 20
 
 
 def test_format_signed_line_values():
