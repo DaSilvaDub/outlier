@@ -1,3 +1,16 @@
+## Daily Pipeline Execution (Local Profile, Reasoning Off) (Gemini) - 2026-09-22
+1. **Last Commit SHA**: `ce1dad2` (master)
+2. **Files Touched**:
+   - `packs/2026-09-22/*`: Generated complete daily briefing pack, candidates (`candidates.csv`), decisions (`decisions.csv`), projections (`projections.jsonl`), game totals, team totals, and identity audit (`identity_audit.json`: status=fail_closed, 11 SO rows, 1 mismatch [Carlos Rodón relegated to Board B], 0 unconfirmed).
+   - `C:\Users\dasil\OneDrive\Desktop\today` & `G:\My Drive\today`: Exported prompt suites (`Desk1_Automated`), candidate sets, and extracted data files via `organize_today_run2.py`.
+3. **Verification**:
+   - Mandatory STEP 0 `report-sync.ps1` completed with `REPORT STATUS: OK` (RUN-NONCE: `eab24b93ce4e413d`).
+   - `scripts/run_daily_pipeline.ps1` completed with exit code 0.
+   - House rules respected: paid AI reasoning models were kept strictly OFF.
+   - Git working tree clean on `master`.
+4. **Next Steps**:
+   - Slate data and prompt files are ready in Desktop `today` and Drive `today` folders for manual review or export.
+
 ## NFL Roster Accuracy: Dolphins Starting QB Malik Willis & Tua Tagovailoa Relocation (Gemini) - 2026-09-21
 1. **Last Commit SHA**: `827ce4e` on branch `fix/roster-tua-dolphins-update` (PR #183: https://github.com/DaSilvaDub/outlier/pull/183)
 2. **Files Touched**:
