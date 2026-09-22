@@ -151,7 +151,7 @@ def test_surname_containing_most_is_not_treated_as_an_aggregate_market() -> None
         [
             _prop("MIA", "Raheem Mostert", "RUSH_YDS"),
             _prop("MIA", "Most Rushing Yards", "RUSH_YDS"),
-            _prop("MIA", "Tua Tagovailoa", "PASS_YDS"),
+            _prop("MIA", "Malik Willis", "PASS_YDS"),
         ],
         include_league_baseline=False,
     )
@@ -245,6 +245,15 @@ def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     assert verify_player_team_attribution("Jauan Jennings", "SF", rosters) is False
     assert verify_player_team_attribution("Noah Fant", "NO", rosters) is True
     assert verify_player_team_attribution("Noah Fant", "SEA", rosters) is False
+    assert verify_player_team_attribution("Malik Willis", "MIA", rosters) is True
+    assert verify_player_team_attribution("Malik Willis", "GB", rosters) is False
+    assert verify_player_team_attribution("Tua Tagovailoa", "ATL", rosters) is True
+    assert verify_player_team_attribution("Tua Tagovailoa", "MIA", rosters) is False
+    assert rosters["MIA"]["starting_qb"] == "Malik Willis"
+    assert OFFSEASON_MOVES_2026["Tua Tagovailoa"]["current_team"] == "ATL"
+    assert "MIA" in OFFSEASON_MOVES_2026["Tua Tagovailoa"]["former_teams"]
+    assert OFFSEASON_MOVES_2026["Malik Willis"]["current_team"] == "MIA"
+    assert "GB" in OFFSEASON_MOVES_2026["Malik Willis"]["former_teams"]
 
     # Full 32 teams check
     assert len(rosters) == 32
@@ -287,6 +296,12 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
     assert "Keenan Allen" in errors_6[0]
     assert "IND" in errors_6[0]
 
+    bad_text_7 = "Tua Tagovailoa on the Dolphins will start under center this week."
+    errors_7 = validate_analysis_text_for_roster_errors(bad_text_7)
+    assert len(errors_7) == 1
+    assert "Tua Tagovailoa" in errors_7[0]
+    assert "ATL" in errors_7[0]
+
     # Valid text with verified current teams
     good_text = (
         "Daniel Jones is the starting quarterback for the Indianapolis Colts. "
@@ -294,7 +309,8 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
         "Aaron Rodgers is leading the Pittsburgh Steelers. "
         "Hollywood Brown is playing for the Philadelphia Eagles. "
         "A.J. Brown is the top wide receiver for the New England Patriots. "
-        "Keenan Allen plays wide receiver for the Indianapolis Colts."
+        "Keenan Allen plays wide receiver for the Indianapolis Colts. "
+        "Malik Willis starts at quarterback for the Miami Dolphins."
     )
     errors_good = validate_analysis_text_for_roster_errors(good_text)
     assert errors_good == []
