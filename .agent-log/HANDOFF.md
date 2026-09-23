@@ -47,6 +47,18 @@ All under `data/NFL/normalized/`:
 - `reports/NFL/` game scripts are ready for manual review / Desk2 prompt routing
 - External metrics (`pbp`, `schedule`) are currently stubs — wire up real providers when available
 
+## Daily Debug Review: NFL Team Totals Misclassified as Game Totals (Claude) - 2026-09-23
+1. **Last Commit SHA**: rebased onto master after #182; branch `claude/inspiring-fermat-bzoq3i` (PR #185: https://github.com/DaSilvaDub/outlier/pull/185).
+2. **Files Touched (still distinct after #182)**:
+   - `outlier_nfl/games.py`: `extract_game_lines()` tests the game-total branch before the team-total branch, and `"TOTAL"`/`"TOTALPOINTS"` belong to both `GAME_TOTAL_PROPOSITIONS` and `TEAM_TOTAL_PROPOSITIONS`. A market the feed explicitly typed `TEAM_PROP` whose proposition read "Total" / "Total Points" / "TOTALPOINTS" satisfied `is_game_total()` and was emitted as a GAMELINE TOTAL with `team=None` -- one team's total published beside the real game total. The branch now declines markets typed `TEAM_PROP` (later refined to require team attribution) so they fall through to the team-total branch.
+   - `tests/test_nfl_normalizer.py`: regression coverage for the feed spellings that used to leak into the games feed.
+3. **Superseded by #182 (dropped on rebase)**:
+   - `outlier_nfl/matchup.py` / `tests/test_nfl_matchup.py` changes that filtered team totals via `PROP_TEAM_TOTAL_POINTS` on canonical `market`. Master already reads team totals through `is_team_total(proposition)` (#182), which is the wider canonical predicate; keeping both would duplicate and risk divergence.
+4. **Verification** (pre-rebase): `pytest tests/test_nfl_*.py` 286 passed / 2 skipped; ruff/mypy clean on touched files.
+5. **Next Steps**:
+   - Review and merge PR #185 once rebase checks are green.
+   - Open, not fixed: repo-wide `ruff check` F401 unused imports; `--window` runs clobber `*_latest.json`; `matches_kickoff_window()` returns True for unrecognized tokens.
+
 ## Daily Debug Review: Matchup Team-Total Reader (Claude) - 2026-09-21
 1. **Last Commit SHA**: `a38d4b3` on branch `claude/inspiring-fermat-xdn5p3` (PR #182: https://github.com/DaSilvaDub/outlier/pull/182).
 2. **Files Touched**:
