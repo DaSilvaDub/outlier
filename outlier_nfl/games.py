@@ -302,8 +302,21 @@ def extract_game_lines(
             # -------------------------------------------------------------
             # 2. Game Total
             # -------------------------------------------------------------
-            elif is_game_total(raw_prop) or (
-                raw_market_type == MARKET_TYPE_GAMELINE and normalize_market(raw_prop) == PROP_TOTAL
+            # ``TOTAL`` and ``TOTALPOINTS`` are members of both
+            # GAME_TOTAL_PROPOSITIONS and TEAM_TOTAL_PROPOSITIONS, so a team
+            # total whose proposition is spelled "Total" / "Total Points" used
+            # to satisfy is_game_total() and be claimed here -- published as a
+            # GAMELINE total with team=None, i.e. one team's 26.5 sitting in
+            # the games feed next to the real 44.5 game total and
+            # indistinguishable from it. When the feed has explicitly typed the
+            # market TEAM_PROP that classification is authoritative; let it
+            # fall through to the team-total branch below.
+            elif raw_market_type != MARKET_TYPE_TEAM_PROP and (
+                is_game_total(raw_prop)
+                or (
+                    raw_market_type == MARKET_TYPE_GAMELINE
+                    and normalize_market(raw_prop) == PROP_TOTAL
+                )
             ):
                 pos = "OVER" if "OVER" in raw_pos else ("UNDER" if "UNDER" in raw_pos else raw_pos)
                 sel = f"Over {line_float}" if pos == "OVER" else (f"Under {line_float}" if pos == "UNDER" else f"{pos} {line_float}")
