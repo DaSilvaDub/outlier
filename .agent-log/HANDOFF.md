@@ -50,11 +50,12 @@ All under `data/NFL/normalized/`:
 ## Daily Debug Review: NFL Team Totals Misclassified as Game Totals (Claude) - 2026-09-23
 1. **Last Commit SHA**: rebased onto master after #182; branch `claude/inspiring-fermat-bzoq3i` (PR #185: https://github.com/DaSilvaDub/outlier/pull/185).
 2. **Files Touched (still distinct after #182)**:
-   - `outlier_nfl/games.py`: `extract_game_lines()` tests the game-total branch before the team-total branch, and `"TOTAL"`/`"TOTALPOINTS"` belong to both `GAME_TOTAL_PROPOSITIONS` and `TEAM_TOTAL_PROPOSITIONS`. A market the feed explicitly typed `TEAM_PROP` whose proposition read "Total" / "Total Points" / "TOTALPOINTS" satisfied `is_game_total()` and was emitted as a GAMELINE TOTAL with `team=None` -- one team's total published beside the real game total. The branch now declines markets typed `TEAM_PROP` (later refined to require team attribution) so they fall through to the team-total branch.
-   - `tests/test_nfl_normalizer.py`: regression coverage for the feed spellings that used to leak into the games feed.
+   - `outlier_nfl/games.py`: `extract_game_lines()` tests the game-total branch before the team-total branch, and `"TOTAL"`/`"TOTALPOINTS"` belong to both `GAME_TOTAL_PROPOSITIONS` and `TEAM_TOTAL_PROPOSITIONS`. A market the feed explicitly typed `TEAM_PROP` whose proposition read "Total" / "Total Points" / "TOTALPOINTS" satisfied `is_game_total()` and was emitted as a GAMELINE TOTAL with `team=None` -- one team's total published beside the real game total. The branch now declines markets typed `TEAM_PROP` so they fall through to the team-total branch.
+   - `outlier_nfl/games.py` (follow-up): guard requires BOTH `TEAM_PROP` type AND a resolved team via `resolve_outcome_team()`, so a game total a provider mislabels `TEAM_PROP` (no team attribution) stays a game total instead of vanishing. Branch 3's resolution is extracted and reused so the guard and the branch cannot disagree.
+   - `tests/test_nfl_normalizer.py`: regression coverage for colliding feed spellings plus `test_game_total_mislabelled_team_prop_is_still_a_game_total`.
 3. **Superseded by #182 (dropped on rebase)**:
    - `outlier_nfl/matchup.py` / `tests/test_nfl_matchup.py` changes that filtered team totals via `PROP_TEAM_TOTAL_POINTS` on canonical `market`. Master already reads team totals through `is_team_total(proposition)` (#182), which is the wider canonical predicate; keeping both would duplicate and risk divergence.
-4. **Verification** (pre-rebase): `pytest tests/test_nfl_*.py` 286 passed / 2 skipped; ruff/mypy clean on touched files.
+4. **Verification** (pre-rebase): `pytest tests/test_nfl_*.py` 287 passed / 2 skipped; hosted CI green on prior tip; ruff/mypy clean on touched files.
 5. **Next Steps**:
    - Review and merge PR #185 once rebase checks are green.
    - Open, not fixed: repo-wide `ruff check` F401 unused imports; `--window` runs clobber `*_latest.json`; `matches_kickoff_window()` returns True for unrecognized tokens.
