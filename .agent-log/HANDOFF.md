@@ -47,6 +47,15 @@ All under `data/NFL/normalized/`:
 - `reports/NFL/` game scripts are ready for manual review / Desk2 prompt routing
 - External metrics (`pbp`, `schedule`) are currently stubs — wire up real providers when available
 
+## Daily Automated Debug Review (Reasoning Off) (Claude) - 2026-09-24
+1. **Last Commit SHA**: rebased onto master after #184; branch `claude/inspiring-fermat-a0ly72` (PR #186: https://github.com/DaSilvaDub/outlier/pull/186).
+2. **Files Touched**:
+   - `outlier_nfl/roster.py`: Fixed `validate_analysis_text_for_roster_errors()`. It lowercased the whole document and interpolated each former-team token into a regex with no escaping and no word boundary, so "TEN" matched inside "Often", "DEN" inside "sudden", "Lions" inside "Millions", and "WAS"/"Bears" matched the English verbs "was"/"bears". The gate fails closed, so each false positive halts a legitimate report. Tokens must now stand alone; the bare-proximity pattern requires the franchise's written or all-caps spelling; the two explicit attribution patterns stay case-insensitive so `keenan allen on the bears` is still caught. Player names and team tokens are `re.escape()`d.
+   - `tests/test_nfl_roster.py`: Added `test_validate_analysis_text_does_not_flag_ordinary_english` and `test_validate_analysis_text_still_catches_capitalized_team_references`.
+3. **Verification** (pre-rebase): offline suite 1098 passed / 43 skipped; mypy/ruff clean on touched files; committed `reports/NFL/*.md` still validate to 0 errors.
+4. **Next Steps**:
+   - Review and merge PR #186 once rebase checks are green.
+   - **Needs a human call**: the bare-proximity pattern still treats an *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson").
 ## Daily Debug Review: NFL Team Totals Misclassified as Game Totals (Claude) - 2026-09-23
 1. **Last Commit SHA**: rebased onto master after #182; branch `claude/inspiring-fermat-bzoq3i` (PR #185: https://github.com/DaSilvaDub/outlier/pull/185).
 2. **Files Touched (still distinct after #182)**:
