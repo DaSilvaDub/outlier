@@ -1541,3 +1541,90 @@ def test_is_qualifying_alt_team_total_fallback():
     )
 
 
+
+
+# --- Producer/consumer agreement on the divergence-fallback surface ----------
+#
+# The tests above hand-build alt rows carrying `position` and `selection`.
+# Neither key exists on the rows the real producer emits, so those tests passed
+# while the surface was dead against actual pack data. These drive
+# build_alt_team_total_board() -- the first input pack_publish feeds to
+# cross_reference_divergent_fallbacks() -- straight into the consumer.
+
+_ALT_BOARD_START = "2026-07-14T23:00:00+00:00"
+
+
+def _alt_team_total_board_row():
+    from outlier_scrapers.alt_team_totals import build_alt_team_total_board, _local_date
+
+    def record(position):
+        return {
+            "market_id": "m1",
+            "outcome_id": f"m1:2.5:{position}",
+            "event_id": "E1",
+            "event_starts_at": _ALT_BOARD_START,
+            "market_type": "TEAM_PROP",
+            "proposition": "RUNS",
+            "market": "RUNS",
+            "scope": "full_game",
+            "line": 2.5,
+            "position": position,
+            "team": "PHI",
+            "matchup": "MIL @ PHI",
+            "books": [{"book": "dk", "odds": -400}],
+            "stats": {"homeSummaryStat": {"l10": 1.0, "l10Results": [True] * 10}},
+        }
+
+    board = build_alt_team_total_board(
+        {"generated_at": "2026-07-14T10:00:00+00:00",
+         "records": [record("OVER"), record("UNDER")]},
+        league="MLB",
+        now=datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+        target_date=_local_date(_ALT_BOARD_START),
+    )
+    assert len(board) == 1, "fixture no longer produces a qualifying board row"
+    return board[0]
+
+
+def test_real_alt_team_total_board_row_qualifies_as_a_fallback():
+    row = _alt_team_total_board_row()
+    # The board emits OVER lines only and does not carry the side onto the row.
+    assert "position" not in row
+    assert is_qualifying_alt_team_total_fallback(row)
+
+
+def test_cross_reference_matches_real_alt_team_total_board_rows():
+    row = _alt_team_total_board_row()
+    totals_rows = [
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "selection": "MIL @ PHI Total O/U OVER 7.5",
+            "quality_flags": "totals_model_divergence",
+        }
+    ]
+
+    fallbacks = cross_reference_divergent_fallbacks(totals_rows, [row])
+
+    assert totals_rows[0]["divergence_fallback_available"] == "true"
+    assert totals_rows[0]["divergence_fallback_count"] == "1"
+    assert len(fallbacks) == 1
+    # The published fallback names the market, not just a bare price.
+    assert fallbacks[0]["selection"] == "PHI Team Total OVER 2.5"
+    assert fallbacks[0]["team"] == "PHI"
+    assert fallbacks[0]["line"] == "2.5"
+    assert fallbacks[0]["parlay_rule"] == "cross_game_only"
+    assert set(fallbacks[0]) == set(DIVERGENT_TOTALS_FALLBACKS_HEADER)
+    assert totals_rows[0]["divergence_fallback_best"].startswith("PHI Team Total OVER 2.5 (")
+
+
+def test_alt_fallback_selection_keeps_an_existing_label():
+    from outlier_scrapers.game_totals import _alt_fallback_selection
+
+    assert _alt_fallback_selection({"selection": "PHI OVER 2.5"}) == "PHI OVER 2.5"
+
+
+def test_an_explicit_under_is_still_rejected_without_a_selection():
+    assert not is_qualifying_alt_team_total_fallback(
+        {"team": "PHI", "line": 2.5, "position": "UNDER", "l10_pct": 100.0}
+    )

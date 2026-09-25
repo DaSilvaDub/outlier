@@ -1,3 +1,55 @@
+# HANDOFF — 2026-09-25 (Claude, daily automated debug review)
+
+## Last Commit SHA
+`2c8f391` — fix(totals): let real alt team totals back a divergent game total
+
+## PR
+[#189](https://github.com/DaSilvaDub/outlier/pull/189) — `claude/inspiring-fermat-y3216p` → master
+
+## Files Touched
+- `outlier_scrapers/game_totals.py` — `is_qualifying_alt_team_total_fallback()` required
+  `row["position"] == "OVER"`, but `build_alt_team_total_board()` (the board `pack_publish`
+  passes *first* into `cross_reference_divergent_fallbacks()`) never emits `position`. Every
+  row it produces was rejected, so no alternate team total could ever back a divergent game
+  total; only the narrower alt bankroll board could fill the surface. Missing `position` now
+  reads as OVER, the same default `ultimate_alt._base_row()` already applies to these rows
+  and the same reasoning behind the existing `market_type` default. Also added
+  `_alt_fallback_selection()`: neither producer emits `selection`, so the published fallback
+  was a bare price in parentheses.
+- `tests/test_game_totals.py` — two regression tests that drive real
+  `build_alt_team_total_board()` output into the consumer (the existing tests hand-build rows
+  carrying `position`/`selection`, which is why they passed while the surface was dead).
+  Both fail on `e104d45`.
+
+## Verification
+- 76 passed / 0 assertion failures across test_game_totals, test_alt_team_totals,
+  test_totals_model, test_ultimate_alt, test_pack_publish. All 28 remaining failures are
+  `ModuleNotFoundError: sqlalchemy`.
+- **Sandbox limitation (recurring):** pypi.org and files.pythonhosted.org return **403** from
+  the egress proxy, so `pip install -r requirements.lock` fails and `pytest`/`ruff`/`mypy`
+  cannot be installed. Tests were executed through a stdlib-only harness with a minimal
+  `pytest`/`structlog` shim under the scratchpad; CI is the authority. Master CI (`Offline
+  Pytest`) is green at `e104d45`.
+
+## Next Steps / Open Items
+- Review and merge PR #189.
+- **Still open (from 2026-09-24):** the roster gate's bare-proximity pattern treats an
+  *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson"). Needs a human
+  call on whether opponent context should be exempted.
+- **Not fixed, needs a human call:** `outlier_nfl/pipeline.py:239` derives the NFL season as
+  `int(target_date.split('-')[0])`. A January/February playoff slate belongs to the *previous*
+  season (2027-01-10 → the 2026 season), so `load_external_metrics()` would be asked for the
+  wrong year. Inert today because every `outlier_nfl/external/` adapter is a stub returning
+  `{"records": []}` — fix it when real providers are wired.
+- **Repo hygiene, needs a human call:** `.pytest_pr1_tmp/` (334 files) and
+  `.worktrees/test-pr97/` (364 files, ~3 MB — a full second copy of `pack.py`, `feedback.py`,
+  `game_totals.py` and the test suite) are tracked in git. They pollute every repo-wide grep
+  with stale duplicates, which is the exact class of confusion the d05eb21 protocol exists to
+  prevent. Recommend `git rm --cached -r` plus `.gitignore` entries; not done here because it
+  rewrites 698 tracked paths and is the owner's call.
+
+---
+
 # HANDOFF — 2026-09-25 (Antigravity)
 
 ## Last Commit SHA
