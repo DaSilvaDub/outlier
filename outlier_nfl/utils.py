@@ -261,6 +261,15 @@ def to_eastern_datetime(dt_or_iso: datetime | str | None) -> datetime | None:
     if dt is None:
         return None
 
+    # A naive datetime means UTC here, matching this function's contract and what
+    # parse_iso_datetime() already does for a naive ISO string. Without this,
+    # astimezone() reads it as the *host's* local clock, so the same kickoff
+    # resolves to a different Eastern slate date depending on the machine the
+    # pipeline runs on -- a UTC runner and a US Pacific workstation disagree by a
+    # day on any game that kicks off after 20:00 ET.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
     eastern_tz: Any
     try:
         eastern_tz = zoneinfo.ZoneInfo("America/New_York")
