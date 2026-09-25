@@ -20,6 +20,7 @@ import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 # Allow ``python scripts/organize_today_run2.py`` imports of sibling modules.
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -322,6 +323,222 @@ def resolve_candidates_csv(pack_dir: Path) -> Path:
     return candidates_csv
 
 
+def generate_playable_props(pack_dir: Path, output_dir: Path) -> Path:
+    """Generate playable_props.md (and playable_props.csv) for the slate.
+
+    Renders:
+    1. MLB Player Props (Pitcher Strikeouts — SO)
+    2. MLB Team Props (Team Run Totals)
+    3. Game Totals & Slate Lines
+    4. Divergence Fallbacks (High-Probability Alternate Team Totals)
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pack_name = pack_dir.name
+    date_str = pack_name.split("_")[-1] if "_" in pack_name else pack_name
+    md_path = output_dir / f"playable_props_{date_str}.md" if date_str else output_dir / "playable_props.md"
+    standard_md_path = output_dir / "playable_props.md"
+
+    # 1. Read candidates.csv if present
+    cand_csv = resolve_candidates_csv(pack_dir)
+    candidates: list[dict[str, Any]] = []
+    if cand_csv.exists():
+        with open(cand_csv, newline="", encoding="utf-8") as f:
+            candidates = list(csv.DictReader(f))
+
+    # 2. Read game_totals.csv
+    gt_csv = pack_dir / "game_totals.csv"
+    if not gt_csv.exists():
+        gt_csv = pack_dir / "data_analysis" / "game_totals.csv"
+    game_totals: list[dict[str, Any]] = []
+    if gt_csv.exists():
+        with open(gt_csv, newline="", encoding="utf-8") as f:
+            game_totals = list(csv.DictReader(f))
+
+    # 3. Read team_totals.csv
+    tt_csv = pack_dir / "team_totals.csv"
+    if not tt_csv.exists():
+        tt_csv = pack_dir / "data_analysis" / "team_totals.csv"
+    team_totals: list[dict[str, Any]] = []
+    if tt_csv.exists():
+        with open(tt_csv, newline="", encoding="utf-8") as f:
+            team_totals = list(csv.DictReader(f))
+
+    # 4. Read divergent_totals_fallbacks.csv
+    fallbacks_csv = pack_dir / "divergent_totals_fallbacks.csv"
+    if not fallbacks_csv.exists():
+        fallbacks_csv = pack_dir / "data_analysis" / "divergent_totals_fallbacks.csv"
+    fallbacks: list[dict[str, Any]] = []
+    if fallbacks_csv.exists():
+        with open(fallbacks_csv, newline="", encoding="utf-8") as f:
+            fallbacks = list(csv.DictReader(f))
+
+    lines: list[str] = [
+        f"# Playable Props & Market Candidates — {date_str}",
+        "",
+        "> Authoritative extract from Outlier daily pack. Pitcher SO & Team Totals strict whitelists applied.",
+        "",
+        "## 1. MLB Player Props (Pitcher Strikeouts — SO)",
+        "",
+        "| Pitcher / Matchup | Selection | Line | Price / Book | Model Win % | Implied % | Edge | Hit Rate | Proj Mean | Board | Status / Flags |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |",
+    ]
+
+    # Section 1: Pitcher Strikeouts (SO)
+    so_rows = [
+        r
+        for r in candidates
+        if str(r.get("sport") or "").upper() == "MLB"
+        and (
+            "STRIKEOUT" in str(r.get("selection") or "").upper()
+            or " SO " in str(r.get("selection") or "").upper()
+            or str(r.get("proposition") or r.get("market") or "").upper() in ("SO", "STRIKEOUTS")
+        )
+    ]
+    if so_rows:
+        for r in so_rows:
+            pitcher = r.get("player_id") or r.get("player") or "Unknown"
+            matchup = r.get("matchup") or ""
+            pm_col = f"**{pitcher}** (`{matchup}`)" if matchup else f"**{pitcher}**"
+            sel = r.get("selection") or ""
+            line_val = r.get("line") or ""
+            pr = r.get("price") or ""
+            bk = r.get("book") or ""
+            pr_col = f"`{pr}` ({bk})" if bk else f"`{pr}`"
+            model_p = f"{float(r['model_prob'])*100:.1f}%" if r.get("model_prob") else "—"
+            imp_p = f"{float(r['implied_prob'])*100:.1f}%" if r.get("implied_prob") else "—"
+            edge_v = r.get("edge_pct")
+            edge_col = f"**{float(edge_v)*100:+.2f}%**" if edge_v not in (None, "") else "—"
+            hr = f"{float(r['l10_pct']):.1f}%" if r.get("l10_pct") else "—"
+            proj = r.get("projection_mean") or "—"
+            board = f"`{r.get('board')}`" if r.get("board") else "—"
+            status = r.get("quality_flags") or r.get("status") or "None"
+            lines.append(
+                f"| {pm_col} | {sel} | {line_val} | {pr_col} | {model_p} | {imp_p} | {edge_col} | {hr} | {proj} | {board} | {status} |"
+            )
+    else:
+        lines.append("*No pitcher strikeout props for current slate.*")
+
+    lines.extend([
+        "",
+        "## 2. MLB Team Props (Team Run Totals)",
+        "",
+        "| Matchup | Selection | Line | Price / Book | Model Win % | Implied % | Edge | Hit Rate | Board | Status / Flags |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |",
+    ])
+
+    # Section 2: Team Totals
+    mlb_tt = [r for r in team_totals if str(r.get("sport") or "").upper() == "MLB"]
+    if not mlb_tt:
+        mlb_tt = [
+            r
+            for r in candidates
+            if str(r.get("sport") or "").upper() == "MLB"
+            and (
+                str(r.get("market_type") or "").upper() == "TEAM_PROP"
+                or "TEAM TOTAL" in str(r.get("selection") or "").upper()
+            )
+        ]
+    if mlb_tt:
+        for r in mlb_tt:
+            m = f"`{r.get('matchup')}`"
+            sel = f"**{r.get('selection')}**"
+            line_val = r.get("line") or ""
+            pr = r.get("best_price") or r.get("price") or ""
+            bk = r.get("book") or ""
+            pr_col = f"`{pr}` ({bk})" if bk else f"`{pr}`"
+            model_p = (
+                f"{float(r['final_blended_prob'])*100:.1f}%"
+                if r.get("final_blended_prob")
+                else (f"{float(r['model_prob'])*100:.1f}%" if r.get("model_prob") else "—")
+            )
+            imp_p = f"{float(r['implied_prob'])*100:.1f}%" if r.get("implied_prob") else "—"
+            edge_v = r.get("edge_pct")
+            edge_col = f"**{float(edge_v)*100:+.2f}%**" if edge_v not in (None, "") else "—"
+            hr = (
+                f"{float(r['recency_hit_prob'])*100:.1f}%"
+                if r.get("recency_hit_prob")
+                else "—"
+            )
+            board = f"`{r.get('board', 'A_FLAGGED')}`"
+            status = r.get("quality_flags") or "None"
+            lines.append(
+                f"| {m} | {sel} | {line_val} | {pr_col} | {model_p} | {imp_p} | {edge_col} | {hr} | {board} | {status} |"
+            )
+    else:
+        lines.append("*No MLB team totals for current slate.*")
+
+    lines.extend([
+        "",
+        "## 3. Game Totals & Slate Lines",
+        "",
+        "| Matchup | Market / Selection | Line | Price / Book | Edge | Board | Flags |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :--- |",
+    ])
+
+    # Section 3: Game Totals & Slate Lines
+    gt_rows = game_totals if game_totals else [
+        r for r in candidates if str(r.get("market_type") or "").upper() == "GAMELINE"
+    ]
+    if gt_rows:
+        for r in gt_rows:
+            m = f"`{r.get('matchup')}`"
+            sel = f"**{r.get('selection')}**"
+            line_val = r.get("line") or ""
+            pr = r.get("best_price") or r.get("price") or ""
+            bk = r.get("book") or ""
+            pr_col = f"`{pr}` ({bk})" if bk else f"`{pr}`"
+            edge_v = r.get("edge_pct")
+            edge_col = f"**{float(edge_v)*100:+.2f}%**" if edge_v not in (None, "") else "—"
+            board = f"`{r.get('board', 'A_FLAGGED')}`"
+            flags = r.get("quality_flags") or "None"
+            lines.append(f"| {m} | {sel} | {line_val} | {pr_col} | {edge_col} | {board} | {flags} |")
+    else:
+        lines.append("*No game totals for current slate.*")
+
+    lines.extend([
+        "",
+        "## 4. Divergence Fallbacks (High-Probability Alternate Team Totals)",
+        "",
+        "> Invariant: MLB alt team totals are OVER runs only and must be parlayed across different games (cross-game parlays only; no SGPs).",
+        "",
+        "| Flagged Game Total | Divergence Flags | Qualifying Alternate Team Total Fallback | Line | Price / Book | L5 Hit Rate | L10 Hit Rate |",
+        "| :--- | :--- | :--- | :---: | :---: | :---: | :---: |",
+    ])
+
+    # Section 4: Divergence Fallbacks
+    if fallbacks:
+        for fb in fallbacks:
+            gt_sel = f"`{fb.get('matchup')}` ({fb.get('game_total_selection')})"
+            flags = f"`{fb.get('divergence_flags')}`"
+            sel = f"**{fb.get('selection')}**"
+            line_val = str(fb.get("line") or "")
+            pr = fb.get("price") or ""
+            bk = fb.get("book") or ""
+            pr_col = f"`{pr}` ({bk})" if bk else f"`{pr}`"
+            l5 = f"{fb.get('l5_pct')}%" if fb.get("l5_pct") not in (None, "") else "—"
+            l10 = f"{fb.get('l10_pct')}%" if fb.get("l10_pct") not in (None, "") else "—"
+            lines.append(f"| {gt_sel} | {flags} | {sel} | {line_val} | {pr_col} | {l5} | {l10} |")
+    else:
+        has_fallback_in_gt = False
+        for gt in game_totals:
+            if gt.get("divergence_fallback_available") == "true":
+                has_fallback_in_gt = True
+                m = gt.get("matchup") or (gt.get("selection", "").split(" Total O/U")[0] if " Total O/U" in gt.get("selection", "") else "")
+                gt_sel = f"`{m}` ({gt.get('selection')})" if m else f"`{gt.get('selection')}`"
+                flags = f"`{gt.get('quality_flags')}`"
+                best_fb = gt.get("divergence_fallback_best") or gt.get("divergence_fallback_markets") or ""
+                lines.append(f"| {gt_sel} | {flags} | **{best_fb}** | — | — | — | — |")
+        if not has_fallback_in_gt:
+            lines.append("*No qualifying alternate team total fallbacks identified for current slate.*")
+
+    lines.append("")
+    content = "\n".join(lines)
+    md_path.write_text(content, encoding="utf-8")
+    if standard_md_path != md_path:
+        standard_md_path.write_text(content, encoding="utf-8")
+    return md_path
+
+
 def copy_pack_into(pipeline_data: Path, latest_pack: Path) -> None:
     """Full replace: wipe pipeline_data then copy pack contents."""
     replace_dir(pipeline_data)
@@ -500,12 +717,14 @@ def organize_today_additive(
             copy_pack_into(pipeline_data, latest_pack)
 
             generate_specific_packs(candidates_csv, extra_packs)
+            generate_playable_props(latest_pack, extra_packs)
 
             for t_csv in [
                 "game_totals.csv",
                 "team_totals.csv",
                 "alt_team_totals.csv",
                 "opportunities.csv",
+                "divergent_totals_fallbacks.csv",
             ]:
                 src = latest_pack / t_csv
                 if not src.exists():
@@ -516,6 +735,7 @@ def organize_today_additive(
                         "game_totals.csv",
                         "team_totals.csv",
                         "alt_team_totals.csv",
+                        "divergent_totals_fallbacks.csv",
                     ]:
                         safe_copy(src, totals_prompts / t_csv)
 
