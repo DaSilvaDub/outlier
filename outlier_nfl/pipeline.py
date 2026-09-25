@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 import sys
 from typing import Any
+from outlier_nfl.external import load_external_metrics
 
 # Ensure Windows stdout handles UTF-8 gracefully
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -233,6 +234,25 @@ class NflPipeline:
         # 1.5 Per-matchup tape analysis, then consensus + calibration
         # =====================================================================
         tapes = load_prior_week_tape(self.nfl_dir)
+        # Load external advanced metrics for the season
+        try:
+            season_year = int(target_date.split('-')[0])
+            external_metrics = load_external_metrics(season_year, through_week=22)
+            logger.info("Loaded %d external metric records", len(external_metrics))
+        except Exception as exc:
+            logger.warning("Failed loading external metrics: %s", exc)
+            external_metrics = []
+        # Persist external metrics to JSON for downstream use and analysis
+        external_metrics_payload = {
+            "date": target_date,
+            "window": window,
+            "updated_at": now_utc,
+            "count": len(external_metrics),
+            "records": external_metrics,
+        }
+        safe_write_json(self.normalized_dir / "nfl_external_metrics_latest.json", external_metrics_payload)
+        safe_write_json(self.normalized_dir / f"nfl_external_metrics_{target_date}.json", external_metrics_payload)
+
         matchup_scripts = build_matchup_scripts(
             all_game_lines,
             tapes,

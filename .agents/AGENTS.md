@@ -60,3 +60,17 @@ When projecting pitcher strikeouts or auditing candidate edges, always check the
 ## Exchange Alpha vs. Thin Liquidity Filter Calibration
 When an exchange book (Prophetx or Novig) offers a player prop line that is a full integer/rung lower than consensus retail sportsbooks (e.g., 4.5 on Prophetx vs. 5.5 on DraftKings/FanDuel), do not treat this solely as a disqualifying `thin_liquidity` trap. Cross-reference whether the consensus higher line also carries positive projection support; if so, the discounted exchange line represents genuine market alpha.
 
+## Codebase Quirk: `outlier_nfl/external/` Stub Adapter Pattern
+`outlier_nfl/external/__init__.py` imports adapters by name (currently `ngs`, `pbp`, and `schedule`). If a new adapter name is added to that import block but the corresponding `.py` file does not exist, the entire `outlier_nfl` package fails to import with a `ModuleNotFoundError`.
+
+**Rule:** Every adapter referenced in `outlier_nfl/external/__init__.py` MUST have a corresponding module file in that directory. The minimal stub pattern is:
+
+```python
+def fetch(client, season: int, through_week: int = 22):
+    """Stub — returns empty records until a real provider is wired up."""
+    return {"records": []}
+```
+
+When adding a new adapter name to `__init__.py`, always create the stub file in the same commit. The pipeline treats missing external data gracefully (falls back to `[]`), so stubs are always safe to ship.
+
+
