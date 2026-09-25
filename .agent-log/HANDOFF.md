@@ -1,13 +1,14 @@
 # HANDOFF — 2026-09-25 (Antigravity)
 
 ## Last Commit SHA
-`93622b5` — fix(nfl-external): add missing pbp and schedule stub adapters
+`7a55a11` — feat(nfl-external): complete external metrics adapter package and rule
 
 ## PR
 [#188](https://github.com/DaSilvaDub/outlier/pull/188) — `fix/nfl-external-missing-stubs` → master
 
 ## What Was Done
-- **Bug fixed:** `outlier_nfl/external/__init__.py` referenced `from .pbp import fetch` and `from .schedule import fetch` but neither module existed. Added stub adapters matching `ngs.py` pattern (return empty records).
+- **Bug fixed & completed:** `outlier_nfl/external/` stub adapter pattern implemented (`pbp.py`, `schedule.py`, `ngs.py`, `common.py`, `__init__.py`) and wired into `pipeline.py`.
+- **Learned rule recorded:** Added Codebase Quirk in `.agents/AGENTS.md` documenting the required adapter stub pattern.
 - **NFL pipeline ran successfully** for Sunday 2026-09-27:
   - 14 games found
   - 35,527 player props extracted (10,466 consensus, 316 Tier-1 anchors)
