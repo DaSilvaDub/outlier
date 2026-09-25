@@ -150,6 +150,10 @@ GAME_TOTALS_HEADER = [
     "starter_flags",
     "research_leverage",
     "scope",
+    "divergence_fallback_available",
+    "divergence_fallback_count",
+    "divergence_fallback_markets",
+    "divergence_fallback_best",
     "as_of",
     "_event_starts_at",
     "source_timestamps",
@@ -157,6 +161,21 @@ GAME_TOTALS_HEADER = [
 # Shared schema: team totals use the same columns; files are split by stream.
 TEAM_TOTALS_HEADER = GAME_TOTALS_HEADER
 TOTALS_HEADER = GAME_TOTALS_HEADER
+
+DIVERGENT_TOTALS_FALLBACKS_HEADER = [
+    "event_id",
+    "matchup",
+    "game_total_selection",
+    "divergence_flags",
+    "team",
+    "selection",
+    "line",
+    "price",
+    "book",
+    "l5_pct",
+    "l10_pct",
+    "parlay_rule",
+]
 
 
 def _to_float(line: Any) -> float | None:
@@ -203,7 +222,8 @@ def median_prob(values: list[float]) -> float | None:
 # consensus; ten games is a high-variance signal, so the market stays dominant.
 BASE_INDEPENDENT_WEIGHT = 0.25  # legacy; retained for reference
 _FULL_SAMPLE_GAMES = 10.0
-EB_PRIOR_STRENGTH = 20.0  # alpha in p_hat = (k + alpha * p_mkt) / (n + alpha)
+EB_PRIOR_STRENGTH = 100.0  # alpha in p_hat = (k + alpha * p_mkt) / (n + alpha)
+MAX_RECENCY_PROB_ADJUSTMENT = 0.035  # max allowed probability deviation from market
 
 
 def _l10_over_for_record(rec: dict[str, Any]) -> dict[str, Any] | None:
@@ -252,7 +272,10 @@ def _l10_over_for_record(rec: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def blend_over_probability(
-    p_over_market: float, l10_over: dict[str, Any] | None
+    p_over_market: float,
+    l10_over: dict[str, Any] | None,
+    *,
+    max_adjustment: float | None = MAX_RECENCY_PROB_ADJUSTMENT,
 ) -> tuple[float, bool]:
     """Empirical-Bayes shrinkage of L10 toward market-implied probability.
 
@@ -272,6 +295,8 @@ def blend_over_probability(
         k = float(l10_over["pct"]) * n
     alpha = EB_PRIOR_STRENGTH
     shrunk = (k + alpha * p_over_market) / (n + alpha)
+    if max_adjustment is not None and max_adjustment > 0:
+        shrunk = max(p_over_market - max_adjustment, min(p_over_market + max_adjustment, shrunk))
     return shrunk, True
 
 
@@ -973,9 +998,10 @@ def build_game_totals(
     sport: str,
     now: datetime | None = None,
     probable_pitchers: dict[str, dict[str, Any]] | None = None,
+    alt_team_totals_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for game totals only (GAMELINE / TOTAL)."""
-    return build_totals(
+    rows = build_totals(
         candidate_rows,
         games_norm,
         sport=sport,
@@ -983,6 +1009,119 @@ def build_game_totals(
         now=now,
         probable_pitchers=probable_pitchers,
     )
+    if alt_team_totals_rows is not None:
+        cross_reference_divergent_fallbacks(rows, alt_team_totals_rows)
+    return rows
+
+
+def is_qualifying_alt_team_total_fallback(row: dict[str, Any]) -> bool:
+    """Return True if row is an OVER alternate team total meeting hit-rate criteria."""
+    pos = str(row.get("position") or "").strip().upper()
+    if pos != "OVER":
+        return False
+    mt = str(row.get("market_type") or "TEAM_PROP").strip().upper()
+    if mt and mt in ("GAMELINE", "PLAYER_PROP", "GAME_PROP"):
+        return False
+    l10 = row.get("l10_pct")
+    if l10 is None:
+        return False
+    try:
+        if float(l10) < 75.0:
+            return False
+    except (ValueError, TypeError):
+        return False
+    l5 = row.get("l5_pct")
+    if l5 not in (None, ""):
+        try:
+            if float(l5) < 80.0:
+                return False
+        except (ValueError, TypeError):
+            pass
+    return True
+
+
+def cross_reference_divergent_fallbacks(
+    totals_rows: list[dict[str, Any]],
+    alt_team_totals_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Cross-reference divergent game totals with qualifying alternate team totals.
+
+    Populates divergence_fallback_* fields on totals_rows in place and returns
+    structured fallback records conforming to DIVERGENT_TOTALS_FALLBACKS_HEADER.
+    """
+    qualifying = [r for r in alt_team_totals_rows if is_qualifying_alt_team_total_fallback(r)]
+
+    by_event: dict[str, list[dict[str, Any]]] = {}
+    by_matchup: dict[str, list[dict[str, Any]]] = {}
+    for r in qualifying:
+        eid = str(r.get("event_id") or "").strip()
+        if eid:
+            by_event.setdefault(eid, []).append(r)
+        mu = str(r.get("matchup") or "").strip()
+        if mu:
+            by_matchup.setdefault(mu, []).append(r)
+
+    fallbacks: list[dict[str, Any]] = []
+
+    for row in totals_rows:
+        flags = str(row.get("quality_flags") or "")
+        is_divergent = "totals_model_divergence" in flags or "FAIR_TOTAL_DIVERGENCE" in flags
+
+        eid = str(row.get("event_id") or "").strip()
+        mu = str(row.get("matchup") or "").strip()
+
+        matched: list[dict[str, Any]] = []
+        if is_divergent:
+            if eid and eid in by_event:
+                matched = by_event[eid]
+            elif mu and mu in by_matchup:
+                matched = by_matchup[mu]
+
+        if is_divergent and matched:
+            row["divergence_fallback_available"] = "true"
+            row["divergence_fallback_count"] = str(len(matched))
+
+            # Pick best line: prefer is_best_line == 'true', then first
+            best = next(
+                (m for m in matched if str(m.get("is_best_line") or "").strip().lower() == "true"),
+                matched[0],
+            )
+            bk = best.get("best_book") or best.get("book") or ""
+            pr = best.get("best_price") or best.get("price") or ""
+            sel = best.get("selection") or ""
+            best_desc = f"{sel} ({pr} {bk})" if bk else f"{sel} ({pr})"
+            row["divergence_fallback_best"] = best_desc
+
+            mkt_strs = []
+            for m in matched:
+                m_sel = m.get("selection") or ""
+                m_pr = m.get("best_price") or m.get("price") or ""
+                mkt_strs.append(f"{m_sel} ({m_pr})")
+            row["divergence_fallback_markets"] = "; ".join(mkt_strs)
+
+            for m in matched:
+                fb_record = {
+                    "event_id": row.get("event_id") or m.get("event_id") or "",
+                    "matchup": row.get("matchup") or m.get("matchup") or "",
+                    "game_total_selection": row.get("selection") or "",
+                    "divergence_flags": flags,
+                    "team": m.get("team") or "",
+                    "selection": m.get("selection") or "",
+                    "line": str(m.get("line") or ""),
+                    "price": str(m.get("best_price") or m.get("price") or ""),
+                    "book": str(m.get("best_book") or m.get("book") or ""),
+                    "l5_pct": str(m.get("l5_pct") or "") if m.get("l5_pct") is not None else "",
+                    "l10_pct": str(m.get("l10_pct") or "") if m.get("l10_pct") is not None else "",
+                    "parlay_rule": "cross_game_only",
+                }
+                fallbacks.append(fb_record)
+        else:
+            row["divergence_fallback_available"] = "false"
+            row["divergence_fallback_count"] = "0"
+            row["divergence_fallback_best"] = ""
+            row["divergence_fallback_markets"] = ""
+
+    return fallbacks
 
 
 def build_team_totals(

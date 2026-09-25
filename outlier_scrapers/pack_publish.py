@@ -71,6 +71,7 @@ DERIVED_PACK_OUTPUTS = (
     "wnba_alt_spreads.csv",
     "ultimate_alt.csv",
     "ultimate_alt_parlays.csv",
+    "divergent_totals_fallbacks.csv",
 )
 
 
@@ -261,8 +262,10 @@ def write_pack(
             opportunity_rows = backfill_totals_probabilities(opportunity_rows, games_norm_by_league)
 
     from outlier_scrapers.game_totals import (
+        DIVERGENT_TOTALS_FALLBACKS_HEADER,
         GAME_TOTALS_HEADER,
         build_game_totals,
+        cross_reference_divergent_fallbacks,
         TEAM_TOTALS_HEADER,
         build_team_totals,
     )
@@ -702,7 +705,17 @@ def write_pack(
     sections_dir = out_dir / "sections"
     sections_dir.mkdir(exist_ok=True)
 
+    all_alt_totals: list[dict[str, Any]] = list(alt_tt_rows)
+    for _lg_rows in bankroll_rows_by_league.values():
+        all_alt_totals.extend(_lg_rows)
+    divergent_fallbacks = cross_reference_divergent_fallbacks(totals_rows, all_alt_totals)
+
     _write_csv(out_dir / "game_totals.csv", GAME_TOTALS_HEADER, totals_rows)
+    _write_csv(
+        out_dir / "divergent_totals_fallbacks.csv",
+        DIVERGENT_TOTALS_FALLBACKS_HEADER,
+        divergent_fallbacks,
+    )
     safe_write_text(sections_dir / "game_totals.md", _format_game_totals_md(totals_rows))
 
     _write_csv(out_dir / "team_totals.csv", TEAM_TOTALS_HEADER, team_totals_rows)

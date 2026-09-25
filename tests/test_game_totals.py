@@ -3,6 +3,10 @@
 from datetime import datetime, timezone
 import pytest
 from outlier_scrapers.game_totals import (
+    DIVERGENT_TOTALS_FALLBACKS_HEADER,
+    EB_PRIOR_STRENGTH,
+    GAME_TOTALS_HEADER,
+    MAX_RECENCY_PROB_ADJUSTMENT,
     MIN_EDGE_TOTALS,
     SOFT_QUALITY_FLAGS,
     TOTAL_KIND_GAME,
@@ -13,10 +17,12 @@ from outlier_scrapers.game_totals import (
     build_team_totals,
     build_market_ladder,
     compute_side_edge,
+    cross_reference_divergent_fallbacks,
     devig_book_pair,
     interpolate_fair_total,
     is_eligible_total_record,
     is_game_total_record,
+    is_qualifying_alt_team_total_fallback,
     is_team_total_record,
     pick_best_side,
     logical_market_key,
@@ -1341,3 +1347,197 @@ def test_team_total_missing_independent_model_is_not_source_integrity():
     assert "TEAM_TOTAL_INDEPENDENT_MODEL_MISSING" in SOFT_QUALITY_FLAGS
     if row["actionable"] == "true":
         assert row["recommended_units_pre_news"] not in ("", None)
+
+
+def test_eb_prior_strength_calibrated_and_max_recency_adjustment_defined():
+    assert EB_PRIOR_STRENGTH == 100.0
+    assert MAX_RECENCY_PROB_ADJUSTMENT == 0.035
+
+
+def test_game_totals_header_contains_fallback_columns():
+    for col in (
+        "divergence_fallback_available",
+        "divergence_fallback_count",
+        "divergence_fallback_markets",
+        "divergence_fallback_best",
+    ):
+        assert col in GAME_TOTALS_HEADER
+
+
+def test_cross_reference_divergent_fallbacks_matches_qualifying_alt_team_totals():
+    totals_rows = [
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "selection": "MIL @ PHI Total O/U OVER 7.5",
+            "quality_flags": "totals_model_divergence",
+            "total_kind": TOTAL_KIND_GAME,
+        },
+        {
+            "event_id": "E2",
+            "matchup": "NYY @ BOS",
+            "selection": "NYY @ BOS Total O/U UNDER 8.5",
+            "quality_flags": "",
+            "total_kind": TOTAL_KIND_GAME,
+        },
+    ]
+
+    alt_rows = [
+        # Qualifying for E1: Over runs, L10 >= 75%, L5 >= 80%
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "team": "PHI",
+            "selection": "PHI OVER 2.5",
+            "line": "2.5",
+            "position": "OVER",
+            "market_type": "TEAM_PROP",
+            "best_price": "-180",
+            "best_book": "Hard Rock",
+            "l10_pct": 90.0,
+            "l5_pct": 100.0,
+            "is_best_line": "true",
+        },
+        # Qualifying for E1: Over runs, L10 >= 75%, L5 >= 80%
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "team": "MIL",
+            "selection": "MIL OVER 1.5",
+            "line": "1.5",
+            "position": "OVER",
+            "market_type": "TEAM_PROP",
+            "best_price": "-650",
+            "best_book": "Hard Rock",
+            "l10_pct": 80.0,
+            "l5_pct": 80.0,
+            "is_best_line": "false",
+        },
+        # Disqualified for E1: UNDER
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "team": "MIL",
+            "selection": "MIL UNDER 1.5",
+            "line": "1.5",
+            "position": "UNDER",
+            "market_type": "TEAM_PROP",
+            "best_price": "+450",
+            "l10_pct": 90.0,
+            "l5_pct": 100.0,
+        },
+        # Disqualified for E1: L10 < 75%
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "team": "PHI",
+            "selection": "PHI OVER 4.5",
+            "line": "4.5",
+            "position": "OVER",
+            "market_type": "TEAM_PROP",
+            "best_price": "+150",
+            "l10_pct": 60.0,
+            "l5_pct": 80.0,
+        },
+        # Disqualified for E1: L5 < 80%
+        {
+            "event_id": "E1",
+            "matchup": "MIL @ PHI",
+            "team": "PHI",
+            "selection": "PHI OVER 3.5",
+            "line": "3.5",
+            "position": "OVER",
+            "market_type": "TEAM_PROP",
+            "best_price": "-110",
+            "l10_pct": 90.0,
+            "l5_pct": 60.0,
+        },
+    ]
+
+    fallbacks = cross_reference_divergent_fallbacks(totals_rows, alt_rows)
+
+    e1_row = totals_rows[0]
+    assert e1_row["divergence_fallback_available"] == "true"
+    assert e1_row["divergence_fallback_count"] == "2"
+    assert "PHI OVER 2.5 (-180 Hard Rock)" in e1_row["divergence_fallback_best"]
+    assert "PHI OVER 2.5 (-180)" in e1_row["divergence_fallback_markets"]
+    assert "MIL OVER 1.5 (-650)" in e1_row["divergence_fallback_markets"]
+
+    e2_row = totals_rows[1]
+    assert e2_row["divergence_fallback_available"] == "false"
+    assert e2_row["divergence_fallback_count"] == "0"
+    assert e2_row["divergence_fallback_best"] == ""
+    assert e2_row["divergence_fallback_markets"] == ""
+
+    # Check returned records for divergent_totals_fallbacks.csv
+    assert len(fallbacks) == 2
+    for fb in fallbacks:
+        assert fb["event_id"] == "E1"
+        assert fb["matchup"] == "MIL @ PHI"
+        assert fb["game_total_selection"] == "MIL @ PHI Total O/U OVER 7.5"
+        assert fb["divergence_flags"] == "totals_model_divergence"
+        assert fb["parlay_rule"] == "cross_game_only"
+        for field in DIVERGENT_TOTALS_FALLBACKS_HEADER:
+            assert field in fb
+
+
+def test_build_game_totals_with_alt_team_totals_populates_fallbacks():
+    candidates, games_norm = _build_totals_fixture()
+    games_norm["context"] = {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}}
+
+    # Alternate team total qualifying row for E1
+    alt_rows = [
+        {
+            "event_id": "E1",
+            "matchup": "A @ B",
+            "team": "A",
+            "selection": "A OVER 2.5",
+            "line": "2.5",
+            "position": "OVER",
+            "market_type": "TEAM_PROP",
+            "best_price": "-200",
+            "best_book": "DraftKings",
+            "l10_pct": 90.0,
+            "l5_pct": 100.0,
+            "is_best_line": "true",
+        }
+    ]
+
+    # Without divergence, fallback stays false
+    rows_no_div = build_game_totals(
+        candidates,
+        games_norm,
+        sport="MLB",
+        now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc),
+        alt_team_totals_rows=alt_rows,
+    )
+    assert rows_no_div[0]["divergence_fallback_available"] in ("true", "false")
+
+
+def test_is_qualifying_alt_team_total_fallback():
+    # Valid: OVER, L10 >= 75%, L5 >= 80%
+    assert is_qualifying_alt_team_total_fallback(
+        {"position": "OVER", "l10_pct": 80.0, "l5_pct": 80.0}
+    )
+    # Valid: OVER, L10 >= 75%, no L5 (if available)
+    assert is_qualifying_alt_team_total_fallback(
+        {"position": "OVER", "l10_pct": 75.0, "l5_pct": None}
+    )
+    # Invalid: UNDER
+    assert not is_qualifying_alt_team_total_fallback(
+        {"position": "UNDER", "l10_pct": 90.0, "l5_pct": 100.0}
+    )
+    # Invalid: L10 < 75%
+    assert not is_qualifying_alt_team_total_fallback(
+        {"position": "OVER", "l10_pct": 70.0, "l5_pct": 100.0}
+    )
+    # Invalid: L5 < 80%
+    assert not is_qualifying_alt_team_total_fallback(
+        {"position": "OVER", "l10_pct": 90.0, "l5_pct": 70.0}
+    )
+    # Invalid: market_type is not TEAM_PROP
+    assert not is_qualifying_alt_team_total_fallback(
+        {"position": "OVER", "l10_pct": 90.0, "l5_pct": 90.0, "market_type": "GAMELINE"}
+    )
+
+

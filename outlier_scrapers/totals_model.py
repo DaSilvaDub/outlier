@@ -23,6 +23,7 @@ from typing import Any
 
 from outlier_scrapers.game_totals import (
     BASE_INDEPENDENT_WEIGHT,
+    MAX_RECENCY_PROB_ADJUSTMENT,
     TOTALS_MODEL_DIVERGENCE_THRESHOLD,
     _l10_over_for_record,
     _to_float,
@@ -41,6 +42,7 @@ from outlier_scrapers.team_totals import team_total_propositions
 
 __all__ = [
     "BASE_INDEPENDENT_WEIGHT",
+    "MAX_RECENCY_PROB_ADJUSTMENT",
     "SOURCE_BLEND",
     "SOURCE_DEVIG",
     "backfill_totals_probabilities",

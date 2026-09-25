@@ -17,7 +17,7 @@ from outlier_scrapers.totals_model import (
     blend_over_probability,
     build_totals_prob_index,
 )
-from outlier_scrapers.game_totals import EB_PRIOR_STRENGTH
+from outlier_scrapers.game_totals import EB_PRIOR_STRENGTH, MAX_RECENCY_PROB_ADJUSTMENT
 
 
 def _rec(
@@ -281,11 +281,25 @@ def test_index_team_total_never_carries_game_total_diagnostic():
 
 
 def test_blend_full_sample_uses_eb_shrinkage():
-    # EB: p_hat = (k + alpha * p_mkt) / (n + alpha) = (10 + 20*0.5) / (10 + 20) = 20/30
-    blended, used = blend_over_probability(0.5, {"hits": 10, "total": 10, "pct": 1.0})
+    # EB: p_hat = (k + alpha * p_mkt) / (n + alpha) = (10 + alpha*0.5) / (10 + alpha)
+    blended, used = blend_over_probability(
+        0.5, {"hits": 10, "total": 10, "pct": 1.0}, max_adjustment=None
+    )
     assert used is True
     alpha = EB_PRIOR_STRENGTH
     assert blended == pytest.approx((10 + alpha * 0.5) / (10 + alpha))
+
+
+def test_blend_caps_extreme_positive_recency():
+    blended, used = blend_over_probability(0.5, {"hits": 10, "total": 10, "pct": 1.0})
+    assert used is True
+    assert blended == pytest.approx(0.5 + MAX_RECENCY_PROB_ADJUSTMENT)
+
+
+def test_blend_caps_extreme_negative_recency():
+    blended, used = blend_over_probability(0.5, {"hits": 0, "total": 10, "pct": 0.0})
+    assert used is True
+    assert blended == pytest.approx(0.5 - MAX_RECENCY_PROB_ADJUSTMENT)
 
 
 def test_blend_short_sample_shrinks_toward_market():

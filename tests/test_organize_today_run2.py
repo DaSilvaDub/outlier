@@ -371,3 +371,115 @@ def test_a_copy_that_dies_partway_does_not_truncate_the_previous_export(
     # The staging file must not be left sitting in the export folder either.
     assert [p.name for p in dst.parent.iterdir()] == ["briefing.md"]
     assert "WARNING" in capsys.readouterr().err
+
+
+def test_generate_playable_props_renders_divergence_fallbacks_from_csv(tmp_path: Path):
+    pack = tmp_path / "packs" / "2026-09-24"
+    pack.mkdir(parents=True)
+    fallbacks_csv = pack / "divergent_totals_fallbacks.csv"
+    with open(fallbacks_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "event_id",
+                "matchup",
+                "game_total_selection",
+                "divergence_flags",
+                "team",
+                "selection",
+                "line",
+                "price",
+                "book",
+                "l5_pct",
+                "l10_pct",
+                "parlay_rule",
+            ],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "event_id": "E1",
+                "matchup": "MIL @ PHI",
+                "game_total_selection": "MIL @ PHI Total O/U OVER 7.5",
+                "divergence_flags": "totals_model_divergence",
+                "team": "PHI",
+                "selection": "PHI OVER 2.5",
+                "line": "2.5",
+                "price": "-180",
+                "book": "Hard Rock",
+                "l5_pct": "100.0",
+                "l10_pct": "90.0",
+                "parlay_rule": "cross_game_only",
+            }
+        )
+
+    out = tmp_path / "extra_packs"
+    md_file = org.generate_playable_props(pack, out)
+    assert md_file.exists()
+    assert (out / "playable_props.md").exists()
+    content = md_file.read_text(encoding="utf-8")
+    assert "## 4. Divergence Fallbacks (High-Probability Alternate Team Totals)" in content
+    assert "cross-game" in content.lower()
+    assert "MIL @ PHI" in content
+    assert "totals_model_divergence" in content
+    assert "PHI OVER 2.5" in content
+    assert "`-180` (Hard Rock)" in content
+    assert "100.0%" in content
+    assert "90.0%" in content
+
+
+def test_generate_playable_props_renders_fallbacks_from_game_totals_when_no_csv(tmp_path: Path):
+    pack = tmp_path / "packs" / "2026-09-24"
+    pack.mkdir(parents=True)
+    gt_csv = pack / "game_totals.csv"
+    with open(gt_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "selection",
+                "quality_flags",
+                "divergence_fallback_available",
+                "divergence_fallback_best",
+                "divergence_fallback_markets",
+            ],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "selection": "CIN @ ATL Total O/U UNDER 7.5",
+                "quality_flags": "totals_model_divergence",
+                "divergence_fallback_available": "true",
+                "divergence_fallback_best": "ATL OVER 2.5 (-360 Hard Rock)",
+                "divergence_fallback_markets": "ATL OVER 2.5 (-360)",
+            }
+        )
+
+    out = tmp_path / "extra_packs"
+    md_file = org.generate_playable_props(pack, out)
+    content = md_file.read_text(encoding="utf-8")
+    assert "ATL OVER 2.5 (-360 Hard Rock)" in content
+
+
+def test_generate_playable_props_empty_disclaimer_when_no_fallbacks(tmp_path: Path):
+    pack = tmp_path / "packs" / "2026-09-24"
+    pack.mkdir(parents=True)
+    gt_csv = pack / "game_totals.csv"
+    with open(gt_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=["selection", "quality_flags", "divergence_fallback_available"],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "selection": "BOS @ NYY Total O/U OVER 8.5",
+                "quality_flags": "",
+                "divergence_fallback_available": "false",
+            }
+        )
+
+    out = tmp_path / "extra_packs"
+    md_file = org.generate_playable_props(pack, out)
+    content = md_file.read_text(encoding="utf-8")
+    assert "*No qualifying alternate team total fallbacks identified for current slate.*" in content
+
