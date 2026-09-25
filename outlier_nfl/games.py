@@ -158,6 +158,47 @@ def american_to_implied_probability(odds: int | float | str | None) -> float | N
     return round(p, 3)
 
 
+def resolve_outcome_team(
+    market: dict[str, Any],
+    outcome: dict[str, Any],
+    team_index: dict[str, str],
+    home_code: str,
+    home_name: str,
+    away_code: str,
+    away_name: str,
+) -> str | None:
+    """Team a market/outcome pair is attributed to, or None when it names no team.
+
+    Team totals carry attribution (an outcome or market ``teamId``, or a label
+    that names the team); game totals never do. That is what separates the two
+    when a proposition token is ambiguous.
+    """
+    outcome_team_id = outcome.get("teamId") or outcome.get("team")
+    if outcome_team_id:
+        resolved = team_index.get(str(outcome_team_id)) or normalize_team(outcome_team_id)
+        if resolved:
+            return resolved
+
+    market_team_id = market.get("teamId")
+    if market_team_id:
+        resolved = team_index.get(str(market_team_id)) or normalize_team(market_team_id)
+        if resolved:
+            return resolved
+
+    # Infer team from market label e.g. "Kansas City Chiefs - Total Points"
+    label = str(market.get("label") or "").lower()
+    if not label:
+        return None
+    if home_name and home_name.lower() in label:
+        return home_code
+    if away_name and away_name.lower() in label:
+        return away_code
+    for code, info in NFL_TEAMS.items():
+        if info.name.lower() in label or info.nickname.lower() in label:
+            return code
+    return None
+
+
 def extract_game_lines(
     event: dict[str, Any],
     event_markets_payload: dict[str, Any] | list[Any],
@@ -302,8 +343,26 @@ def extract_game_lines(
             # -------------------------------------------------------------
             # 2. Game Total
             # -------------------------------------------------------------
-            elif is_game_total(raw_prop) or (
-                raw_market_type == MARKET_TYPE_GAMELINE and normalize_market(raw_prop) == PROP_TOTAL
+            # ``TOTAL`` and ``TOTALPOINTS`` belong to both
+            # GAME_TOTAL_PROPOSITIONS and TEAM_TOTAL_PROPOSITIONS, so a team
+            # total spelled "Total" / "Total Points" satisfies is_game_total()
+            # and would be claimed here -- published as a GAMELINE total with
+            # team=None and indistinguishable from the real game total. Decline
+            # it only when the market is BOTH typed TEAM_PROP by the feed AND
+            # attributed to a team: a game total a provider has mislabelled
+            # TEAM_PROP names no team, and must still be emitted as a game
+            # total rather than disappear into the team-total branch.
+            elif not (
+                raw_market_type == MARKET_TYPE_TEAM_PROP
+                and resolve_outcome_team(
+                    market, outcome, team_index, home_code, home_name, away_code, away_name
+                )
+            ) and (
+                is_game_total(raw_prop)
+                or (
+                    raw_market_type == MARKET_TYPE_GAMELINE
+                    and normalize_market(raw_prop) == PROP_TOTAL
+                )
             ):
                 pos = "OVER" if "OVER" in raw_pos else ("UNDER" if "UNDER" in raw_pos else raw_pos)
                 sel = f"Over {line_float}" if pos == "OVER" else (f"Under {line_float}" if pos == "UNDER" else f"{pos} {line_float}")
@@ -339,28 +398,9 @@ def extract_game_lines(
                 pos = "OVER" if "OVER" in raw_pos else ("UNDER" if "UNDER" in raw_pos else raw_pos)
 
                 # Attribute team
-                outcome_team_id = outcome.get("teamId") or outcome.get("team")
-                team_resolved: str | None = None
-                if outcome_team_id:
-                    team_resolved = team_index.get(str(outcome_team_id)) or normalize_team(outcome_team_id)
-
-                if not team_resolved:
-                    market_team_id = market.get("teamId")
-                    if market_team_id:
-                        team_resolved = team_index.get(str(market_team_id)) or normalize_team(market_team_id)
-
-                if not team_resolved:
-                    # Infer team from market label e.g. "Kansas City Chiefs - Total Points"
-                    label = str(market.get("label") or "")
-                    if home_name and home_name.lower() in label.lower():
-                        team_resolved = home_code
-                    elif away_name and away_name.lower() in label.lower():
-                        team_resolved = away_code
-                    else:
-                        for code, info in NFL_TEAMS.items():
-                            if info.name.lower() in label.lower() or info.nickname.lower() in label.lower():
-                                team_resolved = code
-                                break
+                team_resolved = resolve_outcome_team(
+                    market, outcome, team_index, home_code, home_name, away_code, away_name
+                )
 
                 team_display = get_team_display_name(team_resolved) if team_resolved else "Team"
                 sel = f"{team_display} {pos.capitalize()} {line_float}"

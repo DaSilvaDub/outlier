@@ -47,6 +47,22 @@ All under `data/NFL/normalized/`:
 - `reports/NFL/` game scripts are ready for manual review / Desk2 prompt routing
 - External metrics (`pbp`, `schedule`) are currently stubs — wire up real providers when available
 
+## Daily Debug Review: NFL Team Totals Misclassified as Game Totals (Claude) - 2026-09-23
+1. **Last Commit SHA**: rebased onto master after #182; branch `claude/inspiring-fermat-bzoq3i` (PR #185: https://github.com/DaSilvaDub/outlier/pull/185).
+2. **Files Touched (still distinct after #182)**:
+   - `outlier_nfl/games.py`: `extract_game_lines()` tests the game-total branch before the team-total branch, and `"TOTAL"`/`"TOTALPOINTS"` belong to both `GAME_TOTAL_PROPOSITIONS` and `TEAM_TOTAL_PROPOSITIONS`. A market the feed explicitly typed `TEAM_PROP` whose proposition read "Total" / "Total Points" / "TOTALPOINTS" satisfied `is_game_total()` and was emitted as a GAMELINE TOTAL with `team=None` -- one team's total published beside the real game total. The branch now declines markets typed `TEAM_PROP` so they fall through to the team-total branch.
+   - `outlier_nfl/games.py` (follow-up): guard requires BOTH `TEAM_PROP` type AND a resolved team via `resolve_outcome_team()`, so a game total a provider mislabels `TEAM_PROP` (no team attribution) stays a game total instead of vanishing. Branch 3's resolution is extracted and reused so the guard and the branch cannot disagree.
+   - `tests/test_nfl_normalizer.py`: regression coverage for colliding feed spellings plus `test_game_total_mislabelled_team_prop_is_still_a_game_total`.
+3. **Superseded by #182 (dropped on rebase)**:
+   - `outlier_nfl/matchup.py` / `tests/test_nfl_matchup.py` changes that filtered team totals via `PROP_TEAM_TOTAL_POINTS` on canonical `market`. Master already reads team totals through `is_team_total(proposition)` (#182), which is the wider canonical predicate; keeping both would duplicate and risk divergence.
+   - #182's version is not merely equivalent, it is **strictly better**, and dropping mine avoided a regression: `games.py` branch 3 stamps `market=PROP_TEAM_TOTAL_POINTS` (`"POINTS"`) on *every* `TEAM_PROP` line regardless of what the market is, a team **touchdown** total included. A `market`-based filter would therefore read a 3.5 touchdown line as a projected score; `is_team_total(proposition)` rejects it. Confirmed on the rebased branch (touchdown total -> projection stays at the 24.0 default).
+   - #182 also caught a **third** instance of the same raw-`proposition` defect, in `outlier_nfl/calibration.py::extract_game_script_context()`, which this review missed. There `home_tt` fell back to 27.0, below the 28.0 deficit-risk threshold, so `DEFICIT_VOLUME_RISK` and its road-underdog RB haircut were silently dead on any affected feed.
+4. **Verification** (post-rebase, on head `88179d3`): `pytest tests/test_nfl_*.py` 287 passed / 2 skipped; `ruff check` clean; `mypy outlier_nfl` no issues in 18 source files; all 4 hosted CI checks green (core, provider, typecheck, Codacy) with `mergeable_state: clean`. Composition verified end-to-end through `normalize_game_markets` -> `build_matchup_script`: this branch's classification feeding master's `is_team_total` reader yields the real market numbers on all six feed spellings, and a team touchdown total is still correctly refused.
+5. **Next Steps**:
+   - Review and merge PR #185 once rebase checks are green.
+   - Open, not fixed: repo-wide `ruff check` F401 unused imports; `--window` runs clobber `*_latest.json`; `matches_kickoff_window()` returns True for unrecognized tokens.
+   - **New, flagged not fixed (schema decision, not a bug fix):** `games.py` branch 3 stamps `market=PROP_TEAM_TOTAL_POINTS` on any `TEAM_PROP` market, so a team touchdown/other non-points team prop is published carrying `market="POINTS"`. Nothing is broken today because the readers filter on `proposition` after #182, but it is a live trap for any future code that filters team props on `market`. Closing it properly needs real canonical codes for non-points team props.
+
 ## Daily Debug Review: Matchup Team-Total Reader (Claude) - 2026-09-21
 1. **Last Commit SHA**: `a38d4b3` on branch `claude/inspiring-fermat-xdn5p3` (PR #182: https://github.com/DaSilvaDub/outlier/pull/182).
 2. **Files Touched**:

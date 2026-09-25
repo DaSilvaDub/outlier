@@ -386,3 +386,78 @@ def test_normalize_game_markets_still_drops_another_events_markets(
     }
 
     assert normalize_game_markets(event, foreign, team_index) == []
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+@pytest.mark.parametrize(
+    "proposition",
+    ["POINTS", "Total Points", "TOTALPOINTS", "total_points", "TOTAL", "TEAM_TOTAL_POINTS"],
+)
+def test_team_prop_market_type_is_never_claimed_by_the_game_total_branch(
+    schedule_payload, event_markets_payload, proposition
+):
+    """A TEAM_PROP market stays a team total however the feed spells it.
+
+    ``TOTAL`` and ``TOTALPOINTS`` sit in both GAME_TOTAL_PROPOSITIONS and
+    TEAM_TOTAL_PROPOSITIONS, so a team total propositioned "Total Points"
+    satisfied is_game_total() and was emitted as a GAMELINE total with
+    team=None -- one team's 25.5 landing in the games feed beside the real
+    47.5 game total and indistinguishable from it.
+    """
+    team_index = build_team_index(schedule_payload)
+    event = schedule_payload["events"][0]  # KC @ BAL
+
+    payload = copy.deepcopy(event_markets_payload)
+    for market in payload["markets"]:
+        if (market.get("marketType") or market.get("market_type")) == "TEAM_PROP":
+            market["proposition"] = proposition
+
+    lines = normalize_game_markets(event, payload, team_index)
+
+    game_totals = [
+        line_item
+        for line_item in lines
+        if line_item.market_type == "GAMELINE" and line_item.market == "TOTAL"
+    ]
+    assert {line_item.line for line_item in game_totals} == {47.5}
+
+    team_totals = [line_item for line_item in lines if line_item.market_type == "TEAM_PROP"]
+    assert {line_item.market for line_item in team_totals} == {"POINTS"}
+    assert next(t for t in team_totals if t.team == "KC" and t.position == "OVER").line == 25.5
+    assert next(t for t in team_totals if t.team == "BAL" and t.position == "OVER").line == 22.5
+
+
+@pytest.mark.skipif(not HAS_NORMALIZER, reason="outlier_nfl.normalizer not yet implemented in M1")
+def test_game_total_mislabelled_team_prop_is_still_a_game_total(schedule_payload):
+    """The TEAM_PROP guard keys on team attribution, not on the label alone.
+
+    A genuine team total always names a team; a game total never does. Declining
+    the game-total branch for anything merely typed TEAM_PROP would make a
+    provider's mislabelled game total vanish into the team-total branch and be
+    published with team=None -- the mirror of the bug the guard exists to fix.
+    """
+    team_index = build_team_index(schedule_payload)
+    event = schedule_payload["events"][0]  # KC @ BAL
+
+    payload = {
+        "markets": [
+            {
+                "marketId": "mislabelled-total",
+                "marketType": "TEAM_PROP",  # provider error: no team is named anywhere
+                "proposition": "Total Points",
+                "label": "Total Points",
+                "outcomes": [
+                    {"outcomeId": "o1", "position": "OVER", "line": 47.5, "bestOdds": -110},
+                    {"outcomeId": "o2", "position": "UNDER", "line": 47.5, "bestOdds": -110},
+                ],
+            }
+        ]
+    }
+
+    lines = normalize_game_markets(event, payload, team_index)
+
+    assert len(lines) == 2
+    assert {line_item.market_type for line_item in lines} == {"GAMELINE"}
+    assert {line_item.market for line_item in lines} == {"TOTAL"}
+    assert {line_item.line for line_item in lines} == {47.5}
+    assert all(line_item.team is None for line_item in lines)
