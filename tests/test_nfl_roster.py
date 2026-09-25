@@ -316,6 +316,35 @@ def test_validate_analysis_text_catches_roster_hallucinations() -> None:
     assert errors_good == []
 
 
+def test_validate_analysis_text_does_not_flag_ordinary_english() -> None:
+    """The gate fails closed, so an English word read as a team code halts a valid report.
+
+    Every sentence below tripped it: "was" as WAS, "bears" as Bears, and the
+    substrings "Lions" in "Millions", "TEN" in "Often", "DEN" in "sudden".
+    """
+    clean_texts = [
+        "The plan was to feature Jahan Dotson in the slot on early downs.",
+        "It was clear that Carson Wentz would need play-action to move the ball.",
+        "The line bears the brunt when Keenan Allen runs option routes.",
+        "Millions of fantasy managers still start David Montgomery every week.",
+        "Often the Patriots move A.J. Brown into the slot.",
+        "A sudden change of pace is where Javonte Williams thrives.",
+    ]
+    for text in clean_texts:
+        assert validate_analysis_text_for_roster_errors(text) == [], text
+
+
+def test_validate_analysis_text_still_catches_capitalized_team_references() -> None:
+    """Tightening the bare-proximity pattern must not cost a real catch."""
+    assert validate_analysis_text_for_roster_errors("WAS receiver Jahan Dotson led the team.")
+    assert validate_analysis_text_for_roster_errors("Jahan Dotson (WAS) runs the slot.")
+    assert validate_analysis_text_for_roster_errors("The Lions back David Montgomery scores.")
+    assert validate_analysis_text_for_roster_errors("Seahawks receiver DK Metcalf is featured.")
+    # Explicit attribution stays case-insensitive.
+    assert validate_analysis_text_for_roster_errors("keenan allen on the bears leads the room.")
+    assert validate_analysis_text_for_roster_errors("A.J. Brown (phi) is their top target.")
+
+
 def test_unknown_team_starting_qb_raises() -> None:
     with pytest.raises(ValueError, match="Unknown or unverified"):
         get_starting_qb("FAKE_TEAM")

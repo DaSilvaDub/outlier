@@ -568,6 +568,34 @@ def get_team_depth_chart(team: str) -> dict[str, Any]:
     return dict(NFL_2026_FULL_DEPTH_CHARTS[t_clean])
 
 
+# Team tokens must stand alone. Without an edge guard "TEN" matched inside
+# "often", "DEN" inside "sudden" and "Lions" inside "Millions", and this gate
+# fails closed, so each of those halted a legitimate report.
+_EDGE_LEFT = r"(?<![0-9A-Za-z])"
+_EDGE_RIGHT = r"(?![0-9A-Za-z])"
+
+
+def _loose_token(token: str) -> str:
+    """Standalone, case-insensitive match for a literal token."""
+    return rf"{_EDGE_LEFT}(?i:{re.escape(token)}){_EDGE_RIGHT}"
+
+
+def _cased_team(token: str) -> str:
+    """Standalone match for a team token in its written or all-caps form.
+
+    Only the bare-proximity pattern uses this. That pattern fires on a team
+    token appearing anywhere ahead of the player in the same sentence, so
+    case-folding it turned ordinary English into a franchise: "was" (WAS),
+    "bears" (Bears), "rams" (Rams). A franchise reference is a proper noun and
+    is written "WAS" or "Washington", never "was", while the two explicit
+    attribution patterns below stay case-insensitive because "on the seahawks"
+    cannot be read as anything but a team.
+    """
+    forms = sorted({token, token.upper()}, key=len, reverse=True)
+    alternation = "|".join(re.escape(form) for form in forms)
+    return rf"{_EDGE_LEFT}(?:{alternation}){_EDGE_RIGHT}"
+
+
 def validate_analysis_text_for_roster_errors(text: str) -> list[str]:
     """Inspect qualitative text or generated reports for stale former-team affiliations.
 
@@ -582,19 +610,19 @@ def validate_analysis_text_for_roster_errors(text: str) -> list[str]:
         if p_name not in text_lower:
             continue
 
-        former_teams = [f.lower() for f in meta["former_teams"]]
+        name_pat = _loose_token(player)
 
         player_violation_found = False
         # Check if text associates player with former team
-        for former in former_teams:
+        for former in meta["former_teams"]:
             # Match patterns like "Walker (SEA)", "Walker of the Seahawks", "Rodgers on the Jets"
             patterns = [
-                rf"{p_name}[^.\n]*?(?:on|with|of|for)\s+(?:the\s+)?{former}",
-                rf"{former}[^.\n]*?{p_name}",
-                rf"{p_name}\s*\(\s*{former}\s*\)",
+                rf"{name_pat}[^.\n]*?(?i:on|with|of|for)\s+(?:(?i:the)\s+)?{_loose_token(former)}",
+                rf"{_cased_team(former)}[^.\n]*?{name_pat}",
+                rf"{name_pat}\s*\(\s*{_loose_token(former)}\s*\)",
             ]
             for pat in patterns:
-                if re.search(pat, text_lower):
+                if re.search(pat, text):
                     errors.append(
                         f"Roster Violation: {player} was attributed to former team '{former.upper()}'. "
                         f"Current verified 2026 team is {meta['current_team']} ({meta['role']})."
