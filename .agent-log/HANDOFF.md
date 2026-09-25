@@ -1,3 +1,23 @@
+## Totals Shrinkage Calibration, Alt Fallbacks & Slate Pre-Analysis (Gemini) - 2026-09-24
+1. **Last Commit SHA**: `be3ab1a` on branch `feat/totals-shrinkage-calibration` (PR #187: https://github.com/DaSilvaDub/outlier/pull/187)
+2. **Files Touched**:
+   - `docs/situational_divergence_pre_analysis_2026-09-23.md`: Authoritative pre-analysis situational breakdown for divergent totals on the active slate (MIL@PHI, SD@LAD, CIN@ATL, MIA@CHC, DAL@SEA) evaluating starting pitching, bullpen strain, weather, sharp money flow, and definite PASS / 0.5u verdicts.
+   - `outlier_scrapers/game_totals.py`: Calibrated `EB_PRIOR_STRENGTH = 100.0`, defined `MAX_RECENCY_PROB_ADJUSTMENT = 0.035`, added delta capping in `blend_over_probability`, added 4 fallback fields to `GAME_TOTALS_HEADER`, defined `DIVERGENT_TOTALS_FALLBACKS_HEADER`, implemented `is_qualifying_alt_team_total_fallback` and `cross_reference_divergent_fallbacks`, and updated `build_game_totals`.
+   - `outlier_scrapers/totals_model.py`: Imported and re-exported `MAX_RECENCY_PROB_ADJUSTMENT`.
+   - `outlier_scrapers/pack_publish.py`: Added `"divergent_totals_fallbacks.csv"` to `DERIVED_PACK_OUTPUTS`, cross-referenced divergent totals against all qualifying alternate team totals, and emitted `packs/<date>/divergent_totals_fallbacks.csv`.
+   - `scripts/organize_today_run2.py`: Added Section 4 (`Divergence Fallbacks (High-Probability Alternate Team Totals)`) rendering in `generate_playable_props`, and copied `divergent_totals_fallbacks.csv` to `extra_packs` and `totals_prompts`.
+   - `tests/test_game_totals.py`, `tests/test_totals_model.py`, `tests/test_organize_today_run2.py`: Comprehensive offline unit test coverage (97 passed tests).
+3. **Verification**:
+   - Mandatory STEP 0 `report-sync.ps1` completed with `REPORT STATUS: OK` (RUN-NONCE: `97409f697d1f4b13`).
+   - 97/97 tests passed offline in 7.22s (`pytest tests/test_game_totals.py tests/test_totals_model.py tests/test_organize_today_run2.py -v`).
+   - 41/41 dependent tests passed (`pytest tests/test_pack_publish.py tests/test_alt_team_totals.py tests/test_pack_integrity.py`).
+   - `ruff check` passed with zero errors across all touched files.
+   - PR #187 merged into `master` (`be3ab1a`).
+   - Independent Victory Audit confirmed: `VERDICT: VICTORY CONFIRMED`.
+   - House rules respected: paid AI reasoning models were kept strictly OFF.
+4. **Next Steps**:
+   - Ready for next scheduled daily pipeline run or feature increment.
+
 ## Daily Pipeline Execution (Local Profile, Reasoning Off) (Gemini) - 2026-09-23
 1. **Last Commit SHA**: `c05dfd9` (master)
 2. **Files Touched**:
