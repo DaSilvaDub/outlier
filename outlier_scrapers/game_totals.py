@@ -1015,8 +1015,17 @@ def build_game_totals(
 
 
 def is_qualifying_alt_team_total_fallback(row: dict[str, Any]) -> bool:
-    """Return True if row is an OVER alternate team total meeting hit-rate criteria."""
-    pos = str(row.get("position") or "").strip().upper()
+    """Return True if row is an OVER alternate team total meeting hit-rate criteria.
+
+    An absent ``position`` reads as OVER, the same default
+    ``ultimate_alt._base_row()`` applies to these rows and for the same reason:
+    ``alt_team_totals.build_alt_team_total_board()`` selects OVER lines only and
+    does not carry the side through onto the row it emits. Requiring the key
+    rejected every row that board produces -- the primary input to this
+    surface -- so no alt team total could ever back a divergent game total.
+    ``market_type`` is defaulted here for the same reason.
+    """
+    pos = str(row.get("position") or "OVER").strip().upper()
     if pos != "OVER":
         return False
     mt = str(row.get("market_type") or "TEAM_PROP").strip().upper()
@@ -1038,6 +1047,28 @@ def is_qualifying_alt_team_total_fallback(row: dict[str, Any]) -> bool:
         except (ValueError, TypeError):
             pass
     return True
+
+
+def _alt_fallback_selection(row: dict[str, Any]) -> str:
+    """Human-readable label for an alternate total row.
+
+    The alt team-total board and the alt bankroll board both omit ``selection``
+    -- only the alt spreads board carries one -- so reading the key alone left
+    the published fallback as a bare price in parentheses, naming neither team
+    nor line. Built the same way ``ultimate_alt._base_row()`` builds it, so the
+    two surfaces describe the same market identically.
+    """
+    existing = str(row.get("selection") or "").strip()
+    if existing:
+        return existing
+    team = str(row.get("team") or "").strip()
+    subject = team or str(row.get("matchup") or "").strip()
+    market_type = str(row.get("market_type") or "TEAM_PROP").strip().upper()
+    label = "Team Total" if market_type == "TEAM_PROP" and team else "Total O/U"
+    side = str(row.get("position") or "OVER").strip().upper()
+    line = row.get("line")
+    line_str = "" if line in (None, "") else str(line)
+    return " ".join(part for part in (subject, label, side, line_str) if part)
 
 
 def cross_reference_divergent_fallbacks(
@@ -1088,13 +1119,13 @@ def cross_reference_divergent_fallbacks(
             )
             bk = best.get("best_book") or best.get("book") or ""
             pr = best.get("best_price") or best.get("price") or ""
-            sel = best.get("selection") or ""
+            sel = _alt_fallback_selection(best)
             best_desc = f"{sel} ({pr} {bk})" if bk else f"{sel} ({pr})"
             row["divergence_fallback_best"] = best_desc
 
             mkt_strs = []
             for m in matched:
-                m_sel = m.get("selection") or ""
+                m_sel = _alt_fallback_selection(m)
                 m_pr = m.get("best_price") or m.get("price") or ""
                 mkt_strs.append(f"{m_sel} ({m_pr})")
             row["divergence_fallback_markets"] = "; ".join(mkt_strs)
@@ -1106,7 +1137,7 @@ def cross_reference_divergent_fallbacks(
                     "game_total_selection": row.get("selection") or "",
                     "divergence_flags": flags,
                     "team": m.get("team") or "",
-                    "selection": m.get("selection") or "",
+                    "selection": _alt_fallback_selection(m),
                     "line": str(m.get("line") or ""),
                     "price": str(m.get("best_price") or m.get("price") or ""),
                     "book": str(m.get("best_book") or m.get("book") or ""),
