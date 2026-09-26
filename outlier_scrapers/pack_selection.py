@@ -798,10 +798,6 @@ def _apply_quality_and_signal_flags(
         probable_pitchers,
         player_name=str(card.get("player") or ref.get("player") or row.get("player") or "") or None,
     )
-    if (
-        identity["has_player"] or market_type_upper == "PLAYER_PROP"
-    ) and _projection_side_conflicts(row, headline_side):
-        dq_flags.append("projection_side_conflict")
     if ev_probability_mismatch:
         dq_flags.append("ev_probability_mismatch")
     movement_now = _to_float((side_view.get("movement") or {}).get("current_line"))
@@ -1093,20 +1089,9 @@ def build_row(
 
     _apply_projection_fields(row, card, identity, projections_by_outcome, probable_pitchers)
 
-    # Upstream filter for projection_side_conflict
-    try:
-        proj_mean_str = row.get("projection_mean")
-        line_val_str = row.get("line")
-        if proj_mean_str not in (None, "") and line_val_str not in (None, ""):
-            proj_mean = float(proj_mean_str)
-            line_val = float(line_val_str)
-            side = str(identity.get("headline_side") or "").upper()
-            if side == "OVER" and proj_mean < line_val:
-                return None
-            elif side == "UNDER" and proj_mean > line_val:
-                return None
-    except (ValueError, TypeError):
-        pass
+    market_type_upper = str(row.get("market_type") or "").upper()
+    if (identity["has_player"] or market_type_upper == "PLAYER_PROP") and _projection_side_conflicts(row, identity["headline_side"]):
+        return None
 
     disqualifying, dq_flags = _apply_quality_and_signal_flags(
         row,
