@@ -864,11 +864,7 @@ def _apply_quality_and_signal_flags(
         else (
             card.get("l5_pct")
             if card.get("l5_pct") is not None
-            else (
-                row.get("l5_pct")
-                if row.get("l5_pct") is not None
-                else row.get("hit_l5")
-            )
+            else (row.get("l5_pct") if row.get("l5_pct") is not None else row.get("hit_l5"))
         )
     )
     l10_rate = (
@@ -877,11 +873,7 @@ def _apply_quality_and_signal_flags(
         else (
             card.get("l10_pct")
             if card.get("l10_pct") is not None
-            else (
-                row.get("l10_pct")
-                if row.get("l10_pct") is not None
-                else row.get("hit_l10")
-            )
+            else (row.get("l10_pct") if row.get("l10_pct") is not None else row.get("hit_l10"))
         )
     )
     if slate_quality.low_volume_3pt_shooter(row, dq_flags, l5_pct=l5_rate, l10_pct=l10_rate):
@@ -1090,7 +1082,12 @@ def build_row(
     _apply_projection_fields(row, card, identity, projections_by_outcome, probable_pitchers)
 
     market_type_upper = str(row.get("market_type") or "").upper()
-    if (identity["has_player"] or market_type_upper == "PLAYER_PROP") and _projection_side_conflicts(row, identity["headline_side"]):
+    projection_is_audit = "projection_audit" in str(row.get("projection_quality_flags") or "")
+    if (
+        not projection_is_audit
+        and (identity["has_player"] or market_type_upper == "PLAYER_PROP")
+        and _projection_side_conflicts(row, identity["headline_side"])
+    ):
         return None
 
     disqualifying, dq_flags = _apply_quality_and_signal_flags(
