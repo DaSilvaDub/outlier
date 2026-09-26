@@ -103,9 +103,10 @@ def test_settle_tier1_fixture_metrics():
     assert report.n_scored_prob == 6
     assert report.brier is not None and 0.0 < report.brier < 1.0
     assert report.logloss is not None and report.logloss > 0.0
-    assert report.clv["status"] == "blocked"
-    assert "clv" in report.blockers
-    assert "model_prob" in report.blockers
+    assert report.clv["status"] == "ok"
+    assert "clv" not in report.blockers
+    # model_p present on at least one fixture row → model_prob blocker cleared
+    assert "model_prob" not in report.blockers
 
     tier1 = report.by_tier["TIER_1_ANCHOR"]
     assert tier1["wins"] + tier1["losses"] == 5  # Jamo is TIER_2 in fixture
@@ -166,10 +167,104 @@ def test_cli_writes_json_and_markdown(tmp_path: Path, capsys):
     assert rc == 0
     payload = json.loads(out_json.read_text(encoding="utf-8"))
     assert payload["n_settled"] == 6
-    assert payload["clv"]["status"] == "blocked"
+    assert payload["clv"]["status"] == "ok"
     md = out_md.read_text(encoding="utf-8")
     assert "hit rate" in md.lower()
-    assert "blocked" in md.lower()
+    assert "clv" in md.lower()
     captured = capsys.readouterr().out
     assert "Shadow settle" in captured or "shadow settle" in captured.lower()
     assert render_markdown(settle_predictions([], [])).startswith("#")
+
+
+def test_clv_and_model_p_labels_when_fields_present():
+    predictions = load_prediction_snapshot(FIXTURES / "predictions_tier1.json", source="tier1")
+    assert any(p.close_implied is not None for p in predictions)
+    assert any(p.model_p is not None for p in predictions)
+    events = load_boxscores(FIXTURES / "boxscores_det_buf.json")
+    report = settle_predictions(predictions, events)
+    assert report.clv["status"] == "ok"
+    assert report.clv["n"] == 6
+    assert report.clv["mean_clv_implied_pts"] == pytest.approx(0.0)
+    assert "clv" not in report.blockers
+    assert report.n_scored_model >= 1
+    assert report.brier_model is not None
+    assert report.brier_label == "market_implied"
+    md = render_markdown(report)
+    assert "Brier (model_p)" in md
+    assert "mean_implied_pts" in md or "CLV: **ok**" in md
+
+
+def test_enrich_close_snapshot_best_is_honest(tmp_path: Path):
+    from outlier_nfl.enrich_close import enrich_prediction_payload, CLOSE_SOURCE_SNAPSHOT
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    # Strip close fields to simulate legacy artifact
+    for row in raw["records"]:
+        for key in ("close_line", "close_odds", "close_implied", "close_source", "model_p"):
+            row.pop(key, None)
+    enriched = enrich_prediction_payload(raw, mode="snapshot_best")
+    row0 = enriched["records"][0]
+    assert row0["close_source"] == CLOSE_SOURCE_SNAPSHOT
+    assert row0["close_odds"] == row0["best_odds"]
+    assert row0["close_line"] == row0["line"]
+
+
+def test_nflverse_week_row_maps_into_simplified_schema():
+    from outlier_nfl.boxscore_nflverse import _player_stats_from_week_row, events_to_simplified_payload
+    from outlier_nfl.boxscore import NflBoxScoreEvent
+    from datetime import date
+
+    stats = _player_stats_from_week_row(
+        {
+            "passing_yards": "250",
+            "rushing_yards": "20",
+            "receiving_yards": "0",
+            "receptions": "0",
+            "carries": "3",
+            "completions": "22",
+            "attempts": "30",
+            "passing_tds": "2",
+            "rushing_tds": "0",
+            "receiving_tds": "0",
+            "def_sacks": "0",
+            "def_tackles_solo": "0",
+            "def_tackle_assists": "0",
+            "fg_made": "",
+            "pat_made": "",
+            "special_teams_tds": "0",
+        }
+    )
+    assert stats["PASSING:YDS"] == 250.0
+    assert stats["RUSHING:YDS"] == 20.0
+    event = NflBoxScoreEvent(
+        provider_event_id="x",
+        event_date=date(2026, 9, 20),
+        away="CLE",
+        home="TB",
+        away_score=23,
+        home_score=19,
+        players={"DESHAUNWATSON": stats},
+    )
+    payload = events_to_simplified_payload([event])
+    assert payload["provider"] == "nflverse"
+    assert payload["events"][0]["away"] == "CLE"
+
+
+def test_clv_blocked_without_close_fields():
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    for row in raw["records"]:
+        for key in ("close_line", "close_odds", "close_implied", "close_source", "model_p", "p_model"):
+            row.pop(key, None)
+    tmp = FIXTURES / "_tmp_no_close.json"
+    try:
+        tmp.write_text(json.dumps(raw), encoding="utf-8")
+        predictions = load_prediction_snapshot(tmp, source="tier1")
+        events = load_boxscores(FIXTURES / "boxscores_det_buf.json")
+        report = settle_predictions(predictions, events)
+        assert report.clv["status"] == "blocked"
+        assert "clv" in report.blockers
+        assert "model_prob" in report.blockers
+        assert report.brier_model is None
+    finally:
+        if tmp.exists():
+            tmp.unlink()

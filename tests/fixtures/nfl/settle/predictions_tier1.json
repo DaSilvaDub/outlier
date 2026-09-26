@@ -35,7 +35,12 @@
       ],
       "calibrated_volume_adjustment": -0.15,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 87.5,
+      "close_odds": -111,
+      "close_implied": 52.61,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.5261
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -69,7 +74,11 @@
       ],
       "calibrated_volume_adjustment": 0.2,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 79.5,
+      "close_odds": -104,
+      "close_implied": 50.98,
+      "close_source": "pregame_snapshot_best_odds"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -101,7 +110,11 @@
       ],
       "calibrated_volume_adjustment": null,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 3.5,
+      "close_odds": -137,
+      "close_implied": 57.81,
+      "close_source": "pregame_snapshot_best_odds"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -134,7 +147,11 @@
       ],
       "calibrated_volume_adjustment": 0.1,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 78.5,
+      "close_odds": -106,
+      "close_implied": 51.46,
+      "close_source": "pregame_snapshot_best_odds"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -168,7 +185,11 @@
       ],
       "calibrated_volume_adjustment": -0.25,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 59.5,
+      "close_odds": -109,
+      "close_implied": 52.15,
+      "close_source": "pregame_snapshot_best_odds"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -200,7 +221,11 @@
       ],
       "calibrated_volume_adjustment": null,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "close_line": 249.5,
+      "close_odds": -107,
+      "close_implied": 51.69,
+      "close_source": "pregame_snapshot_best_odds"
     }
   ]
 }

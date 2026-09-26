@@ -5,9 +5,11 @@ joins them to box-score finals by team pair + slate date + player name, and emit
 an OOS scorecard. This is measurement only — no promotion gates.
 
 Honest gaps (marked in the report, never invented):
-- No model probability beyond book-implied odds → Brier/logloss use implied_prob.
-- No closing-line feed in outlier_nfl → CLV is reported as blocked.
-- Live ESPN may be unavailable; pass --boxscores fixture for offline settle.
+- Model Brier/logloss only when ``model_p`` / ``p_model`` is present; otherwise
+  book-implied metrics are labeled as market-only.
+- CLV only when ``close_line`` / ``close_odds`` / ``close_implied`` present;
+  ``best_odds`` alone is not treated as close.
+- Live ESPN may be unavailable; prefer ``--provider nflverse`` or ``--boxscores``.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from __future__ import annotations
 import argparse
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -37,18 +39,22 @@ PREDICTION_SOURCES = (
 )
 
 BLOCKERS = {
-    "clv": "No closing-line artifact in outlier_nfl prediction snapshots; CLV vs close is blocked.",
+    "clv": (
+        "No close_line/close_odds/close_implied on prediction snapshots; "
+        "best_odds alone is not treated as book close. Use enrich_close "
+        "(--mode snapshot_best) or a real close feed."
+    ),
     "model_prob": (
-        "No model probability field on NflPlayerProp; Brier/logloss use book "
-        "implied_probability (0-100 → 0-1) when present, else skipped."
+        "No model_p / p_model on snapshots; Brier/logloss below are book "
+        "implied_probability only (labeled market)."
     ),
     "live_espn": (
         "Live ESPN NFL scoreboard is optional and may return 403 from sandboxed "
-        "egress; prefer --boxscores fixtures for CI and reproducible OOS."
+        "egress; prefer --provider nflverse or --boxscores fixtures."
     ),
     "event_id_join": (
-        "Outlier event_id does not match ESPN provider ids; join is team-pair + "
-        "Eastern slate date + player name."
+        "Outlier event_id does not match ESPN/nflverse provider ids; join is "
+        "team-pair + Eastern slate date + player name."
     ),
 }
 
@@ -74,6 +80,11 @@ class PredictionSnap:
     calibration_tags: tuple[str, ...]
     best_odds: int | None
     window: str | None = None
+    close_line: float | None = None
+    close_odds: int | None = None
+    close_implied: float | None = None
+    close_source: str | None = None
+    model_p: float | None = None
 
     @property
     def team_codes(self) -> frozenset[str]:
@@ -92,9 +103,14 @@ class SettleRow:
     provider_event_id: str | None = None
     actual: float | None = None
     result: str | None = None  # W | L | P
-    prob: float | None = None  # 0-1 book-implied used for scoring
+    prob: float | None = None  # 0-1 book-implied used for market scoring
+    prob_source: str | None = None  # market | model | none
     brier: float | None = None
     logloss: float | None = None
+    model_prob: float | None = None
+    brier_model: float | None = None
+    logloss_model: float | None = None
+    clv_implied_pts: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -114,7 +130,12 @@ class SettleReport:
     hit_rate: float | None = None
     brier: float | None = None
     logloss: float | None = None
+    brier_label: str = "market_implied"
+    logloss_label: str = "market_implied"
     n_scored_prob: int = 0
+    brier_model: float | None = None
+    logloss_model: float | None = None
+    n_scored_model: int = 0
     clv: dict[str, Any] = field(default_factory=dict)
     blockers: dict[str, str] = field(default_factory=dict)
     skip_reasons: dict[str, int] = field(default_factory=dict)
@@ -132,11 +153,9 @@ def _team_code(value: Any) -> str | None:
     text = str(value).strip().upper()
     if not text:
         return None
-    # Prefer trailing token for "Detroit Lions" style; already-canonical codes pass through.
     compact = "".join(ch for ch in text if ch.isalnum())
     if len(compact) <= 4:
         return compact
-    # Matchup fragments like "DET" already handled; longer names need registry — use last word token.
     from outlier_nfl.config import normalize_team
 
     return normalize_team(text) or compact[:4]
@@ -152,6 +171,24 @@ def _slate_date_from_prediction(record: Mapping[str, Any], fallback_date: str | 
         if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
             return raw[:10]
     return fallback_date
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def load_prediction_snapshot(
@@ -191,7 +228,6 @@ def load_prediction_snapshot(
         if require_tier1_or_matchup and inferred == "calibrated" and not (is_tier1 or is_matchup):
             continue
         if inferred == "tier1" and not is_tier1 and require_tier1_or_matchup:
-            # high_prob artifact should already be filtered; keep rows anyway if present.
             pass
         line = raw.get("line")
         try:
@@ -204,17 +240,18 @@ def load_prediction_snapshot(
         if not player_name or not market or not position:
             continue
         ip = raw.get("implied_probability")
-        ip_f: float | None
-        try:
-            ip_f = float(ip) if ip is not None else None
-        except (TypeError, ValueError):
-            ip_f = None
+        ip_f = _optional_float(ip)
+        model_raw = raw.get("model_p")
+        if model_raw is None:
+            model_raw = raw.get("p_model")
         snaps.append(
             PredictionSnap(
                 source=inferred,
                 event_id=str(raw.get("event_id") or ""),
                 event_starts_at=str(raw["event_starts_at"]) if raw.get("event_starts_at") else None,
-                slate_date=_slate_date_from_prediction(raw, str(artifact_date) if artifact_date else None),
+                slate_date=_slate_date_from_prediction(
+                    raw, str(artifact_date) if artifact_date else None
+                ),
                 matchup=str(raw.get("matchup") or ""),
                 team=str(raw["team"]) if raw.get("team") else None,
                 opponent=str(raw["opponent"]) if raw.get("opponent") else None,
@@ -226,8 +263,13 @@ def load_prediction_snapshot(
                 implied_probability=ip_f,
                 confidence_tier=str(tier) if tier else None,
                 calibration_tags=tags,
-                best_odds=int(raw["best_odds"]) if raw.get("best_odds") is not None else None,
+                best_odds=_optional_int(raw.get("best_odds")),
                 window=str(window) if window else None,
+                close_line=_optional_float(raw.get("close_line")),
+                close_odds=_optional_int(raw.get("close_odds")),
+                close_implied=_optional_float(raw.get("close_implied")),
+                close_source=str(raw["close_source"]) if raw.get("close_source") else None,
+                model_p=_optional_float(model_raw),
             )
         )
     return snaps
@@ -261,16 +303,14 @@ def _match_event(
     return candidates[0], None
 
 
-def _prob_01(implied_probability: float | None) -> float | None:
-    if implied_probability is None:
+def _prob_01(raw: float | None) -> float | None:
+    if raw is None:
         return None
-    # Artifact stores percentage (e.g. 52.381); also accept already-normalized 0-1.
-    if 0.0 <= implied_probability <= 1.0:
-        p = implied_probability
+    if 0.0 <= raw <= 1.0:
+        p = raw
     else:
-        p = implied_probability / 100.0
+        p = raw / 100.0
     if p <= 0.0 or p >= 1.0:
-        # Degenerate probs blow up logloss; skip scoring rather than clamp.
         return None
     return p
 
@@ -282,7 +322,6 @@ def _brier(prob: float, won: bool) -> float:
 
 def _logloss(prob: float, won: bool) -> float:
     y = 1.0 if won else 0.0
-    # Clip only for numerical safety inside (0,1); caller already rejects endpoints.
     p = min(max(prob, 1e-15), 1.0 - 1e-15)
     return -(y * math.log(p) + (1.0 - y) * math.log(1.0 - p))
 
@@ -292,18 +331,41 @@ def settle_predictions(
     events: Sequence[NflBoxScoreEvent],
 ) -> SettleReport:
     """Join predictions to box scores and compute shadow OOS metrics."""
+    has_close = any(
+        p.close_implied is not None or p.close_odds is not None or p.close_line is not None
+        for p in predictions
+    )
+    has_model = any(p.model_p is not None for p in predictions)
+    blockers = dict(BLOCKERS)
+    if has_close:
+        blockers.pop("clv", None)
+    if has_model:
+        blockers.pop("model_prob", None)
+
     report = SettleReport(
         n_predictions=len(predictions),
-        blockers=dict(BLOCKERS),
+        blockers=blockers,
         clv={
-            "status": "blocked",
-            "reason": BLOCKERS["clv"],
+            "status": "ok" if has_close else "blocked",
+            "reason": None
+            if has_close
+            else BLOCKERS["clv"],
             "n": 0,
-            "mean_clv": None,
+            "mean_clv_implied_pts": None,
+            "note": (
+                "CLV implied pts = close_implied - bet implied_probability "
+                "(same percent units). Positive ⇒ close was a worse price than the bet. "
+                "Interpret close_source: pregame_snapshot_best_odds is NOT book close."
+            ),
         },
+        brier_label="market_implied",
+        logloss_label="market_implied",
     )
     briers: list[float] = []
     loglosses: list[float] = []
+    model_briers: list[float] = []
+    model_loglosses: list[float] = []
+    clv_vals: list[float] = []
     tier_buckets: dict[str, dict[str, int]] = {}
     source_buckets: dict[str, dict[str, int]] = {}
 
@@ -374,14 +436,27 @@ def settle_predictions(
             _bump(source_buckets, snap.source, "skipped")
             continue
 
-        prob = _prob_01(snap.implied_probability)
+        market_prob = _prob_01(snap.implied_probability)
+        model_prob = _prob_01(snap.model_p)
         brier = logloss = None
-        if result in {"W", "L"} and prob is not None:
+        brier_m = logloss_m = None
+        if result in {"W", "L"}:
             won = result == "W"
-            brier = _brier(prob, won)
-            logloss = _logloss(prob, won)
-            briers.append(brier)
-            loglosses.append(logloss)
+            if market_prob is not None:
+                brier = _brier(market_prob, won)
+                logloss = _logloss(market_prob, won)
+                briers.append(brier)
+                loglosses.append(logloss)
+            if model_prob is not None:
+                brier_m = _brier(model_prob, won)
+                logloss_m = _logloss(model_prob, won)
+                model_briers.append(brier_m)
+                model_loglosses.append(logloss_m)
+
+        clv_pts = None
+        if snap.close_implied is not None and snap.implied_probability is not None:
+            clv_pts = float(snap.close_implied) - float(snap.implied_probability)
+            clv_vals.append(clv_pts)
 
         row = SettleRow(
             prediction=snap,
@@ -389,9 +464,14 @@ def settle_predictions(
             provider_event_id=event.provider_event_id or None,
             actual=actual,
             result=result,
-            prob=prob,
+            prob=market_prob,
+            prob_source="market" if market_prob is not None else "none",
             brier=brier,
             logloss=logloss,
+            model_prob=model_prob,
+            brier_model=brier_m,
+            logloss_model=logloss_m,
+            clv_implied_pts=clv_pts,
         )
         rows.append(row)
         _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "n")
@@ -416,6 +496,27 @@ def settle_predictions(
     report.n_scored_prob = len(briers)
     report.brier = (sum(briers) / len(briers)) if briers else None
     report.logloss = (sum(loglosses) / len(loglosses)) if loglosses else None
+    report.n_scored_model = len(model_briers)
+    report.brier_model = (sum(model_briers) / len(model_briers)) if model_briers else None
+    report.logloss_model = (
+        (sum(model_loglosses) / len(model_loglosses)) if model_loglosses else None
+    )
+    if clv_vals:
+        report.clv["status"] = "ok"
+        report.clv["n"] = len(clv_vals)
+        report.clv["mean_clv_implied_pts"] = sum(clv_vals) / len(clv_vals)
+        sources = sorted(
+            {
+                p.close_source
+                for p in predictions
+                if p.close_source and (
+                    p.close_implied is not None
+                    or p.close_odds is not None
+                    or p.close_line is not None
+                )
+            }
+        )
+        report.clv["close_sources"] = sources
     report.by_tier = {
         key: {
             **vals,
@@ -444,6 +545,28 @@ def settle_predictions(
 
 def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -> str:
     """Render a short human-readable settle scorecard."""
+    clv_status = report.clv.get("status")
+    clv_mean = report.clv.get("mean_clv_implied_pts")
+    clv_line = f"- CLV: **{clv_status}**"
+    if clv_status == "ok":
+        clv_line += (
+            f" — n={report.clv.get('n')} mean_implied_pts={clv_mean} "
+            f"sources={report.clv.get('close_sources')}"
+        )
+    else:
+        clv_line += f" — {report.clv.get('reason')}"
+
+    model_brier = (
+        f"**{report.brier_model}** (n={report.n_scored_model})"
+        if report.brier_model is not None
+        else "n/a"
+    )
+    model_ll = (
+        f"**{report.logloss_model}** (n={report.n_scored_model})"
+        if report.logloss_model is not None
+        else "n/a"
+    )
+
     lines = [
         f"# {title}",
         "",
@@ -453,17 +576,22 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
         f"- settled: **{report.n_settled}** (W {report.n_wins} / L {report.n_losses} / P {report.n_pushes})",
         f"- skipped: **{report.n_skipped}**",
         f"- hit rate (W/(W+L)): **{report.hit_rate if report.hit_rate is not None else 'n/a'}**",
-        f"- Brier (book-implied): **{report.brier if report.brier is not None else 'n/a'}** "
+        f"- Brier ({report.brier_label}): **{report.brier if report.brier is not None else 'n/a'}** "
         f"(n={report.n_scored_prob})",
-        f"- logloss (book-implied): **{report.logloss if report.logloss is not None else 'n/a'}** "
+        f"- logloss ({report.logloss_label}): **{report.logloss if report.logloss is not None else 'n/a'}** "
         f"(n={report.n_scored_prob})",
-        f"- CLV: **{report.clv.get('status')}** — {report.clv.get('reason')}",
+        f"- Brier (model_p): {model_brier}",
+        f"- logloss (model_p): {model_ll}",
+        clv_line,
         "",
         "## Blockers",
         "",
     ]
-    for key, reason in report.blockers.items():
-        lines.append(f"- `{key}`: {reason}")
+    if report.blockers:
+        for key, reason in report.blockers.items():
+            lines.append(f"- `{key}`: {reason}")
+    else:
+        lines.append("- (none)")
     if report.skip_reasons:
         lines.extend(["", "## Skip reasons", ""])
         for reason, count in sorted(report.skip_reasons.items(), key=lambda kv: (-kv[1], kv[0])):
@@ -479,6 +607,32 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
     return "\n".join(lines)
 
 
+def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
+    if args.boxscores:
+        return load_boxscores(args.boxscores)
+    if args.provider == "nflverse":
+        from outlier_nfl.boxscore_nflverse import (
+            fetch_nflverse_boxscores_for_date,
+            load_nflverse_events,
+        )
+
+        if args.slate_date:
+            slate = date.fromisoformat(args.slate_date)
+            return fetch_nflverse_boxscores_for_date(
+                slate,
+                season=args.season or slate.year,
+                cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
+            )
+        if args.season is None or args.week is None:
+            raise SystemExit("nflverse provider requires --slate-date or --season and --week")
+        return load_nflverse_events(
+            season=args.season,
+            week=args.week,
+            cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
+        )
+    raise SystemExit("Provide --boxscores and/or --provider nflverse")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Shadow-settle NFL Tier-1 / matchup prediction snapshots against box scores."
@@ -492,8 +646,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--boxscores",
         type=Path,
-        required=True,
         help="Path to simplified box-score JSON (see docs/nfl/shadow-settle.md).",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=("nflverse",),
+        help="Optional live/offline-downloadable box provider (nflverse GitHub CSV).",
+    )
+    parser.add_argument("--slate-date", help="Eastern slate date YYYY-MM-DD for provider fetch.")
+    parser.add_argument("--season", type=int, help="NFL season year for nflverse week stats.")
+    parser.add_argument("--week", type=int, help="NFL week for nflverse week stats.")
+    parser.add_argument(
+        "--nflverse-cache",
+        type=Path,
+        help="Cache directory for nflverse CSV downloads (default ~/.cache/outlier_nflverse).",
     )
     parser.add_argument(
         "--source",
@@ -508,6 +674,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--out-json", type=Path, help="Write full settle report JSON.")
     parser.add_argument("--out-md", type=Path, help="Write markdown scorecard.")
+    parser.add_argument(
+        "--write-boxscores",
+        type=Path,
+        help="When using --provider, also write the simplified box-score bundle to this path.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     predictions = load_prediction_snapshot(
@@ -515,12 +686,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         source=args.source,
         require_tier1_or_matchup=not args.all_calibrated,
     )
-    events = load_boxscores(args.boxscores)
+    events = _load_events_from_args(args)
+    if args.write_boxscores and args.provider == "nflverse":
+        from outlier_nfl.boxscore_nflverse import events_to_simplified_payload
+
+        safe_write_json(args.write_boxscores, events_to_simplified_payload(events))
+
     report = settle_predictions(predictions, events)
     payload = report.to_dict()
-    payload["generated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    payload["generated_at"] = (
+        datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
     payload["predictions_path"] = str(args.predictions)
-    payload["boxscores_path"] = str(args.boxscores)
+    payload["boxscores_path"] = str(args.boxscores) if args.boxscores else None
+    payload["provider"] = args.provider
+    payload["slate_date"] = args.slate_date
+    payload["season"] = args.season
+    payload["week"] = args.week
 
     if args.out_json:
         safe_write_json(args.out_json, payload)

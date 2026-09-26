@@ -86,6 +86,13 @@ class NflPlayerProp:
     confidence_tier: str | None = None
     calibration_tags: tuple[str, ...] | list[str] = ()
     calibrated_volume_adjustment: float | None = None
+    # Optional pregame / book close (never invent). best_odds is NOT close.
+    close_line: float | None = None
+    close_odds: int | None = None
+    close_implied: float | None = None  # percentage 0-100, same units as implied_probability
+    close_source: str | None = None  # e.g. book_close | pregame_snapshot_best_odds
+    # Optional model / calibrated probability (0-1 preferred; settle also accepts 0-100).
+    model_p: float | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.books, list):

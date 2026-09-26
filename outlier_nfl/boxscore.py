@@ -205,8 +205,12 @@ def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
         return _stat(stats, "KICKING:PTS")
     if token == "SACKS":
         return _stat(stats, "DEFENSIVE:SACK", "DEFENSIVE:SK")
-    if token == "TKLAST":
-        return _stat(stats, "DEFENSIVE:TOT", "DEFENSIVE:TKL")
+    if token in {"TKLAST", "TACKLESASSISTS", "DEFENSIVETACKLESASSISTS", "TACKLES"}:
+        return _stat(stats, "DEFENSIVE:TOT", "DEFENSIVE:TKL", "DEFENSIVE:TACKLESASSISTS")
+    if token in {"ASSISTS", "TACKLEASSISTS", "DEFENSIVEASSISTS"}:
+        return _stat(stats, "DEFENSIVE:AST", "DEFENSIVE:ASSISTS")
+    if token in {"PASSINGCOMPLETIONS", "COMPLETIONS", "COMP"}:
+        return _stat(stats, "PASSING:CMP", "PASSING:COMP")
     if token in {"RUSHRECYDS", "RUSHINGRECEIVINGYARDS"}:
         rush = _stat(stats, "RUSHING:YDS")
         rec = _stat(stats, "RECEIVING:YDS")
