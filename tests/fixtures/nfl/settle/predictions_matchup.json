@@ -1,0 +1,109 @@
+{
+  "date": "2026-09-17",
+  "window": null,
+  "updated_at": "2026-09-17T16:00:00+00:00",
+  "count": 3,
+  "records": [
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "DET",
+      "opponent": "BUF",
+      "player_name": "Amon-Ra St. Brown",
+      "player_id": "p_arsb",
+      "market": "REC_YDS",
+      "market_raw": "REC_YDS",
+      "position": "OVER",
+      "line": 79.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -104,
+          "odds_raw": "-104",
+          "decimal": 1.96
+        }
+      ],
+      "best_odds": -104,
+      "implied_probability": 50.98,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.9,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR",
+        "SHELL_COVERAGE_TARGET_UPGRADE",
+        "MATCHUP_PASS_LEAK"
+      ],
+      "calibrated_volume_adjustment": 0.2,
+      "is_consensus_line": true,
+      "scope": "full_game"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "BUF",
+      "opponent": "DET",
+      "player_name": "James Cook",
+      "player_id": "p_cook",
+      "market": "RUSH_YDS",
+      "market_raw": "RUSH_YDS",
+      "position": "OVER",
+      "line": 78.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -106,
+          "odds_raw": "-106",
+          "decimal": 1.94
+        }
+      ],
+      "best_odds": -106,
+      "implied_probability": 51.46,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.85,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR",
+        "MATCHUP_RUSH_MISMATCH"
+      ],
+      "calibrated_volume_adjustment": 0.1,
+      "is_consensus_line": true,
+      "scope": "full_game"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "DET",
+      "opponent": "BUF",
+      "player_name": "Jameson Williams",
+      "player_id": "p_jamo",
+      "market": "REC_YDS",
+      "market_raw": "REC_YDS",
+      "position": "OVER",
+      "line": 59.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -109,
+          "odds_raw": "-109",
+          "decimal": 1.92
+        }
+      ],
+      "best_odds": -109,
+      "implied_probability": 52.15,
+      "l5_hit_rate": 0.8,
+      "l10_hit_rate": 0.7,
+      "confidence_tier": "TIER_2_STRONG",
+      "calibration_tags": [
+        "CONSISTENT_HIT_RATE",
+        "SHELL_COVERAGE_DEEP_HAIRCUT",
+        "MATCHUP_FADE"
+      ],
+      "calibrated_volume_adjustment": -0.25,
+      "is_consensus_line": true,
+      "scope": "full_game"
+    }
+  ]
+}
