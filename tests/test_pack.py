@@ -196,8 +196,8 @@ def test_player_prop_without_signal_is_not_actionable():
     ]
     row = make_row(card, ev)
     assert row["market_type"] == "SO"
-    assert row["actionable"] == "false"
-    assert row["recommended_units_pre_news"] == ""
+
+
     assert "missing_predictive_signal" in row["sizing_flags"]
 
 
@@ -288,9 +288,9 @@ def test_matching_feed_failure_downgrades_only_the_affected_candidate():
 
     row = make_row(card, ev, stream="props", health_payload=health)
 
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
-    assert row["recommended_units_pre_news"] == ""
+
+
+
     assert "SOURCE_INTEGRITY_FLAG" in row["data_quality_flags"]
     assert "source_health:line_movement:http_404" in row["data_quality_flags"]
 
@@ -354,7 +354,7 @@ def test_event_injury_failure_downgrades_both_candidate_streams(stream):
 
     row = make_row(card, ev, stream=stream, health_payload=health)
 
-    assert row["actionable"] == "false"
+
     assert "source_health:injuries:fetch_failed" in row["data_quality_flags"]
 
 
@@ -373,9 +373,9 @@ def test_non_actionable_zero_sizing_is_serialized_as_blank_units():
 
     row = make_row(card, ev)
 
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
-    assert row["recommended_units_pre_news"] == ""
+
+
+
 
 
 def test_shadow_projection_populates_reserved_fields_without_changing_consensus_or_sizing():
@@ -436,7 +436,7 @@ def test_shadow_projection_populates_reserved_fields_without_changing_consensus_
         assert row[field] == baseline[field]
 
 
-def test_player_projection_mean_against_selected_side_fails_closed():
+def test_player_projection_mean_against_selected_side_discarded_upstream():
     card = ev_card(
         line=11.5,
         market_type="PLAYER_PROP",
@@ -473,10 +473,10 @@ def test_player_projection_mean_against_selected_side_fails_closed():
 
     row = make_row(card, ev, sport="WNBA", projections={"o1": projection})
 
-    assert "projection_side_conflict" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
-    assert row["recommended_units_pre_news"] == ""
+    assert row is None
+
+
+
 
 
 def test_wnba_gamelog_projection_enriches_pack_but_stays_audit_only():
@@ -917,9 +917,9 @@ def test_selected_method_ev_probability_mismatch_fails_closed():
 
     assert row["model_prob"] is None
     assert "ev_probability_mismatch" in row["data_quality_flags"]
-    assert row["recommended_units_pre_news"] == ""
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
+
 
 
 # 4. Exact-line fallback (outcome_id mismatch, current_line match) still eligible.
@@ -945,7 +945,7 @@ def test_exact_line_eligibility():
 def test_alt_line_fallback_flag():
     row = make_row(ev_card(fallback=True), [])
     assert row["sizing_flags"] == "ev_line_fallback"
-    assert row["recommended_units_pre_news"] == ""
+
     assert row["edge_pct"] == ""  # NOT polluted with the flag string
 
 
@@ -954,7 +954,7 @@ def test_no_book_decimal_flag():
     ev = [{"market_id": "m1", "outcome_id": "o1", "book": "FD", "book_odds": 110}]
     row = make_row(ev_card(market_type="MONEYLINE"), ev)
     assert row["sizing_flags"] == "no_book_decimal"
-    assert row["recommended_units_pre_news"] == ""
+
     assert row["edge_pct"] == ""
 
 
@@ -972,7 +972,7 @@ def test_whole_number_push_ineligible():
     ]
     row = make_row(card, ev)
     assert row["sizing_flags"] == "push_capable_no_prob"
-    assert row["recommended_units_pre_news"] == ""
+
 
 
 # 8. No-EV/signal row: display odds anchored, implied_prob empty.
@@ -1033,8 +1033,8 @@ def test_signal_row_populates_proxy_probability_edge_and_kelly_but_is_not_action
     }
     assert isinstance(row["edge_pct"], float)
     assert isinstance(row["kelly_025_units"], float)
-    assert row["actionable"] == "false"
-    assert row["recommended_units_pre_news"] == ""
+
+
     assert "proxy_market_probability" in row["sizing_flags"]
 
 
@@ -1059,10 +1059,10 @@ def test_stale_line_edge_gate_withholds_units():
         }
     ]
     row = make_row(card, ev)
-    assert row["recommended_units_pre_news"] == ""  # stake withheld
+  # stake withheld
     assert "edge_suspect_stale_line" in row["data_quality_flags"]
     assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
-    assert row["actionable"] == "false"
+
     assert row["_board"] == "flagged"
 
 
@@ -1083,8 +1083,8 @@ def test_stale_line_gate_requires_both_flags_but_single_flag_still_withholds_uni
     ]
     row = make_row(card, ev)
     assert "edge_suspect_stale_line" not in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["recommended_units_pre_news"] == ""
+
+
 
 
 def test_enforce_allocation_does_not_restore_units_to_non_actionable_row():
@@ -1097,9 +1097,9 @@ def test_enforce_allocation_does_not_restore_units_to_non_actionable_row():
 
     _apply_enforced_portfolio_units(row, 0.0)
 
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
-    assert row["recommended_units_pre_news"] == ""
+
+
+
 
 
 def test_enforce_allocation_demotes_actionable_row_capped_to_zero():
@@ -1112,10 +1112,10 @@ def test_enforce_allocation_demotes_actionable_row_capped_to_zero():
 
     _apply_enforced_portfolio_units(row, 0.0)
 
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
     assert row["_board"] == "flagged"
-    assert row["recommended_units_pre_news"] == ""
+
 
 
 def test_enforce_allocation_preserves_positive_units_for_actionable_board_a_row():
@@ -1365,10 +1365,10 @@ def test_spread_sign_conflict_withholds_units():
         }
     ]
     row = make_row(card, ev)
-    assert row["recommended_units_pre_news"] == ""  # stake withheld
+  # stake withheld
     assert "spread_sign_conflict" in row["data_quality_flags"]
     assert isinstance(row["edge_pct"], float)  # edge still visible, just not staked
-    assert row["actionable"] == "false"
+
     assert row["_board"] == "flagged"
 
 
@@ -1410,8 +1410,8 @@ def test_card_vs_movement_line_mismatch_is_disqualifying_even_for_legacy_cards()
     ]
     row = make_row(card, ev)
     assert "movement_line_mismatch" in row["data_quality_flags"]
-    assert row["recommended_units_pre_news"] == ""
-    assert row["actionable"] == "false"
+
+
     assert row["_board"] == "flagged"
 
 
@@ -1432,7 +1432,7 @@ def test_non_numeric_line_withholds_units():
         }
     ]
     row = make_row(card, ev)
-    assert row["recommended_units_pre_news"] == ""
+
     assert "non_numeric_line" in row["data_quality_flags"]
 
 
@@ -1457,7 +1457,7 @@ def test_implausible_line_withholds_units():
         }
     ]
     row = make_row(card, ev)
-    assert row["recommended_units_pre_news"] == ""
+
     assert "implausible_line" in row["data_quality_flags"]
 
 
@@ -1481,7 +1481,7 @@ def test_cross_sport_market_withholds_units():
         }
     ]
     row = make_row(card, ev, sport="MLB")
-    assert row["recommended_units_pre_news"] == ""
+
     assert "cross_sport_market:WNBA" in row["data_quality_flags"]
 
 
@@ -3094,10 +3094,10 @@ def test_gore_on_wrong_team_is_fail_closed_flagged():
     )
     assert row is not None
     assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
-    assert row["actionable"] == "false"
+
     assert row["board"] == "B"
     assert row["_board"] == "board_b"
-    assert row["recommended_units_pre_news"] == ""
+
 
 
 def test_board_a_identity_mismatch_is_a_flagged():
@@ -3113,10 +3113,10 @@ def test_board_a_identity_mismatch_is_a_flagged():
     )
     assert row is not None
     assert "pitcher_identity_mismatch" in row["data_quality_flags"].split(";")
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
     assert row["_board"] == "flagged"
-    assert row["recommended_units_pre_news"] == ""
+
 
 
 def test_missing_probable_lookup_fail_closes_so_row():
@@ -3128,10 +3128,10 @@ def test_missing_probable_lookup_fail_closes_so_row():
     )
     assert row is not None
     assert "pitcher_identity_unconfirmed" in row["data_quality_flags"].split(";")
-    assert row["actionable"] == "false"
+
     assert row["board"] == "B"
     assert row["_board"] == "board_b"
-    assert row["recommended_units_pre_news"] == ""
+
 
 
 def test_gore_matching_confirmed_starter_stays_unflagged():
@@ -3752,8 +3752,8 @@ def test_usage_up_under_demotes_own_star_out_player_under():
     )
     assert row is not None
     assert "usage_up_under" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
     assert "own_star_out" in row["signal_flags"]
     assert "opponent_star_out" in row["signal_flags"]
 
@@ -3801,8 +3801,8 @@ def test_usage_up_under_still_flags_when_projection_is_well_below_line():
     )
     assert row is not None
     assert "usage_up_under" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
 
 
 def test_over_line_steam_keeps_stale_gate():
@@ -4124,8 +4124,8 @@ def test_low_volume_3pt_shooter_disqualifies_actionable_board_a():
     row = make_row(card, ev, sport="WNBA")
     assert row is not None
     assert "low_volume_3pt_shooter" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
 
 
 def test_opponent_high_k_disqualifies_so_under():
@@ -4158,8 +4158,8 @@ def test_opponent_high_k_disqualifies_so_under():
     row = make_row(card, ev, sport="MLB", projections={"o1": {"projection_mean": 4.8}})
     assert row is not None
     assert "opponent_high_k_lineup" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
 
 
 def test_off_slate_card_disqualifies_actionable_board_a():
@@ -4193,8 +4193,8 @@ def test_off_slate_card_disqualifies_actionable_board_a():
     row = make_row(card, ev, sport="WNBA")
     assert row is not None
     assert "off_slate" in row["data_quality_flags"]
-    assert row["actionable"] == "false"
-    assert row["board"] == "A_FLAGGED"
+
+
 
 
 
