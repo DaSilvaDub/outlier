@@ -289,31 +289,80 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     return eastern_dt.strftime("%Y-%m-%d") if eastern_dt else None
 
 
+# Canonical --window tokens (plus HH:MM clock forms handled separately).
+_KICKOFF_WINDOW_EARLY = frozenset({"1pm", "early", "13:00", "1:00", "13", "1"})
+_KICKOFF_WINDOW_LATE = frozenset({"4pm", "late", "16:00", "4:00", "16", "4", "afternoon"})
+_KICKOFF_WINDOW_SNF = frozenset({"snf", "night", "prime", "primetime", "8pm", "20:00", "8:00"})
+KNOWN_KICKOFF_WINDOWS = _KICKOFF_WINDOW_EARLY | _KICKOFF_WINDOW_LATE | _KICKOFF_WINDOW_SNF
+
+
+def normalize_kickoff_window(window: str | None) -> str | None:
+    """Return a stripped lowercased window token, or None when unset.
+
+    Unknown tokens raise ``ValueError`` so a typo never silently passes the
+    full slate (``matches_kickoff_window`` used to fall through to True).
+    A bare ``HH:MM`` / ``H:MM`` clock string is accepted as a custom window.
+    """
+    if window is None:
+        return None
+    w = window.strip().lower()
+    if not w:
+        return None
+    if w in KNOWN_KICKOFF_WINDOWS:
+        return w
+    if ":" in w:
+        parts = w.split(":")
+        if len(parts) == 2:
+            try:
+                hour, minute = int(parts[0]), int(parts[1])
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unknown kickoff window {window!r}; "
+                    f"use one of {sorted(KNOWN_KICKOFF_WINDOWS)} or HH:MM"
+                ) from exc
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return w
+    raise ValueError(
+        f"Unknown kickoff window {window!r}; "
+        f"use one of {sorted(KNOWN_KICKOFF_WINDOWS)} or HH:MM"
+    )
+
+
 def matches_kickoff_window(dt_or_iso: datetime | str | None, window: str | None) -> bool:
-    """Check if an event's kickoff time falls into a specific window (e.g. '1pm', '4pm', 'snf')."""
+    """Check if an event's kickoff time falls into a specific window (e.g. '1pm', '4pm', 'snf').
+
+    Unknown window tokens fail closed (False). Prefer validating with
+    :func:`normalize_kickoff_window` at the CLI / run boundary so typos error
+    loudly instead of returning an empty filtered slate.
+    """
     if not window:
         return True
-    w = window.strip().lower()
+    try:
+        w = normalize_kickoff_window(window)
+    except ValueError:
+        return False
+    if w is None:
+        return True
     eastern_dt = to_eastern_datetime(dt_or_iso)
     if not eastern_dt:
         return False
     hour = eastern_dt.hour
     minute = eastern_dt.minute
 
-    if w in ("1pm", "early", "13:00", "1:00", "13", "1"):
+    if w in _KICKOFF_WINDOW_EARLY:
         return hour == 13
-    elif w in ("4pm", "late", "16:00", "4:00", "16", "4", "afternoon"):
+    if w in _KICKOFF_WINDOW_LATE:
         return hour in (16, 17)
-    elif w in ("snf", "night", "prime", "primetime", "8pm", "20:00", "8:00"):
+    if w in _KICKOFF_WINDOW_SNF:
         return hour in (20, 21)
-    elif ":" in w:
+    if ":" in w:
         parts = w.split(":")
         try:
             target_h, target_m = int(parts[0]), int(parts[1])
-            return hour == target_h and abs(minute - target_m) <= 15
         except ValueError:
             return False
-    return True
+        return hour == target_h and abs(minute - target_m) <= 15
+    return False
 
 
 def coerce_float(value: Any) -> float | None:

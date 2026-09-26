@@ -49,6 +49,7 @@ from outlier_nfl.schema import (
 from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.utils import (
     matches_kickoff_window,
+    normalize_kickoff_window,
     safe_read_json,
     safe_write_json,
     to_eastern_date,
@@ -101,6 +102,8 @@ class NflPipeline:
         now_utc = datetime.now(timezone.utc).isoformat()
         target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
 
+        window = normalize_kickoff_window(window)
+        write_latest = window is None
         window_label = f" (window: {window})" if window else ""
         logger.info("Starting Outlier NFL Pipeline run for date: %s%s", target_date, window_label)
         self.normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +253,8 @@ class NflPipeline:
             "count": len(external_metrics),
             "records": external_metrics,
         }
-        safe_write_json(self.normalized_dir / "nfl_external_metrics_latest.json", external_metrics_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_external_metrics_latest.json", external_metrics_payload)
         safe_write_json(self.normalized_dir / f"nfl_external_metrics_{target_date}.json", external_metrics_payload)
 
         matchup_scripts = build_matchup_scripts(
@@ -311,13 +315,15 @@ class NflPipeline:
         }
 
         # Write normalized outputs atomically
-        safe_write_json(self.normalized_dir / "nfl_games_latest.json", games_payload)
-        safe_write_json(self.normalized_dir / "nfl_props_latest.json", props_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_games_latest.json", games_payload)
+            safe_write_json(self.normalized_dir / "nfl_props_latest.json", props_payload)
         safe_write_json(self.normalized_dir / f"nfl_games_{target_date}.json", games_payload)
         safe_write_json(self.normalized_dir / f"nfl_props_{target_date}.json", props_payload)
 
         # Write calibrated and high-probability datasets
-        safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload
         )
@@ -330,7 +336,8 @@ class NflPipeline:
             "count": len(anchors),
             "records": anchors,
         }
-        safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload
         )
@@ -344,7 +351,8 @@ class NflPipeline:
             "teams_count": len(rosters),
             "rosters": rosters,
         }
-        safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
         safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}.json", rosters_payload)
 
         scripts_payload = {
@@ -354,7 +362,8 @@ class NflPipeline:
             "count": len(matchup_scripts),
             "records": scripts_to_records(matchup_scripts),
         }
-        safe_write_json(self.normalized_dir / "nfl_matchup_scripts_latest.json", scripts_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_matchup_scripts_latest.json", scripts_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_matchup_scripts_{target_date}.json",
             scripts_payload,
@@ -372,9 +381,10 @@ class NflPipeline:
             "count": len(matchup_prop_records),
             "records": matchup_prop_records,
         }
-        safe_write_json(
-            self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
-        )
+        if write_latest:
+            safe_write_json(
+                self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
+            )
         safe_write_json(
             self.normalized_dir / f"nfl_matchup_props_{target_date}.json",
             matchup_props_payload,
@@ -479,7 +489,8 @@ class NflPipeline:
             except Exception as exc:
                 logger.warning("Failed generating game script: %s", exc)
 
-        safe_write_json(self.normalized_dir / "summary_latest.json", summary)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "summary_latest.json", summary)
         safe_write_json(self.normalized_dir / f"summary_{target_date}.json", summary)
         if window:
             safe_write_json(
@@ -549,12 +560,16 @@ def main() -> int:
 
     try:
         pipeline = NflPipeline(data_dir=args.data_dir)
-        summary = pipeline.run(
-            date=args.date,
-            window=args.window,
-            offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
-            generate_game_script=args.generate_game_script,
-        )
+        try:
+            summary = pipeline.run(
+                date=args.date,
+                window=args.window,
+                offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
+                generate_game_script=args.generate_game_script,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         print("=" * 60)
         print("OUTLIER NFL PIPELINE EXECUTION SUMMARY")
         print(f"Date:                   {summary.get('date')}")
