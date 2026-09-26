@@ -17,6 +17,7 @@ model Brier fills when `model_p` / `p_model` is present. Values are never invent
 | same | `nfl_matchup_props_{date}.json` | Props with any `MATCHUP_*` tag (same schema) |
 | same | `nfl_calibrated_props_{date}.json` | Full calibrated set |
 | Close / model enricher | `python -m outlier_nfl.enrich_close` | Post-hoc `close_*` + `model_p` attach |
+| Odds-API close fetch | `python -m outlier_nfl.fetch_odds_close` | Live/event (hist optional) → close-feed JSON |
 | Tiering + `model_p` | `outlier_nfl/calibration.py` | Tier-1 when L5==1.0, L10≥0.80, books≥3; **default `model_p` = Laplace(α=2) shrink of empirical hit rate** |
 | Projection (optional) | `outlier_nfl/projection.py` | nflverse prior-week gamelog rate vs line |
 | Matchup tags | `outlier_nfl/matchup.py` | Stacks `MATCHUP_*`; re-attaches empirical `model_p` when missing |
@@ -105,7 +106,23 @@ python -m outlier_nfl.enrich_close \
 # Real book close (requires feed; will not label snapshot as book_close)
 # Minimal schema: {"records":[{"player_name","market","line","position","close_odds",
 #   "close_implied"? , ...}]}  — see outlier_nfl/close_feed.py
-# Env for TheOddsAPI (not wired to prop join yet): ODDS_API_KEY | THE_ODDS_API_KEY
+#
+# Live Odds-API → close-feed (kickoff capture). Auth: ODDS_API_KEY | THE_ODDS_API_KEY
+# (apiKey query param). Player props use /events/{id}/odds. Historical close for
+# past slates needs the paid historical endpoint (`--historical-date`).
+python -m outlier_nfl.fetch_odds_close --probe-only   # plan coverage (no secrets printed)
+python -m outlier_nfl.fetch_odds_close \
+  --out path/to/closes.json \
+  --predictions path/to/pack.json \
+  --save-raw path/to/odds_api_raw_redacted.json
+#
+# Then enrich (join keys: player_name, market, line, position; matchup/event_id optional):
+python -m outlier_nfl.enrich_close \
+  --predictions path/to/pack.json \
+  --out path/to/pack_book_close.json \
+  --mode book_close \
+  --close-feed path/to/closes.json \
+  --attach-model-p pass
 #
 # Synthetic close-feed (CI / plumbing proof only — NOT live book close):
 python -m outlier_nfl.enrich_close \
@@ -119,11 +136,20 @@ python -m outlier_nfl.enrich_close \
 Close feed shape: `{ "records": [ { player_name, market, line, position,
 matchup, event_id, close_line, close_odds, close_implied }, ... ] }`.
 
-**Book-close blocker:** No NFL prop closing-line capture is wired on this box
-(TheOddsAPI / second Outlier scrape at kickoff / Pinnacle close). MLB ledger
-has distinct-close logic in `outlier_scrapers/feedback_settlement.py` but it is
-not NFL props. Credential/source needed: historical odds close API key **or**
-a scheduled Outlier props scrape stored separately from the take snapshot.
+**Odds-API wiring (this PR):** `outlier_nfl/fetch_odds_close.py` maps NFL player
+props → Outlier close-feed rows (best American price across books). Join uses
+short keys `(player_name, market, line, position)` so Odds-API event ids need not
+match Outlier. Fixture:
+`tests/fixtures/nfl/settle/odds_api_event_props_sanitized.json` (+ derived
+`book_close_feed_from_odds_api.json`). **Never** label snapshot `best_odds` as
+`book_close`.
+
+**Book-close live status (2026-09-26):** `ODDS_API_KEY` is present on the box
+secret card (len=25) but The Odds API returns `INVALID_KEY` for sports/events/
+props/historical probes — so live tier coverage and 2026-09-20 historical close
+enrich are **blocked** until a valid key is injected. Use mocked fixtures for CI;
+at kickoff, re-run `fetch_odds_close` once the key validates (`--probe-only`
+should show `sports_ok` / `props_ok`).
 
 ## Sunday 2026-09-20 settle (updated this PR)
 
@@ -156,11 +182,14 @@ Scorecard: `docs/nfl/artifacts/shadow_settle_2026-09-20.md`
 
 ## Honest blockers (remaining)
 
-1. **True book close** — `book_close` mode + `--close-feed` schema ship;
-   fixture proves CLV ≠ 0 when closes move (`tests/fixtures/nfl/settle/book_close_feed_moved.json`).
-   **No `ODDS_API_KEY` / `THE_ODDS_API_KEY` on box** (checked env + gh secrets).
-   Live path: set one of those env vars *or* schedule Outlier T-0/kickoff scrape →
-   `--close-feed`. Helper: `outlier_nfl/close_feed.py`. Never label snapshot as book_close.
+1. **True book close** — `book_close` mode + `--close-feed` schema + Odds-API
+   mapper (`python -m outlier_nfl.fetch_odds_close`) ship; fixtures prove CLV ≠ 0
+   when closes move (`book_close_feed_moved.json`, `odds_api_event_props_sanitized.json`).
+   **Live blocker (2026-09-26):** box has `ODDS_API_KEY` (len=25) but API returns
+   `INVALID_KEY` — cannot probe props/historical or enrich 09-20 with real
+   `book_close` until a valid key is available. Kickoff path: valid key →
+   `fetch_odds_close --out closes.json [--predictions pack]` →
+   `enrich_close --mode book_close --close-feed`. Never label snapshot as book_close.
 
 2. **Projection still thin early season** — nflverse gamelog rate works but
    with 1 prior week it underperforms pure Laplace; ridge/Elo still absent.

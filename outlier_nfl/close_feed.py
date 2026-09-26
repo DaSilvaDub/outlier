@@ -45,7 +45,9 @@ def close_feed_blocker_message() -> str:
     names = ", ".join(ODDS_API_KEY_ENV_NAMES)
     return (
         "No live NFL book-close feed on this box. "
-        f"Set one of [{names}] for TheOddsAPI historical/event odds, "
+        f"Set one of [{names}] then run "
+        "`python -m outlier_nfl.fetch_odds_close --out closes.json` "
+        "(optional `--predictions pack.json`, `--historical-date ISO` when paid) "
         "or schedule an Outlier T-0/kickoff props scrape and pass it as "
         "--close-feed JSON (schema: records[] with player_name, market, line, "
         "position, close_odds|odds, optional close_implied|implied_probability). "
@@ -162,15 +164,32 @@ def fetch_odds_api_event_odds(
     api_key: str,
     sport: str = "americanfootball_nfl",
     regions: str = "us",
-    markets: str = "player_points,player_pass_yds,player_rush_yds,player_reception_yds,player_receptions",
+    markets: str = (
+        "player_pass_yds,player_rush_yds,player_reception_yds,"
+        "player_receptions,player_anytime_td"
+    ),
     odds_format: str = "american",
     timeout: int = 30,
-) -> dict[str, Any]:
-    """Fetch current event odds from The Odds API (requires network + key).
+    event_id: str | None = None,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Fetch Odds-API odds. Prefer event-level props when ``event_id`` is set.
 
-    Returns the raw JSON payload. Mapping onto Outlier prop keys is left to
-    callers / future adapters — this module will not invent joins.
+    Featured h2h/spreads/totals use the sport odds endpoint; NFL player props
+    require ``/events/{eventId}/odds``. Mapping onto Outlier close-feed rows is
+    in ``outlier_nfl.fetch_odds_close``.
     """
+    if event_id:
+        from outlier_nfl.fetch_odds_close import fetch_event_odds
+
+        return fetch_event_odds(
+            api_key=api_key,
+            event_id=event_id,
+            sport=sport,
+            regions=regions,
+            markets=tuple(m.strip() for m in markets.split(",") if m.strip()),
+            odds_format=odds_format,
+            timeout=timeout,
+        )
     params = urllib.parse.urlencode(
         {
             "apiKey": api_key,
@@ -180,7 +199,7 @@ def fetch_odds_api_event_odds(
         }
     )
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?{params}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "x-api-key": api_key})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
@@ -195,19 +214,63 @@ def try_load_live_or_file_close_index(
     close_feed: Path | str | None,
     *,
     allow_odds_api: bool = False,
+    predictions: Path | str | Mapping[str, Any] | None = None,
+    event_ids: Sequence[str] | None = None,
 ) -> tuple[dict[tuple[Any, ...], dict[str, Any]] | None, str]:
-    """Load a book-close index from file, or report the blocker.
+    """Load a book-close index from file, or live Odds-API→Outlier prop join.
 
-    ``allow_odds_api`` only checks that a key exists — full Odds API → Outlier
-    prop join is not implemented yet (needs market/player mapping work).
+    Live path requires ``allow_odds_api=True`` and a resolvable API key. Fetches
+    upcoming (or provided) NFL event props, maps to close-feed records, and
+    builds the enrich_close index. Prefer persisting via
+    ``python -m outlier_nfl.fetch_odds_close --out …`` at kickoff.
     """
     if close_feed is not None:
         index = load_book_close_feed(Path(close_feed))
         return index, f"loaded_close_feed:{close_feed}"
     key = resolve_odds_api_key()
-    if allow_odds_api and key:
-        return None, (
-            "ODDS_API_KEY present but Odds-API→Outlier prop join not wired yet; "
-            "export closes to --close-feed JSON after mapping, or use a kickoff scrape."
-        )
-    return None, close_feed_blocker_message()
+    if not (allow_odds_api and key):
+        return None, close_feed_blocker_message()
+
+    from outlier_nfl.fetch_odds_close import (
+        build_close_feed_from_event_odds,
+        fetch_event_odds,
+        list_events,
+    )
+
+    pred_payload: Mapping[str, Any] | None = None
+    if isinstance(predictions, Mapping):
+        pred_payload = predictions
+    elif predictions is not None:
+        loaded = safe_read_json(Path(predictions))
+        if isinstance(loaded, Mapping):
+            pred_payload = loaded
+
+    ids = list(event_ids) if event_ids else []
+    if not ids:
+        try:
+            events = list_events(api_key=key)
+        except Exception as exc:  # noqa: BLE001
+            return None, f"odds_api_events_failed:{exc}"
+        ids = [str(e.get("id")) for e in events if e.get("id")]
+    if not ids:
+        return None, "odds_api_no_nfl_events"
+
+    records: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for eid in ids:
+        try:
+            payload = fetch_event_odds(api_key=key, event_id=eid)
+            records.extend(
+                build_close_feed_from_event_odds(payload, predictions=pred_payload)
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{eid}:{exc}")
+    if not records:
+        detail = "; ".join(errors[:3]) if errors else "empty"
+        return None, f"odds_api_prop_join_empty:{detail}"
+
+    # Build index compatible with load_book_close_feed (full + short keys).
+    from outlier_nfl.enrich_close import index_book_close_records
+
+    index = index_book_close_records(records)
+    return index, f"odds_api_live_join:n={len(records)}:events={len(ids)}"

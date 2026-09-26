@@ -79,23 +79,20 @@ def _row_match_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def load_book_close_feed(path: Path) -> dict[tuple[Any, ...], dict[str, Any]]:
-    """Load a book-close JSON feed keyed for join onto prediction rows.
+def _row_match_key_short(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Join key used for Odds-API↔Outlier prop close (no matchup/event_id)."""
+    return (
+        str(row.get("player_name") or "").strip().upper(),
+        str(row.get("market") or "").strip().upper(),
+        _as_float(row.get("line")),
+        str(row.get("position") or "").strip().upper(),
+    )
 
-    Accepted shapes:
-    - ``{"records": [ {player_name, market, line, position, ..., close_line,
-      close_odds, close_implied}, ... ]}``
-    - a bare list of the same row objects
-    """
-    payload = safe_read_json(path)
-    if isinstance(payload, list):
-        records = payload
-    elif isinstance(payload, Mapping):
-        records = payload.get("records") or payload.get("closes") or []
-    else:
-        raise ValueError(f"Unsupported book-close feed shape: {path}")
-    if not isinstance(records, list):
-        raise ValueError(f"Book-close feed missing records list: {path}")
+
+def index_book_close_records(
+    records: Sequence[Mapping[str, Any]],
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    """Index close-feed rows under full and short join keys."""
     index: dict[tuple[Any, ...], dict[str, Any]] = {}
     for raw in records:
         if not isinstance(raw, Mapping):
@@ -107,13 +104,50 @@ def load_book_close_feed(path: Path) -> dict[tuple[Any, ...], dict[str, Any]]:
         )
         if close_line is None and close_odds is None and close_implied is None:
             continue
-        index[_row_match_key(raw)] = {
+        payload = {
             "close_line": close_line,
             "close_odds": close_odds,
             "close_implied": close_implied,
             "close_source": CLOSE_SOURCE_BOOK,
         }
+        index[_row_match_key(raw)] = payload
+        index[_row_match_key_short(raw)] = payload
     return index
+
+
+def lookup_book_close_row(
+    book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]],
+    record: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Prefer full key, then short key (player, market, line, position)."""
+    hit = book_close_index.get(_row_match_key(record))
+    if hit is not None:
+        return hit
+    return book_close_index.get(_row_match_key_short(record))
+
+
+def load_book_close_feed(path: Path) -> dict[tuple[Any, ...], dict[str, Any]]:
+    """Load a book-close JSON feed keyed for join onto prediction rows.
+
+    Accepted shapes:
+    - ``{"records": [ {player_name, market, line, position, ..., close_line,
+      close_odds, close_implied}, ... ]}``
+    - a bare list of the same row objects
+
+    Index includes full keys (with matchup/event_id) and short keys
+    (player_name, market, line, position) so Odds-API feeds without Outlier
+    event ids still join.
+    """
+    payload = safe_read_json(path)
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, Mapping):
+        records = payload.get("records") or payload.get("closes") or []
+    else:
+        raise ValueError(f"Unsupported book-close feed shape: {path}")
+    if not isinstance(records, list):
+        raise ValueError(f"Book-close feed missing records list: {path}")
+    return index_book_close_records(records)
 
 
 def attach_close_fields(
@@ -167,7 +201,7 @@ def attach_close_fields(
                 "book_close mode requires a close feed index; refusing to label "
                 "snapshot odds as book_close."
             )
-        feed_row = book_close_index.get(_row_match_key(record))
+        feed_row = lookup_book_close_row(book_close_index, record)
         if feed_row:
             record["close_line"] = feed_row.get("close_line")
             record["close_odds"] = feed_row.get("close_odds")
