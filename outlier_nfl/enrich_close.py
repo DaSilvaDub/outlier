@@ -412,11 +412,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.mode == "book_close" and args.close_feed is None:
+        from outlier_nfl.close_feed import close_feed_blocker_message
+
         raise SystemExit(
             "error: --mode book_close requires --close-feed PATH. "
             "Refusing to label snapshot odds as book_close. "
-            "Need a real closing-line capture (e.g. Odds API historical close, "
-            "or a second Outlier scrape at kickoff stored as close_*)."
+            + close_feed_blocker_message()
         )
 
     book_index = None

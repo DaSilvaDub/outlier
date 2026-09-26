@@ -421,3 +421,136 @@ def test_projection_gamelog_rate_fixture():
     assert result.model_p == 0.5
     assert result.n_games == 2
     assert result.source == MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+
+
+def test_book_close_feed_produces_nonzero_clv_when_prices_moved(tmp_path: Path):
+    """Fixture close-feed with moved odds → CLV ≠ 0; never labels snapshot as book_close."""
+    from outlier_nfl.close_feed import (
+        snapshot_rows_to_moved_close_feed,
+        write_close_feed,
+        resolve_odds_api_key,
+        close_feed_blocker_message,
+        ODDS_API_KEY_ENV_NAMES,
+    )
+    from outlier_nfl.enrich_close import (
+        enrich_prediction_payload,
+        load_book_close_feed,
+        CLOSE_SOURCE_BOOK,
+        CLOSE_SOURCE_SNAPSHOT,
+    )
+
+    assert resolve_odds_api_key(env={}) is None
+    assert "ODDS_API_KEY" in close_feed_blocker_message()
+    assert ODDS_API_KEY_ENV_NAMES[0] == "ODDS_API_KEY"
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    for row in raw["records"]:
+        for key in (
+            "close_line",
+            "close_odds",
+            "close_implied",
+            "close_source",
+            "model_p",
+            "model_p_source",
+            "p_model",
+        ):
+            row.pop(key, None)
+
+    pred_path = tmp_path / "preds.json"
+    pred_path.write_text(json.dumps(raw), encoding="utf-8")
+    moved = snapshot_rows_to_moved_close_feed(pred_path, odds_delta=25, implied_delta_pts=3.0)
+    assert moved and moved[0]["close_odds"] != raw["records"][0]["best_odds"]
+    feed_path = tmp_path / "closes.json"
+    write_close_feed(feed_path, moved, note="fixture synthetic move for CLV proof")
+    index = load_book_close_feed(feed_path)
+
+    enriched = enrich_prediction_payload(
+        raw,
+        mode="book_close",
+        attach_model_p="pass",
+        book_close_index=index,
+    )
+    row0 = enriched["records"][0]
+    assert row0["close_source"] == CLOSE_SOURCE_BOOK
+    assert row0["close_source"] != CLOSE_SOURCE_SNAPSHOT
+    assert row0["close_implied"] != row0["implied_probability"]
+
+    # Settle and prove mean CLV ≠ 0
+    enriched_path = tmp_path / "enriched.json"
+    enriched_path.write_text(json.dumps(enriched), encoding="utf-8")
+    predictions = load_prediction_snapshot(enriched_path, source="tier1")
+    events = load_boxscores(FIXTURES / "boxscores_det_buf.json")
+    report = settle_predictions(predictions, events)
+    assert report.clv["status"] == "ok"
+    assert report.clv["n"] >= 1
+    assert report.clv["mean_clv_implied_pts"] != 0.0
+    assert CLOSE_SOURCE_BOOK in (report.clv.get("close_sources") or [])
+
+
+def test_book_close_mode_refuses_without_feed():
+    from outlier_nfl.enrich_close import enrich_prediction_payload
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="close feed"):
+        enrich_prediction_payload(raw, mode="book_close", attach_model_p="pass")
+
+
+def test_projection_v2_requires_three_prior_weeks():
+    from outlier_nfl.projection import (
+        project_hit_probability_v2,
+        project_hit_probability,
+        MIN_PRIOR_WEEKS_V2,
+        attach_projection_model_p_record,
+    )
+
+    assert MIN_PRIOR_WEEKS_V2 == 3
+    thin = [{"rushing_yards": 40}, {"rushing_yards": 60}]
+    assert (
+        project_hit_probability_v2(
+            player_name="A", market="RUSH_YDS", line=49.5, position="OVER", week_rows=thin
+        )
+        is None
+    )
+    # v1 still works on thin history
+    v1 = project_hit_probability(
+        player_name="A", market="RUSH_YDS", line=49.5, position="OVER", week_rows=thin
+    )
+    assert v1 is not None and v1.method == "gamelog_rate_laplace"
+
+    fat = thin + [{"rushing_yards": 55}]
+    v2 = project_hit_probability_v2(
+        player_name="A", market="RUSH_YDS", line=49.5, position="OVER", week_rows=fat
+    )
+    assert v2 is not None
+    assert v2.method == "gamelog_gaussian"
+    assert 0.0 < v2.model_p < 1.0
+
+    # attach prefers v2 when enough weeks
+    from outlier_nfl.boxscore import _token
+
+    record = {
+        "player_name": "Test Back",
+        "market": "RUSH_YDS",
+        "line": 49.5,
+        "position": "OVER",
+    }
+    week_index = {_token("Test Back"): fat}
+    attach_projection_model_p_record(record, week_index=week_index, overwrite=True)
+    assert record["model_p_source"] == "projection_nflverse_gaussian"
+    assert record["model_p_n_games"] == 3
+
+
+def test_team_codes_normalize_la_to_lar():
+    from datetime import date
+    from outlier_nfl.boxscore import NflBoxScoreEvent
+
+    event = NflBoxScoreEvent(
+        provider_event_id="x",
+        event_date=date(2026, 9, 21),
+        away="NYG",
+        home="LA",
+        away_score=6,
+        home_score=28,
+        players={},
+    )
+    assert event.team_codes == frozenset({"NYG", "LAR"})

@@ -49,7 +49,12 @@ def _token(value: Any) -> str:
 
 
 def _team_token(value: Any) -> str:
-    return _token(value)
+    """Canonical NFL team code (nflverse LA → LAR, etc.)."""
+    from outlier_nfl.config import normalize_team
+
+    raw = str(value or "").strip()
+    canonical = normalize_team(raw)
+    return canonical or _token(raw)
 
 
 def _number(value: Any) -> float | None:

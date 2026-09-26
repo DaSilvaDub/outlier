@@ -49,9 +49,11 @@ Join strategy: **team pair + Eastern slate date + player name**.
 
 ## model_p hierarchy
 
-1. **`projection_nflverse_rate`** — prior-week nflverse gamelog rate vs the prop
-   line (Laplace-smoothed). Requires `--nflverse-week-stats` + `--before-week`
-   (slate week; no leakage).
+1. **`projection_nflverse_*`** — nflverse prior-week gamelog projection vs the
+   prop line. **v2** (`gamelog_gaussian` / `gamelog_poisson`) activates only when
+   ≥3 prior weeks exist; otherwise **v1** Laplace gamelog-rate. Requires
+   `--nflverse-week-stats` + `--before-week` (slate week; no leakage). As of
+   2026-09-26 only Weeks 1–2 are full (Week 3 thin/TNF) — v2 will not fire yet.
 2. **`empirical_hit_rate_laplace`** — Laplace/add-α shrink of Outlier
    L10→L20→L5→season rates (default **α=2**, assumed n = 10/20/5/17).
 3. **`empirical_hit_rate`** — raw empirical rate (legacy; overconfident at p=1.0).
@@ -59,20 +61,20 @@ Join strategy: **team pair + Eastern slate date + player name**.
 `enrich_close --attach-model-p hierarchy` runs (1)→(2)→(3). Pipeline high-prob /
 calibrated emit defaults to Laplace α=2.
 
-### Shrink discipline (2026-09-20 holdout)
+### Shrink discipline / α lock (multi-slate, 2026-09-26)
 
-Only one settleable Sunday pack was available on box. Grid on that slate:
+See full table: [`docs/nfl/artifacts/alpha_lock_multi_slate.md`](artifacts/alpha_lock_multi_slate.md).
 
-| α (Laplace, n=10) | model Brier | vs market 0.209 |
-|---|---|---|
-| 0 (raw) | 0.238 | +0.029 |
-| 1 | 0.215 | +0.006 |
-| **2 (default)** | **0.205** | **−0.005** |
-| 4 (slate min) | 0.199 | −0.010 |
-| 10 | 0.206 | −0.003 |
+| Pack | Kind | Market Brier | Model Brier (α=2) | Best α on slate |
+|---|---|---|---|---|
+| 2026-09-20 1pm | **Sunday** Week 2 | 0.209 | **0.205** (beats) | 4 |
+| 2026-09-21 MNF | midweek Week 2 | 0.136 | 0.214 (loses) | 6 |
+| 2026-09-24 TNF | midweek Week 3 | — | Drive pack; settle after full assemble | — |
+| 2026-09-27 | Sunday Week 3 | — | **not settleable yet** (today Sat 09-26) | — |
 
-α∈[1.5, 12] beat market. **α=2 is the shipped default** (pre-specified add-2);
-α=4 is reported but not locked without more Sundays.
+**Recommendation: keep α=2.** Only one Sunday OOS pack exists; midweek is labeled
+separately and does **not** unlock a default bump. α=4/6 minimize individual
+slates but do not agree across ≥2 Sundays.
 
 ## Box providers / CLI
 
@@ -101,6 +103,11 @@ python -m outlier_nfl.enrich_close \
   --before-week 2 --alpha 2.0 --overwrite-model-p
 
 # Real book close (requires feed; will not label snapshot as book_close)
+# Minimal schema: {"records":[{"player_name","market","line","position","close_odds",
+#   "close_implied"? , ...}]}  — see outlier_nfl/close_feed.py
+# Env for TheOddsAPI (not wired to prop join yet): ODDS_API_KEY | THE_ODDS_API_KEY
+#
+# Synthetic close-feed (CI / plumbing proof only — NOT live book close):
 python -m outlier_nfl.enrich_close \
   --predictions path/to/pack.json \
   --out path/to/pack_book_close.json \
@@ -149,8 +156,12 @@ Scorecard: `docs/nfl/artifacts/shadow_settle_2026-09-20.md`
 
 ## Honest blockers (remaining)
 
-1. **True book close** — schema + CLI `book_close` mode ship; **no live NFL
-   close feed** on box yet (need Odds API / kickoff scrape).
+1. **True book close** — `book_close` mode + `--close-feed` schema ship;
+   fixture proves CLV ≠ 0 when closes move (`tests/fixtures/nfl/settle/book_close_feed_moved.json`).
+   **No `ODDS_API_KEY` / `THE_ODDS_API_KEY` on box** (checked env + gh secrets).
+   Live path: set one of those env vars *or* schedule Outlier T-0/kickoff scrape →
+   `--close-feed`. Helper: `outlier_nfl/close_feed.py`. Never label snapshot as book_close.
+
 2. **Projection still thin early season** — nflverse gamelog rate works but
    with 1 prior week it underperforms pure Laplace; ridge/Elo still absent.
 3. **Single-slate α tuning** — lock α across more Sundays before changing default.
@@ -165,3 +176,13 @@ Scorecard: `docs/nfl/artifacts/shadow_settle_2026-09-20.md`
 - Not an extension of the MLB/WNBA ledger settler.
 - Not permission to invent settle fields or fill missing CLV/Brier with placeholders.
 - Not permission to copy market implied into `model_p`.
+
+## nflverse weeks available (as of 2026-09-26)
+
+| Week | player-week rows | Notes |
+|---|---|---|
+| 1 | ~1118 | full |
+| 2 | ~1107 | full |
+| 3 | ~69 | TNF ATL@GB only — thin |
+
+Projection v2 (≥3 prior weeks) therefore stays dormant until Week 4+ slates.

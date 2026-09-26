@@ -8,11 +8,18 @@ When prior weeks are thin (e.g. Week 2 slate with only Week 1 history), the
 rate is Laplace-smoothed. Callers should fall back to shrunk/raw empirical
 when this returns None (unsupported market, no matching player, or no prior
 games).
+
+Projection **v2** (``gamelog_gaussian`` / ``gamelog_poisson``) uses prior-week
+mean/σ (or Poisson λ=mean) and only activates when ``n_games >=
+MIN_PRIOR_WEEKS_V2`` (default **3**). As of 2026-09-26 (season week ~3), full
+Weeks 1–2 exist and Week 3 is thin (TNF only) — v2 will not fire on Week 3
+slates; hierarchy keeps the v1 Laplace gamelog-rate fallback. No fake ridge.
 """
 
 from __future__ import annotations
 
 import csv
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +29,33 @@ from outlier_nfl.boxscore import _token
 from outlier_nfl.calibration import DEFAULT_LAPLACE_ALPHA, shrink_hit_rate
 
 MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE = "projection_nflverse_rate"
+MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN = "projection_nflverse_gaussian"
+MODEL_P_SOURCE_PROJECTION_NFLVERSE_POISSON = "projection_nflverse_poisson"
 MODEL_P_SOURCE_EXTERNAL = "external"
+
+MIN_PRIOR_WEEKS_V2 = 3  # Gaussian/Poisson requires ≥3 prior weeks; else v1 rate.
+
+POISSON_MARKETS = frozenset(
+    {
+        "PASS_TD",
+        "RUSH_TD",
+        "REC_TD",
+        "REC",
+        "PASS_ATT",
+        "PASS_COMP",
+        "PASSING_COMPLETIONS",
+        "PASSING_ATTEMPTS",
+        "RUSH_ATT",
+        "TARGETS",
+        "SACKS",
+        "SOLO_TACKLES",
+        "ASSISTS",
+        "DEFENSIVE_TACKLES_ASSISTS",
+        "ANYTIME_TD",
+        "MADE_FIELD_GOALS",
+        "INTERCEPTIONS_THROWN",
+    }
+)
 
 # Outlier market → nflverse week-stats column (or synthetic).
 MARKET_STAT_COLUMN: dict[str, str | None] = {
@@ -165,6 +198,98 @@ def project_hit_probability(
     return ProjectionResult(model_p=round(model_p, 6), n_games=n)
 
 
+
+
+def _normal_cdf(x: float) -> float:
+    """Standard normal CDF via erf (no scipy dependency)."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _poisson_sf_gt(rate: float, threshold: float) -> float:
+    """P(X > threshold) for X~Poisson(rate); threshold usually a .5 line."""
+    if rate <= 0:
+        return 0.0
+    k_max = int(math.floor(threshold))
+    rate = min(float(rate), 80.0)
+    term = math.exp(-rate)
+    cdf = term
+    for k in range(1, k_max + 1):
+        term *= rate / k
+        cdf += term
+    return max(0.0, min(1.0, 1.0 - cdf))
+
+
+def project_hit_probability_v2(
+    *,
+    player_name: str,
+    market: str,
+    line: float,
+    position: str,
+    week_rows: Sequence[Mapping[str, Any]],
+    min_games: int = MIN_PRIOR_WEEKS_V2,
+    method: str = "auto",
+) -> ProjectionResult | None:
+    """Gaussian/Poisson P(hit) from prior-week mean/σ — requires ≥3 games.
+
+    ``method``: ``auto`` picks Poisson for count markets else Gaussian.
+    Returns None when prior weeks are thinner than ``min_games`` (callers keep
+    v1 / empirical hierarchy). Never copies book implied. No ridge.
+    """
+    del player_name  # join key handled by caller
+    if not week_rows or len(week_rows) < min_games:
+        return None
+    values: list[float] = []
+    for row in week_rows:
+        value = week_stat_value(market, row)
+        if value is None:
+            return None
+        values.append(float(value))
+    if len(values) < min_games:
+        return None
+
+    pos = (position or "").upper()
+    mkt = (market or "").upper()
+    chosen = method
+    if chosen == "auto":
+        chosen = "poisson" if mkt in POISSON_MARKETS else "gaussian"
+
+    mean = sum(values) / len(values)
+    if chosen == "poisson":
+        p_over = _poisson_sf_gt(mean, float(line))
+        if pos in {"OVER", "YES"}:
+            model_p = p_over
+        elif pos == "UNDER":
+            model_p = 1.0 - p_over
+        else:
+            return None
+        return ProjectionResult(
+            model_p=round(max(0.0, min(1.0, model_p)), 6),
+            n_games=len(values),
+            source=MODEL_P_SOURCE_PROJECTION_NFLVERSE_POISSON,
+            method="gamelog_poisson",
+        )
+
+    if len(values) < 2:
+        return None
+    var = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+    sigma = math.sqrt(var) if var > 0 else 0.0
+    sigma = max(sigma, 0.5)  # avoid hard 0/1 from degenerate sample
+    z = (float(line) - mean) / sigma
+    p_over = 1.0 - _normal_cdf(z)
+    if pos in {"OVER", "YES"}:
+        model_p = p_over
+    elif pos == "UNDER":
+        model_p = 1.0 - p_over
+    else:
+        return None
+    return ProjectionResult(
+        model_p=round(max(0.0, min(1.0, model_p)), 6),
+        n_games=len(values),
+        source=MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN,
+        method="gamelog_gaussian",
+    )
+
+
 def attach_projection_model_p_record(
     record: dict[str, Any],
     *,
@@ -188,20 +313,32 @@ def attach_projection_model_p_record(
         line = float(record["line"])
     except (KeyError, TypeError, ValueError):
         return record
-    result = project_hit_probability(
+    # v2 Gaussian/Poisson when ≥ MIN_PRIOR_WEEKS_V2 prior games; else v1 rate.
+    result = project_hit_probability_v2(
         player_name=str(record.get("player_name") or ""),
         market=str(record.get("market") or ""),
         line=line,
         position=str(record.get("position") or ""),
         week_rows=rows,
-        alpha=alpha,
-        min_games=min_games,
+        min_games=max(min_games, MIN_PRIOR_WEEKS_V2),
+        method="auto",
     )
+    if result is None:
+        result = project_hit_probability(
+            player_name=str(record.get("player_name") or ""),
+            market=str(record.get("market") or ""),
+            line=line,
+            position=str(record.get("position") or ""),
+            week_rows=rows,
+            alpha=alpha,
+            min_games=min_games,
+        )
     if result is None:
         return record
     record["model_p"] = result.model_p
     record["model_p_source"] = result.source
     record["model_p_n_games"] = result.n_games
+    record["model_p_method"] = result.method
     return record
 
 
@@ -213,7 +350,7 @@ def attach_model_p_hierarchy_record(
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     min_games: int = 1,
 ) -> dict[str, Any]:
-    """projection_nflverse_rate → empirical_hit_rate_laplace → empirical_hit_rate.
+    """projection v2 (gaussian/poisson if ≥3 wks) / v1 rate → Laplace → raw empirical.
 
     ``overwrite=True`` by default so hierarchy replaces a stale raw empirical
     stamp when re-enriching historical packs.
