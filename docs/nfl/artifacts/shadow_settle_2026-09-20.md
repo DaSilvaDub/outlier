@@ -1,28 +1,39 @@
-# NFL shadow settle
+# Shadow settle — 2026-09-20 (Week 2, 1pm Tier-1)
 
-## Summary
+| Metric | Value |
+|---|---|
+| predictions | 328 |
+| settled | 237 (W 171 / L 65 / P 1) |
+| hit rate | 0.725 |
+| Brier (market) | **0.209** |
+| logloss (market) | 0.611 |
+| Brier (model_p Laplace α=2) | **0.205** |
+| logloss (model_p) | 0.606 |
+| CLV | ok vs snapshot (mean 0.0); `close_source=pregame_snapshot_best_odds` — **not** book close |
 
-- predictions: **328**
-- settled: **237** (W 171 / L 65 / P 1)
-- skipped: **91**
-- hit rate (W/(W+L)): **0.7245762711864406**
-- Brier (market_implied): **0.20942634476398303** (n=236)
-- logloss (market_implied): **0.6109200586924246** (n=236)
-- Brier (model_p): **0.23783898305084747** (n=236)
-- logloss (model_p): **3.787168484897851** (n=236)
-- CLV: **ok** — n=237 mean_implied_pts=0.0 sources=['pregame_snapshot_best_odds']
+## model_p comparison (same 236 scored rows)
 
-## Blockers
+| Variant | model Brier | vs market |
+|---|---|---|
+| Raw empirical L10 (`empirical_hit_rate`) | 0.238 | +0.029 worse |
+| Laplace α=2 (`empirical_hit_rate_laplace`) | **0.205** | **−0.005 better** |
+| Hierarchy (nflverse gamelog → Laplace) | 0.217 | +0.008 worse |
 
-- `live_espn`: Live ESPN NFL scoreboard is optional and may return 403 from sandboxed egress; prefer --provider nflverse or --boxscores fixtures.
-- `event_id_join`: Outlier event_id does not match ESPN/nflverse provider ids; join is team-pair + Eastern slate date + player name.
+Default α=2 is pre-specified (add-2). Grid on this slate alone: α∈[1.5,12] beat market; α=4 min (~0.199) — not locked without more Sundays.
 
-## Skip reasons
+Projection coverage on pack: 229/328 `projection_nflverse_rate` (only Week 1 prior); remainder Laplace. Hierarchy does **not** beat pure Laplace yet on this thin sample.
 
-- `player_not_in_boxscore`: 57
-- `unsupported_or_missing_stat`: 34
+## How produced
 
-## By tier
+```bash
+python -m outlier_nfl.enrich_close \
+  --predictions artifacts/nfl/nfl_high_prob_props_2026-09-20_1pm.json \
+  --out artifacts/nfl/nfl_high_prob_props_2026-09-20_1pm_laplace.json \
+  --mode snapshot_best --attach-model-p empirical_hit_rate_laplace --alpha 2.0 --overwrite-model-p
 
-- `TIER_1_ANCHOR`: settled=237 W/L/P=171/65/1 hit_rate=0.7245762711864406 skipped=91
-
+python -m outlier_nfl.settle \
+  --predictions artifacts/nfl/nfl_high_prob_props_2026-09-20_1pm_laplace.json \
+  --boxscores artifacts/nfl/boxscores_2026-09-20_nflverse.json \
+  --out-json docs/nfl/artifacts/shadow_settle_2026-09-20.json \
+  --out-md docs/nfl/artifacts/shadow_settle_2026-09-20.md
+```

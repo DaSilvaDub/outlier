@@ -67,6 +67,80 @@ KNOWN_VERTICAL_DEEP_THREATS: tuple[str, ...] = (
 
 
 MODEL_P_SOURCE_EMPIRICAL_HIT_RATE = "empirical_hit_rate"
+MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE = "empirical_hit_rate_laplace"
+MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA = "empirical_hit_rate_beta"
+
+# Assumed trial counts when Outlier only ships a rate (no explicit n).
+# L10 is the preferred window for Tier-1; season uses a full-season proxy.
+HIT_RATE_WINDOW_N: dict[str, int] = {
+    "l10": 10,
+    "l20": 20,
+    "l5": 5,
+    "season": 17,
+}
+
+# Principled default: add-2 smoothing. On 2026-09-20 holdout, α∈[1.5, 12]
+# beat market Brier; α=4 minimized that one slate — do not treat the peak as
+# locked without more Sundays. α=2 is pre-specified and still beats market.
+DEFAULT_LAPLACE_ALPHA = 2.0
+
+
+def _normalize_hit_rate(value: Any) -> float | None:
+    try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (p == p) or p < 0:
+        return None
+    if 0.0 <= p <= 1.0:
+        return p
+    if 1.0 < p <= 100.0:
+        return p / 100.0
+    return None
+
+
+def select_empirical_hit_rate(
+    *,
+    l5_hit_rate: float | None = None,
+    l10_hit_rate: float | None = None,
+    l20_hit_rate: float | None = None,
+    season_hit_rate: float | None = None,
+) -> tuple[float, int, str] | None:
+    """Return (p, assumed_n, window_name) using L10→L20→L5→season preference."""
+    candidates = (
+        ("l10", l10_hit_rate),
+        ("l20", l20_hit_rate),
+        ("l5", l5_hit_rate),
+        ("season", season_hit_rate),
+    )
+    for window, raw in candidates:
+        p = _normalize_hit_rate(raw)
+        if p is None:
+            continue
+        return (p, HIT_RATE_WINDOW_N[window], window)
+    return None
+
+
+def shrink_hit_rate(
+    p: float,
+    n: int,
+    *,
+    alpha: float = DEFAULT_LAPLACE_ALPHA,
+    beta: float | None = None,
+) -> float:
+    """Beta/Laplace posterior mean: (p*n + α) / (n + α + β).
+
+    When ``beta`` is None, uses β=α (symmetric Laplace / add-α smoothing).
+    """
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if alpha < 0:
+        raise ValueError("alpha must be >= 0")
+    b = alpha if beta is None else float(beta)
+    if b < 0:
+        raise ValueError("beta must be >= 0")
+    hits = float(p) * float(n)
+    return (hits + float(alpha)) / (float(n) + float(alpha) + b)
 
 
 def compute_empirical_model_p(
@@ -83,55 +157,105 @@ def compute_empirical_model_p(
     present. Accepts 0–1 fractions or 0–100 percentages. Does **not** use book
     implied probability.
     """
-    for value in (l10_hit_rate, l20_hit_rate, l5_hit_rate, season_hit_rate):
-        if value is None:
-            continue
-        try:
-            p = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not (p == p) or p < 0:  # NaN / negative
-            continue
-        if 0.0 <= p <= 1.0:
-            return round(p, 6)
-        if 1.0 < p <= 100.0:
-            return round(p / 100.0, 6)
-    return None
+    selected = select_empirical_hit_rate(
+        l5_hit_rate=l5_hit_rate,
+        l10_hit_rate=l10_hit_rate,
+        l20_hit_rate=l20_hit_rate,
+        season_hit_rate=season_hit_rate,
+    )
+    if selected is None:
+        return None
+    return round(selected[0], 6)
+
+
+def compute_shrunk_empirical_model_p(
+    *,
+    l5_hit_rate: float | None = None,
+    l10_hit_rate: float | None = None,
+    l20_hit_rate: float | None = None,
+    season_hit_rate: float | None = None,
+    alpha: float = DEFAULT_LAPLACE_ALPHA,
+    beta: float | None = None,
+    method: str = "laplace",
+) -> tuple[float, str] | None:
+    """Shrunk empirical P(hit) and source stamp, or None if no usable rate.
+
+    method:
+      - laplace: β=α (ignores ``beta`` arg except when method=beta)
+      - beta: uses provided β (default β=α when None)
+    Never uses book implied probability.
+    """
+    selected = select_empirical_hit_rate(
+        l5_hit_rate=l5_hit_rate,
+        l10_hit_rate=l10_hit_rate,
+        l20_hit_rate=l20_hit_rate,
+        season_hit_rate=season_hit_rate,
+    )
+    if selected is None:
+        return None
+    p, n, _window = selected
+    if method == "laplace":
+        shrunk = shrink_hit_rate(p, n, alpha=alpha, beta=None)
+        source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+    elif method == "beta":
+        shrunk = shrink_hit_rate(p, n, alpha=alpha, beta=beta)
+        source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA
+    else:
+        raise ValueError(f"Unsupported shrink method: {method}")
+    return (round(shrunk, 6), source)
 
 
 def attach_empirical_model_p(
     prop: NflPlayerProp,
     *,
     overwrite: bool = False,
+    method: str = "raw",
+    alpha: float = DEFAULT_LAPLACE_ALPHA,
+    beta: float | None = None,
 ) -> NflPlayerProp:
     """Return prop with ``model_p`` from empirical hit rates when missing.
 
-    Preserves an already-set ``model_p`` unless ``overwrite`` is True. Never
-    copies ``implied_probability``.
+    method: ``raw`` | ``laplace`` | ``beta``. Preserves an already-set
+    ``model_p`` unless ``overwrite`` is True. Never copies ``implied_probability``.
     """
     if prop.model_p is not None and not overwrite:
         return prop
-    model_p = compute_empirical_model_p(
-        l5_hit_rate=prop.l5_hit_rate,
-        l10_hit_rate=prop.l10_hit_rate,
-        l20_hit_rate=prop.l20_hit_rate,
-        season_hit_rate=prop.season_hit_rate,
-    )
+    if method == "raw":
+        model_p = compute_empirical_model_p(
+            l5_hit_rate=prop.l5_hit_rate,
+            l10_hit_rate=prop.l10_hit_rate,
+            l20_hit_rate=prop.l20_hit_rate,
+            season_hit_rate=prop.season_hit_rate,
+        )
+        source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    else:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=prop.l5_hit_rate,
+            l10_hit_rate=prop.l10_hit_rate,
+            l20_hit_rate=prop.l20_hit_rate,
+            season_hit_rate=prop.season_hit_rate,
+            alpha=alpha,
+            beta=beta,
+            method=method,
+        )
+        if shrunk is None:
+            model_p, source = None, None
+        else:
+            model_p, source = shrunk
     if model_p is None:
         if prop.model_p is None and prop.model_p_source is None:
             return prop
         return replace(prop, model_p=None, model_p_source=None)
-    return replace(
-        prop,
-        model_p=model_p,
-        model_p_source=MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
-    )
+    return replace(prop, model_p=model_p, model_p_source=source)
 
 
 def attach_empirical_model_p_record(
     record: dict[str, Any],
     *,
     overwrite: bool = False,
+    method: str = "raw",
+    alpha: float = DEFAULT_LAPLACE_ALPHA,
+    beta: float | None = None,
 ) -> dict[str, Any]:
     """Mutate/return a prop dict with empirical ``model_p`` when missing.
 
@@ -143,18 +267,34 @@ def attach_empirical_model_p_record(
     if record.get("model_p") is not None and not overwrite:
         record.setdefault("model_p_source", record.get("model_p_source"))
         return record
-    model_p = compute_empirical_model_p(
-        l5_hit_rate=record.get("l5_hit_rate"),
-        l10_hit_rate=record.get("l10_hit_rate"),
-        l20_hit_rate=record.get("l20_hit_rate"),
-        season_hit_rate=record.get("season_hit_rate"),
-    )
+    if method == "raw":
+        model_p = compute_empirical_model_p(
+            l5_hit_rate=record.get("l5_hit_rate"),
+            l10_hit_rate=record.get("l10_hit_rate"),
+            l20_hit_rate=record.get("l20_hit_rate"),
+            season_hit_rate=record.get("season_hit_rate"),
+        )
+        source: str | None = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    else:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=record.get("l5_hit_rate"),
+            l10_hit_rate=record.get("l10_hit_rate"),
+            l20_hit_rate=record.get("l20_hit_rate"),
+            season_hit_rate=record.get("season_hit_rate"),
+            alpha=alpha,
+            beta=beta,
+            method=method,
+        )
+        if shrunk is None:
+            model_p, source = None, None
+        else:
+            model_p, source = shrunk
     if model_p is None:
         record.setdefault("model_p", None)
         record.setdefault("model_p_source", None)
         return record
     record["model_p"] = model_p
-    record["model_p_source"] = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    record["model_p_source"] = source
     return record
 
 
@@ -290,6 +430,6 @@ def apply_game_script_calibration(
             calibration_tags=tuple(tags),
             calibrated_volume_adjustment=round(vol_adj, 2) if vol_adj is not None else None,
         )
-        calibrated_props.append(attach_empirical_model_p(updated))
+        calibrated_props.append(attach_empirical_model_p(updated, method="laplace"))
 
     return calibrated_props

@@ -17,9 +17,12 @@ from pathlib import Path
 
 from outlier_nfl.calibration import (
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
+    MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
     apply_game_script_calibration,
     attach_empirical_model_p,
     compute_empirical_model_p,
+    compute_shrunk_empirical_model_p,
+    shrink_hit_rate,
     extract_game_script_context,
 )
 from outlier_nfl.consensus import (
@@ -398,9 +401,9 @@ def test_empirical_hit_rate_tiering():
 
     assert by_name["Sam LaPorta"].confidence_tier == "TIER_1_ANCHOR"
     assert "HIGH_HIT_RATE_ANCHOR" in by_name["Sam LaPorta"].calibration_tags
-    # Empirical model_p from L10 (never book implied_probability)
-    assert by_name["Sam LaPorta"].model_p == 0.9
-    assert by_name["Sam LaPorta"].model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    # Empirical model_p from Laplace(α=2) on L10 (never book implied_probability)
+    assert by_name["Sam LaPorta"].model_p == round(shrink_hit_rate(0.9, 10, alpha=2.0), 6)
+    assert by_name["Sam LaPorta"].model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
     assert by_name["Sam LaPorta"].implied_probability == 52.38
     assert by_name["Sam LaPorta"].model_p != 0.5238
 
@@ -524,3 +527,22 @@ def test_compute_empirical_model_p_prefers_l10_never_market():
     assert filled.model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
     # Must not equal book implied (52.38%)
     assert filled.model_p != 0.5238
+
+
+def test_laplace_shrink_empirical_model_p():
+    """Laplace α=2 pulls p=1.0 at n=10 toward 12/14; source stamped."""
+    assert shrink_hit_rate(1.0, 10, alpha=2.0) == 12.0 / 14.0
+    assert shrink_hit_rate(0.8, 10, alpha=2.0) == 10.0 / 14.0
+    out = compute_shrunk_empirical_model_p(l5_hit_rate=1.0, l10_hit_rate=1.0, alpha=2.0)
+    assert out is not None
+    p, source = out
+    assert p == round(12.0 / 14.0, 6)
+    assert source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+    # Never equals a typical market implied fraction
+    assert abs(p - 0.5238) > 0.05
+
+    prop = attach_empirical_model_p(
+        _make_prop("Z", "REC_YDS", 50.0, l5=1.0, l10=1.0), method="laplace", alpha=2.0
+    )
+    assert prop.model_p == round(12.0 / 14.0, 6)
+    assert prop.model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE

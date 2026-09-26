@@ -11,15 +11,15 @@
   "brier_label": "market_implied",
   "logloss_label": "market_implied",
   "n_scored_prob": 236,
-  "brier_model": 0.23783898305084747,
-  "logloss_model": 3.787168484897851,
+  "brier_model": 0.20479505534422882,
+  "logloss_model": 0.606162510823085,
   "n_scored_model": 236,
   "clv": {
     "status": "ok",
     "reason": null,
     "n": 237,
     "mean_clv_implied_pts": 0.0,
-    "note": "CLV implied pts = close_implied - bet implied_probability (same percent units). Positive ⇒ close was a worse price than the bet. Interpret close_source: pregame_snapshot_best_odds is NOT book close.",
+    "note": "CLV implied pts = close_implied - bet implied_probability (same percent units). Positive \u21d2 close was a worse price than the bet. Interpret close_source: pregame_snapshot_best_odds is NOT book close.",
     "close_sources": [
       "pregame_snapshot_best_odds"
     ]
@@ -52,7 +52,24 @@
       "hit_rate": 0.7245762711864406
     }
   },
-  "rows": [],
+  "generated_at": "2026-09-26T11:22:02Z",
+  "predictions_path": "artifacts/nfl/nfl_high_prob_props_2026-09-20_1pm_laplace.json",
+  "boxscores_path": "artifacts/nfl/boxscores_2026-09-20_nflverse.json",
+  "provider": null,
+  "slate_date": null,
+  "season": null,
+  "week": null,
   "rows_omitted": true,
-  "model_p_note": "model_p = empirical_hit_rate (L10→L20→L5→season); never copied from implied_probability. Source stamped model_p_source=empirical_hit_rate."
+  "model_p_note": "model_p = Laplace(\u03b1=2) shrink of empirical L10\u2192L20\u2192L5\u2192season hit rates; source=empirical_hit_rate_laplace. Never copied from implied_probability. Raw empirical (pre-shrink) Brier was 0.238 on this slate.",
+  "shrink_grid_note": "Holdout grid on 2026-09-20 only (no prior settleable Sunday pack on box): \u03b1\u2208[1.5,12] beat market Brier 0.209; \u03b1=4 minimized (~0.199). Default \u03b1=2 is pre-specified add-2 smoothing (model Brier 0.2048) to avoid locking the single-slate peak.",
+  "comparison": {
+    "market_brier": 0.20942634476398303,
+    "raw_empirical_brier": 0.23783898305084747,
+    "laplace_alpha2_brier": 0.20479505534422882,
+    "hierarchy_proj_then_laplace_brier": 0.21717053251470342,
+    "hierarchy_sources_on_pack": {
+      "projection_nflverse_rate": 229,
+      "empirical_hit_rate_laplace": 99
+    }
+  }
 }

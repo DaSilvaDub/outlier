@@ -309,3 +309,115 @@ def test_prob_01_allows_extremes_for_brier():
     assert _brier(1.0, won=False) == 1.0
     assert _logloss(1.0, won=False) > 0.0
 
+
+
+def test_enrich_laplace_shrinks_overconfident_l10():
+    from outlier_nfl.enrich_close import enrich_prediction_payload
+    from outlier_nfl.calibration import (
+        MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
+        shrink_hit_rate,
+    )
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    for row in raw["records"]:
+        for key in ("model_p", "model_p_source", "p_model"):
+            row.pop(key, None)
+    enriched = enrich_prediction_payload(
+        raw,
+        mode="snapshot_best",
+        attach_model_p="empirical_hit_rate_laplace",
+        alpha=2.0,
+        overwrite_model_p=True,
+    )
+    row0 = enriched["records"][0]
+    l10 = float(row0["l10_hit_rate"])
+    assert row0["model_p"] == round(shrink_hit_rate(l10, 10, alpha=2.0), 6)
+    assert row0["model_p_source"] == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+    assert row0["model_p"] != l10 or l10 not in (0.0, 1.0)
+
+
+def test_book_close_mode_refuses_without_feed():
+    from outlier_nfl.enrich_close import enrich_prediction_payload, main
+    import pytest
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    with pytest.raises(ValueError, match="book_close"):
+        enrich_prediction_payload(raw, mode="book_close", attach_model_p="pass")
+
+    with pytest.raises(SystemExit, match="close-feed"):
+        main(
+            [
+                "--predictions",
+                str(FIXTURES / "predictions_tier1.json"),
+                "--out",
+                str(FIXTURES / "_should_not_write.json"),
+                "--mode",
+                "book_close",
+            ]
+        )
+
+
+def test_book_close_feed_stamps_source(tmp_path: Path):
+    from outlier_nfl.enrich_close import enrich_prediction_payload, CLOSE_SOURCE_BOOK, load_book_close_feed
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    row = raw["records"][0]
+    feed = {
+        "records": [
+            {
+                "player_name": row["player_name"],
+                "market": row["market"],
+                "line": row["line"],
+                "position": row["position"],
+                "matchup": row["matchup"],
+                "event_id": row["event_id"],
+                "close_line": row["line"],
+                "close_odds": -115,
+                "close_implied": 53.488,
+            }
+        ]
+    }
+    feed_path = tmp_path / "closes.json"
+    feed_path.write_text(json.dumps(feed), encoding="utf-8")
+    index = load_book_close_feed(feed_path)
+    # Strip existing close so feed must win
+    for r in raw["records"]:
+        for key in ("close_line", "close_odds", "close_implied", "close_source"):
+            r.pop(key, None)
+    enriched = enrich_prediction_payload(
+        raw, mode="book_close", attach_model_p="pass", book_close_index=index
+    )
+    matched = [r for r in enriched["records"] if r.get("close_source") == CLOSE_SOURCE_BOOK]
+    assert len(matched) == 1
+    assert matched[0]["close_odds"] == -115
+    # Unmatched rows must not be silently labeled book_close from snapshot
+    unmatched = [r for r in enriched["records"] if r.get("close_source") != CLOSE_SOURCE_BOOK]
+    assert len(unmatched) == len(enriched["records"]) - 1
+    assert all(r.get("close_odds") is None for r in unmatched)
+
+
+def test_projection_gamelog_rate_fixture():
+    from outlier_nfl.projection import (
+        project_hit_probability,
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
+        week_stat_value,
+    )
+
+    rows = [
+        {"rushing_yards": "90", "receiving_yards": "10", "week": "1"},
+        {"rushing_yards": "70", "receiving_yards": "5", "week": "2"},
+    ]
+    assert week_stat_value("RUSH_YDS", rows[0]) == 90.0
+    result = project_hit_probability(
+        player_name="Jahmyr Gibbs",
+        market="RUSH_YDS",
+        line=80.5,
+        position="OVER",
+        week_rows=rows,
+        alpha=1.0,
+    )
+    assert result is not None
+    # 1 of 2 overs → (1+1)/(2+2) = 0.5 with α=1
+    assert result.model_p == 0.5
+    assert result.n_games == 2
+    assert result.source == MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
