@@ -11,21 +11,20 @@
   "brier_label": "market_implied",
   "logloss_label": "market_implied",
   "n_scored_prob": 236,
-  "brier_model": null,
-  "logloss_model": null,
-  "n_scored_model": 0,
+  "brier_model": 0.23783898305084747,
+  "logloss_model": 3.787168484897851,
+  "n_scored_model": 236,
   "clv": {
     "status": "ok",
     "reason": null,
     "n": 237,
     "mean_clv_implied_pts": 0.0,
-    "note": "CLV implied pts = close_implied - bet implied_probability (same percent units). Positive \u21d2 close was a worse price than the bet. Interpret close_source: pregame_snapshot_best_odds is NOT book close.",
+    "note": "CLV implied pts = close_implied - bet implied_probability (same percent units). Positive ⇒ close was a worse price than the bet. Interpret close_source: pregame_snapshot_best_odds is NOT book close.",
     "close_sources": [
       "pregame_snapshot_best_odds"
     ]
   },
   "blockers": {
-    "model_prob": "No model_p / p_model on snapshots; Brier/logloss below are book implied_probability only (labeled market).",
     "live_espn": "Live ESPN NFL scoreboard is optional and may return 403 from sandboxed egress; prefer --provider nflverse or --boxscores fixtures.",
     "event_id_join": "Outlier event_id does not match ESPN/nflverse provider ids; join is team-pair + Eastern slate date + player name."
   },
@@ -53,13 +52,7 @@
       "hit_rate": 0.7245762711864406
     }
   },
-  "generated_at": "2026-09-26T10:33:43Z",
-  "predictions_path": "artifacts/nfl/nfl_high_prob_props_2026-09-20_1pm_with_close.json",
-  "boxscores_path": "artifacts/nfl/boxscores_2026-09-20_nflverse.json",
-  "provider": null,
-  "slate_date": null,
-  "season": null,
-  "week": null,
+  "rows": [],
   "rows_omitted": true,
-  "n_rows": 328
+  "model_p_note": "model_p = empirical_hit_rate (L10→L20→L5→season); never copied from implied_probability. Source stamped model_p_source=empirical_hit_rate."
 }

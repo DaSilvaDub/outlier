@@ -36,7 +36,9 @@
       ],
       "calibrated_volume_adjustment": 0.2,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "model_p": 0.9,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -69,7 +71,9 @@
       ],
       "calibrated_volume_adjustment": 0.1,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "model_p": 0.85,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -103,7 +107,9 @@
       ],
       "calibrated_volume_adjustment": -0.25,
       "is_consensus_line": true,
-      "scope": "full_game"
+      "scope": "full_game",
+      "model_p": 0.7,
+      "model_p_source": "empirical_hit_rate"
     }
   ]
 }

@@ -196,17 +196,44 @@ def test_clv_and_model_p_labels_when_fields_present():
 
 def test_enrich_close_snapshot_best_is_honest(tmp_path: Path):
     from outlier_nfl.enrich_close import enrich_prediction_payload, CLOSE_SOURCE_SNAPSHOT
+    from outlier_nfl.calibration import MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
 
     raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
-    # Strip close fields to simulate legacy artifact
+    # Strip close / model fields to simulate legacy artifact
     for row in raw["records"]:
-        for key in ("close_line", "close_odds", "close_implied", "close_source", "model_p"):
+        for key in (
+            "close_line",
+            "close_odds",
+            "close_implied",
+            "close_source",
+            "model_p",
+            "model_p_source",
+            "p_model",
+        ):
             row.pop(key, None)
-    enriched = enrich_prediction_payload(raw, mode="snapshot_best")
+    enriched = enrich_prediction_payload(
+        raw, mode="snapshot_best", attach_model_p="empirical_hit_rate"
+    )
     row0 = enriched["records"][0]
     assert row0["close_source"] == CLOSE_SOURCE_SNAPSHOT
     assert row0["close_odds"] == row0["best_odds"]
     assert row0["close_line"] == row0["line"]
+    # Empirical model_p from L10 — never a copy of implied_probability
+    assert row0["model_p"] == row0["l10_hit_rate"]
+    assert row0["model_p_source"] == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    assert abs(float(row0["model_p"]) - float(row0["implied_probability"]) / 100.0) > 1e-6
+    assert enriched["model_p_enrichment"]["n_with_model_p"] == len(enriched["records"])
+
+
+def test_enrich_close_pass_does_not_invent_model_p():
+    from outlier_nfl.enrich_close import enrich_prediction_payload
+
+    raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
+    for row in raw["records"]:
+        for key in ("model_p", "model_p_source", "p_model"):
+            row.pop(key, None)
+    enriched = enrich_prediction_payload(raw, mode="snapshot_best", attach_model_p="pass")
+    assert all(r.get("model_p") is None for r in enriched["records"])
 
 
 def test_nflverse_week_row_maps_into_simplified_schema():
@@ -253,7 +280,7 @@ def test_nflverse_week_row_maps_into_simplified_schema():
 def test_clv_blocked_without_close_fields():
     raw = json.loads((FIXTURES / "predictions_tier1.json").read_text(encoding="utf-8"))
     for row in raw["records"]:
-        for key in ("close_line", "close_odds", "close_implied", "close_source", "model_p", "p_model"):
+        for key in ("close_line", "close_odds", "close_implied", "close_source", "model_p", "model_p_source", "p_model"):
             row.pop(key, None)
     tmp = FIXTURES / "_tmp_no_close.json"
     try:
@@ -268,3 +295,17 @@ def test_clv_blocked_without_close_fields():
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+def test_prob_01_allows_extremes_for_brier():
+    """Empirical L10=1.0 must still score Brier (logloss clips internally)."""
+    from outlier_nfl.settle import _prob_01, _brier, _logloss
+
+    assert _prob_01(1.0) == 1.0
+    assert _prob_01(0.0) == 0.0
+    assert _prob_01(80.0) == 0.8
+    assert _prob_01(101.0) is None
+    assert _brier(1.0, won=True) == 0.0
+    assert _brier(1.0, won=False) == 1.0
+    assert _logloss(1.0, won=False) > 0.0
+

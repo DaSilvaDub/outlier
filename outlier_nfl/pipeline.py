@@ -326,7 +326,7 @@ class NflPipeline:
         anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
         # Persist emit-time odds as close_* with honest source label (not book close).
         for row in anchors:
-            attach_close_fields(row, mode="snapshot_best")
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate")
         anchors_payload = {
             "date": target_date,
             "window": window,
@@ -336,6 +336,13 @@ class NflPipeline:
             "close_enrichment": {
                 "mode": "snapshot_best",
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
+            },
+            "model_p_enrichment": {
+                "mode": "empirical_hit_rate",
+                "note": (
+                    "model_p from L10/L20/L5/season hit rates "
+                    "(source=empirical_hit_rate); never copied from implied_probability."
+                ),
             },
         }
         safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
@@ -374,7 +381,7 @@ class NflPipeline:
             if any(str(tag).startswith("MATCHUP_") for tag in p.calibration_tags)
         ]
         for row in matchup_prop_records:
-            attach_close_fields(row, mode="snapshot_best")
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate")
         matchup_props_payload = {
             "date": target_date,
             "window": window,
@@ -384,6 +391,13 @@ class NflPipeline:
             "close_enrichment": {
                 "mode": "snapshot_best",
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
+            },
+            "model_p_enrichment": {
+                "mode": "empirical_hit_rate",
+                "note": (
+                    "model_p from L10/L20/L5/season hit rates "
+                    "(source=empirical_hit_rate); never copied from implied_probability."
+                ),
             },
         }
         safe_write_json(

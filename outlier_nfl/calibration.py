@@ -4,6 +4,9 @@ Implements calibration heuristics learned from empirical postgame reconciliation
 1. Deficit-Risk Haircut on Road Underdog RB Rushing Lines (-15% volume adjustment).
 2. Two-High Shell Target Divergence in Comeback Mode (+20% Slot/TE, -25% Deep Threat).
 3. Empirical Hit Rate Priority (Tier-1 Anchor classification for 100% L5 / 80%+ L10).
+4. Emit ``model_p`` from empirical hit rates (L10→L20→L5→season) — never from
+   book ``implied_probability``. Volume haircuts stay tags; they are not mapped
+   into probability without a distributional model.
 """
 
 from __future__ import annotations
@@ -61,6 +64,98 @@ KNOWN_VERTICAL_DEEP_THREATS: tuple[str, ...] = (
     "Jalin Hyatt",
     "J. Hyatt",
 )
+
+
+MODEL_P_SOURCE_EMPIRICAL_HIT_RATE = "empirical_hit_rate"
+
+
+def compute_empirical_model_p(
+    *,
+    l5_hit_rate: float | None = None,
+    l10_hit_rate: float | None = None,
+    l20_hit_rate: float | None = None,
+    season_hit_rate: float | None = None,
+) -> float | None:
+    """Selected-side empirical P(hit) in [0, 1], or None if no usable hit rate.
+
+    Preference order favors the longer / more stable window first. Tier-1 rows
+    often have ``l5_hit_rate == 1.0`` by construction, so L10 is preferred when
+    present. Accepts 0–1 fractions or 0–100 percentages. Does **not** use book
+    implied probability.
+    """
+    for value in (l10_hit_rate, l20_hit_rate, l5_hit_rate, season_hit_rate):
+        if value is None:
+            continue
+        try:
+            p = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not (p == p) or p < 0:  # NaN / negative
+            continue
+        if 0.0 <= p <= 1.0:
+            return round(p, 6)
+        if 1.0 < p <= 100.0:
+            return round(p / 100.0, 6)
+    return None
+
+
+def attach_empirical_model_p(
+    prop: NflPlayerProp,
+    *,
+    overwrite: bool = False,
+) -> NflPlayerProp:
+    """Return prop with ``model_p`` from empirical hit rates when missing.
+
+    Preserves an already-set ``model_p`` unless ``overwrite`` is True. Never
+    copies ``implied_probability``.
+    """
+    if prop.model_p is not None and not overwrite:
+        return prop
+    model_p = compute_empirical_model_p(
+        l5_hit_rate=prop.l5_hit_rate,
+        l10_hit_rate=prop.l10_hit_rate,
+        l20_hit_rate=prop.l20_hit_rate,
+        season_hit_rate=prop.season_hit_rate,
+    )
+    if model_p is None:
+        if prop.model_p is None and prop.model_p_source is None:
+            return prop
+        return replace(prop, model_p=None, model_p_source=None)
+    return replace(
+        prop,
+        model_p=model_p,
+        model_p_source=MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
+    )
+
+
+def attach_empirical_model_p_record(
+    record: dict[str, Any],
+    *,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Mutate/return a prop dict with empirical ``model_p`` when missing.
+
+    Same contract as :func:`attach_empirical_model_p` for JSON artifacts
+    (historical packs / enrich_close). Never copies implied_probability.
+    """
+    if record.get("model_p") is None and record.get("p_model") is not None:
+        record["model_p"] = record.get("p_model")
+    if record.get("model_p") is not None and not overwrite:
+        record.setdefault("model_p_source", record.get("model_p_source"))
+        return record
+    model_p = compute_empirical_model_p(
+        l5_hit_rate=record.get("l5_hit_rate"),
+        l10_hit_rate=record.get("l10_hit_rate"),
+        l20_hit_rate=record.get("l20_hit_rate"),
+        season_hit_rate=record.get("season_hit_rate"),
+    )
+    if model_p is None:
+        record.setdefault("model_p", None)
+        record.setdefault("model_p_source", None)
+        return record
+    record["model_p"] = model_p
+    record["model_p_source"] = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    return record
 
 
 def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict[str, Any]]:
@@ -189,13 +284,12 @@ def apply_game_script_calibration(
             tier = "TIER_2_STRONG"
             tags.append("CONSISTENT_HIT_RATE")
 
-        calibrated_props.append(
-            replace(
-                prop,
-                confidence_tier=tier,
-                calibration_tags=tuple(tags),
-                calibrated_volume_adjustment=round(vol_adj, 2) if vol_adj is not None else None,
-            )
+        updated = replace(
+            prop,
+            confidence_tier=tier,
+            calibration_tags=tuple(tags),
+            calibrated_volume_adjustment=round(vol_adj, 2) if vol_adj is not None else None,
         )
+        calibrated_props.append(attach_empirical_model_p(updated))
 
     return calibrated_props

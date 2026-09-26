@@ -40,7 +40,8 @@
       "close_odds": -111,
       "close_implied": 52.61,
       "close_source": "pregame_snapshot_best_odds",
-      "model_p": 0.5261
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -78,7 +79,9 @@
       "close_line": 79.5,
       "close_odds": -104,
       "close_implied": 50.98,
-      "close_source": "pregame_snapshot_best_odds"
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.9,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -114,7 +117,9 @@
       "close_line": 3.5,
       "close_odds": -137,
       "close_implied": 57.81,
-      "close_source": "pregame_snapshot_best_odds"
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -151,7 +156,9 @@
       "close_line": 78.5,
       "close_odds": -106,
       "close_implied": 51.46,
-      "close_source": "pregame_snapshot_best_odds"
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.85,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -189,7 +196,9 @@
       "close_line": 59.5,
       "close_odds": -109,
       "close_implied": 52.15,
-      "close_source": "pregame_snapshot_best_odds"
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.7,
+      "model_p_source": "empirical_hit_rate"
     },
     {
       "event_id": "outlier-det-buf-20260917",
@@ -225,7 +234,9 @@
       "close_line": 249.5,
       "close_odds": -107,
       "close_implied": 51.69,
-      "close_source": "pregame_snapshot_best_odds"
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
     }
   ]
 }

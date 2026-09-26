@@ -16,7 +16,10 @@ import json
 from pathlib import Path
 
 from outlier_nfl.calibration import (
+    MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
     apply_game_script_calibration,
+    attach_empirical_model_p,
+    compute_empirical_model_p,
     extract_game_script_context,
 )
 from outlier_nfl.consensus import (
@@ -395,6 +398,11 @@ def test_empirical_hit_rate_tiering():
 
     assert by_name["Sam LaPorta"].confidence_tier == "TIER_1_ANCHOR"
     assert "HIGH_HIT_RATE_ANCHOR" in by_name["Sam LaPorta"].calibration_tags
+    # Empirical model_p from L10 (never book implied_probability)
+    assert by_name["Sam LaPorta"].model_p == 0.9
+    assert by_name["Sam LaPorta"].model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    assert by_name["Sam LaPorta"].implied_probability == 52.38
+    assert by_name["Sam LaPorta"].model_p != 0.5238
 
     assert by_name["Amon-Ra St. Brown"].confidence_tier == "TIER_2_STRONG"
     assert "CONSISTENT_HIT_RATE" in by_name["Amon-Ra St. Brown"].calibration_tags
@@ -491,3 +499,28 @@ def test_game_script_generator_output(tmp_path):
     assert "Calibrated Signal" in report
     assert "DEFICIT RISK (-15% Vol)" in report
     assert "SHELL UPGRADE (+20% Vol)" in report
+
+
+def test_compute_empirical_model_p_prefers_l10_never_market():
+    """model_p is L10/L5 empirical hit rate — not implied_probability."""
+    from dataclasses import replace
+
+    assert compute_empirical_model_p(l5_hit_rate=1.0, l10_hit_rate=0.8) == 0.8
+    assert compute_empirical_model_p(l5_hit_rate=1.0, l10_hit_rate=None) == 1.0
+    assert compute_empirical_model_p(l5_hit_rate=None, l10_hit_rate=None) is None
+    assert compute_empirical_model_p(l10_hit_rate=80.0) == 0.8
+
+    seeded = replace(
+        _make_prop("X", "REC_YDS", 50.0, l5=1.0, l10=0.8),
+        model_p=0.61,
+        model_p_source="external",
+    )
+    kept = attach_empirical_model_p(seeded)
+    assert kept.model_p == 0.61
+    assert kept.model_p_source == "external"
+
+    filled = attach_empirical_model_p(_make_prop("Y", "REC_YDS", 50.0, l5=1.0, l10=0.85))
+    assert filled.model_p == 0.85
+    assert filled.model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+    # Must not equal book implied (52.38%)
+    assert filled.model_p != 0.5238

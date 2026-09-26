@@ -17,8 +17,8 @@ model Brier fills when `model_p` / `p_model` is present. Values are never invent
 | same | `nfl_matchup_props_{date}.json` | Props with any `MATCHUP_*` tag (same schema) |
 | same | `nfl_calibrated_props_{date}.json` | Full calibrated set |
 | Close enricher | `python -m outlier_nfl.enrich_close` | Post-hoc attach of `close_*` |
-| Tiering | `outlier_nfl/calibration.py` | `TIER_1_ANCHOR` when L5==1.0, L10>=0.80, books>=3 |
-| Matchup tags | `outlier_nfl/matchup.py` `apply_matchup_signals` | Stacks `MATCHUP_*` (+ fade/upgrade volume adj) |
+| Tiering + `model_p` | `outlier_nfl/calibration.py` | `TIER_1_ANCHOR` when L5==1.0, L10>=0.80, books>=3; **`model_p` = empirical hit rate** (L10→L20→L5→season), source=`empirical_hit_rate` — **never** book implied |
+| Matchup tags | `outlier_nfl/matchup.py` `apply_matchup_signals` | Stacks `MATCHUP_*` (+ fade/upgrade volume adj); re-attaches empirical `model_p` when missing |
 
 **Result sources**
 
@@ -29,7 +29,7 @@ model Brier fills when `model_p` / `p_model` is present. Values are never invent
 | **nflverse week stats** | External (GitHub releases CSV) | Preferred live/offline provider: `outlier_nfl/boxscore_nflverse.py` → simplified schema |
 | Simplified box-score JSON | Fixtures / generated | CI path: `tests/fixtures/nfl/settle/boxscores_det_buf.json` |
 | Closing lines | Optional on snapshot | `close_*` via pipeline emit (`snapshot_best`) or enricher; **not** silent use of `best_odds` |
-| Model probability | Optional on snapshot | `model_p` / `p_model`; absent ⇒ model Brier `n/a`, market Brier still labeled |
+| Model probability | Emitted on snapshot | `model_p` / `p_model` + `model_p_source`; empirical hit-rate path (not market). Absent ⇒ model Brier `n/a` |
 
 Join strategy: **team pair + Eastern slate date + player name**. Outlier `event_id` is not assumed equal to ESPN/nflverse provider ids.
 
@@ -41,7 +41,8 @@ Join strategy: **team pair + Eastern slate date + player name**. Outlier `event_
 | `close_odds` | American odds at close (or labeled snapshot) |
 | `close_implied` | Implied probability **percent** (same units as `implied_probability`) |
 | `close_source` | `book_close` \| `pregame_snapshot_best_odds` \| … |
-| `model_p` / `p_model` | Model / calibrated probability (0–1 preferred; 0–100 also accepted) |
+| `model_p` / `p_model` | Selected-side model probability (0–1 preferred; 0–100 also accepted) |
+| `model_p_source` | `empirical_hit_rate` (L10→L20→L5→season) \| `external` \| … — **never** a copy of `implied_probability` |
 
 **Honesty:** `best_odds` is **not** book close. Pipeline emit and `--mode snapshot_best` copy emit-time line/odds/implied into `close_*` and set `close_source=pregame_snapshot_best_odds` so CLV can leave `blocked` while remaining labeled. A true book-close feed should set `close_source=book_close`.
 
@@ -80,7 +81,8 @@ python -m outlier_nfl.settle \
 python -m outlier_nfl.enrich_close \
   --predictions path/to/nfl_high_prob_props_DATE.json \
   --out path/to/nfl_high_prob_props_DATE_with_close.json \
-  --mode snapshot_best   # or: explicit
+  --mode snapshot_best \
+  --attach-model-p empirical_hit_rate   # or: pass (alias only; never copies market)
 ```
 
 ## Sunday 2026-09-20 settle (shipped this PR)
@@ -92,11 +94,13 @@ Calendar: Sat 2026-09-26 → last Sunday **2026-09-20** (NFL 2026 Week 2).
 | Props | Drive `nfl_high_prob_props_2026-09-20_1pm.json` (328 Tier-1 rows; assembled via Drive MCP — binary `download_file` unavailable this turn) |
 | Box | nflverse `stats_player_week_2026` + `games.csv` (live fetch **worked** on box; ESPN scoreboard **403**) |
 | Close | post-hoc `snapshot_best` (`close_source=pregame_snapshot_best_odds`) — **not** book close |
-| Model p | absent → model Brier `n/a` |
+| Model p | empirical hit rate (L10) via enrich `--attach-model-p empirical_hit_rate` → all 328 rows; `model_p_source=empirical_hit_rate` |
 
-| n pred | settled | W/L/P | hit rate | Brier (market) | logloss (market) | CLV |
-|---|---|---|---|---|---|---|
-| 328 | 237 | 171/65/1 | 0.725 | 0.209 | 0.611 | ok (mean implied pts **0.0** vs snapshot; sources=`pregame_snapshot_best_odds`) |
+| n pred | settled | W/L/P | hit rate | Brier (market) | logloss (market) | Brier (model_p) | logloss (model_p) | CLV |
+|---|---|---|---|---|---|---|---|---|
+| 328 | 237 | 171/65/1 | 0.725 | 0.209 | 0.611 | **0.238** (n=236) | **3.787** (n=236) | ok (mean implied pts **0.0** vs snapshot; sources=`pregame_snapshot_best_odds`) |
+
+Model Brier is **worse** than market on this slate: raw L10 rates are overconfident (many `model_p=1.0`), so losses at p=1 inflate Brier/logloss. That is an honest measurement, not a blocker.
 
 Skipped: 57 `player_not_in_boxscore`, 34 `unsupported_or_missing_stat` (e.g. LONG_REC / LONG_RUSH / some defensive labels).
 
@@ -111,10 +115,11 @@ Scorecard: `docs/nfl/artifacts/shadow_settle_2026-09-20.md` (summary JSON alongs
 ## Honest blockers (remaining)
 
 1. **True book close** — still missing as a feed; snapshot CLV is labeled, not Pinnacle/book close.
-2. **Model Brier on live packs** — `model_p` not yet emitted by the NFL model path on high-prob artifacts.
-3. **Live ESPN** — optional; often 403. Use nflverse.
-4. **LONG_* / some defensive props** — may skip until mapped.
-5. **Props location** — live packs live on Google Drive (`nfl_high_prob_props_*.json`); repo does not store full slate packs by default.
+2. **No ridge/Elo/ensemble** — `model_p` today is **empirical L10/L5 hit rate**, not an independent projection model. Volume haircuts are tags only (not folded into p).
+3. **Overconfident empirical rates** — Tier-1 often has L10=1.0; Laplace/Beta shrinkage or a real projection model is the next calibration step.
+4. **Live ESPN** — optional; often 403. Use nflverse.
+5. **LONG_* / some defensive props** — may skip until mapped.
+6. **Props location** — live packs live on Google Drive (`nfl_high_prob_props_*.json`); repo does not store full slate packs by default.
 
 ## What this is not
 

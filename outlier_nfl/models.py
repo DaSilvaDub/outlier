@@ -92,7 +92,9 @@ class NflPlayerProp:
     close_implied: float | None = None  # percentage 0-100, same units as implied_probability
     close_source: str | None = None  # e.g. book_close | pregame_snapshot_best_odds
     # Optional model / calibrated probability (0-1 preferred; settle also accepts 0-100).
+    # Never copy book implied_probability into model_p.
     model_p: float | None = None
+    model_p_source: str | None = None  # e.g. empirical_hit_rate | external
 
     def __post_init__(self) -> None:
         if isinstance(self.books, list):

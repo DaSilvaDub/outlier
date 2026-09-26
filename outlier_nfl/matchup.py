@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from outlier_nfl.config import is_team_total, normalize_team
+from outlier_nfl.calibration import attach_empirical_model_p
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 
@@ -623,13 +624,17 @@ def apply_matchup_signals(
     props: list[NflPlayerProp],
     scripts: list[MatchupScript],
 ) -> list[NflPlayerProp]:
-    """Stack matchup mismatch tags and volume adjustments onto calibrated props."""
+    """Stack matchup mismatch tags and volume adjustments onto calibrated props.
+
+    Ensures ``model_p`` is present from empirical hit rates when available
+    (preserves an already-set model_p). Never copies implied_probability.
+    """
     by_event = {script.event_id: script for script in scripts}
     updated: list[NflPlayerProp] = []
     for prop in props:
         script = by_event.get(prop.event_id)
         if script is None:
-            updated.append(prop)
+            updated.append(attach_empirical_model_p(prop))
             continue
         tags = list(prop.calibration_tags)
         protected = bool({"DEFICIT_VOLUME_RISK", "SHELL_COVERAGE_DEEP_HAIRCUT"} & set(tags))
@@ -663,7 +668,7 @@ def apply_matchup_signals(
                 # Play the under: tag only. Do not apply the fade haircut.
                 continue
         if not matched:
-            updated.append(prop)
+            updated.append(attach_empirical_model_p(prop))
             continue
         if fade and "MATCHUP_FADE" not in tags:
             tags.append("MATCHUP_FADE")
@@ -673,11 +678,13 @@ def apply_matchup_signals(
         if adj is not None:
             adj = round(adj, 2)
         updated.append(
-            replace(
-                prop,
-                calibration_tags=tuple(tags),
-                calibrated_volume_adjustment=adj,
-                confidence_tier=tier,
+            attach_empirical_model_p(
+                replace(
+                    prop,
+                    calibration_tags=tuple(tags),
+                    calibrated_volume_adjustment=adj,
+                    confidence_tier=tier,
+                )
             )
         )
     return updated

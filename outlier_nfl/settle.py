@@ -304,15 +304,22 @@ def _match_event(
 
 
 def _prob_01(raw: float | None) -> float | None:
+    """Normalize a probability to [0, 1].
+
+    Accepts fractions or 0–100 percentages. Extremes 0 and 1 are valid for
+    Brier; ``_logloss`` clips internally. Rejects values outside [0, 100].
+    """
     if raw is None:
         return None
-    if 0.0 <= raw <= 1.0:
-        p = raw
-    else:
-        p = raw / 100.0
-    if p <= 0.0 or p >= 1.0:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
         return None
-    return p
+    if 0.0 <= value <= 1.0:
+        return value
+    if 1.0 < value <= 100.0:
+        return value / 100.0
+    return None
 
 
 def _brier(prob: float, won: bool) -> float:
