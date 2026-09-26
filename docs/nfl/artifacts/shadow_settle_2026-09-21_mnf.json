@@ -1,0 +1,27 @@
+{
+  "slate_date": "2026-09-21",
+  "kind": "midweek_mnf",
+  "n_predictions": 34,
+  "n_settled": 29,
+  "n_skipped": 5,
+  "skip_reasons": {
+    "unsupported_or_missing_stat": 1,
+    "player_not_in_boxscore": 4
+  },
+  "hit_rate": 0.7241379310344828,
+  "brier": 0.13612003067586206,
+  "brier_model": 0.21358207459541378,
+  "logloss": 0.4141579797759036,
+  "logloss_model": 0.6382236416546502,
+  "clv": {
+    "status": "ok",
+    "reason": null,
+    "n": 29,
+    "mean_clv_implied_pts": 0.0,
+    "note": "CLV implied pts = close_implied - bet implied_probability (same percent units). Positive ⇒ close was a worse price than the bet. Interpret close_source: pregame_snapshot_best_odds is NOT book close.",
+    "close_sources": [
+      "pregame_snapshot_best_odds"
+    ]
+  },
+  "note": "MNF midweek pack — labeled separately from Sunday OOS; does not unlock α bump alone."
+}

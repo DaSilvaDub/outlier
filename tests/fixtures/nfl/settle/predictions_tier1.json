@@ -1,0 +1,242 @@
+{
+  "date": "2026-09-17",
+  "window": null,
+  "updated_at": "2026-09-17T16:00:00+00:00",
+  "count": 6,
+  "records": [
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "DET",
+      "opponent": "BUF",
+      "player_name": "Jahmyr Gibbs",
+      "player_id": "p_gibbs",
+      "market": "RUSH_YDS",
+      "market_raw": "RUSH_YDS",
+      "position": "OVER",
+      "line": 87.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -111,
+          "odds_raw": "-111",
+          "decimal": 1.9
+        }
+      ],
+      "best_odds": -111,
+      "implied_probability": 52.61,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.8,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR",
+        "DEFICIT_VOLUME_RISK"
+      ],
+      "calibrated_volume_adjustment": -0.15,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 87.5,
+      "close_odds": -111,
+      "close_implied": 52.61,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "DET",
+      "opponent": "BUF",
+      "player_name": "Amon-Ra St. Brown",
+      "player_id": "p_arsb",
+      "market": "REC_YDS",
+      "market_raw": "REC_YDS",
+      "position": "OVER",
+      "line": 79.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -104,
+          "odds_raw": "-104",
+          "decimal": 1.96
+        }
+      ],
+      "best_odds": -104,
+      "implied_probability": 50.98,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.9,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR",
+        "SHELL_COVERAGE_TARGET_UPGRADE",
+        "MATCHUP_PASS_LEAK"
+      ],
+      "calibrated_volume_adjustment": 0.2,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 79.5,
+      "close_odds": -104,
+      "close_implied": 50.98,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.9,
+      "model_p_source": "empirical_hit_rate"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "BUF",
+      "opponent": "DET",
+      "player_name": "Khalil Shakir",
+      "player_id": "p_shakir",
+      "market": "REC",
+      "market_raw": "REC",
+      "position": "OVER",
+      "line": 3.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -137,
+          "odds_raw": "-137",
+          "decimal": 1.73
+        }
+      ],
+      "best_odds": -137,
+      "implied_probability": 57.81,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.8,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR"
+      ],
+      "calibrated_volume_adjustment": null,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 3.5,
+      "close_odds": -137,
+      "close_implied": 57.81,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "BUF",
+      "opponent": "DET",
+      "player_name": "James Cook",
+      "player_id": "p_cook",
+      "market": "RUSH_YDS",
+      "market_raw": "RUSH_YDS",
+      "position": "OVER",
+      "line": 78.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -106,
+          "odds_raw": "-106",
+          "decimal": 1.94
+        }
+      ],
+      "best_odds": -106,
+      "implied_probability": 51.46,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.85,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR",
+        "MATCHUP_RUSH_MISMATCH"
+      ],
+      "calibrated_volume_adjustment": 0.1,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 78.5,
+      "close_odds": -106,
+      "close_implied": 51.46,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.85,
+      "model_p_source": "empirical_hit_rate"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "DET",
+      "opponent": "BUF",
+      "player_name": "Jameson Williams",
+      "player_id": "p_jamo",
+      "market": "REC_YDS",
+      "market_raw": "REC_YDS",
+      "position": "OVER",
+      "line": 59.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -109,
+          "odds_raw": "-109",
+          "decimal": 1.92
+        }
+      ],
+      "best_odds": -109,
+      "implied_probability": 52.15,
+      "l5_hit_rate": 0.8,
+      "l10_hit_rate": 0.7,
+      "confidence_tier": "TIER_2_STRONG",
+      "calibration_tags": [
+        "CONSISTENT_HIT_RATE",
+        "SHELL_COVERAGE_DEEP_HAIRCUT",
+        "MATCHUP_FADE"
+      ],
+      "calibrated_volume_adjustment": -0.25,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 59.5,
+      "close_odds": -109,
+      "close_implied": 52.15,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.7,
+      "model_p_source": "empirical_hit_rate"
+    },
+    {
+      "event_id": "outlier-det-buf-20260917",
+      "event_starts_at": "2026-09-17T20:15:00-04:00",
+      "matchup": "DET @ BUF",
+      "team": "BUF",
+      "opponent": "DET",
+      "player_name": "Josh Allen",
+      "player_id": "p_allen",
+      "market": "PASS_YDS",
+      "market_raw": "PASS_YDS",
+      "position": "OVER",
+      "line": 249.5,
+      "books": [
+        {
+          "book": "FD",
+          "odds": -107,
+          "odds_raw": "-107",
+          "decimal": 1.93
+        }
+      ],
+      "best_odds": -107,
+      "implied_probability": 51.69,
+      "l5_hit_rate": 1.0,
+      "l10_hit_rate": 0.8,
+      "confidence_tier": "TIER_1_ANCHOR",
+      "calibration_tags": [
+        "HIGH_HIT_RATE_ANCHOR"
+      ],
+      "calibrated_volume_adjustment": null,
+      "is_consensus_line": true,
+      "scope": "full_game",
+      "close_line": 249.5,
+      "close_odds": -107,
+      "close_implied": 51.69,
+      "close_source": "pregame_snapshot_best_odds",
+      "model_p": 0.8,
+      "model_p_source": "empirical_hit_rate"
+    }
+  ]
+}

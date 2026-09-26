@@ -47,6 +47,7 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.roster import build_team_roster_index
+from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.utils import (
     matches_kickoff_window,
     safe_read_json,
@@ -323,12 +324,28 @@ class NflPipeline:
         )
 
         anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
+        # Persist emit-time odds as close_* with honest source label (not book close).
+        for row in anchors:
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
         anchors_payload = {
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
             "count": len(anchors),
             "records": anchors,
+            "close_enrichment": {
+                "mode": "snapshot_best",
+                "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
+            },
+            "model_p_enrichment": {
+                "mode": "empirical_hit_rate_laplace",
+                "alpha": 2.0,
+                "note": (
+                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
+                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
+                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                ),
+            },
         }
         safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
         safe_write_json(
@@ -365,12 +382,27 @@ class NflPipeline:
             for p in calibrated_props
             if any(str(tag).startswith("MATCHUP_") for tag in p.calibration_tags)
         ]
+        for row in matchup_prop_records:
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
         matchup_props_payload = {
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
             "count": len(matchup_prop_records),
             "records": matchup_prop_records,
+            "close_enrichment": {
+                "mode": "snapshot_best",
+                "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
+            },
+            "model_p_enrichment": {
+                "mode": "empirical_hit_rate_laplace",
+                "alpha": 2.0,
+                "note": (
+                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
+                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
+                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                ),
+            },
         }
         safe_write_json(
             self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
