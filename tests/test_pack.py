@@ -4225,3 +4225,25 @@ def test_pack_target_rechecks_stored_off_slate_card():
     rows = pack.process_stream({"board_a": [card]}, None, None, None, "WNBA", "props", {}, {}, expected_projection_date="2099-01-02")
     assert "off_slate" in rows[0]["data_quality_flags"]
     assert rows[0]["actionable"] == "false"
+
+def test_projection_side_conflict_discarded_upstream():
+    # If the projection directly contradicts the line, the row should be dropped
+    # completely upstream, not just flagged.
+    card = _ctx_card("CLE", "MIN", "CLE @ MIN", market="SO")
+    card["sides"]["OVER"]["line"] = 6.5
+    
+    # We pass independent projections that clash with the OVER 6.5
+    projections = {"o1": {"projection_mean": 6.29, "outcome_id": "o1"}}
+    
+    row = make_row(card, [], sport="MLB", projections=projections)
+    assert row is None, "Row should be discarded if projection mean contradicts selection"
+
+    # Verify UNDER works identically
+    card_under = _ctx_card("CLE", "MIN", "CLE @ MIN", market="SO", headline_side="UNDER")
+    card_under["sides"]["UNDER"] = card_under["sides"].pop("OVER")
+    card_under["sides"]["UNDER"]["outcome_id"] = "o2"
+    card_under["sides"]["UNDER"]["line"] = 6.5
+    projections_under = {"o2": {"projection_mean": 7.1, "outcome_id": "o2"}}
+
+    row_under = make_row(card_under, [], sport="MLB", projections=projections_under)
+    assert row_under is None, "Row should be discarded if projection mean contradicts selection"
