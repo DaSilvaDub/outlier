@@ -49,6 +49,7 @@ from outlier_nfl.schema import (
 from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.utils import (
     matches_kickoff_window,
+    nfl_season_for_date,
     safe_read_json,
     safe_write_json,
     to_eastern_date,
@@ -236,9 +237,17 @@ class NflPipeline:
         tapes = load_prior_week_tape(self.nfl_dir)
         # Load external advanced metrics for the season
         try:
-            season_year = int(target_date.split('-')[0])
-            external_metrics = load_external_metrics(season_year, through_week=22)
-            logger.info("Loaded %d external metric records", len(external_metrics))
+            season_year = nfl_season_for_date(target_date)
+            if season_year is None:
+                logger.warning(
+                    "Could not derive an NFL season from target date %r; "
+                    "skipping external metrics",
+                    target_date,
+                )
+                external_metrics = []
+            else:
+                external_metrics = load_external_metrics(season_year, through_week=22)
+                logger.info("Loaded %d external metric records", len(external_metrics))
         except Exception as exc:
             logger.warning("Failed loading external metrics: %s", exc)
             external_metrics = []

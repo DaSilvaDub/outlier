@@ -787,7 +787,6 @@ def _apply_quality_and_signal_flags(
     line = identity["line"]
     side_view = identity["side_view"]
     headline_side = identity["headline_side"]
-    market_type_upper = str(market_type or "").upper()
 
     # Surface card-level quality flags and, for an EV alt-line fallback, the line
     # the EV/price was actually derived from (e.g. shown 9.0 but priced at 8.5),

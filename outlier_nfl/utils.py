@@ -289,6 +289,40 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     return eastern_dt.strftime("%Y-%m-%d") if eastern_dt else None
 
 
+def nfl_season_for_date(dt_or_iso: datetime | str | None) -> int | None:
+    """Return the NFL season year a calendar date belongs to.
+
+    A season is labelled by the year its September kickoff falls in and runs
+    through the Super Bowl in early February of the *next* calendar year, so a
+    January/February playoff date belongs to the previous year's season
+    (``2027-01-10`` -> the 2026 season). Reading the year straight off the date
+    asks upstream providers for a season that has not been played yet. March
+    through August is the offseason and resolves to the season about to start,
+    matching the nflverse convention.
+
+    Accepts a ``datetime``, a full ISO timestamp, or a bare ``YYYY-MM-DD``
+    slate date. Returns ``None`` when no year/month can be read.
+    """
+    if dt_or_iso is None:
+        return None
+    if isinstance(dt_or_iso, datetime):
+        year, month = dt_or_iso.year, dt_or_iso.month
+    else:
+        text = str(dt_or_iso).strip()
+        if not text:
+            return None
+        parts = text.split("T")[0].split(" ")[0].split("-")
+        if len(parts) < 2:
+            return None
+        try:
+            year, month = int(parts[0]), int(parts[1])
+        except (TypeError, ValueError):
+            return None
+    if not 1 <= month <= 12:
+        return None
+    return year if month >= 3 else year - 1
+
+
 def matches_kickoff_window(dt_or_iso: datetime | str | None, window: str | None) -> bool:
     """Check if an event's kickoff time falls into a specific window (e.g. '1pm', '4pm', 'snf')."""
     if not window:

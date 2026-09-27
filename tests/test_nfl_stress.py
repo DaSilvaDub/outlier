@@ -60,6 +60,7 @@ from outlier_nfl.schema import (
 )
 from outlier_nfl.utils import (
     format_signed_line,
+    nfl_season_for_date,
     safe_read_json,
     safe_write_json,
     to_eastern_date,
@@ -849,6 +850,48 @@ def test_to_eastern_datetime_naive_is_utc_under_a_non_utc_host_tz():
     # Under the old behaviour the naive value was read as 00:15 Pacific, which is
     # 03:15 UTC on the 14th and so resolved to the Monday slate: "2026-09-14".
     assert proc.stdout.split() == ["2026-09-13", "2026-09-13"]
+
+
+def test_nfl_season_for_date_reads_january_playoffs_as_the_previous_season():
+    """A January/February playoff slate belongs to the *previous* year's season.
+
+    ``pipeline.py`` derived the season as ``int(target_date.split('-')[0])``, so a
+    2027-01-10 wild-card slate asked ``load_external_metrics()`` for the 2027
+    season -- a year that has not been played. Inert while every
+    ``outlier_nfl/external/`` adapter is a stub returning no records, but it
+    silently mismatches every metric once real providers are wired.
+    """
+    # Regular season: the season is labelled by its own calendar year.
+    assert nfl_season_for_date("2026-09-27") == 2026
+    assert nfl_season_for_date("2026-12-28") == 2026
+
+    # Playoffs roll into the next calendar year but stay in the 2026 season.
+    assert nfl_season_for_date("2027-01-10") == 2026  # wild card
+    assert nfl_season_for_date("2027-02-07") == 2026  # Super Bowl
+
+    # The naive year-off-the-date derivation this replaces got these wrong.
+    for playoff_date in ("2027-01-10", "2027-02-07"):
+        assert nfl_season_for_date(playoff_date) != int(playoff_date.split("-")[0])
+
+    # March through August is the offseason: the season about to start.
+    assert nfl_season_for_date("2027-03-01") == 2027
+    assert nfl_season_for_date("2027-08-31") == 2027
+
+
+def test_nfl_season_for_date_accepts_datetimes_timestamps_and_bad_input():
+    """Same answer from a datetime, a full ISO timestamp and a bare slate date."""
+    assert nfl_season_for_date(datetime(2027, 1, 10, 18, 5, tzinfo=timezone.utc)) == 2026
+    assert nfl_season_for_date("2027-01-10T18:05:00Z") == 2026
+    assert nfl_season_for_date("2027-01-10 18:05:00") == 2026
+    assert nfl_season_for_date("2026-09-27") == nfl_season_for_date(datetime(2026, 9, 27))
+
+    # Unreadable input yields None so the caller can skip the fetch rather than
+    # asking a provider for season "None" or a garbage year.
+    assert nfl_season_for_date(None) is None
+    assert nfl_season_for_date("") is None
+    assert nfl_season_for_date("not-a-date") is None
+    assert nfl_season_for_date("2026") is None
+    assert nfl_season_for_date("2026-13-01") is None
 
 
 def test_format_signed_line_values():
