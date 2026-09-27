@@ -2,7 +2,7 @@
 
 **Branch**: `fix/nfl-prop-scope-gating`
 **Last Commit SHA**: `cef0b73` — docs(skills): codify full-game scope invariant into nfl-game-script skill
-**Prior Commit SHA**: `c6f739b` — fix(nfl-calibration): enforce full-game scope gating on prop anchors and exports
+**PR**: [#196](https://github.com/DaSilvaDub/outlier/pull/196) — `fix/nfl-prop-scope-gating` → master
 
 ## Problem & Root Cause
 - **User Correction**: Chris Olave receiving yards line was erroneously reported as 14.5 @ -104, an impossible full-game total.
