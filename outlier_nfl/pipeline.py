@@ -322,7 +322,11 @@ class NflPipeline:
             self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload
         )
 
-        anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
+        anchors = [
+            p.to_dict()
+            for p in calibrated_props
+            if p.confidence_tier == "TIER_1_ANCHOR" and p.scope in (None, "", "full_game")
+        ]
         anchors_payload = {
             "date": target_date,
             "window": window,
