@@ -156,6 +156,8 @@ def test_header_canonical_with_flags():
         "home_away",
         "market_label",
         "priced_line",
+        "player_position",
+        "team_total",
     ):
         assert col in CANDIDATES_HEADER
     for col in (
