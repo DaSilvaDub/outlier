@@ -22,6 +22,12 @@
 - `tests/test_nfl_stress.py` — 2 regression tests (playoff/offseason boundaries; datetime,
   ISO-timestamp and bare-date inputs plus the None cases).
 
+## Hosted CI (authoritative)
+Green on PR head `17145d2`: **Offline Pytest success**, **Static Type Checking success**
+(also both green on the code commit `e7d9075`). The Offline Pytest job installs the declared
+dependencies, so it is the authority for the `pack_selection.py` change and every other file
+this sandbox cannot import.
+
 ## Verification
 - Offline suite **906 passed / 43 skipped** (was 904; +2 new tests). NFL suite
   **294 passed / 2 skipped** (was 292/2). `mypy outlier_nfl` clean; ruff clean on all four
@@ -55,8 +61,19 @@
 - Review and merge PR #197.
 - **Still open, needs a human call:** `matches_kickoff_window()` falls through to
   `return True` for an unrecognised window token.
-- **Still open:** `--window` advertised but no argparse wiring; window runs clobber
-  `*_latest.json`.
+- **Corrected inherited claim:** earlier handoffs listed "`--window` advertised but no
+  argparse wiring exists". That is now **stale** -- `--window` is fully wired
+  (`pipeline.py:524-529`) and threaded through `run(window=...)`. Do not re-chase it.
+- **Still open, needs a human call:** a `--window` run *does* clobber `*_latest.json`.
+  Every `*_latest.json` write (`pipeline.py:262,323,324,329,346,360,370,389,495`) is
+  unconditional and sits *outside* the `if window:` block, so `--window snf` overwrites
+  `nfl_props_latest.json` / `nfl_high_prob_props_latest.json` with only that window's subset
+  while also writing the `_{window_slug}` copies. Newly found downstream consequence:
+  `scripts/export_nfl_extra_pack.py::resolve_source()` falls back to
+  `nfl_high_prob_props_latest.json`, so after a window run the exported `nfl_only.csv` is a
+  partial slate with nothing marking it partial. Not fixed because the intended semantics are
+  genuinely ambiguous (should "latest" mean the most recent run, or the full slate?) -- a
+  one-line `if not window:` guard would settle it either way once the owner decides.
 - **Still open (from 2026-09-24):** the roster gate's bare-proximity pattern treats an
   *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson").
 - **Repo hygiene, needs a human call:** `.pytest_pr1_tmp/` (334 files) and
