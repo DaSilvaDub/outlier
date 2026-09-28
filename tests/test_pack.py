@@ -517,6 +517,40 @@ def test_player_projection_side_conflict_discarded_upstream_under():
     assert row is None
 
 
+def test_audit_only_projection_side_conflict_is_kept_but_flagged():
+    """An audit-only projection is too rough to drop the row, but the desk still
+    has to see that the projection mean opposes the wager side."""
+    card = ev_card(
+        line=5.5,
+        market_type="PLAYER_PROP",
+        market="SO",
+        player="Jackson Jobe",
+        team="DET",
+        opponent="PIT",
+        matchup="DET @ PIT",
+        event_id="game-1",
+    )
+    ev = [
+        {
+            "market_id": "m1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.1,
+            "calculated_ev_pct": 0.05,
+        }
+    ]
+    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+
+    row = make_row(card, ev, probable_pitchers=probable)
+
+    assert row is not None
+    # League-average SO (~4.95) sits below the 5.5 OVER line.
+    assert "projection_audit_league_avg" in row["projection_quality_flags"]
+    assert float(row["projection_mean"]) < float(row["line"])
+    assert "projection_side_conflict" in row["data_quality_flags"].split(";")
+
+
 def test_wnba_gamelog_projection_enriches_pack_but_stays_audit_only():
     card = ev_card(
         line=8.5,
