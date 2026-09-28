@@ -336,7 +336,7 @@ def test_enrich_laplace_shrinks_overconfident_l10():
     assert row0["model_p"] != l10 or l10 not in (0.0, 1.0)
 
 
-def test_book_close_mode_refuses_without_feed():
+def test_book_close_mode_cli_refuses_without_feed():
     from outlier_nfl.enrich_close import enrich_prediction_payload, main
     import pytest
 

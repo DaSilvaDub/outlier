@@ -52,9 +52,11 @@ def _download(url: str, dest: Path, *, timeout: int = 60) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 0:
         return dest
-    request = Request(url, headers={"Accept": "*/*", "User-Agent": USER_AGENT})
+    if not url.startswith("https://"):
+        raise BoxScoreError(f"Refusing non-https URL: {url}")
+    request = Request(url, headers={"Accept": "*/*", "User-Agent": USER_AGENT})  # noqa: S310  # nosec B310 - https only
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310  # nosec B310 - https only
             data = response.read()
     except HTTPError as exc:
         raise BoxScoreError(f"nflverse download failed ({exc.code}): {url}") from exc

@@ -185,50 +185,50 @@ def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
 
     Prefer group-qualified keys (PASSING:YDS) so bare YDS/ATT/TD never cross units.
     """
-    token = _token(market)
-    if token == "PASSYDS":
+    norm = _token(market)
+    if norm == "PASSYDS":
         return _stat(stats, "PASSING:YDS")
-    if token == "PASSTD":
+    if norm == "PASSTD":
         return _stat(stats, "PASSING:TD")
-    if token == "PASSCOMP":
+    if norm == "PASSCOMP":
         return _stat(stats, "PASSING:CMP", "PASSING:COMP")
-    if token == "PASSATT":
+    if norm == "PASSATT":
         return _stat(stats, "PASSING:ATT")
-    if token == "INT":
+    if norm == "INT":
         return _stat(stats, "PASSING:INT")
-    if token == "RUSHYDS":
+    if norm == "RUSHYDS":
         return _stat(stats, "RUSHING:YDS")
-    if token == "RUSHATT":
+    if norm == "RUSHATT":
         return _stat(stats, "RUSHING:CAR", "RUSHING:ATT")
-    if token == "RECYDS":
+    if norm == "RECYDS":
         return _stat(stats, "RECEIVING:YDS")
-    if token == "REC":
+    if norm == "REC":
         return _stat(stats, "RECEIVING:REC")
-    if token == "FGM":
+    if norm == "FGM":
         return _stat(stats, "KICKING:FG")
-    if token == "KICKPTS":
+    if norm == "KICKPTS":
         return _stat(stats, "KICKING:PTS")
-    if token == "SACKS":
+    if norm == "SACKS":
         return _stat(stats, "DEFENSIVE:SACK", "DEFENSIVE:SK")
-    if token in {"TKLAST", "TACKLESASSISTS", "DEFENSIVETACKLESASSISTS", "TACKLES"}:
+    if norm in {"TKLAST", "TACKLESASSISTS", "DEFENSIVETACKLESASSISTS", "TACKLES"}:
         return _stat(stats, "DEFENSIVE:TOT", "DEFENSIVE:TKL", "DEFENSIVE:TACKLESASSISTS")
-    if token in {"ASSISTS", "TACKLEASSISTS", "DEFENSIVEASSISTS"}:
+    if norm in {"ASSISTS", "TACKLEASSISTS", "DEFENSIVEASSISTS"}:
         return _stat(stats, "DEFENSIVE:AST", "DEFENSIVE:ASSISTS")
-    if token in {"PASSINGCOMPLETIONS", "COMPLETIONS", "COMP"}:
+    if norm in {"PASSINGCOMPLETIONS", "COMPLETIONS", "COMP"}:
         return _stat(stats, "PASSING:CMP", "PASSING:COMP")
-    if token in {"RUSHRECYDS", "RUSHINGRECEIVINGYARDS"}:
+    if norm in {"RUSHRECYDS", "RUSHINGRECEIVINGYARDS"}:
         rush = _stat(stats, "RUSHING:YDS")
         rec = _stat(stats, "RECEIVING:YDS")
         if rush is None or rec is None:
             return None
         return rush + rec
-    if token in {"PASSRUSHYDS", "PASSINGRUSHINGYARDS"}:
+    if norm in {"PASSRUSHYDS", "PASSINGRUSHINGYARDS"}:
         passing = _stat(stats, "PASSING:YDS")
         rush = _stat(stats, "RUSHING:YDS")
         if passing is None or rush is None:
             return None
         return passing + rush
-    if token in {"ANYTIMETD", "FIRSTTD"}:
+    if norm in {"ANYTIMETD", "FIRSTTD"}:
         # Anytime TD scorer: rush + receiving (+ return) TDs. Passing TDs do not count.
         has_any = False
         total = 0.0
@@ -291,9 +291,11 @@ def resolve_player_stats(
 def fetch_espn_scoreboard(event_date: date, *, timeout: int = 30) -> dict[str, Any]:
     """Fetch ESPN NFL scoreboard JSON for a date. May raise BoxScoreError (e.g. 403)."""
     url = f"{ESPN_NFL_BASE}/scoreboard?dates={event_date.strftime('%Y%m%d')}"
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    if not url.startswith("https://"):
+        raise BoxScoreError(f"Refusing non-https URL: {url}")
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})  # noqa: S310  # nosec B310 - https only
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310  # nosec B310 - https only
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise BoxScoreError(

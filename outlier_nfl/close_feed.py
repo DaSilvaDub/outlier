@@ -199,9 +199,11 @@ def fetch_odds_api_event_odds(
         }
     )
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/?{params}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "x-api-key": api_key})
+    if not url.startswith("https://"):
+        raise RuntimeError("Refusing non-https Odds API URL")
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "x-api-key": api_key})  # noqa: S310  # nosec B310 - https only
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosec B310 - https only
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Odds API HTTP {exc.code}: {exc.reason}") from exc

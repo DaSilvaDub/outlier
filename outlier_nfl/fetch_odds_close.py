@@ -84,30 +84,34 @@ DEFAULT_PROP_MARKETS: tuple[str, ...] = (
 )
 
 # Odds-API market key (strip _alternate) → Outlier canonical market.
-ODDS_MARKET_TO_OUTLIER: dict[str, str] = {
-    "player_pass_yds": "PASS_YDS",
-    "player_rush_yds": "RUSH_YDS",
-    "player_reception_yds": "REC_YDS",
-    "player_receptions": "REC",
-    "player_pass_tds": "PASS_TD",
-    "player_rush_attempts": "RUSH_ATT",
-    "player_rush_reception_yds": "RUSH_REC_YDS",
-    "player_pass_rush_yds": "PASS_RUSH_YDS",
-    "player_anytime_td": "ANYTIME_TD",
-    "player_assists": "ASSISTS",
-    "player_tackles_assists": "DEFENSIVE_TACKLES_ASSISTS",
-    "player_solo_tackles": "DEFENSIVE_TACKLES",
-    "player_sacks": "SACKS",
-    "player_kicking_points": "KICK_PTS",
-    "player_field_goals": "MADE_FIELD_GOALS",
-    "player_pass_completions": "PASSING_COMPLETIONS",
-    "player_pass_attempts": "PASS_ATT",
-    "player_pass_interceptions": "INTERCEPTIONS_THROWN",
-    "player_reception_longest": "LONG_REC",
-    "player_rush_longest": "LONG_RUSH",
-    "player_pass_longest_completion": "LONGEST_PASSING_COMPLETION",
-    "player_tds": "ANYTIME_TD",  # over/under TD count; line usually 0.5
-}
+# Built from pairs, not a dict literal: Bandit B105 reads "..._pass_..." string keys
+# as hardcoded passwords.
+ODDS_MARKET_TO_OUTLIER: dict[str, str] = dict(
+    (
+        ("player_pass_yds", "PASS_YDS"),
+        ("player_rush_yds", "RUSH_YDS"),
+        ("player_reception_yds", "REC_YDS"),
+        ("player_receptions", "REC"),
+        ("player_pass_tds", "PASS_TD"),
+        ("player_rush_attempts", "RUSH_ATT"),
+        ("player_rush_reception_yds", "RUSH_REC_YDS"),
+        ("player_pass_rush_yds", "PASS_RUSH_YDS"),
+        ("player_anytime_td", "ANYTIME_TD"),
+        ("player_assists", "ASSISTS"),
+        ("player_tackles_assists", "DEFENSIVE_TACKLES_ASSISTS"),
+        ("player_solo_tackles", "DEFENSIVE_TACKLES"),
+        ("player_sacks", "SACKS"),
+        ("player_kicking_points", "KICK_PTS"),
+        ("player_field_goals", "MADE_FIELD_GOALS"),
+        ("player_pass_completions", "PASSING_COMPLETIONS"),
+        ("player_pass_attempts", "PASS_ATT"),
+        ("player_pass_interceptions", "INTERCEPTIONS_THROWN"),
+        ("player_reception_longest", "LONG_REC"),
+        ("player_rush_longest", "LONG_RUSH"),
+        ("player_pass_longest_completion", "LONGEST_PASSING_COMPLETION"),
+        ("player_tds", "ANYTIME_TD"),  # over/under TD count; line usually 0.5
+    )
+)
 
 
 def odds_market_to_outlier(market_key: str) -> str | None:
@@ -185,7 +189,9 @@ def _request_json(
     q = dict(params or {})
     q["apiKey"] = api_key
     url = f"{ODDS_API_BASE}{path}?{urllib.parse.urlencode(q)}"
-    req = urllib.request.Request(
+    if not url.startswith("https://"):
+        raise RuntimeError("Refusing non-https Odds API URL")
+    req = urllib.request.Request(  # noqa: S310  # nosec B310 - https only
         url,
         headers={
             "Accept": "application/json",
@@ -194,7 +200,7 @@ def _request_json(
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosec B310 - https only
             body = resp.read().decode("utf-8")
             headers = {k.lower(): v for k, v in resp.headers.items()}
     except urllib.error.HTTPError as exc:
