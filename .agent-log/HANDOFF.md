@@ -1,18 +1,19 @@
 # Handoff
 
-**Last Commit SHA**: 8ffee08
-**Pull Request**: https://github.com/DaSilvaDub/outlier/pull/195 (Branch: `feat/candidates-header-parity`)
+**Last Commit SHA**: see branch `claude/nifty-einstein-gbtl85`
+**Pull Request**: https://github.com/DaSilvaDub/outlier/pull/198
 
 **Files Touched**:
-- `outlier_scrapers/pack_selection.py` (added `player_position` after `player_id` and `team_total` after `priced_line` to `CANDIDATES_HEADER`)
-- `tests/test_pack.py` (added `player_position` and `team_total` to `test_header_canonical_with_flags` test assertions)
+- `outlier_nfl/tape_nflverse.py` (new): rebuilds `data/NFL/tape/prior_week.json` from nflverse stats_team_week + schedules; before-date cutoff, optional last-N, role fields preserved, atomic write + `.prev` backup.
+- `outlier_nfl/pipeline.py`: `--refresh-tape`, `--tape-last-n` (fetch failure keeps old tape).
+- `scripts/pull_nflverse_tape.py` (new CLI), `tests/test_nfl_tape_nflverse.py` (6 tests).
+- `.agents/skills/nfl-game-script/SKILL.md` runbook; `docs/nfl-data-sources.md` data-source survey.
 
-**Validation**:
-- `pytest tests/test_pack.py -k test_header_canonical_with_flags` passed (1/1).
-- `pytest tests/test_schema.py` passed (11/11).
-- `pytest tests/test_pack_index.py tests/test_runner_common.py` passed (72/72).
-- Zero schema warnings on candidate rows during pack generation.
+**Validation**: `pytest tests/test_nfl_*.py` 298 passed / 2 skipped; ruff + mypy clean on touched files; live pull wrote 32 teams.
 
-**Next Steps**:
-- Review and merge PR #195 into master.
-- When running tomorrow's daily job, verify that the 27 `Candidate row schema warning` lines are completely eliminated.
+**Data state (Drive tape folder)**: `prior_week.json` = nflverse Weeks 1-3 box-score tape (uploaded manually 2026-09-28); `prior_week_w1_backup.json` = original Week 1; `prior_week_w1w2_search_blend.json` = superseded search-based blend.
+
+**Next Steps** (see docs/nfl-data-sources.md "Suggested integration order"):
+1. Auto roles/inactives from nflverse depth_charts + injuries (LAR TE1 is Colby Parkinson, tape still says Higbee).
+2. Pass-rush grade from pfr_advstats pressures; qb_grade from ESPN QBR.
+3. Fill outlier_nfl/external/ ngs/pbp/schedule stubs.
