@@ -58,3 +58,34 @@ remains the source for live multi-book props.
 3. ~~Fill `outlier_nfl/external/` stubs (`ngs`, `pbp`, `schedule`) from nflverse.~~ Done (PR #198): records land in `data/NFL/normalized/nfl_external_metrics_*.json` (not yet consumed by the matchup engine).
 4. ~~Weather pillar~~ Done (PR #198): Open-Meteo kickoff forecasts (`outlier_nfl/weather.py`), thresholds sized from nflverse `schedules` wind history. Open-Meteo and NWS are blocked in the sandbox; works on the pipeline machine.
 5. ~~Player prop context~~ Done (PR #198): vacated targets/carries and efficiency regression from `stats_player_week` + `ffopportunity` (`outlier_nfl/usage.py`). Snap counts not used yet (no backtested edge).
+
+## Backtest findings (2026-09-28, nflverse 2023-2025 regular season, 1,344 team-games)
+
+Pearson r of prior-games (>= 3) team/opponent composites with the next game:
+
+| Next-game target | Prior yards | Prior EPA/play | Notes |
+|---|---|---|---|
+| Rushing yards | **0.293** | 0.239 | 75/25 yards/EPA blend 0.298 (noise) |
+| Passing yards | **0.244** | 0.189 | blend 0.250 |
+| Rushing EPA/play | 0.164 | **0.200** | |
+| Passing EPA/play | 0.162 | **0.251** | |
+| Team points | 0.294 (prior points) | 0.290 | market implied team total 0.437 |
+| Points minus market implied total | 0.017 | 0.014 | neither beats the market |
+
+**Decision: EPA is not wired into matchup triggers or score projections.** Props settle on
+yards, which EPA/play predicts worse (it drops volume), and it adds nothing beyond the market on
+points. EPA stays in `nfl_external_metrics_*.json` for context.
+
+Opponent pass-rush measures vs. the QB's next game:
+
+| Next-game target | Pressure rate | Sacks/game |
+|---|---|---|
+| Sacks taken | **+0.105** | +0.050 |
+| Pass EPA/play | **-0.087** | -0.058 |
+| Passing yards | -0.002 | +0.003 |
+
+Pressure rate beats sacks, but **neither predicts passing yards**, so `MATCHUP_PASS_SUPPRESS`
+(PASS_YDS UNDER) has no support in this data; the supported targets are sacks taken
+(`PASSING_TIMES_SACKED`) and efficiency. Also note the engine's trigger checks OR a grade with a
+raw count (e.g. pressure grade >= 70 *or* sacks >= 3), so explicit grades add triggers rather than
+replace the raw proxy. Both are open design questions, not yet changed.
