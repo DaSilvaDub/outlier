@@ -71,6 +71,10 @@ class MatchupScript:
     mismatches: tuple[str, ...]
     prop_signals: tuple[PropSignal, ...]
     notes: tuple[str, ...] = ()
+    # market = quoted line; default = synthetic 45.5 / 24 / 21 placeholder
+    total_source: str = "market"
+    home_tt_source: str = "market"
+    away_tt_source: str = "market"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -201,7 +205,7 @@ def _unit_score(tape: Mapping[str, Any]) -> dict[str, float | None]:
     }
 
 
-def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> dict[str, float]:
+def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> dict[str, Any]:
     lines = [g for g in game_lines if g.scope == "full_game" and g.line is not None]
 
     home_spreads = [
@@ -226,9 +230,15 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
             game_totals,
             key=lambda x: (len(x.books or ()), -abs(x.best_odds - (-110) if x.best_odds else 999)),
         )
-        total = float(best_total.line or 45.5)
+        if best_total.line is not None:
+            total = float(best_total.line)
+            total_source = "market"
+        else:
+            total = 45.5
+            total_source = "default"
     else:
         total = 45.5
+        total_source = "default"
 
     # `proposition` carries the raw feed string (normalizer sets
     # `proposition=str(raw_prop)`), so compare it through the canonical
@@ -242,14 +252,27 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
     home_tts = [g for g in team_totals if g.team == home]
     away_tts = [g for g in team_totals if g.team == away]
 
-    home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line or 24.0) if home_tts else 24.0
-    away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line or 21.0) if away_tts else 21.0
+    if home_tts and max(home_tts, key=lambda x: len(x.books or ())).line is not None:
+        home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line)
+        home_tt_source = "market"
+    else:
+        home_tt = 24.0
+        home_tt_source = "default"
+    if away_tts and max(away_tts, key=lambda x: len(x.books or ())).line is not None:
+        away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line)
+        away_tt_source = "market"
+    else:
+        away_tt = 21.0
+        away_tt_source = "default"
 
     return {
         "home_spread": home_spread,
         "total": total,
         "home_tt": home_tt,
         "away_tt": away_tt,
+        "total_source": total_source,
+        "home_tt_source": home_tt_source,
+        "away_tt_source": away_tt_source,
     }
 
 
@@ -522,6 +545,17 @@ def build_matchup_script(
         elif favorite_is_home is False and away_score <= home_score:
             away_score = home_score + 7
 
+    total_source = str(ctx.get("total_source") or "market")
+    home_tt_source = str(ctx.get("home_tt_source") or "market")
+    away_tt_source = str(ctx.get("away_tt_source") or "market")
+    if total_source == "default":
+        notes.append("PLACEHOLDER total 45.5 (no quoted game total).")
+    if home_tt_source == "default" or away_tt_source == "default":
+        notes.append(
+            f"PLACEHOLDER team totals "
+            f"(home={home_tt_source}, away={away_tt_source}; defaults 24/21)."
+        )
+
     return MatchupScript(
         event_id=event_id,
         matchup=f"{away} @ {home}",
@@ -537,6 +571,9 @@ def build_matchup_script(
         mismatches=tuple(mismatches),
         prop_signals=tuple(signals),
         notes=tuple(notes),
+        total_source=total_source,
+        home_tt_source=home_tt_source,
+        away_tt_source=away_tt_source,
     )
 
 
@@ -706,12 +743,22 @@ def render_matchup_markdown(
         "",
     ]
     if script:
+        src_bits = []
+        if script.total_source == "default":
+            src_bits.append("total=default")
+        if script.home_tt_source == "default" or script.away_tt_source == "default":
+            src_bits.append("team_totals=default")
+        src_note = f" ⚠️ PLACEHOLDER ({', '.join(src_bits)})" if src_bits else ""
         lines.append(
             f"- **Script:** `{script.script_type}` | "
             f"**Projected:** {home} {script.home_score:.0f}, {away} {script.away_score:.0f}"
+            f"{src_note}"
         )
         lines.append(f"- **Spread lean:** {script.spread_lean} ({script.home_spread:+.1f} {home})")
-        lines.append(f"- **Total lean:** {script.total_lean} {script.total:.1f}")
+        total_tag = " (placeholder)" if script.total_source == "default" else ""
+        lines.append(
+            f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"
+        )
         if script.mismatches:
             lines.append("- **Mismatches:**")
             for item in script.mismatches:
