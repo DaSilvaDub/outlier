@@ -22,8 +22,8 @@ NUMERIC_FIELDS = (
     "temp", "wind", "home_rest", "away_rest",
 )
 TEXT_FIELDS = (
-    "game_id", "gameday", "gametime", "weekday", "roof", "surface", "stadium", "referee",
-    "home_qb_name", "away_qb_name", "home_coach", "away_coach",
+    "game_id", "gameday", "gametime", "weekday", "location", "roof", "surface", "stadium",
+    "referee", "home_qb_name", "away_qb_name", "home_coach", "away_coach",
 )
 
 

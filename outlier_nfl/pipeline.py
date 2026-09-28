@@ -26,6 +26,7 @@ from outlier_nfl.constants import (
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
+from outlier_nfl.weather import apply_weather, load_slate_weather
 from outlier_nfl.matchup import (
     _event_team_codes,
     apply_matchup_signals,
@@ -275,6 +276,30 @@ class NflPipeline:
                 len(matchup_scripts),
                 len(tapes),
             )
+
+        # Game-day weather: open-air forecasts add pass-volume haircut signals.
+        if offline_fixtures_dir is None and matchup_scripts:
+            try:
+                weathers = load_slate_weather(
+                    slate_events,
+                    [r for r in external_metrics if r.get("source") == "schedule"],
+                )
+                matchup_scripts = apply_weather(matchup_scripts, weathers, tapes)
+                weather_payload = {
+                    "date": target_date,
+                    "window": window,
+                    "updated_at": now_utc,
+                    "count": len(weathers),
+                    "records": [w.to_dict() for w in weathers.values()],
+                }
+                safe_write_json(self.normalized_dir / f"nfl_weather_{target_date}.json", weather_payload)
+                logger.info(
+                    "Weather: %d games forecast, %d with a pass haircut",
+                    len(weathers),
+                    sum(1 for w in weathers.values() if w.pass_adjustment < 0),
+                )
+            except Exception as exc:
+                logger.warning("Weather calibration skipped: %s", exc)
 
         if all_player_props:
             consensus_props = select_consensus_player_props(all_player_props)
