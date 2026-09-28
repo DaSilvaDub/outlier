@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -131,3 +133,18 @@ def test_alternate_lines_are_never_used_for_grading() -> None:
     two = [{"team": "LAR", "player_name": "Davante Adams", "market": "REC_YDS", "position": "OVER",
             "line": v, "is_consensus_line": True} for v in (79.5, 84.5)]
     assert sc.consensus_lines(two)[("LAR", "davante adams", "REC_YDS")] == 82.0
+
+
+def test_slate_records_and_report_paths(tmp_path) -> None:
+    from datetime import date
+
+    from outlier_nfl.scorecard import load_slate_records, write_report
+
+    slate = date(2026, 9, 27)
+    assert load_slate_records(tmp_path, "matchup_scripts", slate) is None
+    (tmp_path / "nfl_matchup_scripts_2026-09-27.json").write_text('{"records": [{"a": 1}]}')
+    assert load_slate_records(tmp_path, "matchup_scripts", slate) == [{"a": 1}]
+    with pytest.raises(ValueError):
+        load_slate_records(tmp_path, "../x", slate)
+    out = write_report(tmp_path / "reports", slate, "# ok")
+    assert out.name == "2026-09-27_Signal_Scorecard.md" and out.read_text() == "# ok"

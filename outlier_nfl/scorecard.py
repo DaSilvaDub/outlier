@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from datetime import date as date_cls
 import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -216,6 +217,24 @@ def update_ledger(path: Path, graded: list[GradedSignal], date: str) -> list[dic
     tmp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     tmp.replace(path)
     return rows
+
+
+def load_slate_records(normalized_dir: Path, kind: str, slate: date_cls) -> list[dict[str, Any]] | None:
+    """``records`` from ``nfl_<kind>_<date>.json``; None when the file is missing."""
+    if kind not in ("matchup_scripts", "calibrated_props"):
+        raise ValueError(f"Unknown slate file kind: {kind}")
+    path = normalized_dir / f"nfl_{kind}_{slate.isoformat()}.json"
+    if not path.exists():
+        return None
+    return list(json.loads(path.read_text(encoding="utf-8")).get("records", []))
+
+
+def write_report(reports_dir: Path, slate: date_cls, text: str) -> Path:
+    """Write ``<date>_Signal_Scorecard.md`` under ``reports_dir``; return its path."""
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    out = reports_dir / f"{slate.isoformat()}_Signal_Scorecard.md"
+    out.write_text(text, encoding="utf-8")
+    return out
 
 
 def summarize(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:

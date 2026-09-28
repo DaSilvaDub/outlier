@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import date as date_cls
-import json
 from pathlib import Path
 import sys
 
@@ -32,9 +31,11 @@ if str(REPO_ROOT) not in sys.path:
 from outlier_nfl.scorecard import (  # noqa: E402
     direction_baselines,
     grade_signals,
+    load_slate_records,
     render_markdown,
     summarize,
     update_ledger,
+    write_report,
 )
 from outlier_nfl.tape_nflverse import SCHEDULES_URL, fetch_csv  # noqa: E402
 from outlier_nfl.usage import fetch_player_weeks  # noqa: E402
@@ -61,21 +62,15 @@ def main() -> int:
     parser.add_argument("--reports-dir", type=Path, default=Path("reports/NFL"))
     args = parser.parse_args()
 
-    # Paths are built only from the parsed date, never the raw argument string.
     slate: date_cls = args.date
     slate_iso = slate.isoformat()
     season = args.season or (slate.year if slate.month >= 3 else slate.year - 1)
     normalized = args.data_dir / "NFL" / "normalized"
-    scripts_path = normalized / f"nfl_matchup_scripts_{slate_iso}.json"
-    if not scripts_path.exists():
-        print(f"Missing {scripts_path}; run the pipeline for {slate_iso} first.")
+    scripts = load_slate_records(normalized, "matchup_scripts", slate)
+    if scripts is None:
+        print(f"Missing matchup scripts for {slate_iso}; run the pipeline for that date first.")
         return 1
-    scripts = json.loads(scripts_path.read_text(encoding="utf-8")).get("records", [])
-    props_path = normalized / f"nfl_calibrated_props_{slate_iso}.json"
-    props = (
-        json.loads(props_path.read_text(encoding="utf-8")).get("records", [])
-        if props_path.exists() else []
-    )
+    props = load_slate_records(normalized, "calibrated_props", slate) or []
 
     week = args.week or _slate_week(season, slate_iso)
     player_rows = fetch_player_weeks(season)
@@ -90,9 +85,7 @@ def main() -> int:
     baselines = direction_baselines(week, player_rows, {g.market for g in graded})
 
     report = render_markdown(slate_iso, week, slate_summary, cumulative, baselines, graded, skipped)
-    args.reports_dir.mkdir(parents=True, exist_ok=True)
-    out = args.reports_dir / f"{slate_iso}_Signal_Scorecard.md"
-    out.write_text(report, encoding="utf-8")
+    out = write_report(args.reports_dir, slate, report)
 
     print(f"Week {week}: graded {len(graded)} signals, {len(skipped)} ungraded -> {out}")
     for label, summary in (("SLATE", slate_summary), ("CUMULATIVE", cumulative)):
