@@ -18,3 +18,13 @@ def _shadow_portfolio_policy(request, monkeypatch):
         "outlier_scrapers.portfolio.load_portfolio_policy",
         lambda path=None: PortfolioPolicy(mode="shadow"),
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_nfl_external_metrics(monkeypatch):
+    """Keep NFL pipeline tests offline: no nflverse downloads, no weather forecasts."""
+    monkeypatch.setattr(
+        "outlier_nfl.pipeline.load_external_metrics", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", lambda *args, **kwargs: {})
+    monkeypatch.setattr("outlier_nfl.pipeline.load_usage", lambda *args, **kwargs: {})
