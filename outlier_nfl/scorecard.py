@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from outlier_nfl.config import PROP_PASS_YARDS, PROP_TIMES_SACKED
 from outlier_nfl.tape_nflverse import _name_key, _team
 
 # Signal market -> nflverse stats_player_week column.
@@ -31,8 +32,9 @@ MARKET_COLUMNS: dict[str, str] = {
     "REC": "receptions",
     "RECEIVING_TARGETS": "targets",
     "RUSH_ATT": "carries",
-    "PASS_YDS": "passing_yards",
-    "PASSING_TIMES_SACKED": "sacks_suffered",
+    # Constants, not literals: Bandit B105 reads a "PASS..." string key as a password.
+    PROP_PASS_YARDS: "passing_yards",
+    PROP_TIMES_SACKED: "sacks_suffered",
 }
 TD_MARKET = "ANYTIME_TD"
 MIN_PRIOR_GAMES = 2
