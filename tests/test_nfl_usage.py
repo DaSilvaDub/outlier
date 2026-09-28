@@ -114,3 +114,61 @@ def test_load_usage_survives_missing_expected_stats() -> None:
     prof = usage.load_usage(2026, 3, fetch)
     assert prof["wr1"].rec_yds_exp_pg is None  # regression signals drop out, profiles remain
     assert usage.usage_signals(prof, {}, EVENTS) == []
+
+
+def _sig(tag: str, side: str, adj: float, conf: str = "MEDIUM", market: str = "RUSH_YDS"):
+    from outlier_nfl.matchup import PropSignal
+
+    return PropSignal("e1", "Kyren Williams", "LAR", market, side, tag, "r", conf, adj)
+
+
+def _kyren_prop(market: str = "RUSH_YDS", position: str = "OVER"):
+    from outlier_nfl.models import BookPrice, NflPlayerProp
+
+    return NflPlayerProp(
+        event_id="e1", event_starts_at=None, matchup="LAR @ DEN", team="LAR", opponent="DEN",
+        player_name="Kyren Williams", player_id=None, market=market, market_raw=market,
+        position=position, line=64.5,
+        books=(BookPrice(book="DK", odds=-110, odds_raw="-110", decimal=1.91),),
+        best_odds=-110, implied_probability=52.4,
+    )
+
+
+def _apply(signals: list) -> object:
+    from outlier_nfl.matchup import apply_matchup_signals
+
+    script = MatchupScript("e1", "LAR @ DEN", "DEN", "LAR", "COMPETITIVE", "AWAY", "UNDER",
+                           21, 24, 2.5, 44.5, (), tuple(signals))
+    return apply_matchup_signals([_kyren_prop()], [script])[0]
+
+
+def test_regression_wins_conflict_and_blocks_tier_bump() -> None:
+    prop = _apply([
+        _sig("MATCHUP_RUSH_MISMATCH", "OVER", 0.20, "HIGH"),
+        _sig("EFFICIENCY_HOT", "UNDER", -0.10),
+    ])
+    assert prop.calibrated_volume_adjustment == -0.10
+    assert "EFFICIENCY_HOT" in prop.calibration_tags and "MATCHUP_FADE" in prop.calibration_tags
+    assert "OVERRIDDEN_MATCHUP_RUSH_MISMATCH" in prop.calibration_tags
+    assert "MATCHUP_RUSH_MISMATCH" not in prop.calibration_tags
+    assert prop.confidence_tier in {None, "", "STANDARD"}  # HIGH over was dropped
+
+
+def test_regression_overrides_weather_and_stacks_with_same_direction() -> None:
+    prop = _apply([
+        _sig("EFFICIENCY_COLD", "OVER", 0.08),
+        _sig("VACATED_CARRIES", "OVER", 0.25, "HIGH"),
+        _sig("WEATHER_WIND_HIGH", "UNDER", -0.10),
+    ])
+    assert prop.calibrated_volume_adjustment == 0.33  # cold + vacated stack
+    assert "OVERRIDDEN_WEATHER_WIND_HIGH" in prop.calibration_tags
+    assert prop.confidence_tier == "TIER_2_STRONG"  # surviving HIGH over still promotes
+
+
+def test_without_regression_conflicting_signals_still_net_out() -> None:
+    prop = _apply([
+        _sig("MATCHUP_RUSH_MISMATCH", "OVER", 0.20, "HIGH"),
+        _sig("WEATHER_WIND_HIGH", "UNDER", -0.10),
+    ])
+    assert prop.calibrated_volume_adjustment == 0.10
+    assert not any(t.startswith("OVERRIDDEN_") for t in prop.calibration_tags)

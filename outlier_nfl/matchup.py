@@ -632,6 +632,36 @@ def _names_match(
     return False
 
 
+REGRESSION_TAGS = frozenset({"EFFICIENCY_HOT", "EFFICIENCY_COLD"})
+
+
+def _direction(signal: PropSignal) -> int:
+    return 1 if signal.side == "OVER" else -1
+
+
+def resolve_signal_conflicts(
+    signals: list[PropSignal],
+) -> tuple[list[PropSignal], list[str]]:
+    """Regression signals win conflicts on the same prop.
+
+    When an efficiency-regression signal and any other signal on one prop point
+    in opposite directions, the opposing non-regression signals are dropped and
+    reported as ``OVERRIDDEN_<tag>`` audit tags. Same-direction signals stack.
+    """
+    regression = [s for s in signals if s.tag in REGRESSION_TAGS]
+    if not regression:
+        return signals, []
+    direction = _direction(regression[0])
+    kept: list[PropSignal] = []
+    overridden: list[str] = []
+    for signal in signals:
+        if signal.tag not in REGRESSION_TAGS and _direction(signal) != direction:
+            overridden.append(f"OVERRIDDEN_{signal.tag}")
+            continue
+        kept.append(signal)
+    return kept, overridden
+
+
 def apply_matchup_signals(
     props: list[NflPlayerProp],
     scripts: list[MatchupScript],
@@ -650,16 +680,17 @@ def apply_matchup_signals(
         matched = False
         fade = False
         high_over = False
-        for signal in script.prop_signals:
-            if signal.market != prop.market:
-                continue
-            if not _names_match(
-                signal.player_name,
-                prop.player_name,
-                signal.team,
-                prop.team,
-            ):
-                continue
+        candidates = [
+            signal
+            for signal in script.prop_signals
+            if signal.market == prop.market
+            and _names_match(signal.player_name, prop.player_name, signal.team, prop.team)
+        ]
+        candidates, overridden = resolve_signal_conflicts(candidates)
+        for tag in overridden:
+            if tag not in tags:
+                tags.append(tag)
+        for signal in candidates:
             matched = True
             if signal.tag not in tags:
                 tags.append(signal.tag)
