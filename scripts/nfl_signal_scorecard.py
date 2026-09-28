@@ -53,42 +53,45 @@ def _slate_week(season: int, slate: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--date", required=True, help="Slate date (YYYY-MM-DD, Eastern).")
+    parser.add_argument("--date", required=True, type=date_cls.fromisoformat,
+                        help="Slate date (YYYY-MM-DD, Eastern).")
     parser.add_argument("--week", type=int, default=None, help="Slate week (default: from schedule).")
     parser.add_argument("--season", type=int, default=None, help="Season (default: from date).")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--reports-dir", type=Path, default=Path("reports/NFL"))
     args = parser.parse_args()
 
-    slate = date_cls.fromisoformat(args.date)
+    # Paths are built only from the parsed date, never the raw argument string.
+    slate: date_cls = args.date
+    slate_iso = slate.isoformat()
     season = args.season or (slate.year if slate.month >= 3 else slate.year - 1)
     normalized = args.data_dir / "NFL" / "normalized"
-    scripts_path = normalized / f"nfl_matchup_scripts_{args.date}.json"
+    scripts_path = normalized / f"nfl_matchup_scripts_{slate_iso}.json"
     if not scripts_path.exists():
-        print(f"Missing {scripts_path}; run the pipeline for {args.date} first.")
+        print(f"Missing {scripts_path}; run the pipeline for {slate_iso} first.")
         return 1
     scripts = json.loads(scripts_path.read_text(encoding="utf-8")).get("records", [])
-    props_path = normalized / f"nfl_calibrated_props_{args.date}.json"
+    props_path = normalized / f"nfl_calibrated_props_{slate_iso}.json"
     props = (
         json.loads(props_path.read_text(encoding="utf-8")).get("records", [])
         if props_path.exists() else []
     )
 
-    week = args.week or _slate_week(season, args.date)
+    week = args.week or _slate_week(season, slate_iso)
     player_rows = fetch_csv(PLAYER_WEEK_URL.format(season=season))
     if not any(r.get("week") == str(week) for r in player_rows):
         print(f"nflverse has no week {week} box scores yet; try again after the games are posted.")
         return 1
 
-    graded, skipped = grade_signals(args.date, week, scripts, player_rows, props)
-    ledger = update_ledger(args.data_dir / "NFL" / "scorecard" / "ledger.jsonl", graded, args.date)
+    graded, skipped = grade_signals(slate_iso, week, scripts, player_rows, props)
+    ledger = update_ledger(args.data_dir / "NFL" / "scorecard" / "ledger.jsonl", graded, slate_iso)
     slate_summary = summarize([g.__dict__ for g in graded])
     cumulative = summarize(ledger)
     baselines = direction_baselines(week, player_rows, {g.market for g in graded})
 
-    report = render_markdown(args.date, week, slate_summary, cumulative, baselines, graded, skipped)
+    report = render_markdown(slate_iso, week, slate_summary, cumulative, baselines, graded, skipped)
     args.reports_dir.mkdir(parents=True, exist_ok=True)
-    out = args.reports_dir / f"{args.date}_Signal_Scorecard.md"
+    out = args.reports_dir / f"{slate_iso}_Signal_Scorecard.md"
     out.write_text(report, encoding="utf-8")
 
     print(f"Week {week}: graded {len(graded)} signals, {len(skipped)} ungraded -> {out}")
