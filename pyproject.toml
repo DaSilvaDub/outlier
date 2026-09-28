@@ -26,7 +26,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["outlier_scrapers"]
+packages = ["outlier_scrapers", "outlier_nfl", "outlier_nfl.external"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -61,7 +61,7 @@ ignore_errors = true
 
 
 [tool.pyright]
-include = ["outlier_scrapers"]
+include = ["outlier_scrapers", "outlier_nfl"]
 exclude = [
     "**/__pycache__",
     "outlier_scrapers/normalizer.py",

@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from outlier_nfl.config import is_team_total, normalize_team
+from outlier_nfl.config import PROP_TIMES_SACKED, is_team_total, normalize_team
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 
@@ -27,14 +27,16 @@ STRONG_RUSH_YARDS = 140.0
 RUSH_GRADE_GAP = 25.0
 LEAKY_PASS_DEFENSE_GRADE = 45.0
 LEAKY_PASS_YARDS_ALLOWED = 280.0
-WEAK_QB_GRADE = 60.0
 STRONG_PASS_RUSH_GRADE = 70.0
 STRONG_PASS_RUSH_SACKS = 3.0
 FAVORITE_SPREAD = 5.5
 GRIND_TOTAL = 47.5
 SHOOTOUT_TOTAL = 50.5
 HIGH_RUSH_ADJ = 0.20
-HIGH_PASS_FADE_ADJ = -0.20
+# Strong pass rush -> QB sacks taken OVER. nflverse 2023-2025: next-game sacks
+# 1.08x the QB's own prior rate vs 1.00x otherwise (n=319); passing yards were
+# unaffected (r ~ 0), so the old PASS_YDS UNDER target was retired.
+PASS_RUSH_SACK_ADJ = 0.08
 REC_ADJ = 0.15
 
 
@@ -71,6 +73,10 @@ class MatchupScript:
     mismatches: tuple[str, ...]
     prop_signals: tuple[PropSignal, ...]
     notes: tuple[str, ...] = ()
+    # market = quoted line; default = synthetic 45.5 / 24 / 21 placeholder
+    total_source: str = "market"
+    home_tt_source: str = "market"
+    away_tt_source: str = "market"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -162,7 +168,18 @@ def _role_player(tape: Mapping[str, Any], team: str, role: str) -> str | None:
     return None
 
 
+EXPLICIT_GRADES = ("rush_offense", "rush_defense", "pass_defense", "pass_rush")
+
+
 def _unit_score(tape: Mapping[str, Any]) -> dict[str, float | None]:
+    """Unit grades; tape-provided grades are flagged ``<grade>_explicit`` = 1.0.
+
+    Explicit grades (PFF, pressures, EPA, ...) decide their trigger alone; the
+    raw yards/sacks fallbacks only apply when a grade was derived from them.
+    """
+    explicit = {
+        f"{g}_explicit": 1.0 if _num(tape, g) is not None else None for g in EXPLICIT_GRADES
+    }
     rush_off = _num(tape, "rush_offense")
     rush_def = _num(tape, "rush_defense")
     pass_off = _num(tape, "pass_offense", "qb_grade")
@@ -198,10 +215,11 @@ def _unit_score(tape: Mapping[str, Any]) -> dict[str, float | None]:
         "opp_pass_yards_allowed": opp_pass,
         "sacks": sacks,
         "qb_grade": qb_grade,
+        **explicit,
     }
 
 
-def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> dict[str, float]:
+def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> dict[str, Any]:
     lines = [g for g in game_lines if g.scope == "full_game" and g.line is not None]
 
     home_spreads = [
@@ -226,9 +244,15 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
             game_totals,
             key=lambda x: (len(x.books or ()), -abs(x.best_odds - (-110) if x.best_odds else 999)),
         )
-        total = float(best_total.line or 45.5)
+        if best_total.line is not None:
+            total = float(best_total.line)
+            total_source = "market"
+        else:
+            total = 45.5
+            total_source = "default"
     else:
         total = 45.5
+        total_source = "default"
 
     # `proposition` carries the raw feed string (normalizer sets
     # `proposition=str(raw_prop)`), so compare it through the canonical
@@ -242,14 +266,27 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
     home_tts = [g for g in team_totals if g.team == home]
     away_tts = [g for g in team_totals if g.team == away]
 
-    home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line or 24.0) if home_tts else 24.0
-    away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line or 21.0) if away_tts else 21.0
+    if home_tts and max(home_tts, key=lambda x: len(x.books or ())).line is not None:
+        home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line)
+        home_tt_source = "market"
+    else:
+        home_tt = 24.0
+        home_tt_source = "default"
+    if away_tts and max(away_tts, key=lambda x: len(x.books or ())).line is not None:
+        away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line)
+        away_tt_source = "market"
+    else:
+        away_tt = 21.0
+        away_tt_source = "default"
 
     return {
         "home_spread": home_spread,
         "total": total,
         "home_tt": home_tt,
         "away_tt": away_tt,
+        "total_source": total_source,
+        "home_tt_source": home_tt_source,
+        "away_tt_source": away_tt_source,
     }
 
 
@@ -258,6 +295,8 @@ def _is_leaky_run_d(unit: Mapping[str, float | None]) -> bool:
     opp_rush = unit.get("opp_rush_yards_allowed")
     if rush_def is not None and rush_def <= LEAKY_RUN_DEFENSE_GRADE:
         return True
+    if unit.get("rush_defense_explicit"):
+        return False
     return opp_rush is not None and opp_rush >= LEAKY_RUN_YARDS_ALLOWED
 
 
@@ -266,6 +305,8 @@ def _is_strong_rush(unit: Mapping[str, float | None]) -> bool:
     rush_yards = unit.get("rush_yards")
     if rush_off is not None and rush_off >= STRONG_RUSH_GRADE:
         return True
+    if unit.get("rush_offense_explicit"):
+        return False
     return rush_yards is not None and rush_yards >= STRONG_RUSH_YARDS
 
 
@@ -282,6 +323,8 @@ def _is_leaky_pass_d(unit: Mapping[str, float | None]) -> bool:
     opp_pass = unit.get("opp_pass_yards_allowed")
     if pass_def is not None and pass_def <= LEAKY_PASS_DEFENSE_GRADE:
         return True
+    if unit.get("pass_defense_explicit"):
+        return False
     return opp_pass is not None and opp_pass >= LEAKY_PASS_YARDS_ALLOWED
 
 
@@ -290,18 +333,9 @@ def _is_strong_pass_rush(unit: Mapping[str, float | None]) -> bool:
     sacks = unit.get("sacks")
     if grade is not None and grade >= STRONG_PASS_RUSH_GRADE:
         return True
+    if unit.get("pass_rush_explicit"):
+        return False
     return sacks is not None and sacks >= STRONG_PASS_RUSH_SACKS
-
-
-def _is_weak_qb(unit: Mapping[str, float | None]) -> bool:
-    qb = unit.get("qb_grade")
-    if qb is not None:
-        return qb < WEAK_QB_GRADE
-    pass_off = unit.get("pass_offense")
-    if pass_off is not None:
-        return pass_off < WEAK_QB_GRADE
-    pass_yards = unit.get("pass_yards")
-    return pass_yards is not None and pass_yards <= 180.0
 
 
 def _signal(
@@ -400,25 +434,27 @@ def build_matchup_script(
 
     def pass_suppress(pass_rush_team: str, qb_team: str) -> None:
         rush_unit = home_unit if pass_rush_team == home else away_unit
-        qb_unit = home_unit if qb_team == home else away_unit
         qb_tape = home_tape if qb_team == home else away_tape
-        if not (_is_strong_pass_rush(rush_unit) and _is_weak_qb(qb_unit)):
+        # The pass rush drives sacks; a weak-QB gate added nothing in the backtest.
+        if not _is_strong_pass_rush(rush_unit):
             return
         qb = _eligible(_role_player(qb_tape, qb_team, "qb"))
         if not qb:
             return
+        grade = rush_unit.get("pass_rush")
         mismatches.append(f"{pass_rush_team} pass rush vs {qb}")
         signals.append(
             _signal(
                 event_id,
                 qb,
                 qb_team,
-                "PASS_YDS",
-                "UNDER",
+                PROP_TIMES_SACKED,
+                "OVER",
                 "MATCHUP_PASS_SUPPRESS",
-                f"{qb} week-1/tape grade vs {pass_rush_team} pass rush",
-                "HIGH",
-                HIGH_PASS_FADE_ADJ,
+                f"{qb} sacks vs {pass_rush_team} pass rush (grade {grade:.0f})"
+                if grade is not None else f"{qb} sacks vs {pass_rush_team} pass rush",
+                "MEDIUM",
+                PASS_RUSH_SACK_ADJ,
             )
         )
 
@@ -522,6 +558,17 @@ def build_matchup_script(
         elif favorite_is_home is False and away_score <= home_score:
             away_score = home_score + 7
 
+    total_source = str(ctx.get("total_source") or "market")
+    home_tt_source = str(ctx.get("home_tt_source") or "market")
+    away_tt_source = str(ctx.get("away_tt_source") or "market")
+    if total_source == "default":
+        notes.append("PLACEHOLDER total 45.5 (no quoted game total).")
+    if home_tt_source == "default" or away_tt_source == "default":
+        notes.append(
+            f"PLACEHOLDER team totals "
+            f"(home={home_tt_source}, away={away_tt_source}; defaults 24/21)."
+        )
+
     return MatchupScript(
         event_id=event_id,
         matchup=f"{away} @ {home}",
@@ -537,6 +584,9 @@ def build_matchup_script(
         mismatches=tuple(mismatches),
         prop_signals=tuple(signals),
         notes=tuple(notes),
+        total_source=total_source,
+        home_tt_source=home_tt_source,
+        away_tt_source=away_tt_source,
     )
 
 
@@ -619,6 +669,36 @@ def _names_match(
     return False
 
 
+REGRESSION_TAGS = frozenset({"EFFICIENCY_HOT", "EFFICIENCY_COLD"})
+
+
+def _direction(signal: PropSignal) -> int:
+    return 1 if signal.side == "OVER" else -1
+
+
+def resolve_signal_conflicts(
+    signals: list[PropSignal],
+) -> tuple[list[PropSignal], list[str]]:
+    """Regression signals win conflicts on the same prop.
+
+    When an efficiency-regression signal and any other signal on one prop point
+    in opposite directions, the opposing non-regression signals are dropped and
+    reported as ``OVERRIDDEN_<tag>`` audit tags. Same-direction signals stack.
+    """
+    regression = [s for s in signals if s.tag in REGRESSION_TAGS]
+    if not regression:
+        return signals, []
+    direction = _direction(regression[0])
+    kept: list[PropSignal] = []
+    overridden: list[str] = []
+    for signal in signals:
+        if signal.tag not in REGRESSION_TAGS and _direction(signal) != direction:
+            overridden.append(f"OVERRIDDEN_{signal.tag}")
+            continue
+        kept.append(signal)
+    return kept, overridden
+
+
 def apply_matchup_signals(
     props: list[NflPlayerProp],
     scripts: list[MatchupScript],
@@ -637,16 +717,17 @@ def apply_matchup_signals(
         matched = False
         fade = False
         high_over = False
-        for signal in script.prop_signals:
-            if signal.market != prop.market:
-                continue
-            if not _names_match(
-                signal.player_name,
-                prop.player_name,
-                signal.team,
-                prop.team,
-            ):
-                continue
+        candidates = [
+            signal
+            for signal in script.prop_signals
+            if signal.market == prop.market
+            and _names_match(signal.player_name, prop.player_name, signal.team, prop.team)
+        ]
+        candidates, overridden = resolve_signal_conflicts(candidates)
+        for tag in overridden:
+            if tag not in tags:
+                tags.append(tag)
+        for signal in candidates:
             matched = True
             if signal.tag not in tags:
                 tags.append(signal.tag)
@@ -706,12 +787,22 @@ def render_matchup_markdown(
         "",
     ]
     if script:
+        src_bits = []
+        if script.total_source == "default":
+            src_bits.append("total=default")
+        if script.home_tt_source == "default" or script.away_tt_source == "default":
+            src_bits.append("team_totals=default")
+        src_note = f" ⚠️ PLACEHOLDER ({', '.join(src_bits)})" if src_bits else ""
         lines.append(
             f"- **Script:** `{script.script_type}` | "
             f"**Projected:** {home} {script.home_score:.0f}, {away} {script.away_score:.0f}"
+            f"{src_note}"
         )
         lines.append(f"- **Spread lean:** {script.spread_lean} ({script.home_spread:+.1f} {home})")
-        lines.append(f"- **Total lean:** {script.total_lean} {script.total:.1f}")
+        total_tag = " (placeholder)" if script.total_source == "default" else ""
+        lines.append(
+            f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"
+        )
         if script.mismatches:
             lines.append("- **Mismatches:**")
             for item in script.mismatches:
