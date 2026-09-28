@@ -262,13 +262,24 @@ def append_signals(
     return out
 
 
+MIN_SEASON, MAX_SEASON = 1999, 2100
+
+
+def fetch_player_weeks(season: int, fetch_rows: FetchRows = fetch_csv) -> list[dict[str, str]]:
+    """nflverse player-week stats for a validated season (URL built here, not by callers)."""
+    season = int(season)
+    if not MIN_SEASON <= season <= MAX_SEASON:
+        raise ValueError(f"Season out of range: {season}")
+    return fetch_rows(PLAYER_WEEK_URL.format(season=season))
+
+
 def load_usage(
     season: int,
     before_week: int | None,
     fetch_rows: FetchRows = fetch_csv,
 ) -> dict[str, PlayerUsage]:
     """Fetch nflverse player weeks (+ ffopportunity expected stats when available)."""
-    players = fetch_rows(PLAYER_WEEK_URL.format(season=season))
+    players = fetch_player_weeks(season, fetch_rows)
     try:
         expected = fetch_rows(EXPECTED_URL.format(season=season))
     except Exception as exc:  # regression signals simply drop out without it

@@ -172,3 +172,12 @@ def test_without_regression_conflicting_signals_still_net_out() -> None:
     ])
     assert prop.calibrated_volume_adjustment == 0.10
     assert not any(t.startswith("OVERRIDDEN_") for t in prop.calibration_tags)
+
+
+def test_fetch_player_weeks_validates_season() -> None:
+    urls: list[str] = []
+    usage.fetch_player_weeks(2026, lambda url: urls.append(url) or [])
+    assert urls[0].endswith("/stats_player/stats_player_week_2026.csv")
+    for bad in (1900, 3000):
+        with pytest.raises(ValueError):
+            usage.fetch_player_weeks(bad, lambda url: [])

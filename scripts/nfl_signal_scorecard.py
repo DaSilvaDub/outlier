@@ -37,7 +37,7 @@ from outlier_nfl.scorecard import (  # noqa: E402
     update_ledger,
 )
 from outlier_nfl.tape_nflverse import SCHEDULES_URL, fetch_csv  # noqa: E402
-from outlier_nfl.usage import PLAYER_WEEK_URL  # noqa: E402
+from outlier_nfl.usage import fetch_player_weeks  # noqa: E402
 
 
 def _slate_week(season: int, slate: str) -> int:
@@ -78,7 +78,7 @@ def main() -> int:
     )
 
     week = args.week or _slate_week(season, slate_iso)
-    player_rows = fetch_csv(PLAYER_WEEK_URL.format(season=season))
+    player_rows = fetch_player_weeks(season)
     if not any(r.get("week") == str(week) for r in player_rows):
         print(f"nflverse has no week {week} box scores yet; try again after the games are posted.")
         return 1
