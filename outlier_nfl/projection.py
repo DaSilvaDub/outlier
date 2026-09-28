@@ -23,7 +23,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from outlier_nfl.boxscore import _token
 from outlier_nfl.calibration import DEFAULT_LAPLACE_ALPHA, shrink_hit_rate

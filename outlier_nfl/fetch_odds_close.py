@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from outlier_nfl.close_feed import (
     CLOSE_FEED_SCHEMA_VERSION,

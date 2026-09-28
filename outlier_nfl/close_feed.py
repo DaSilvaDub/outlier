@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from outlier_nfl.enrich_close import CLOSE_SOURCE_BOOK, load_book_close_feed
 from outlier_nfl.utils import safe_read_json, safe_write_json
