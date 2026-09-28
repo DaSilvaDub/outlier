@@ -85,6 +85,8 @@ When categorizing filtered props:
 - **Floor Ladder Foundations:** Alternate lines offering 85%–92% implied probability used strictly as foundational anchors in correlated parlay builds.
 
 ## 5. Post-Game Reconciliation & Calibration
+**Signal scorecard (run the morning after each slate):** `python scripts/nfl_signal_scorecard.py --date YYYY-MM-DD` grades every signal in `nfl_matchup_scripts_<date>.json` against nflverse box scores: direction vs the player's own prior average (with same-week baselines, since most players finish under their average) and vs the slate's full-game consensus line (alternate ladder lines are never used). Writes `reports/NFL/<date>_Signal_Scorecard.md` and appends to `data/NFL/scorecard/ledger.jsonl` (re-running a date replaces its rows), so per-signal hit rates accumulate week over week.
+
 When a game concludes:
 1. Retrieve official box scores (via Outlier API or verified boxscore feeds).
 2. Reconcile game lines (Spread, Total, Team Totals) and individual player props.
