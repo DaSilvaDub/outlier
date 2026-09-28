@@ -172,7 +172,7 @@ def test_rush_mismatch_emits_favorite_rb_over_and_td():
     assert "MATCHUP_RUSH_MISMATCH" in rush.tag
 
 
-def test_pass_rush_vs_weak_qb_fades_underdog_pass_yards():
+def test_strong_pass_rush_targets_qb_sacks_taken_not_pass_yards():
     from outlier_nfl.matchup import build_matchup_script
 
     script = build_matchup_script(
@@ -183,10 +183,14 @@ def test_pass_rush_vs_weak_qb_fades_underdog_pass_yards():
         tapes=_week1_tape(),
     )
     jones = next(
-        s for s in script.prop_signals if s.player_name == "Daniel Jones" and s.market == "PASS_YDS"
+        s for s in script.prop_signals
+        if s.player_name == "Daniel Jones" and s.tag == "MATCHUP_PASS_SUPPRESS"
     )
-    assert jones.side == "UNDER"
-    assert "MATCHUP_PASS_SUPPRESS" in jones.tag
+    assert jones.market == "PASSING_TIMES_SACKED" and jones.side == "OVER"
+    assert jones.volume_adjustment == 0.08 and jones.confidence == "MEDIUM"
+    assert not any(
+        s.market == "PASS_YDS" and s.tag == "MATCHUP_PASS_SUPPRESS" for s in script.prop_signals
+    )
 
 
 def test_leaky_secondary_upgrades_slot_and_te():
@@ -236,6 +240,7 @@ def test_apply_matchup_signals_boosts_matching_overs_and_fades_conflicting_overs
     )
     props = [
         _prop("Kenneth Walker III", "RUSH_YDS", team="KC", opponent="IND"),
+        _prop("Daniel Jones", "PASSING_TIMES_SACKED", team="IND", opponent="KC", line=2.5),
         _prop("Daniel Jones", "PASS_YDS", team="IND", opponent="KC", line=199.5),
         _prop("Patrick Mahomes", "PASS_YDS", team="KC", opponent="IND", line=219.5),
     ]
@@ -247,10 +252,11 @@ def test_apply_matchup_signals_boosts_matching_overs_and_fades_conflicting_overs
     assert (walker.calibrated_volume_adjustment or 0) > 0
     assert walker.confidence_tier in {"TIER_2_STRONG", "TIER_1_ANCHOR"}
 
-    jones = by_name["Daniel Jones"]
-    assert "MATCHUP_PASS_SUPPRESS" in jones.calibration_tags
-    assert (jones.calibrated_volume_adjustment or 0) < 0
-    assert "MATCHUP_FADE" in jones.calibration_tags
+    jones_sacks, jones_yards = (p for p in calibrated if p.player_name == "Daniel Jones")
+    assert "MATCHUP_PASS_SUPPRESS" in jones_sacks.calibration_tags
+    assert jones_sacks.calibrated_volume_adjustment == 0.08
+    assert jones_sacks.confidence_tier in {None, "", "STANDARD"}  # MEDIUM does not promote
+    assert "MATCHUP_PASS_SUPPRESS" not in jones_yards.calibration_tags  # yards no longer faded
 
 
 def test_missing_tape_still_builds_market_only_script():
@@ -305,28 +311,27 @@ def test_deficit_risk_rush_over_is_not_revived_by_matchup_boost():
     assert row.confidence_tier != "TIER_2_STRONG"
 
 
-def test_pass_suppress_fades_over_but_does_not_haircut_under():
+def test_pass_suppress_boosts_sacks_over_and_leaves_under_unadjusted():
     from outlier_nfl.matchup import apply_matchup_signals, build_matchup_script
 
     script = build_matchup_script("evt-ind-kc", "KC", "IND", _ind_kc_lines(), _week1_tape())
-    over = _prop("Daniel Jones", "PASS_YDS", team="IND", opponent="KC", line=199.5)
+    over = _prop("Daniel Jones", "PASSING_TIMES_SACKED", team="IND", opponent="KC", line=2.5)
     under = _prop(
         "Daniel Jones",
-        "PASS_YDS",
+        "PASSING_TIMES_SACKED",
         team="IND",
         opponent="KC",
         position="UNDER",
-        line=199.5,
+        line=2.5,
     )
     stacked = apply_matchup_signals([over, under], [script])
     by_side = {p.position: p for p in stacked}
-    assert "MATCHUP_FADE" in by_side["OVER"].calibration_tags
-    assert (by_side["OVER"].calibrated_volume_adjustment or 0) < 0
-    assert "MATCHUP_FADE" not in by_side["UNDER"].calibration_tags
-    assert (by_side["UNDER"].calibrated_volume_adjustment or 0) >= 0
+    assert (by_side["OVER"].calibrated_volume_adjustment or 0) > 0
+    assert "MATCHUP_FADE" not in by_side["OVER"].calibration_tags
+    assert by_side["UNDER"].calibrated_volume_adjustment is None
 
 
-def test_healthy_qb_grade_is_not_overridden_by_low_pass_offense():
+def test_elite_rush_targets_sacks_even_for_healthy_qb():
     from outlier_nfl.matchup import build_matchup_script
 
     tape = _week1_tape()
@@ -349,12 +354,25 @@ def test_healthy_qb_grade_is_not_overridden_by_low_pass_offense():
         ),
     ]
     script = build_matchup_script("evt-bal-kc", "KC", "BAL", lines, tape)
-    mahomes_pass = [
-        s
-        for s in script.prop_signals
-        if s.player_name == "Patrick Mahomes" and s.market == "PASS_YDS" and s.side == "UNDER"
+    mahomes = [s for s in script.prop_signals if s.player_name == "Patrick Mahomes"]
+    # A healthy QB still takes more sacks vs an elite rush; passing yards are never faded.
+    assert [(s.market, s.side) for s in mahomes if s.tag == "MATCHUP_PASS_SUPPRESS"] == [
+        ("PASSING_TIMES_SACKED", "OVER")
     ]
-    assert mahomes_pass == []
+    assert not any(s.market == "PASS_YDS" and s.side == "UNDER" for s in mahomes)
+
+
+def test_explicit_grades_override_raw_fallbacks():
+    from outlier_nfl.matchup import _is_leaky_run_d, _is_strong_pass_rush, _unit_score
+
+    # Pressure grade present and below 70 decides, even with 4 sacks/game.
+    assert not _is_strong_pass_rush(_unit_score({"pass_rush": 55.0, "sacks": 4}))
+    # No explicit grade: the sacks fallback still applies.
+    assert _is_strong_pass_rush(_unit_score({"sacks": 4}))
+    assert not _is_strong_pass_rush(_unit_score({"sacks": 2}))
+    # Same rule for run defense: an explicit grade beats yards allowed.
+    assert not _is_leaky_run_d(_unit_score({"rush_defense": 70.0, "opp_rush_yards_allowed": 180}))
+    assert _is_leaky_run_d(_unit_score({"opp_rush_yards_allowed": 180}))
 
 
 def test_road_favorite_grind_leans_away_and_does_not_invert_score():
