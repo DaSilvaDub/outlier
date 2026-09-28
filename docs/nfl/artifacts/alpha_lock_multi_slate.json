@@ -1,0 +1,146 @@
+{
+  "generated": "2026-09-26",
+  "note": "Sunday vs midweek labeled separately. 09-27 Week 3 Sunday not settleable yet (games pending). 09-24 TNF pack Drive-assembled separately when available.",
+  "recommendation": {
+    "default_alpha": 2,
+    "recommendation": "keep α=2",
+    "rationale": "Only 1 Sunday pack(s) settleable; midweek packs labeled separately. Best alphas by slate: [('2026-09-20', 4), ('2026-09-21', 6)]. Do not bump default without ≥2 OOS Sundays agreeing.",
+    "alpha2_vs_market": [
+      [
+        "2026-09-20",
+        true,
+        -0.004631289419754214
+      ],
+      [
+        "2026-09-21",
+        false,
+        0.07746204391955172
+      ]
+    ]
+  },
+  "slates": [
+    {
+      "slate": "2026-09-20 Sunday 1pm (Week 2)",
+      "kind": "sunday",
+      "slate_date": "2026-09-20",
+      "market_brier": 0.20942634476398303,
+      "grid": [
+        {
+          "alpha": 0,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.23783898305084747,
+          "delta_vs_market": 0.02841263828686444
+        },
+        {
+          "alpha": 1,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.21501296233530084,
+          "delta_vs_market": 0.0055866175713178146
+        },
+        {
+          "alpha": 2,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.20479505534422882,
+          "delta_vs_market": -0.004631289419754214
+        },
+        {
+          "alpha": 4,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.19906099644283476,
+          "delta_vs_market": -0.010365348321148271
+        },
+        {
+          "alpha": 6,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.20010679787092372,
+          "delta_vs_market": -0.009319546893059305
+        },
+        {
+          "alpha": 10,
+          "n_settled": 237,
+          "hit_rate": 0.7245762711864406,
+          "market_brier": 0.20942634476398303,
+          "model_brier": 0.20618172928445339,
+          "delta_vs_market": -0.0032446154795296445
+        }
+      ],
+      "best_alpha": 4,
+      "best_model_brier": 0.19906099644283476,
+      "alphas_beating_market": [
+        2,
+        4,
+        6,
+        10
+      ]
+    },
+    {
+      "slate": "2026-09-21 MNF NYG@LAR (Week 2 midweek)",
+      "kind": "midweek_mnf",
+      "slate_date": "2026-09-21",
+      "market_brier": 0.13612003067586206,
+      "grid": [
+        {
+          "alpha": 0,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.2517241379310345,
+          "delta_vs_market": 0.11560410725517242
+        },
+        {
+          "alpha": 1,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.2258143007663793,
+          "delta_vs_market": 0.08969427009051723
+        },
+        {
+          "alpha": 2,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.21358207459541378,
+          "delta_vs_market": 0.07746204391955172
+        },
+        {
+          "alpha": 4,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.20540665474675862,
+          "delta_vs_market": 0.06928662407089656
+        },
+        {
+          "alpha": 6,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.20504426674272413,
+          "delta_vs_market": 0.06892423606686207
+        },
+        {
+          "alpha": 10,
+          "n_settled": 29,
+          "hit_rate": 0.7241379310344828,
+          "market_brier": 0.13612003067586206,
+          "model_brier": 0.20957866973189654,
+          "delta_vs_market": 0.07345863905603447
+        }
+      ],
+      "best_alpha": 6,
+      "best_model_brier": 0.20504426674272413,
+      "alphas_beating_market": []
+    }
+  ]
+}

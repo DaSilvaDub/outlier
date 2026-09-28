@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "source": "book_close",
+  "note": "Synthetic fixture: closes moved vs snapshot to prove CLV≠0. NOT a live book close.",
+  "count": 6,
+  "records": [
+    {
+      "player_name": "Jahmyr Gibbs",
+      "market": "RUSH_YDS",
+      "line": 87.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 87.5,
+      "close_odds": -91,
+      "close_implied": 56.61,
+      "close_source": "book_close"
+    },
+    {
+      "player_name": "Amon-Ra St. Brown",
+      "market": "REC_YDS",
+      "line": 79.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 79.5,
+      "close_odds": -84,
+      "close_implied": 54.98,
+      "close_source": "book_close"
+    },
+    {
+      "player_name": "Khalil Shakir",
+      "market": "REC",
+      "line": 3.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 3.5,
+      "close_odds": -117,
+      "close_implied": 61.81,
+      "close_source": "book_close"
+    },
+    {
+      "player_name": "James Cook",
+      "market": "RUSH_YDS",
+      "line": 78.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 78.5,
+      "close_odds": -86,
+      "close_implied": 55.46,
+      "close_source": "book_close"
+    },
+    {
+      "player_name": "Jameson Williams",
+      "market": "REC_YDS",
+      "line": 59.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 59.5,
+      "close_odds": -89,
+      "close_implied": 56.15,
+      "close_source": "book_close"
+    },
+    {
+      "player_name": "Josh Allen",
+      "market": "PASS_YDS",
+      "line": 249.5,
+      "position": "OVER",
+      "matchup": "DET @ BUF",
+      "event_id": "outlier-det-buf-20260917",
+      "close_line": 249.5,
+      "close_odds": -87,
+      "close_implied": 55.69,
+      "close_source": "book_close"
+    }
+  ]
+}

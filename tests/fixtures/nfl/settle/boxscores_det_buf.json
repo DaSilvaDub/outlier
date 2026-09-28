@@ -1,0 +1,74 @@
+{
+  "source": "fixture",
+  "notes": "DET@BUF 2026-09-17 finals distilled from reports/NFL/2026-09-17_DET_BUF_Postgame_Calibration.md for offline join tests. Not a live feed.",
+  "events": [
+    {
+      "provider_event_id": "fixture-det-buf-20260917",
+      "event_date": "2026-09-17",
+      "away": "DET",
+      "home": "BUF",
+      "away_score": 31,
+      "home_score": 41,
+      "players": {
+        "Jahmyr Gibbs": {
+          "RUSHING:YDS": 52,
+          "RUSHING:CAR": 16,
+          "RUSHING:TD": 0,
+          "RECEIVING:REC": 1,
+          "RECEIVING:YDS": 5,
+          "RECEIVING:TD": 1
+        },
+        "Amon-Ra St. Brown": {
+          "RECEIVING:REC": 9,
+          "RECEIVING:YDS": 142,
+          "RECEIVING:TD": 2
+        },
+        "Jameson Williams": {
+          "RECEIVING:REC": 2,
+          "RECEIVING:YDS": 33,
+          "RECEIVING:TD": 0
+        },
+        "Jared Goff": {
+          "PASSING:YDS": 327,
+          "PASSING:ATT": 38,
+          "PASSING:CMP": 26,
+          "PASSING:TD": 3,
+          "PASSING:INT": 0
+        },
+        "Josh Allen": {
+          "PASSING:YDS": 248,
+          "PASSING:ATT": 31,
+          "PASSING:CMP": 22,
+          "PASSING:TD": 3,
+          "PASSING:INT": 0,
+          "RUSHING:YDS": 72,
+          "RUSHING:CAR": 8,
+          "RUSHING:TD": 2
+        },
+        "James Cook": {
+          "RUSHING:YDS": 135,
+          "RUSHING:CAR": 21,
+          "RUSHING:TD": 1,
+          "RECEIVING:REC": 1,
+          "RECEIVING:YDS": 8,
+          "RECEIVING:TD": 0
+        },
+        "Khalil Shakir": {
+          "RECEIVING:REC": 5,
+          "RECEIVING:YDS": 53,
+          "RECEIVING:TD": 0
+        },
+        "Dalton Kincaid": {
+          "RECEIVING:REC": 4,
+          "RECEIVING:YDS": 61,
+          "RECEIVING:TD": 1
+        },
+        "Sam LaPorta": {
+          "RECEIVING:REC": 7,
+          "RECEIVING:YDS": 70,
+          "RECEIVING:TD": 1
+        }
+      }
+    }
+  ]
+}
