@@ -32,6 +32,7 @@ without data keep the engine's sack / pass-yard proxies.
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import json
 import logging
@@ -77,14 +78,25 @@ TAPE_NUMERIC_FIELDS: tuple[str, ...] = (
 ROLE_FIELDS: tuple[str, ...] = ("qb", "rb1", "te", "wr_slot", "wr_deep")
 
 
-def fetch_csv(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
-    """Download a CSV release asset (GitHub redirects are followed by urlopen)."""
+def fetch_bytes(url: str, timeout: float = 60.0) -> bytes:
+    """Download a release asset over https (GitHub redirects are followed by urlopen)."""
     if not url.startswith("https://"):
         raise ValueError(f"Refusing non-https URL: {url!r}")
     req = Request(url, headers={"User-Agent": "outlier-nfl-tape/1.0"})  # nosec B310 - https only
     with urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosec B310 - https only
-        text = resp.read().decode("utf-8")
-    return list(csv.DictReader(io.StringIO(text)))
+        return resp.read()
+
+
+def parse_csv_bytes(data: bytes) -> list[dict[str, str]]:
+    """Parse CSV bytes, transparently gunzipping ``.csv.gz`` payloads."""
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+    return list(csv.DictReader(io.StringIO(data.decode("utf-8"))))
+
+
+def fetch_csv(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
+    """Download and parse a CSV (or gzipped CSV) release asset."""
+    return parse_csv_bytes(fetch_bytes(url, timeout))
 
 
 def _num(value: Any) -> float:

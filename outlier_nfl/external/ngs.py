@@ -1,19 +1,62 @@
-"""NGS (Next Gen Stats) adapter stub.
+"""NFL Next Gen Stats adapter (nflverse ``nextgen_stats`` release).
 
-Provides a ``fetch`` function matching the signature used by ``load_external_metrics``.
-It returns an empty dict placeholder so the pipeline can run without requiring real
-data sources. In production this would query the actual NGS API.
+Returns one record per player-week of the regular season, weeks 1..``through_week``
+(week 0 rows are nflverse season aggregates and are skipped).
 """
 
-def fetch(client, season: int, kind: str, through_week: int = 22):
-    """Return a stubbed empty record set.
+from __future__ import annotations
 
-    Args:
-        client: a ``Client`` instance (unused in the stub).
-        season: NFL season year.
-        kind: one of ``"passing"``, ``"rushing"``, ``"receiving"``.
-        through_week: week cutoff (ignored).
-    Returns:
-        dict: ``{"records": []}`` to satisfy the caller.
-    """
-    return {"records": []}
+from typing import Any
+
+from outlier_nfl.config import normalize_team
+
+from .common import NFLVERSE_RELEASES, Client, num
+
+NGS_URL = NFLVERSE_RELEASES + "/nextgen_stats/ngs_{kind}.csv.gz"
+
+# Metrics kept per kind, beyond the shared identity fields.
+NGS_FIELDS: dict[str, tuple[str, ...]] = {
+    "passing": (
+        "attempts", "pass_yards", "avg_time_to_throw", "aggressiveness",
+        "avg_intended_air_yards", "avg_air_yards_to_sticks",
+        "completion_percentage_above_expectation", "passer_rating",
+    ),
+    "rushing": (
+        "rush_attempts", "rush_yards", "efficiency", "percent_attempts_gte_eight_defenders",
+        "avg_time_to_los", "rush_yards_over_expected", "rush_yards_over_expected_per_att",
+        "rush_pct_over_expected",
+    ),
+    "receiving": (
+        "targets", "receptions", "yards", "avg_cushion", "avg_separation",
+        "avg_intended_air_yards", "percent_share_of_intended_air_yards",
+        "avg_yac_above_expectation",
+    ),
+}
+
+
+def fetch(client: Client, season: int, kind: str, through_week: int = 22) -> dict[str, Any]:
+    """Player-week NGS records for ``kind`` in ("passing", "rushing", "receiving")."""
+    if kind not in NGS_FIELDS:
+        raise ValueError(f"Unknown NGS kind: {kind!r}")
+    records: list[dict[str, Any]] = []
+    for row in client.fetch_csv(NGS_URL.format(kind=kind)):
+        if str(row.get("season")) != str(season) or row.get("season_type") != "REG":
+            continue
+        week = int(num(row.get("week")) or 0)
+        if week < 1 or week > through_week:
+            continue
+        team = str(row.get("team_abbr") or "")
+        record: dict[str, Any] = {
+            "source": "ngs",
+            "kind": kind,
+            "season": season,
+            "week": week,
+            "player": row.get("player_display_name"),
+            "gsis_id": row.get("player_gsis_id"),
+            "position": row.get("player_position"),
+            "team": normalize_team(team) or team,
+        }
+        for field in NGS_FIELDS[kind]:
+            record[field] = num(row.get(field))
+        records.append(record)
+    return {"records": records}

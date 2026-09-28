@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 import sys
 from typing import Any
-from outlier_nfl.external import load_external_metrics
+from outlier_nfl.external import Client as ExternalClient, load_external_metrics
 
 # Ensure Windows stdout handles UTF-8 gracefully
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -237,13 +237,19 @@ class NflPipeline:
         # =====================================================================
         tapes = load_prior_week_tape(self.nfl_dir)
         # Load external advanced metrics for the season
-        try:
-            season_year = int(target_date.split('-')[0])
-            external_metrics = load_external_metrics(season_year, through_week=22)
-            logger.info("Loaded %d external metric records", len(external_metrics))
-        except Exception as exc:
-            logger.warning("Failed loading external metrics: %s", exc)
-            external_metrics = []
+        # Offline fixture replays never touch the network.
+        external_metrics: list[dict[str, Any]] = []
+        if offline_fixtures_dir is None:
+            try:
+                season_year = int(target_date.split('-')[0])
+                external_metrics = load_external_metrics(
+                    season_year,
+                    through_week=22,
+                    client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
+                )
+                logger.info("Loaded %d external metric records", len(external_metrics))
+            except Exception as exc:
+                logger.warning("Failed loading external metrics: %s", exc)
         # Persist external metrics to JSON for downstream use and analysis
         external_metrics_payload = {
             "date": target_date,
