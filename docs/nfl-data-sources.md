@@ -57,4 +57,4 @@ remains the source for live multi-book props.
 2. ~~Pass-rush grade from `pfr_advstats` pressures; `qb_grade` from ESPN QBR for all 32 teams.~~ Done (PR #198).
 3. ~~Fill `outlier_nfl/external/` stubs (`ngs`, `pbp`, `schedule`) from nflverse.~~ Done (PR #198): records land in `data/NFL/normalized/nfl_external_metrics_*.json` (not yet consumed by the matchup engine).
 4. ~~Weather pillar~~ Done (PR #198): Open-Meteo kickoff forecasts (`outlier_nfl/weather.py`), thresholds sized from nflverse `schedules` wind history. Open-Meteo and NWS are blocked in the sandbox; works on the pipeline machine.
-5. Player prop context from `stats_player_week`, `snap_counts`, `ffopportunity`.
+5. ~~Player prop context~~ Done (PR #198): vacated targets/carries and efficiency regression from `stats_player_week` + `ffopportunity` (`outlier_nfl/usage.py`). Snap counts not used yet (no backtested edge).

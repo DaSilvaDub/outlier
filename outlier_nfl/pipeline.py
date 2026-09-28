@@ -8,6 +8,7 @@ and persists normalized datasets to disk atomically.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from datetime import date, datetime, timezone
 import logging
 from pathlib import Path
@@ -26,6 +27,7 @@ from outlier_nfl.constants import (
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
+from outlier_nfl.usage import append_signals, load_usage, usage_signals
 from outlier_nfl.weather import apply_weather, load_slate_weather
 from outlier_nfl.matchup import (
     _event_team_codes,
@@ -300,6 +302,38 @@ class NflPipeline:
                 )
             except Exception as exc:
                 logger.warning("Weather calibration skipped: %s", exc)
+
+        # Player usage: vacated volume and efficiency regression re-base stale hit rates.
+        if offline_fixtures_dir is None and matchup_scripts:
+            try:
+                season = int(target_date[:4]) if int(target_date[5:7]) >= 3 else int(target_date[:4]) - 1
+                upcoming = [
+                    int(r["week"])
+                    for r in external_metrics
+                    if r.get("source") == "schedule" and str(r.get("gameday") or "") >= target_date
+                ]
+                profiles = load_usage(season, min(upcoming) if upcoming else None)
+                event_by_team: dict[str, str] = {}
+                for script in matchup_scripts:
+                    event_by_team[script.home_team] = script.event_id
+                    event_by_team[script.away_team] = script.event_id
+                usage = usage_signals(profiles, load_tape_inactives(self.nfl_dir), event_by_team)
+                matchup_scripts = append_signals(matchup_scripts, usage)
+                safe_write_json(
+                    self.normalized_dir / f"nfl_player_usage_{target_date}.json",
+                    {
+                        "date": target_date,
+                        "window": window,
+                        "updated_at": now_utc,
+                        "players": [
+                            p.to_dict() for p in profiles.values() if p.team in event_by_team
+                        ],
+                        "signals": [asdict(sig) for sig in usage],
+                    },
+                )
+                logger.info("Usage: %d profiles, %d signals", len(profiles), len(usage))
+            except Exception as exc:
+                logger.warning("Usage signals skipped: %s", exc)
 
         if all_player_props:
             consensus_props = select_consensus_player_props(all_player_props)

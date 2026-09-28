@@ -27,3 +27,4 @@ def _no_live_nfl_external_metrics(monkeypatch):
         "outlier_nfl.pipeline.load_external_metrics", lambda *args, **kwargs: []
     )
     monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", lambda *args, **kwargs: {})
+    monkeypatch.setattr("outlier_nfl.pipeline.load_usage", lambda *args, **kwargs: {})
