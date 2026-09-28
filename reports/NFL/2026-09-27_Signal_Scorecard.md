@@ -4,29 +4,29 @@
 
 | Signal | Graded | vs player avg | vs consensus line |
 |---|---|---|---|
-| EFFICIENCY_COLD | 37 | 18/37 (49%) | - (-) |
-| EFFICIENCY_HOT | 32 | 24/32 (75%) | 0/2 (0%) |
+| EFFICIENCY_COLD | 39 | 19/39 (49%) | - (-) |
+| EFFICIENCY_HOT | 36 | 26/36 (72%) | 0/2 (0%) |
 | MATCHUP_COVERAGE_LEAK | 9 | 5/9 (56%) | - (-) |
 | MATCHUP_PASS_SUPPRESS | 5 | 2/4 (50%) | - (-) |
-| MATCHUP_RUSH_MISMATCH | 2 | 1/2 (50%) | - (-) |
+| MATCHUP_RUSH_MISMATCH | 4 | 2/4 (50%) | - (-) |
 | VACATED_TARGETS | 9 | 6/9 (67%) | - (-) |
 
 ## Cumulative (all graded slates)
 
 | Signal | Graded | vs player avg | vs consensus line |
 |---|---|---|---|
-| EFFICIENCY_COLD | 37 | 18/37 (49%) | - (-) |
-| EFFICIENCY_HOT | 32 | 24/32 (75%) | 0/2 (0%) |
+| EFFICIENCY_COLD | 39 | 19/39 (49%) | - (-) |
+| EFFICIENCY_HOT | 36 | 26/36 (72%) | 0/2 (0%) |
 | MATCHUP_COVERAGE_LEAK | 9 | 5/9 (56%) | - (-) |
 | MATCHUP_PASS_SUPPRESS | 5 | 2/4 (50%) | - (-) |
-| MATCHUP_RUSH_MISMATCH | 2 | 1/2 (50%) | - (-) |
+| MATCHUP_RUSH_MISMATCH | 4 | 2/4 (50%) | - (-) |
 | VACATED_TARGETS | 9 | 6/9 (67%) | - (-) |
 
 ## Same-week direction baselines (all players, >= 2 prior games)
 
 | Market | Over avg | Under avg |
 |---|---|---|
-| PASSING_TIMES_SACKED | 35% | 65% |
+| PASSING_TIMES_SACKED | 36% | 64% |
 | REC | 47% | 53% |
 | RECEIVING_TARGETS | 50% | 50% |
 | REC_YDS | 45% | 55% |
@@ -38,6 +38,7 @@
 |---|---|---|---|---|---|---|---|---|
 | EFFICIENCY_COLD | Carnell Tate | REC_YDS | OVER | 32.5 | - | 58 | HIT | - |
 | EFFICIENCY_COLD | Chase Brown | REC_YDS | OVER | 12.0 | - | 8 | miss | - |
+| EFFICIENCY_COLD | Courtland Sutton | REC_YDS | OVER | 18.0 | - | 46 | HIT | - |
 | EFFICIENCY_COLD | DK Metcalf | REC_YDS | OVER | 33.5 | - | 31 | miss | - |
 | EFFICIENCY_COLD | David Montgomery | RUSH_YDS | OVER | 35.0 | - | 33 | miss | - |
 | EFFICIENCY_COLD | DeMario Douglas | REC_YDS | OVER | 14.5 | - | 38 | HIT | - |
@@ -65,6 +66,7 @@
 | EFFICIENCY_COLD | Roman Wilson | REC_YDS | OVER | 27.0 | - | 60 | HIT | - |
 | EFFICIENCY_COLD | Ryan Flournoy | REC_YDS | OVER | 22.5 | - | 22 | miss | - |
 | EFFICIENCY_COLD | Ted Hurst III | REC_YDS | OVER | 31.5 | - | 40 | HIT | - |
+| EFFICIENCY_COLD | Terrance Ferguson | REC_YDS | OVER | 27.0 | - | 9 | miss | - |
 | EFFICIENCY_COLD | Terry McLaurin | REC_YDS | OVER | 32.0 | - | 77 | HIT | - |
 | EFFICIENCY_COLD | Tommy Tremble | REC_YDS | OVER | 14.5 | - | 41 | HIT | - |
 | EFFICIENCY_COLD | Travis Etienne | REC_YDS | OVER | 19.0 | - | 13 | miss | - |
@@ -75,6 +77,7 @@
 | EFFICIENCY_COLD | Xavier Worthy | REC_YDS | OVER | 21.5 | - | 20 | miss | - |
 | EFFICIENCY_HOT | Antonio Williams | REC_YDS | UNDER | 44.0 | - | 15 | HIT | - |
 | EFFICIENCY_HOT | Bijan Robinson | REC_YDS | UNDER | 49.5 | - | 19 | HIT | - |
+| EFFICIENCY_HOT | Blake Corum | RUSH_YDS | UNDER | 66.5 | - | 15 | HIT | - |
 | EFFICIENCY_HOT | Breece Hall | REC_YDS | UNDER | 39.5 | - | 23 | HIT | - |
 | EFFICIENCY_HOT | CeeDee Lamb | REC_YDS | UNDER | 98.5 | - | 112 | miss | - |
 | EFFICIENCY_HOT | Chris Godwin Jr. | REC_YDS | UNDER | 43.0 | - | 25 | HIT | - |
@@ -83,10 +86,12 @@
 | EFFICIENCY_HOT | Dalton Kincaid | REC_YDS | UNDER | 112.5 | - | 38 | HIT | - |
 | EFFICIENCY_HOT | Darnell Mooney | REC_YDS | UNDER | 37.5 | 17.5 | 20 | HIT | miss |
 | EFFICIENCY_HOT | Darren Waller | REC_YDS | UNDER | 30.5 | - | 51 | miss | - |
+| EFFICIENCY_HOT | Davante Adams | REC_YDS | UNDER | 110.5 | - | 137 | miss | - |
 | EFFICIENCY_HOT | Denzel Boston | REC_YDS | UNDER | 77.0 | - | 41 | HIT | - |
 | EFFICIENCY_HOT | Derrick Henry | RUSH_YDS | UNDER | 106.0 | - | 89 | HIT | - |
 | EFFICIENCY_HOT | Drake London | REC_YDS | UNDER | 40.0 | - | 194 | miss | - |
 | EFFICIENCY_HOT | Elic Ayomanor | REC_YDS | UNDER | 40.0 | - | 11 | HIT | - |
+| EFFICIENCY_HOT | Evan Engram | REC_YDS | UNDER | 30.0 | - | 0 | HIT | - |
 | EFFICIENCY_HOT | Foster Moreau | REC_YDS | UNDER | 24.5 | - | 7 | HIT | - |
 | EFFICIENCY_HOT | Harold Fannin Jr. | REC_YDS | UNDER | 37.5 | - | 51 | miss | - |
 | EFFICIENCY_HOT | Jake Ferguson | REC_YDS | UNDER | 24.5 | - | 23 | HIT | - |
@@ -98,6 +103,7 @@
 | EFFICIENCY_HOT | Josh Oliver | REC_YDS | UNDER | 23.0 | - | 0 | HIT | - |
 | EFFICIENCY_HOT | Juwan Johnson | REC_YDS | UNDER | 60.0 | 35.5 | 53 | HIT | miss |
 | EFFICIENCY_HOT | Kenneth Walker III | RUSH_YDS | UNDER | 145.0 | - | 70 | HIT | - |
+| EFFICIENCY_HOT | Kyren Williams | RUSH_YDS | UNDER | 63.0 | - | 88 | miss | - |
 | EFFICIENCY_HOT | Laquon Treadwell | REC_YDS | UNDER | 30.5 | - | 20 | HIT | - |
 | EFFICIENCY_HOT | Rashee Rice | REC_YDS | UNDER | 51.0 | - | 88 | miss | - |
 | EFFICIENCY_HOT | Romeo Doubs | REC_YDS | UNDER | 48.0 | - | 49 | miss | - |
@@ -121,6 +127,8 @@
 | MATCHUP_PASS_SUPPRESS | Tyler Shough | PASSING_TIMES_SACKED | OVER | 4.0 | - | 2 | miss | - |
 | MATCHUP_RUSH_MISMATCH | Derrick Henry | RUSH_YDS | OVER | 106.0 | - | 89 | miss | - |
 | MATCHUP_RUSH_MISMATCH | Derrick Henry | ANYTIME_TD | OVER | - | - | 2 | HIT | - |
+| MATCHUP_RUSH_MISMATCH | Kyren Williams | RUSH_YDS | OVER | 63.0 | - | 88 | HIT | - |
+| MATCHUP_RUSH_MISMATCH | Kyren Williams | ANYTIME_TD | OVER | - | - | 0 | miss | - |
 | VACATED_TARGETS | De'Von Achane | RECEIVING_TARGETS | OVER | 5.5 | - | 1 | miss | - |
 | VACATED_TARGETS | De'Von Achane | REC | OVER | 3.5 | - | 0 | miss | - |
 | VACATED_TARGETS | De'Von Achane | REC_YDS | OVER | 24.5 | - | 0 | miss | - |
@@ -131,6 +139,6 @@
 | VACATED_TARGETS | Malik Washington | REC | OVER | 3.5 | - | 5 | HIT | - |
 | VACATED_TARGETS | Malik Washington | REC_YDS | OVER | 48.0 | - | 56 | HIT | - |
 
-Ungraded: 2 fewer than 2 prior games and no line, 12 no box score this week
+Ungraded: 2 fewer than 2 prior games and no line, 4 no box score this week
 
 _vs player avg is directional (most players finish under their average, see baselines); vs consensus line is the betting-relevant grade._
