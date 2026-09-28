@@ -58,6 +58,91 @@ def test_per_game_joins_opponent_and_score_and_normalizes_team() -> None:
     assert [g["week"] for g in per["LAR"]] == [1, 2]  # unplayed and preseason dropped
 
 
+def _depth(dt: str, team: str, pos: str, slot: str, rank: int, name: str, gsis: str = "") -> dict[str, str]:
+    return {"dt": dt, "team": team, "pos_abb": pos, "pos_slot": slot, "pos_rank": str(rank),
+            "player_name": name, "gsis_id": gsis}
+
+
+DT_OLD, DT_NEW, DT_AFTER = "2026-09-20T12:00:00Z", "2026-09-27T12:56:55Z", "2026-09-28T06:00:00Z"
+DEPTH = [
+    _depth(DT_OLD, "LA", "TE", "10", 1, "Tyler Higbee"),
+    _depth(DT_NEW, "LA", "QB", "9", 1, "Matthew Stafford"),
+    _depth(DT_NEW, "LA", "RB", "11", 1, "Kyren Williams"),
+    _depth(DT_NEW, "LA", "TE", "10", 1, "Colby Parkinson"),
+    _depth(DT_NEW, "LA", "TE", "10", 4, "Tyler Higbee"),
+    _depth(DT_NEW, "LA", "WR", "1", 1, "Puka Nacua", "00-NACUA"),
+    _depth(DT_NEW, "LA", "WR", "2", 2, "Davante Adams"),
+    _depth(DT_NEW, "LA", "WR", "8", 3, "Jordan Whittington"),
+    _depth(DT_AFTER, "LA", "QB", "9", 1, "Future Snapshot QB"),
+]
+INJURIES = [
+    {"season_type": "REG", "week": "3", "team": "LA", "full_name": "Puka Nacua",
+     "gsis_id": "00-NACUA", "report_status": "Doubtful", "position": "WR"},
+    {"season_type": "REG", "week": "3", "team": "LA", "full_name": "Kyren Williams",
+     "gsis_id": "", "report_status": "Questionable", "position": "RB"},
+    {"season_type": "REG", "week": "2", "team": "LA", "full_name": "Blake Corum",
+     "gsis_id": "", "report_status": "Out", "position": "RB"},
+]
+
+
+def test_inactives_use_slate_week_and_out_doubtful_only() -> None:
+    assert tape.slate_week(GAMES, 2026, date(2026, 9, 27)) == 3
+    out = tape.inactive_players(INJURIES, 3)
+    assert [p["name"] for p in out["LAR"]] == ["Puka Nacua"]  # Questionable plays; Wk 2 ignored
+
+
+def test_depth_roles_skip_inactive_and_ignore_future_snapshots() -> None:
+    roles = tape.depth_chart_roles(DEPTH, tape.inactive_players(INJURIES, 3), date(2026, 9, 27))
+    assert roles["LAR"] == {
+        "qb": "Matthew Stafford", "rb1": "Kyren Williams", "te": "Colby Parkinson",
+        "wr_deep": "Davante Adams", "wr_slot": "Jordan Whittington",
+    }
+    healthy = tape.depth_chart_roles(DEPTH, {}, date(2026, 9, 27))
+    assert healthy["LAR"]["wr_deep"] == "Puka Nacua"
+    # name fallback when the injury row has no gsis id
+    by_name = tape.depth_chart_roles(
+        DEPTH, {"LAR": [{"name": "Puka Nacua", "gsis_id": ""}]}, date(2026, 9, 27)
+    )
+    assert by_name["LAR"]["wr_deep"] == "Davante Adams"
+
+
+def test_auto_roles_override_stale_tape_roles_and_fill_gaps() -> None:
+    stale = {"LAR": {"te": "Tyler Higbee", "wr_deep": "Puka Nacua"}, "SF": {"qb": "Brock Purdy"}}
+    roles = tape.depth_chart_roles(DEPTH, tape.inactive_players(INJURIES, 3), date(2026, 9, 27))
+    payload = tape.build_tape_payload(
+        2026, roles=stale, team_rows=TEAM_ROWS, game_rows=GAMES,
+        depth_roles=roles, inactive=tape.inactive_players(INJURIES, 3),
+    )
+    assert payload["teams"]["LAR"]["te"] == "Colby Parkinson"
+    assert payload["teams"]["LAR"]["wr_deep"] == "Davante Adams"
+    assert payload["teams"]["SF"]["qb"] == "Brock Purdy"  # no depth data -> tape role kept
+
+
+def test_auto_roles_fetch_failure_keeps_existing_roles(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
+        raise OSError("blocked")
+
+    monkeypatch.setattr(tape, "fetch_csv", boom)
+    payload = tape.build_tape_payload(
+        2026, roles={"LAR": {"qb": "Manual QB"}}, team_rows=TEAM_ROWS, game_rows=GAMES
+    )
+    assert payload["teams"]["LAR"]["qb"] == "Manual QB"
+    assert payload["inactive"] == {} and payload["roles_source"] == "existing tape"
+
+
+def test_pipeline_maps_inactives_to_both_teams_of_each_event(tmp_path: Path) -> None:
+    (tmp_path / "tape").mkdir()
+    (tmp_path / "tape" / "prior_week.json").write_text(
+        json.dumps({"inactive": {"LA": ["Puka Nacua"], "DEN": []}, "teams": {}})
+    )
+    inactive = tape.load_tape_inactives(tmp_path)
+    assert inactive == {"LAR": ["Puka Nacua"], "DEN": []}
+    events = [{"eventId": "e1", "home": {"alias": "DEN"}, "away": {"alias": "LAR"}}]
+    mapped = nfl_pipeline.injuries_by_event(inactive, [], events)
+    assert mapped == {"e1": ["Puka Nacua"]}
+    assert nfl_pipeline.injuries_by_event({}, [], events) == {}
+
+
 def test_before_cutoff_excludes_games_on_or_after_slate_date() -> None:
     per = tape.build_per_game(TEAM_ROWS, GAMES, 2026, before=date(2026, 9, 21))
     assert [g["week"] for g in per["LAR"]] == [1]
@@ -84,7 +169,8 @@ def test_write_tape_keeps_backup_and_engine_can_load(tmp_path: Path) -> None:
     path.write_text(json.dumps({"teams": {"LAR": {"qb": "Old QB", "rush_yards": 1}}}))
 
     payload = tape.build_tape_payload(
-        2026, roles=tape.load_existing_roles(path), team_rows=TEAM_ROWS, game_rows=GAMES
+        2026, roles=tape.load_existing_roles(path), team_rows=TEAM_ROWS, game_rows=GAMES,
+        auto_roles=False,
     )
     backup = tape.write_tape(path, payload)
 
@@ -101,13 +187,23 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
 
     def fake_fetch(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
         calls.append(url)
-        return TEAM_ROWS if "stats_team_week_2026" in url else GAMES
+        if "stats_team_week_2026" in url:
+            return TEAM_ROWS
+        if "injuries_2026" in url:
+            return INJURIES
+        if "depth_charts_2026" in url:
+            return DEPTH
+        return GAMES
 
     monkeypatch.setattr(tape, "fetch_csv", fake_fetch)
     out = tape.refresh_prior_week_tape(tmp_path, 2026, before=date(2026, 9, 27))
     assert out == tmp_path / "tape" / "prior_week.json"
-    assert json.loads(out.read_text())["teams"]["LAR"]["games"] == 2
-    assert len(calls) == 2
+    written = json.loads(out.read_text())
+    assert written["teams"]["LAR"]["games"] == 2
+    assert written["teams"]["LAR"]["wr_deep"] == "Davante Adams"  # Nacua Doubtful
+    assert written["inactive"] == {"LAR": ["Puka Nacua"]}
+    assert written["roles_source"].startswith("nflverse")
+    assert len(calls) == 4
 
     with pytest.raises(ValueError):
         tape.refresh_prior_week_tape(tmp_path, 2026, before=date(2026, 9, 1))

@@ -11,8 +11,11 @@ nflverse's public release assets instead of hand-entered numbers:
 Each team row is the per-game average over every completed game before the
 cutoff date, so a slate never sees its own results. ``pass_yards`` is gross
 passing yards, matching the convention the engine thresholds were tuned on.
-Role fields (``qb``, ``rb1``, ``te``, ``wr_slot``, ``wr_deep``) are carried
-over from the existing tape so manual injury/depth edits survive a refresh.
+Role fields (``qb``, ``rb1``, ``te``, ``wr_slot``, ``wr_deep``) come from the
+latest nflverse depth chart on or before the slate date, skipping players
+listed Out/Doubtful on that week's injury report; roles already in the tape
+only fill gaps. The inactive list is stored under ``inactive`` so the pipeline
+can keep those players out of matchup signals.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import io
 import json
 import logging
 import os
+import re
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -35,6 +39,14 @@ logger = logging.getLogger(__name__)
 NFLVERSE_RELEASES = "https://github.com/nflverse/nflverse-data/releases/download"
 TEAM_WEEK_URL = NFLVERSE_RELEASES + "/stats_team/stats_team_week_{season}.csv"
 SCHEDULES_URL = NFLVERSE_RELEASES + "/schedules/games.csv"
+DEPTH_CHART_URL = NFLVERSE_RELEASES + "/depth_charts/depth_charts_{season}.csv"
+INJURIES_URL = NFLVERSE_RELEASES + "/injuries/injuries_{season}.csv"
+
+INACTIVE_STATUSES: tuple[str, ...] = ("Out", "Doubtful")
+# nflverse depth-chart pos_slot values for wide receivers: 1/2 outside (X/Z), 8 slot.
+OUTSIDE_WR_SLOTS = {"1", "2"}
+SLOT_WR_SLOTS = {"8"}
+_SUFFIX_RE = re.compile(r"\b(jr|sr|ii|iii|iv|v)\b")
 
 TAPE_NUMERIC_FIELDS: tuple[str, ...] = (
     "rush_yards",
@@ -171,6 +183,136 @@ def load_existing_roles(path: Path) -> dict[str, dict[str, Any]]:
     }
 
 
+def _name_key(name: Any) -> str:
+    text = re.sub(r"[^a-z ]", "", str(name or "").lower().replace("-", " "))
+    return " ".join(_SUFFIX_RE.sub("", text).split())
+
+
+def slate_week(
+    game_rows: Iterable[Mapping[str, str]], season: int, before: date | None
+) -> int | None:
+    """Week of the first regular-season game on/after ``before`` (None if unknown)."""
+    weeks: list[int] = []
+    for g in game_rows:
+        if str(g.get("season")) != str(season) or g.get("game_type") != "REG":
+            continue
+        try:
+            if before is not None and date.fromisoformat(str(g.get("gameday"))) < before:
+                continue
+            weeks.append(int(_num(g.get("week"))))
+        except ValueError:
+            continue
+    return min(weeks) if weeks else None
+
+
+def inactive_players(
+    injury_rows: Iterable[Mapping[str, str]],
+    week: int | None,
+    statuses: Iterable[str] = INACTIVE_STATUSES,
+) -> dict[str, list[dict[str, str]]]:
+    """Players ruled ``statuses`` on the given week's report, per team.
+
+    With ``week=None`` the latest reported week is used.
+    """
+    rows = [r for r in injury_rows if r.get("season_type", "REG") == "REG"]
+    if week is None:
+        reported = [int(_num(r.get("week"))) for r in rows if r.get("week")]
+        week = max(reported) if reported else None
+    wanted = set(statuses)
+    out: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for r in rows:
+        if week is None or int(_num(r.get("week"))) != week:
+            continue
+        if r.get("report_status") not in wanted:
+            continue
+        out[_team(r.get("team"))].append(
+            {
+                "name": str(r.get("full_name") or ""),
+                "gsis_id": str(r.get("gsis_id") or ""),
+                "status": str(r.get("report_status")),
+                "position": str(r.get("position") or ""),
+            }
+        )
+    return dict(out)
+
+
+def depth_chart_roles(
+    depth_rows: Iterable[Mapping[str, str]],
+    inactive: Mapping[str, list[dict[str, str]]] | None = None,
+    as_of: date | None = None,
+) -> dict[str, dict[str, str]]:
+    """Top healthy QB/RB/TE plus outside and slot WR from the latest snapshot per team.
+
+    ``as_of`` keeps only snapshots dated on or before that day (slate mornings count).
+    """
+    latest: dict[str, str] = {}
+    by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
+    for r in depth_rows:
+        dt = str(r.get("dt") or "")
+        if not dt or (as_of is not None and dt[:10] > as_of.isoformat()):
+            continue
+        team = _team(r.get("team"))
+        if dt > latest.get(team, ""):
+            latest[team] = dt
+            by_team[team] = []
+        if dt == latest[team]:
+            by_team[team].append(r)
+
+    roles: dict[str, dict[str, str]] = {}
+    for team, rows in by_team.items():
+        out_ids = {p["gsis_id"] for p in (inactive or {}).get(team, []) if p.get("gsis_id")}
+        out_names = {_name_key(p["name"]) for p in (inactive or {}).get(team, [])}
+
+        def healthy(r: Mapping[str, str]) -> bool:
+            gsis = str(r.get("gsis_id") or "")
+            if gsis and gsis in out_ids:
+                return False
+            return _name_key(r.get("player_name")) not in out_names
+
+        def best(pos: str, slots: set[str] | None = None, skip: str = "") -> str | None:
+            cands = [
+                r
+                for r in rows
+                if r.get("pos_abb") == pos
+                and (slots is None or str(r.get("pos_slot")) in slots)
+                and healthy(r)
+                and r.get("player_name") != skip
+            ]
+            cands.sort(key=lambda r: _num(r.get("pos_rank")) or 99.0)
+            return str(cands[0]["player_name"]) if cands else None
+
+        team_roles: dict[str, str] = {}
+        for role, pos in (("qb", "QB"), ("rb1", "RB"), ("te", "TE")):
+            name = best(pos)
+            if name:
+                team_roles[role] = name
+        deep = best("WR", OUTSIDE_WR_SLOTS) or best("WR")
+        if deep:
+            team_roles["wr_deep"] = deep
+        slot = best("WR", SLOT_WR_SLOTS, skip=deep or "") or best("WR", skip=deep or "")
+        if slot:
+            team_roles["wr_slot"] = slot
+        roles[team] = team_roles
+    return roles
+
+
+def _auto_roles(
+    season: int, before: date | None, game_rows: list[dict[str, str]]
+) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]]]:
+    """Depth-chart roles and inactives; empty on any fetch/parse failure."""
+    try:
+        injuries = inactive_players(
+            fetch_csv(INJURIES_URL.format(season=season)), slate_week(game_rows, season, before)
+        )
+        roles = depth_chart_roles(
+            fetch_csv(DEPTH_CHART_URL.format(season=season)), injuries, as_of=before
+        )
+        return roles, injuries
+    except Exception as exc:  # roles are an enhancement; keep the tape build alive
+        logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
+        return {}, {}
+
+
 def build_tape_payload(
     season: int,
     before: date | None = None,
@@ -178,14 +320,27 @@ def build_tape_payload(
     roles: Mapping[str, Mapping[str, Any]] | None = None,
     team_rows: list[dict[str, str]] | None = None,
     game_rows: list[dict[str, str]] | None = None,
+    auto_roles: bool = True,
+    depth_roles: Mapping[str, Mapping[str, str]] | None = None,
+    inactive: Mapping[str, list[dict[str, str]]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch (unless rows are supplied) and assemble the tape JSON payload."""
+    """Fetch (unless rows are supplied) and assemble the tape JSON payload.
+
+    With ``auto_roles`` the depth chart + injury report are fetched unless
+    ``depth_roles``/``inactive`` are supplied; depth-chart roles override
+    ``roles`` field by field.
+    """
     if team_rows is None:
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
+    if auto_roles and depth_roles is None and inactive is None:
+        depth_roles, inactive = _auto_roles(season, before, game_rows)
+    merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
+    for team, team_roles in (depth_roles or {}).items():
+        merged.setdefault(team, {}).update(team_roles)
     per_game = build_per_game(team_rows, game_rows, season, before)
-    teams = aggregate_tape(per_game, last_n=last_n, roles=roles)
+    teams = aggregate_tape(per_game, last_n=last_n, roles=merged)
     weeks = sorted({w for row in teams.values() for w in row["weeks"]})
     return {
         "season": season,
@@ -196,8 +351,22 @@ def build_tape_payload(
             "nflverse-data stats_team_week + schedules; per-game averages; "
             "pass_yards = gross passing"
         ),
+        "roles_source": "nflverse depth_charts + injuries" if depth_roles else "existing tape",
+        "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
         "teams": teams,
     }
+
+
+def load_tape_inactives(nfl_dir: Path | str) -> dict[str, list[str]]:
+    """``inactive`` block of ``<nfl_dir>/tape/prior_week.json`` (empty when absent)."""
+    try:
+        raw = json.loads((Path(nfl_dir) / "tape" / "prior_week.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    block = raw.get("inactive") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return {}
+    return {_team(t): [str(n) for n in names] for t, names in block.items() if isinstance(names, list)}
 
 
 def write_tape(path: Path, payload: Mapping[str, Any]) -> Path | None:

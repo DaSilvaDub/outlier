@@ -25,8 +25,9 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
-from outlier_nfl.tape_nflverse import refresh_prior_week_tape
+from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
 from outlier_nfl.matchup import (
+    _event_team_codes,
     apply_matchup_signals,
     build_matchup_scripts,
     load_prior_week_tape,
@@ -257,6 +258,9 @@ class NflPipeline:
         matchup_scripts = build_matchup_scripts(
             all_game_lines,
             tapes,
+            injuries_by_event=injuries_by_event(
+                load_tape_inactives(self.nfl_dir), all_game_lines, slate_events
+            ),
             slate_events=slate_events,
         )
         if matchup_scripts:
@@ -502,6 +506,28 @@ class NflPipeline:
             tier_1_anchors_count,
         )
         return summary
+
+
+def injuries_by_event(
+    inactive_by_team: dict[str, list[str]],
+    game_lines: list[NflGameLine],
+    slate_events: list[dict[str, Any]] | None,
+) -> dict[str, list[str]]:
+    """Inactive player names for both teams of every slate event."""
+    if not inactive_by_team:
+        return {}
+    teams: dict[str, tuple[str, str]] = {}
+    for event in slate_events or []:
+        event_id = str(event.get("eventId") or event.get("id") or "")
+        if event_id:
+            teams[event_id] = _event_team_codes(event)
+    for line in game_lines:
+        if line.event_id and line.event_id not in teams:
+            teams[line.event_id] = (line.home_team, line.away_team)
+    return {
+        event_id: inactive_by_team.get(home, []) + inactive_by_team.get(away, [])
+        for event_id, (home, away) in teams.items()
+    }
 
 
 def _refresh_tape(nfl_dir: Path, target_date: str | None, last_n: int | None) -> None:
