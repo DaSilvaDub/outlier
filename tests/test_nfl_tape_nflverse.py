@@ -126,3 +126,9 @@ def test_pipeline_refresh_failure_keeps_existing_tape(
     monkeypatch.setattr(nfl_pipeline, "refresh_prior_week_tape", boom)
     nfl_pipeline._refresh_tape(tmp_path, "2026-09-27", None)  # must not raise
     assert json.loads(path.read_text())["teams"]["LAR"]["rush_yards"] == 99
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "http://example.com/x.csv", "ftp://x/y.csv"])
+def test_fetch_csv_rejects_non_https(url: str) -> None:
+    with pytest.raises(ValueError):
+        tape.fetch_csv(url)
