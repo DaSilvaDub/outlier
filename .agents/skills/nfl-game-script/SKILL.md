@@ -74,9 +74,12 @@ Never select or recommend props purely off an isolated L5 hit rate. All player p
    - Open-air precipitation and sustained winds $\ge 12\text{--}15\text{ mph}$ demand downward volume adjustments on deep vertical passing in favor of tight end checkdowns and power rushing.
    - Domed/controlled venues (NRG, Mercedes-Benz, AT&T) preserve maximum offensive pace and perimeter separation.
 
-## 4. High-Probability Prop Tiering
+## 4. High-Probability Prop Tiering & Scope Invariants
 When categorizing filtered props:
-- **Tier-1 Alpha Anchors:** Props with L5 >= 80%, L10 >= 80%, strong multi-book consensus (8+ books), and favorable tactical matchups (e.g. Cole Kmet Over 1.5 Rec vs. blitz-heavy defense, Michael Wilson Over 3.5 Rec in dome).
+- **Full-Game Scope Invariant:** Only propositions with `scope in (None, "", "full_game")` are eligible for `TIER_1_ANCHOR` or `TIER_2_STRONG` ratings, or inclusion in `nfl_high_prob_props_*.json` and `nfl_only.csv`.
+- **Micro-Period Rejection:** Quarters (`first_quarter`, `second_quarter`, `third_quarter`, `fourth_quarter`) and halves (`first_half`, `second_half`) carry high small-sample noise and must remain `STANDARD`.
+- **Explicit Period Labeling:** If non-full-game lines are ever displayed or exported, they must explicitly state their scope in the selection string (e.g. `REC_YDS (fourth_quarter)`).
+- **Tier-1 Alpha Anchors:** Full-game props with L5 >= 80%, L10 >= 80%, strong multi-book consensus (8+ books), and favorable tactical matchups (e.g. Cole Kmet Over 1.5 Rec vs. blitz-heavy defense, Michael Wilson Over 3.5 Rec in dome).
 - **Goal-Line TD Scorers:** Target undisputed goal-line ball-carriers with implied probability >= 60% in high-total environments (Team Total >= 24.0).
 - **Floor Ladder Foundations:** Alternate lines offering 85%–92% implied probability used strictly as foundational anchors in correlated parlay builds.
 
