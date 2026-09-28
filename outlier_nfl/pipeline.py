@@ -8,7 +8,7 @@ and persists normalized datasets to disk atomically.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import logging
 from pathlib import Path
 import sys
@@ -25,6 +25,7 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
+from outlier_nfl.tape_nflverse import refresh_prior_week_tape
 from outlier_nfl.matchup import (
     apply_matchup_signals,
     build_matchup_scripts,
@@ -503,6 +504,17 @@ class NflPipeline:
         return summary
 
 
+def _refresh_tape(nfl_dir: Path, target_date: str | None, last_n: int | None) -> None:
+    """Rebuild the matchup tape from games before the slate; keep the old tape on failure."""
+    raw = target_date or to_eastern_date(datetime.now(timezone.utc))
+    try:
+        slate = date.fromisoformat(str(raw))
+        season = slate.year if slate.month >= 3 else slate.year - 1
+        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n)
+    except Exception as exc:  # network/API failure must not block the slate run
+        logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
+
+
 def main() -> int:
     """CLI entry point to execute Outlier NFL Pipeline."""
     parser = argparse.ArgumentParser(description="Execute Outlier NFL betting data pipeline.")
@@ -542,6 +554,17 @@ def main() -> int:
         help="Automatically generate structured betting game script markdown report.",
     )
     parser.add_argument(
+        "--refresh-tape",
+        action="store_true",
+        help="Rebuild data/NFL/tape/prior_week.json from nflverse box scores before running.",
+    )
+    parser.add_argument(
+        "--tape-last-n",
+        type=int,
+        default=None,
+        help="With --refresh-tape, average only each team's last N games. Default: all.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable detailed logging.",
@@ -550,6 +573,9 @@ def main() -> int:
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    if args.refresh_tape:
+        _refresh_tape(args.data_dir / "NFL", args.date, args.tape_last_n)
 
     try:
         pipeline = NflPipeline(data_dir=args.data_dir)
