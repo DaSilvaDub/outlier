@@ -37,7 +37,7 @@ GAMES = [
     _game("g3", 3, "2026-09-27", "LA", "DEN", "", ""),  # not played yet
     _game("p1", 0, "2026-08-20", "LA", "LAC", "10", "3", game_type="PRE"),
 ]
-TEAM_ROWS = [
+TEAM_ROWS: list[dict[str, str]] = [
     _team_row("g1", 1, "LA", "SF", 122, 168, 0),
     _team_row("g1", 1, "SF", "LA", 174, 205, 3),
     _team_row("g2", 2, "LA", "NYG", 163, 327, 2),
@@ -53,7 +53,7 @@ def test_per_game_joins_opponent_and_score_and_normalizes_team() -> None:
     assert w1 == {
         "week": 1, "opponent": "SF", "rush_yards": 122.0, "pass_yards": 168.0,
         "points": 7.0, "opp_rush_yards_allowed": 174.0, "opp_pass_yards_allowed": 205.0,
-        "opp_points_allowed": 27.0, "sacks": 0.0,
+        "opp_points_allowed": 27.0, "sacks": 0.0, "opp_dropbacks": 0.0,
     }
     assert [g["week"] for g in per["LAR"]] == [1, 2]  # unplayed and preseason dropped
 
@@ -111,7 +111,7 @@ def test_auto_roles_override_stale_tape_roles_and_fill_gaps() -> None:
     roles = tape.depth_chart_roles(DEPTH, tape.inactive_players(INJURIES, 3), date(2026, 9, 27))
     payload = tape.build_tape_payload(
         2026, roles=stale, team_rows=TEAM_ROWS, game_rows=GAMES,
-        depth_roles=roles, inactive=tape.inactive_players(INJURIES, 3),
+        depth_roles=roles, inactive=tape.inactive_players(INJURIES, 3), grades={},
     )
     assert payload["teams"]["LAR"]["te"] == "Colby Parkinson"
     assert payload["teams"]["LAR"]["wr_deep"] == "Davante Adams"
@@ -127,6 +127,7 @@ def test_auto_roles_fetch_failure_keeps_existing_roles(monkeypatch: pytest.Monke
         2026, roles={"LAR": {"qb": "Manual QB"}}, team_rows=TEAM_ROWS, game_rows=GAMES
     )
     assert payload["teams"]["LAR"]["qb"] == "Manual QB"
+    assert "pass_rush" not in payload["teams"]["LAR"] and payload["grades_source"] is None
     assert payload["inactive"] == {} and payload["roles_source"] == "existing tape"
 
 
@@ -141,6 +142,56 @@ def test_pipeline_maps_inactives_to_both_teams_of_each_event(tmp_path: Path) -> 
     mapped = nfl_pipeline.injuries_by_event(inactive, [], events)
     assert mapped == {"e1": ["Puka Nacua"]}
     assert nfl_pipeline.injuries_by_event({}, [], events) == {}
+
+
+PFR_DEF = [
+    {"game_type": "REG", "week": "1", "team": "LA", "def_pressures": "3"},
+    {"game_type": "REG", "week": "2", "team": "LA", "def_pressures": "6"},
+    {"game_type": "REG", "week": "2", "team": "LA", "def_pressures": "4"},
+    {"game_type": "REG", "week": "1", "team": "SF", "def_pressures": "12"},
+    {"game_type": "REG", "week": "2", "team": "NYG", "def_pressures": "2"},
+    {"game_type": "PRE", "week": "0", "team": "LA", "def_pressures": "50"},
+]
+QBR = [
+    {"season": "2026", "season_type": "Regular", "week_num": "1", "name_display": "Matthew Stafford",
+     "qb_plays": "30", "qbr_total": "40"},
+    {"season": "2026", "season_type": "Regular", "week_num": "2", "name_display": "Matthew Stafford",
+     "qb_plays": "30", "qbr_total": "80"},
+    {"season": "2026", "season_type": "Regular", "week_num": "2", "name_display": "Jameis Winston",
+     "qb_plays": "40", "qbr_total": "20"},
+    {"season": "2026", "season_type": "Regular", "week_num": "3", "name_display": "Jameis Winston",
+     "qb_plays": "40", "qbr_total": "99"},
+    {"season": "2026", "season_type": "Regular", "week_num": "2", "name_display": "Tiny Sample",
+     "qb_plays": "5", "qbr_total": "99"},
+]
+
+
+def _dropback_rows() -> list[dict[str, str]]:
+    rows = [dict(r) for r in TEAM_ROWS]
+    for r in rows:
+        r["attempts"], r["sacks_suffered"] = "28", "2"  # 30 dropbacks per game
+    return rows
+
+
+def test_pass_rush_grade_uses_pressures_per_opponent_dropback() -> None:
+    per = tape.build_per_game(_dropback_rows(), GAMES, 2026)
+    assert per["LAR"][0]["opp_dropbacks"] == 30.0
+    grades = tape.pass_rush_grades(per, tape.team_pressures(PFR_DEF))
+    assert grades["LAR"]["pressure_rate"] == round(13 / 60, 3)  # preseason row ignored
+    assert grades["SF"]["pressure_rate"] == 0.4 and grades["NYG"]["pressure_rate"] == round(2 / 30, 3)
+    # league-relative: best rate grades highest, z = 0 maps to the base grade
+    assert grades["SF"]["pass_rush"] > grades["LAR"]["pass_rush"] > grades["NYG"]["pass_rush"]
+    assert tape.pass_rush_grades(per, {}) == {}
+
+
+def test_qb_grade_is_play_weighted_starter_only_and_before_slate_week() -> None:
+    starters = {"LAR": "Matthew Stafford", "NYG": "Jameis Winston", "CHI": "Tyson Bagent"}
+    grades = tape.qb_grades(QBR, starters, 2026, before_week=3)
+    assert grades["LAR"]["qbr"] == 60.0  # (30*40 + 30*80) / 60; week 3 excluded
+    assert grades["NYG"]["qbr"] == 20.0
+    assert "CHI" not in grades  # no QBR rows -> engine keeps its proxy
+    # two graded QBs at z = +/-1 -> base +/- 12
+    assert grades["LAR"]["qb_grade"] == 82.0 and grades["NYG"]["qb_grade"] == 58.0
 
 
 def test_before_cutoff_excludes_games_on_or_after_slate_date() -> None:
@@ -170,7 +221,7 @@ def test_write_tape_keeps_backup_and_engine_can_load(tmp_path: Path) -> None:
 
     payload = tape.build_tape_payload(
         2026, roles=tape.load_existing_roles(path), team_rows=TEAM_ROWS, game_rows=GAMES,
-        auto_roles=False,
+        auto_roles=False, advanced=False,
     )
     backup = tape.write_tape(path, payload)
 
@@ -193,6 +244,10 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
             return INJURIES
         if "depth_charts_2026" in url:
             return DEPTH
+        if "advstats_week_def" in url:
+            return PFR_DEF
+        if "qbr_week_level" in url:
+            return QBR
         return GAMES
 
     monkeypatch.setattr(tape, "fetch_csv", fake_fetch)
@@ -203,7 +258,11 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
     assert written["teams"]["LAR"]["wr_deep"] == "Davante Adams"  # Nacua Doubtful
     assert written["inactive"] == {"LAR": ["Puka Nacua"]}
     assert written["roles_source"].startswith("nflverse")
-    assert len(calls) == 4
+    assert written["teams"]["LAR"]["qb_grade"] == 82.0  # Stafford QBR 60 vs Winston 20
+    assert "qb_grade" not in written["teams"]["NYG"]  # no listed starter -> ungraded
+    assert "pass_rush" not in written["teams"]["LAR"]  # fixture rows carry no dropbacks
+    assert written["grades_source"].startswith("pfr_advstats")
+    assert len(calls) == 6
 
     with pytest.raises(ValueError):
         tape.refresh_prior_week_tape(tmp_path, 2026, before=date(2026, 9, 1))

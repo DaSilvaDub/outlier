@@ -16,6 +16,17 @@ latest nflverse depth chart on or before the slate date, skipping players
 listed Out/Doubtful on that week's injury report; roles already in the tape
 only fill gaps. The inactive list is stored under ``inactive`` so the pipeline
 can keep those players out of matchup signals.
+
+Two league-relative grades feed the engine's existing thresholds
+(``STRONG_PASS_RUSH_GRADE`` 70, ``WEAK_QB_GRADE`` 60):
+
+- ``pass_rush`` from PFR pressures per opponent dropback,
+  ``62 + 15 * z`` (70 is about the top 30% of defenses);
+- ``qb_grade`` from the listed starter's play-weighted ESPN QBR,
+  ``70 + 12 * z`` (below 60 is about the bottom 20% of QBs).
+
+The raw ``pressure_rate`` and ``qbr`` are kept alongside for auditing. Teams
+without data keep the engine's sack / pass-yard proxies.
 """
 
 from __future__ import annotations
@@ -41,6 +52,12 @@ TEAM_WEEK_URL = NFLVERSE_RELEASES + "/stats_team/stats_team_week_{season}.csv"
 SCHEDULES_URL = NFLVERSE_RELEASES + "/schedules/games.csv"
 DEPTH_CHART_URL = NFLVERSE_RELEASES + "/depth_charts/depth_charts_{season}.csv"
 INJURIES_URL = NFLVERSE_RELEASES + "/injuries/injuries_{season}.csv"
+PFR_DEF_URL = NFLVERSE_RELEASES + "/pfr_advstats/advstats_week_def_{season}.csv"
+QBR_URL = NFLVERSE_RELEASES + "/espn_data/qbr_week_level.csv"
+
+PASS_RUSH_BASE, PASS_RUSH_PER_SD = 62.0, 15.0
+QB_GRADE_BASE, QB_GRADE_PER_SD = 70.0, 12.0
+MIN_QB_PLAYS = 20
 
 INACTIVE_STATUSES: tuple[str, ...] = ("Out", "Doubtful")
 # nflverse depth-chart pos_slot values for wide receivers: 1/2 outside (X/Z), 8 slot.
@@ -137,6 +154,7 @@ def build_per_game(
                 "opp_pass_yards_allowed": _num(opp.get("passing_yards")),
                 "opp_points_allowed": opp_points,
                 "sacks": _num(r.get("def_sacks")),
+                "opp_dropbacks": _num(opp.get("attempts")) + _num(opp.get("sacks_suffered")),
             }
         )
     for games_list in per_game.values():
@@ -296,6 +314,120 @@ def depth_chart_roles(
     return roles
 
 
+def _clamp_grade(value: float) -> float:
+    return round(max(20.0, min(99.0, value)), 1)
+
+
+def _zscores(values: Mapping[str, float]) -> dict[str, float]:
+    if len(values) < 2:
+        return {k: 0.0 for k in values}
+    mean = sum(values.values()) / len(values)
+    var = sum((v - mean) ** 2 for v in values.values()) / len(values)
+    sd = var**0.5 or 1.0
+    return {k: (v - mean) / sd for k, v in values.items()}
+
+
+def team_pressures(pfr_def_rows: Iterable[Mapping[str, str]]) -> dict[tuple[str, int], float]:
+    """Sum PFR ``def_pressures`` per (team, week) for regular-season games."""
+    totals: dict[tuple[str, int], float] = defaultdict(float)
+    for r in pfr_def_rows:
+        if r.get("game_type", "REG") != "REG":
+            continue
+        totals[(_team(r.get("team")), int(_num(r.get("week"))))] += _num(r.get("def_pressures"))
+    return dict(totals)
+
+
+def pass_rush_grades(
+    per_game: Mapping[str, list[dict[str, Any]]],
+    pressures: Mapping[tuple[str, int], float],
+    last_n: int | None = None,
+) -> dict[str, dict[str, float]]:
+    """League-relative pass-rush grade from pressures per opponent dropback.
+
+    Only games with both a pressure total and opponent dropbacks count.
+    """
+    rates: dict[str, float] = {}
+    for team, games in per_game.items():
+        window = games[-last_n:] if last_n else games
+        num = den = 0.0
+        for g in window:
+            key = (team, g["week"])
+            if key in pressures and g.get("opp_dropbacks"):
+                num += pressures[key]
+                den += g["opp_dropbacks"]
+        if den > 0:
+            rates[team] = num / den
+    z = _zscores(rates)
+    return {
+        t: {
+            "pressure_rate": round(rates[t], 3),
+            "pass_rush": _clamp_grade(PASS_RUSH_BASE + PASS_RUSH_PER_SD * z[t]),
+        }
+        for t in rates
+    }
+
+
+def qb_grades(
+    qbr_rows: Iterable[Mapping[str, str]],
+    starters: Mapping[str, str],
+    season: int,
+    before_week: int | None = None,
+) -> dict[str, dict[str, float]]:
+    """League-relative grade for each team's listed starter from play-weighted QBR.
+
+    QBR is pooled per QB across teams for regular-season weeks before
+    ``before_week``; QBs under ``MIN_QB_PLAYS`` plays are left ungraded.
+    """
+    plays: dict[str, float] = defaultdict(float)
+    weighted: dict[str, float] = defaultdict(float)
+    for r in qbr_rows:
+        if str(r.get("season")) != str(season) or r.get("season_type") != "Regular":
+            continue
+        week = int(_num(r.get("week_num") or r.get("game_week")))
+        if before_week is not None and week >= before_week:
+            continue
+        n = _num(r.get("qb_plays"))
+        key = _name_key(r.get("name_display"))
+        plays[key] += n
+        weighted[key] += n * _num(r.get("qbr_total"))
+    qbr = {k: weighted[k] / plays[k] for k in plays if plays[k] >= MIN_QB_PLAYS}
+    z = _zscores(qbr)
+    out: dict[str, dict[str, float]] = {}
+    for team, name in starters.items():
+        key = _name_key(name)
+        if key in qbr:
+            out[team] = {
+                "qbr": round(qbr[key], 1),
+                "qb_grade": _clamp_grade(QB_GRADE_BASE + QB_GRADE_PER_SD * z[key]),
+            }
+    return out
+
+
+def _advanced_grades(
+    season: int,
+    before: date | None,
+    game_rows: list[dict[str, str]],
+    per_game: Mapping[str, list[dict[str, Any]]],
+    starters: Mapping[str, str],
+    last_n: int | None,
+) -> dict[str, dict[str, float]]:
+    """Pass-rush and QB grades merged per team; empty parts on fetch failure."""
+    grades: dict[str, dict[str, float]] = defaultdict(dict)
+    try:
+        pressures = team_pressures(fetch_csv(PFR_DEF_URL.format(season=season)))
+        for team, vals in pass_rush_grades(per_game, pressures, last_n).items():
+            grades[team].update(vals)
+    except Exception as exc:  # grades are optional; engine falls back to sacks
+        logger.warning("Pressure grades unavailable: %s", exc)
+    try:
+        week = slate_week(game_rows, season, before) if before else None
+        for team, vals in qb_grades(fetch_csv(QBR_URL), starters, season, week).items():
+            grades[team].update(vals)
+    except Exception as exc:  # engine falls back to the pass-yards proxy
+        logger.warning("QBR grades unavailable: %s", exc)
+    return dict(grades)
+
+
 def _auto_roles(
     season: int, before: date | None, game_rows: list[dict[str, str]]
 ) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]]]:
@@ -323,12 +455,15 @@ def build_tape_payload(
     auto_roles: bool = True,
     depth_roles: Mapping[str, Mapping[str, str]] | None = None,
     inactive: Mapping[str, list[dict[str, str]]] | None = None,
+    advanced: bool = True,
+    grades: Mapping[str, Mapping[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
     With ``auto_roles`` the depth chart + injury report are fetched unless
     ``depth_roles``/``inactive`` are supplied; depth-chart roles override
-    ``roles`` field by field.
+    ``roles`` field by field. With ``advanced`` the pass-rush and QB grades
+    are fetched unless ``grades`` is supplied.
     """
     if team_rows is None:
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
@@ -341,6 +476,12 @@ def build_tape_payload(
         merged.setdefault(team, {}).update(team_roles)
     per_game = build_per_game(team_rows, game_rows, season, before)
     teams = aggregate_tape(per_game, last_n=last_n, roles=merged)
+    if advanced and grades is None:
+        starters = {t: str(r["qb"]) for t, r in teams.items() if r.get("qb")}
+        grades = _advanced_grades(season, before, game_rows, per_game, starters, last_n)
+    for team, vals in (grades or {}).items():
+        if team in teams:
+            teams[team].update(vals)
     weeks = sorted({w for row in teams.values() for w in row["weeks"]})
     return {
         "season": season,
@@ -352,6 +493,7 @@ def build_tape_payload(
             "pass_yards = gross passing"
         ),
         "roles_source": "nflverse depth_charts + injuries" if depth_roles else "existing tape",
+        "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
         "teams": teams,
     }
