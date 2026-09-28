@@ -17,13 +17,14 @@ listed Out/Doubtful on that week's injury report; roles already in the tape
 only fill gaps. The inactive list is stored under ``inactive`` so the pipeline
 can keep those players out of matchup signals.
 
-Two league-relative grades feed the engine's existing thresholds
-(``STRONG_PASS_RUSH_GRADE`` 70, ``WEAK_QB_GRADE`` 60):
+Two league-relative grades are added:
 
 - ``pass_rush`` from PFR pressures per opponent dropback,
-  ``62 + 15 * z`` (70 is about the top 30% of defenses);
+  ``62 + 15 * z`` (the engine's ``STRONG_PASS_RUSH_GRADE`` 70 is about the top
+  30% of defenses); as an explicit grade it overrides the sacks fallback;
 - ``qb_grade`` from the listed starter's play-weighted ESPN QBR,
-  ``70 + 12 * z`` (below 60 is about the bottom 20% of QBs).
+  ``70 + 12 * z``. Informational: the weak-QB gate on the pass-rush signal was
+  removed after a backtest showed it added nothing.
 
 The raw ``pressure_rate`` and ``qbr`` are kept alongside for auditing. Teams
 without data keep the engine's sack / pass-yard proxies.

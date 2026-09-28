@@ -84,8 +84,17 @@ Opponent pass-rush measures vs. the QB's next game:
 | Pass EPA/play | **-0.087** | -0.058 |
 | Passing yards | -0.002 | +0.003 |
 
-Pressure rate beats sacks, but **neither predicts passing yards**, so `MATCHUP_PASS_SUPPRESS`
-(PASS_YDS UNDER) has no support in this data; the supported targets are sacks taken
-(`PASSING_TIMES_SACKED`) and efficiency. Also note the engine's trigger checks OR a grade with a
-raw count (e.g. pressure grade >= 70 *or* sacks >= 3), so explicit grades add triggers rather than
-replace the raw proxy. Both are open design questions, not yet changed.
+Pressure rate beats sacks, but **neither predicts passing yards**. Resolved (PR #198):
+`MATCHUP_PASS_SUPPRESS` now targets QB sacks taken (`PASSING_TIMES_SACKED` OVER, +0.08, MEDIUM)
+on a strong pass rush alone, and explicit grades (pressures, PFF, EPA) now decide their trigger
+without the raw yards/sacks fallback. QB's next-game sacks vs his own prior rate:
+
+| Situation | Next-game sacks vs own average | 3+ sacks | n |
+|---|---|---|---|
+| Neither | 1.00x | 39.8% | 724 |
+| Weak QB only | 0.82x | 43.8% | 226 |
+| Pressure grade >= 70 | **1.08x** | 46.1% | 319 |
+| Grade >= 70 + weak QB | 1.05x | 68.0% | 75 |
+
+The weak-QB gate added nothing beyond the QB's own baseline, so it was removed; `qb_grade`
+(QBR) is now informational.
