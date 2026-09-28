@@ -387,8 +387,11 @@ def apply_game_script_calibration(
             or (team == ctx.get("home_team") and ctx.get("home_deficit_risk"))
         )
 
+        # Invariant: Deficit risk and shell coverage adjustments apply strictly to full-game scope
+        is_full_game = prop.scope in (None, "", "full_game")
+
         # 1. Deficit-Risk Adjustment on Underdog Running Backs
-        if is_underdog_in_deficit_risk:
+        if is_underdog_in_deficit_risk and is_full_game:
             if prop.market in ("RUSH_YDS", "RUSH_ATT") and prop.position == "OVER":
                 tags.append("DEFICIT_VOLUME_RISK")
                 vol_adj = -0.15  # 15% downward volume haircut
@@ -396,7 +399,7 @@ def apply_game_script_calibration(
                 tags.append("RESILIENT_GAME_SCRIPT_TARGET")
 
         # 2. Defensive Shell Target Divergence for Pass Catchers
-        if is_underdog_in_deficit_risk:
+        if is_underdog_in_deficit_risk and is_full_game:
             # Check slot/intermediate targets
             if any(name in prop.player_name for name in KNOWN_SLOT_INTERMEDIATE_TARGETS):
                 tags.append("SHELL_COVERAGE_TARGET_UPGRADE")
@@ -413,14 +416,15 @@ def apply_game_script_calibration(
                     vol_adj = (vol_adj or 0.0) - 0.25
 
         # 3. Empirical Hit Rate Priority (Tier 1 / Tier 2)
+        # Period props (quarters/halves) have micro-sample volatility and must NEVER qualify for TIER_1_ANCHOR or TIER_2_STRONG.
         l5 = prop.l5_hit_rate
         l10 = prop.l10_hit_rate
         book_count = len(prop.books)
 
-        if l5 is not None and l5 == 1.0 and l10 is not None and l10 >= 0.80 and book_count >= 3:
+        if is_full_game and l5 is not None and l5 == 1.0 and l10 is not None and l10 >= 0.80 and book_count >= 3:
             tier = "TIER_1_ANCHOR"
             tags.append("HIGH_HIT_RATE_ANCHOR")
-        elif l5 is not None and l5 >= 0.80 and l10 is not None and l10 >= 0.70:
+        elif is_full_game and l5 is not None and l5 >= 0.80 and l10 is not None and l10 >= 0.70:
             tier = "TIER_2_STRONG"
             tags.append("CONSISTENT_HIT_RATE")
 

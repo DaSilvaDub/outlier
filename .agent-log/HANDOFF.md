@@ -1,171 +1,216 @@
-# HANDOFF — 2026-09-25 (Claude, daily automated debug review)
+# Handoff — 2026-09-28 (claude)
 
-## Last Commit SHA
-`2c8f391` — fix(totals): let real alt team totals back a divergent game total
+**Branch**: `claude/nifty-einstein-gbtl85` · **PR**: https://github.com/DaSilvaDub/outlier/pull/198 (merged master incl. #192, #196)
 
-## PR
-[#189](https://github.com/DaSilvaDub/outlier/pull/189) — `claude/inspiring-fermat-y3216p` → master
+**Scope**: nflverse tape pull (`outlier_nfl/tape_nflverse.py`, `scripts/pull_nflverse_tape.py`) with auto roles/inactives, pass-rush + QBR grades; real external adapters (`outlier_nfl/external/`); weather (`outlier_nfl/weather.py`); player usage vacancy/efficiency signals (`outlier_nfl/usage.py`); pass-rush retargeted to TIMES_SACKED; regression wins conflicts; signal scorecard (`outlier_nfl/scorecard.py`, `scripts/nfl_signal_scorecard.py`). Findings in `docs/nfl-data-sources.md`.
 
-## Files Touched
-- `outlier_scrapers/game_totals.py` — `is_qualifying_alt_team_total_fallback()` required
-  `row["position"] == "OVER"`, but `build_alt_team_total_board()` (the board `pack_publish`
-  passes *first* into `cross_reference_divergent_fallbacks()`) never emits `position`. Every
-  row it produces was rejected, so no alternate team total could ever back a divergent game
-  total; only the narrower alt bankroll board could fill the surface. Missing `position` now
-  reads as OVER, the same default `ultimate_alt._base_row()` already applies to these rows
-  and the same reasoning behind the existing `market_type` default. Also added
-  `_alt_fallback_selection()`: neither producer emits `selection`, so the published fallback
-  was a bare price in parentheses.
-- `tests/test_game_totals.py` — two regression tests that drive real
-  `build_alt_team_total_board()` output into the consumer (the existing tests hand-build rows
-  carrying `position`/`selection`, which is why they passed while the surface was dead).
-  Both fail on `e104d45`.
+**Open**: Codacy flagged a high issue on the scorecard commit; mitigated by moving URL building into `usage.fetch_player_weeks` — confirm Codacy clean before merging #198. PRs #193 (Codacy action_required), #194/#195/#197 (conflicts with master) were not merged.
 
-## Verification
-- 76 passed / 0 assertion failures across test_game_totals, test_alt_team_totals,
-  test_totals_model, test_ultimate_alt, test_pack_publish. All 28 remaining failures are
-  `ModuleNotFoundError: sqlalchemy`.
-- **Sandbox limitation (recurring):** pypi.org and files.pythonhosted.org return **403** from
-  the egress proxy, so `pip install -r requirements.lock` fails and `pytest`/`ruff`/`mypy`
-  cannot be installed. Tests were executed through a stdlib-only harness with a minimal
-  `pytest`/`structlog` shim under the scratchpad; CI is the authority. Master CI (`Offline
-  Pytest`) is green at `e104d45`.
-
-## Next Steps / Open Items
-- Review and merge PR #189.
-- **Still open (from 2026-09-24):** the roster gate's bare-proximity pattern treats an
-  *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson"). Needs a human
-  call on whether opponent context should be exempted.
-- **Not fixed, needs a human call:** `outlier_nfl/pipeline.py:239` derives the NFL season as
-  `int(target_date.split('-')[0])`. A January/February playoff slate belongs to the *previous*
-  season (2027-01-10 → the 2026 season), so `load_external_metrics()` would be asked for the
-  wrong year. Inert today because every `outlier_nfl/external/` adapter is a stub returning
-  `{"records": []}` — fix it when real providers are wired.
-- **Repo hygiene, needs a human call:** `.pytest_pr1_tmp/` (334 files) and
-  `.worktrees/test-pr97/` (364 files, ~3 MB — a full second copy of `pack.py`, `feedback.py`,
-  `game_totals.py` and the test suite) are tracked in git. They pollute every repo-wide grep
-  with stale duplicates, which is the exact class of confusion the d05eb21 protocol exists to
-  prevent. Recommend `git rm --cached -r` plus `.gitignore` entries; not done here because it
-  rewrites 698 tracked paths and is the owner's call.
+**Next**: run `python scripts/nfl_signal_scorecard.py --date 2026-09-27` after nflverse posts Week 3 box scores.
 
 ---
 
-# HANDOFF — 2026-09-25 (Antigravity)
+# Handoff — 2026-09-27 (Antigravity / Gemini)
 
-## Last Commit SHA
-`7a55a11` — feat(nfl-external): complete external metrics adapter package and rule
+**Branch**: `fix/nfl-prop-scope-gating`
+**Last Commit SHA**: `cef0b73` — docs(skills): codify full-game scope invariant into nfl-game-script skill
+**PR**: [#196](https://github.com/DaSilvaDub/outlier/pull/196) — `fix/nfl-prop-scope-gating` → master
 
-## PR
-[#188](https://github.com/DaSilvaDub/outlier/pull/188) — `fix/nfl-external-missing-stubs` → master
+## Problem & Root Cause
+- **User Correction**: Chris Olave receiving yards line was erroneously reported as 14.5 @ -104, an impossible full-game total.
+- **Root Cause**: FanDuel and HardRock offered a 4th-quarter receiving yards prop (`scope: "fourth_quarter"`) for Chris Olave at 14.5 @ -104. Because Olave hit >=15 yards in the 4th quarter in 5 of 5 games (L5=100%, L10=100%), `apply_game_script_calibration` in `outlier_nfl/calibration.py` evaluated hit rates without checking `scope == "full_game"`, incorrectly stamping it with `TIER_1_ANCHOR` and `HIGH_HIT_RATE_ANCHOR`.
+- **Downstream Leak**: `pipeline.py` exported all `TIER_1_ANCHOR` records into `nfl_high_prob_props_*.json`, and `scripts/export_nfl_extra_pack.py` exported them into `nfl_only.csv` without filtering for full-game scope or formatting the period scope in the selection string. Over 109 period props (e.g. Mahomes 55.5 Pass Yds 1Q, Burrow 0.5 Pass TD 1H, Olave 14.5 Rec Yds 4Q) were masquerading as full-game lines across the board.
+- **Chris Olave Ground Truth**: Full-game consensus line is 79.5 Receiving Yards (Over +101 / Under -117 with 14 books quoting) and 6.5 Receptions (Over +140 / Under -140 with 17 books quoting).
 
-## What Was Done
-- **Bug fixed & completed:** `outlier_nfl/external/` stub adapter pattern implemented (`pbp.py`, `schedule.py`, `ngs.py`, `common.py`, `__init__.py`) and wired into `pipeline.py`.
-- **Learned rule recorded:** Added Codebase Quirk in `.agents/AGENTS.md` documenting the required adapter stub pattern.
-- **NFL pipeline ran successfully** for Sunday 2026-09-27:
-  - 14 games found
-  - 35,527 player props extracted (10,466 consensus, 316 Tier-1 anchors)
-  - 716 matchup-tagged props
-  - 14 matchup game scripts generated under `reports/NFL/`
+## Files Touched
+- `outlier_nfl/calibration.py` — Enforced `is_full_game = prop.scope in (None, "", "full_game")` gate on deficit volume adjustments, defensive shell coverage adjustments, and `TIER_1_ANCHOR`/`TIER_2_STRONG` confidence tier assignments.
+- `outlier_nfl/pipeline.py` — Added defense-in-depth full-game scope filtering when populating `anchors` for `nfl_high_prob_props_*.json`.
+- `scripts/export_nfl_extra_pack.py` — Filtered `export_nfl_only` to full-game scope records, and updated `_selection()` to explicitly append `({scope})` if a non-full-game scope is ever present.
+- `tests/test_nfl_calibration.py` — Added `test_period_props_never_qualify_for_tier1_or_tier2_anchors()` unit test.
+- `.agents/AGENTS.md` — Codified `Codebase Quirk: NFL Prop Scope Gating (Full-Game vs. Micro-Periods)`.
+- `.agents/skills/nfl-game-script/SKILL.md` — Codified Section 4 Full-Game Scope Invariant.
 
-## Generated Game Script Files
-| Matchup | File |
-|---------|------|
-| TEN @ NYG | `reports/NFL/2026-09-27_TEN_NYG_Game_Script.md` |
-| NYJ @ DET | `reports/NFL/2026-09-27_NYJ_DET_Game_Script.md` (largest, 15KB) |
-| MIN @ TB | `reports/NFL/2026-09-27_MIN_TB_Game_Script.md` |
-| HOU @ IND | `reports/NFL/2026-09-27_HOU_IND_Game_Script.md` |
-| CIN @ PIT | `reports/NFL/2026-09-27_CIN_PIT_Game_Script.md` |
-| NE @ JAX | `reports/NFL/2026-09-27_NE_JAX_Game_Script.md` |
-| LAC @ BUF | `reports/NFL/2026-09-27_LAC_BUF_Game_Script.md` |
-| BAL @ DAL | `reports/NFL/2026-09-27_BAL_DAL_Game_Script.md` |
-| ARI @ SF | `reports/NFL/2026-09-27_ARI_SF_Game_Script.md` |
-| SEA @ WAS | `reports/NFL/2026-09-27_SEA_WAS_Game_Script.md` |
-| CAR @ CLE | `reports/NFL/2026-09-27_CAR_CLE_Game_Script.md` |
-| LAR @ DEN | `reports/NFL/2026-09-27_LAR_DEN_Game_Script.md` |
-| KC @ MIA | `reports/NFL/2026-09-27_KC_MIA_Game_Script.md` |
-| LV @ NO | `reports/NFL/2026-09-27_LV_NO_Game_Script.md` |
-
-## Normalized Outputs Written
-All under `data/NFL/normalized/`:
-- `nfl_games_2026-09-27.json`, `nfl_props_2026-09-27.json`
-- `nfl_calibrated_props_2026-09-27.json`, `nfl_high_prob_props_2026-09-27.json`
-- `nfl_rosters_2026-09-27.json`, `nfl_matchup_scripts_2026-09-27.json`
-- `nfl_matchup_props_2026-09-27.json`, `nfl_external_metrics_2026-09-27.json`
-- `summary_2026-09-27.json`
+## Validation & Verification
+- `pytest tests/test_nfl_calibration.py tests/test_nfl_matchup.py tests/test_nfl_roster.py` — 42/42 passed.
+- Re-ran recalibration on 2026-09-27 slate: Period props in `nfl_high_prob_props_2026-09-27.json` dropped from 109 to 0. Olave 14.5 dropped to 0.
+- `export_nfl_extra_pack.py` successfully updated `nfl_only.csv` (857 rows, all full_game).
 
 ## Next Steps
-- Merge PR #188 to master
-- Review the high-probability Tier-1 anchor props (316 total) for desk analysis
-- `reports/NFL/` game scripts are ready for manual review / Desk2 prompt routing
-- External metrics (`pbp`, `schedule`) are currently stubs — wire up real providers when available
+- Push branch `fix/nfl-prop-scope-gating` to remote and open PR to master.
 
-## Daily Automated Debug Review (Reasoning Off) (Claude) - 2026-09-24
-1. **Last Commit SHA**: rebased onto master after #184; branch `claude/inspiring-fermat-a0ly72` (PR #186: https://github.com/DaSilvaDub/outlier/pull/186).
-2. **Files Touched**:
-   - `outlier_nfl/roster.py`: Fixed `validate_analysis_text_for_roster_errors()`. It lowercased the whole document and interpolated each former-team token into a regex with no escaping and no word boundary, so "TEN" matched inside "Often", "DEN" inside "sudden", "Lions" inside "Millions", and "WAS"/"Bears" matched the English verbs "was"/"bears". The gate fails closed, so each false positive halts a legitimate report. Tokens must now stand alone; the bare-proximity pattern requires the franchise's written or all-caps spelling; the two explicit attribution patterns stay case-insensitive so `keenan allen on the bears` is still caught. Player names and team tokens are `re.escape()`d.
-   - `tests/test_nfl_roster.py`: Added `test_validate_analysis_text_does_not_flag_ordinary_english` and `test_validate_analysis_text_still_catches_capitalized_team_references`.
-3. **Verification** (pre-rebase): offline suite 1098 passed / 43 skipped; mypy/ruff clean on touched files; committed `reports/NFL/*.md` still validate to 0 errors.
-4. **Next Steps**:
-   - Review and merge PR #186 once rebase checks are green.
-   - **Needs a human call**: the bare-proximity pattern still treats an *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson").
-## Daily Debug Review: NFL Team Totals Misclassified as Game Totals (Claude) - 2026-09-23
-1. **Last Commit SHA**: rebased onto master after #182; branch `claude/inspiring-fermat-bzoq3i` (PR #185: https://github.com/DaSilvaDub/outlier/pull/185).
-2. **Files Touched (still distinct after #182)**:
-   - `outlier_nfl/games.py`: `extract_game_lines()` tests the game-total branch before the team-total branch, and `"TOTAL"`/`"TOTALPOINTS"` belong to both `GAME_TOTAL_PROPOSITIONS` and `TEAM_TOTAL_PROPOSITIONS`. A market the feed explicitly typed `TEAM_PROP` whose proposition read "Total" / "Total Points" / "TOTALPOINTS" satisfied `is_game_total()` and was emitted as a GAMELINE TOTAL with `team=None` -- one team's total published beside the real game total. The branch now declines markets typed `TEAM_PROP` so they fall through to the team-total branch.
-   - `outlier_nfl/games.py` (follow-up): guard requires BOTH `TEAM_PROP` type AND a resolved team via `resolve_outcome_team()`, so a game total a provider mislabels `TEAM_PROP` (no team attribution) stays a game total instead of vanishing. Branch 3's resolution is extracted and reused so the guard and the branch cannot disagree.
-   - `tests/test_nfl_normalizer.py`: regression coverage for colliding feed spellings plus `test_game_total_mislabelled_team_prop_is_still_a_game_total`.
-3. **Superseded by #182 (dropped on rebase)**:
-   - `outlier_nfl/matchup.py` / `tests/test_nfl_matchup.py` changes that filtered team totals via `PROP_TEAM_TOTAL_POINTS` on canonical `market`. Master already reads team totals through `is_team_total(proposition)` (#182), which is the wider canonical predicate; keeping both would duplicate and risk divergence.
-   - #182's version is not merely equivalent, it is **strictly better**, and dropping mine avoided a regression: `games.py` branch 3 stamps `market=PROP_TEAM_TOTAL_POINTS` (`"POINTS"`) on *every* `TEAM_PROP` line regardless of what the market is, a team **touchdown** total included. A `market`-based filter would therefore read a 3.5 touchdown line as a projected score; `is_team_total(proposition)` rejects it. Confirmed on the rebased branch (touchdown total -> projection stays at the 24.0 default).
-   - #182 also caught a **third** instance of the same raw-`proposition` defect, in `outlier_nfl/calibration.py::extract_game_script_context()`, which this review missed. There `home_tt` fell back to 27.0, below the 28.0 deficit-risk threshold, so `DEFICIT_VOLUME_RISK` and its road-underdog RB haircut were silently dead on any affected feed.
-4. **Verification** (post-rebase, on head `88179d3`): `pytest tests/test_nfl_*.py` 287 passed / 2 skipped; `ruff check` clean; `mypy outlier_nfl` no issues in 18 source files; all 4 hosted CI checks green (core, provider, typecheck, Codacy) with `mergeable_state: clean`. Composition verified end-to-end through `normalize_game_markets` -> `build_matchup_script`: this branch's classification feeding master's `is_team_total` reader yields the real market numbers on all six feed spellings, and a team touchdown total is still correctly refused.
-5. **Next Steps**:
-   - Review and merge PR #185 once rebase checks are green.
-   - Open, not fixed: repo-wide `ruff check` F401 unused imports; `--window` runs clobber `*_latest.json`; `matches_kickoff_window()` returns True for unrecognized tokens.
-   - **New, flagged not fixed (schema decision, not a bug fix):** `games.py` branch 3 stamps `market=PROP_TEAM_TOTAL_POINTS` on any `TEAM_PROP` market, so a team touchdown/other non-points team prop is published carrying `market="POINTS"`. Nothing is broken today because the readers filter on `proposition` after #182, but it is a live trap for any future code that filters team props on `market`. Closing it properly needs real canonical codes for non-points team props.
-## Daily Automated Debug & Code-Health Review (Claude) - 2026-09-22
-1. **Last Commit SHA**: rebased onto master after #185; branch `claude/inspiring-fermat-yd5et4` (PR #184: https://github.com/DaSilvaDub/outlier/pull/184).
-2. **Files Touched**:
-   - `outlier_nfl/utils.py`: `to_eastern_datetime()` now stamps a naive datetime as UTC before `astimezone()`. Previously a naive value was read as the *host's* local clock, so the Eastern slate date depended on the machine: a Sunday 8:15pm ET kickoff (00:15 UTC Monday) resolved to `2026-09-13` on a UTC runner and `2026-09-14` on a US Pacific workstation. `parse_iso_datetime()` already normalised the ISO-string path; this closes the same hole on the datetime-object path. Every current caller passes a string or an aware datetime, so no existing behaviour changes.
-   - `tests/test_nfl_stress.py`: two tests. `test_to_eastern_datetime_naive_is_utc_under_a_non_utc_host_tz` is the real regression guard — it runs the assertion in a subprocess with `TZ` forced, because on a UTC host the pre-fix and post-fix behaviour are indistinguishable. `test_to_eastern_datetime_reads_a_naive_datetime_as_utc` covers the host-independent assertions.
-3. **Verification** (pre-rebase): regression fails against pre-fix utils on TZ=UTC; `pytest tests/test_nfl_*.py` 278 passed / 2 skipped; prior CI green on `00d8d0e`.
-4. **Gotcha for the next agent**: `git stash push -- <path>` silently no-ops once a change is committed, so a "stash, run, pop" red-before/green-after check quietly tests the *fixed* code and reports a false pass. Use `git show <base-sha>:<path>` to materialise the pre-fix file instead.
-5. **Next Steps**:
-   - Review and merge PR #184 once rebase checks are green.
-   - Reported, not fixed: `matches_kickoff_window()` falls through to `return True` for an unrecognised window token.
-   - Also open: `--window` CLI flag advertised but no argparse wiring exists.
+---
 
-## Daily Debug Review: Matchup Team-Total Reader (Claude) - 2026-09-21
-1. **Last Commit SHA**: `a38d4b3` on branch `claude/inspiring-fermat-xdn5p3` (PR #182: https://github.com/DaSilvaDub/outlier/pull/182).
-2. **Files Touched**:
-   - `outlier_nfl/matchup.py`: `_market_context()` selected a game's team totals by testing `NflGameLine.proposition` against four literal spellings, but `proposition` carries the raw feed string (`games.py` sets `proposition=str(raw_prop)` while pinning the canonical code on `market`). The sibling SPREAD and TOTAL filters in the same function already match on canonical `market`; team totals were the one exception. A feed spelling the market `TEAM_TOTAL_POINTS` / `Team Total Points` / `team_total` -- all of which normalize into real TEAM_PROP lines carrying real numbers -- was dropped, and the script published the hardcoded 24.0/21.0 placeholder as the projected score into `nfl_matchup_scripts_*.json` and `reports/NFL/*_Game_Script.md`. Now matched through `outlier_nfl.config.is_team_total()`, the predicate the normalizer itself uses: it accepts every points-total spelling and still rejects non-points TEAM_PROPs (TEAM_TOTAL_TOUCHDOWNS). Strict widening -- the four old spellings all still match.
-   - `outlier_nfl/calibration.py`: same defect in `extract_game_script_context()`, found by Copilot's review on #182 and verified -- and the worse of the two. That reader feeds `apply_game_script_calibration()` over every slate game, and its fallback pins `home_tt` at 27.0, *below* the 28.0 deficit-risk threshold, so `away_deficit_risk` can never fire: DEFICIT_VOLUME_RISK and its road-underdog RB rushing haircut are silently dead on any affected feed while the real quoted totals sit unread in the same list. Same `is_team_total()` fix.
-   - `tests/test_nfl_calibration.py`: 2 regression tests on the calibration path (widening across seven proposition spellings incl. `away_deficit_risk`; non-points TEAM_PROPs ignored).
-   - `tests/test_nfl_matchup.py`: 2 regression tests (score follows the team total across five proposition spellings; a team TD total never becomes the projected score).
-3. **Verification**:
-   - 280 passed / 2 skipped across `tests/test_nfl_*.py` (was 276/2). Both widening tests fail on their pre-fix predicate and pass after.
-   - Full offline suite 1,062 passed (was 1,058), with the same dependency-driven collection errors as before the change. PyPI is unreachable in this cloud sandbox (`pytest`, `ruff` and `mypy` cannot be installed), so the suite was run under a local minimal pytest-compatible runner plus a `structlog` stand-in, both kept outside the repo; `sqlalchemy`, `openai` and `google-genai` modules stay uncollectable. **Hosted CI is authoritative.**
-   - End-to-end offline pipeline run against `tests/fixtures/nfl`: status OK, 3 matchup scripts, 3 game-script reports, 0 errors.
-   - `python -m compileall` clean across `outlier_nfl`, `outlier_scrapers`, `scripts`, `tests`.
-   - Roster registry cross-checked programmatically: 32 teams, no player on two depth charts, no `OFFSEASON_MOVES_2026` entry contradicting a chart.
-   - No paid reasoning models were invoked (house rule respected).
-4. **Next Steps**:
-   - PR #182 open against master: core/provider/typecheck green on `a38d4b3`, Copilot's one finding fixed and its thread resolved. Awaiting human review.
-   - **Reported, not fixed** (report-semantics call for a human): when a game genuinely has no team totals or total in the feed, `_market_context()` still returns hardcoded 24.0/21.0/45.5 and `render_matchup_markdown()` prints them as real lines ("**Total lean:** UNDER 45.5") with nothing marking them as defaults. Both committed live reports (`2026-09-20_IND_KC`, `2026-09-21_NYG_LAR`) show projected scores that came from the spread/total fallback rather than team totals.
-   - Minor, no change made: `build_matchup_script()` derives projected scores with `round()`, whose banker's rounding turns a 25.5/22.5 team-total pair into 26-22 (margin 4 against a 3.5 spread). Cosmetic; intended tie-breaking is not clear from the code.
+# HANDOFF — 2026-09-26 (Claude, daily automated debug review)
 
-## NFL Roster Accuracy: Dolphins Starting QB Malik Willis & Tua Tagovailoa Relocation (Gemini) - 2026-09-21
-1. **Last Commit SHA**: `827ce4e` on branch `fix/roster-tua-dolphins-update` (PR #183: https://github.com/DaSilvaDub/outlier/pull/183)
-2. **Files Touched**:
-   - `outlier_nfl/roster.py`: Mapped Malik Willis as starting QB for MIA in `NFL_2026_FULL_DEPTH_CHARTS`. Registered Tua Tagovailoa on ATL with former team MIA and registered Malik Willis on MIA with former teams GB/TEN in `OFFSEASON_MOVES_2026`.
-   - `outlier_nfl/tape/prior_week_tape.json` & `tests/fixtures/nfl/prior_week_tape.json`: Updated MIA unit tape qb to Malik Willis and te to Julian Hill.
-   - `tests/test_nfl_roster.py`: Added assertions verifying Malik Willis on MIA, Tua Tagovailoa on ATL, and text validation catching Tua on Dolphins hallucinations.
-   - `.agents/AGENTS.md` & `.agents/skills/nfl-game-script/SKILL.md`: Added MIA Core Anchor to documentation and skill invariants.
-   - `reports/NFL/2026-09-21_NYG_LAR_Game_Script.md`: Re-rendered with verified active starters.
-3. **Verification**:
-   - 294/294 tests passed (`pytest -k nfl`).
-   - `validate_analysis_text_for_roster_errors` confirmed 0 errors on generated game scripts.
-   - PR #183 opened targeting `master`.
-4. **Next Steps**:
-   - Review and merge PR #183.
-   - House rules respected: paid reasoning models kept strictly OFF.
+## Last Commit SHA
+`394138e` — fix(pack): restore projection_side_conflict flag on audit-only rows
+
+## PR
+[#194](https://github.com/DaSilvaDub/outlier/pull/194) — `claude/inspiring-fermat-xuehxu` → master
+
+## Files Touched
+- `outlier_scrapers/pack_selection.py` — #190 (`26f257e`) moved the
+  `projection_side_conflict` check out of `_apply_quality_and_signal_flags` into a
+  `build_row` discard; `c25a0a0` then exempted audit-only fallback projections from that
+  discard. The combination left audit-only rows with *no* signal: the row is kept, but the
+  flag was no longer appended anywhere in the codebase. Restored the original block. It is
+  only reachable by rows the upstream discard deliberately kept, so real projections still
+  drop at `build_row` and only the audit-only case falls through to the flag. The flag stays
+  informational (not in `DISQUALIFYING_DQ_FLAGS`), matching its pre-#190 role. Also re-uses
+  the `market_type_upper` local that #190 orphaned (ruff `F841`).
+- `tests/test_pack.py` — `test_audit_only_projection_side_conflict_is_kept_but_flagged`,
+  placed alongside #190's two `_discarded_upstream_` tests so the trio pins all three
+  outcomes.
+
+## Evidence
+Same card as `test_league_average_so_projection_is_audit_only` (OVER 5.5, league-average SO
+mean 4.95 — below the line, so it opposes the OVER):
+
+| revision | `data_quality_flags` |
+|---|---|
+| `82569cd` (pre-#190) | `projection_side_conflict` |
+| `c25a0a0` (master) | *(empty)* |
+| this branch | `projection_side_conflict` |
+
+## Verification
+- `pytest` — 1124 passed / 43 skipped, identical to the pre-change baseline. All 67 failures
+  and 29 collection errors are `ModuleNotFoundError` (`sqlalchemy` ×most, plus `google`,
+  `anthropic`, `openai`, `dateutil`).
+- **Sandbox limitation (recurring):** pypi.org and files.pythonhosted.org return **403** from
+  the egress proxy (also via `--proxy $HTTPS_PROXY`), so project deps cannot be installed.
+  `pytest`/`ruff`/`mypy` are present as standalone uv tools. A stdlib-only `structlog` shim
+  under the scratchpad unblocked 41 of the 48 collection errors. **`tests/test_pack.py` is
+  sqlalchemy-blocked, so the new test could not run locally — CI is the authority.** Its
+  assertions were validated by driving `build_row` directly through a `pack_selection`-only
+  import path, and the pre-#190 comparison was run in a detached worktree at `82569cd`.
+- `ruff check` — 20 → 19 errors (the `F841` is resolved). Remaining 19 are pre-existing
+  unused imports in `scratch.py`/`script.py`/`append_feedback.py` and two test files; ruff is
+  not in CI.
+- `mypy outlier_scrapers` — unchanged: 3 pre-existing `arg-type` false positives
+  (`schema.py:256`, `probable_pitchers.py:95`, `game_totals.py:1045` — all wrapped in
+  `try/except (ValueError, TypeError)`) plus one missing-stub note.
+
+## Next Steps / Open Items
+- Review and merge PR #194.
+- **Still open (from 2026-09-25):** `outlier_nfl/pipeline.py:239` derives the NFL season as
+  `int(target_date.split('-')[0])`, so a January/February playoff slate resolves to the
+  *next* season. Confirmed still present. Impact is currently **nil** — every
+  `outlier_nfl/external/*` adapter (`ngs`, `pbp`, `schedule`) is a stub returning
+  `{"records": []}`, and the call is wrapped in `try/except` with an empty-list fallback. It
+  becomes real the moment those adapters are implemented. Fix is a month<=2 → year-1 guard.
+- **Still open (from 2026-09-24):** the roster gate's bare-proximity pattern treats an
+  *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson"). Needs a human
+  call on whether opponent context should be exempted.
+
+---
+
+# HANDOFF — 2026-09-27 (Antigravity)
+
+## Last Commit SHA
+`8ffee08` — feat(pack): add team_total and player_position to CANDIDATES_HEADER
+
+## PR
+[#195](https://github.com/DaSilvaDub/outlier/pull/195) — `feat/candidates-header-parity` → `master`
+
+## Files Touched
+- `outlier_scrapers/pack_selection.py` — added `player_position` (after `player_id`) and `team_total` (after `priced_line`) to `CANDIDATES_HEADER`.
+- `tests/test_pack.py` — updated `test_header_canonical_with_flags` to assert presence of `player_position` and `team_total`.
+
+## Verification
+- `pytest tests/test_pack.py -k test_header_canonical_with_flags` passed (1/1).
+- `pytest tests/test_schema.py` passed (11/11).
+- `pytest tests/test_pack_index.py tests/test_runner_common.py` passed (72/72).
+- Scratch verification confirmed zero schema errors/warnings on candidate rows.
+
+## Next Steps
+- Merge PR #195 into master.
+- When running tomorrow's daily job, confirm that the 27 `Candidate row schema warning` messages are gone.
+
+---
+
+# HANDOFF — 2026-09-27 (Claude, daily automated debug review)
+
+## Last Commit SHA
+`e7d9075` — fix(nfl): read a January playoff slate as the previous NFL season
+
+## PR
+[#197](https://github.com/DaSilvaDub/outlier/pull/197) — `claude/inspiring-fermat-x2sxto` → master
+
+## Files Touched
+- `outlier_nfl/utils.py` — new `nfl_season_for_date()` beside the Eastern-date helpers.
+  Sep–Feb resolves to the season in progress, Mar–Aug to the season about to start
+  (nflverse convention). Accepts a `datetime`, an ISO timestamp, or a bare `YYYY-MM-DD`;
+  returns `None` on unreadable input.
+- `outlier_nfl/pipeline.py` — replaced `season_year = int(target_date.split('-')[0])`.
+  A `2027-01-10` wild-card slate asked `load_external_metrics()` for the **2027** season,
+  a year that has not been played. Caller now skips the fetch and logs when the season
+  can't be derived, instead of passing `None` into a parameter typed `int`.
+  This was the reported-not-fixed item carried by the 2026-09-25 handoff.
+- `outlier_scrapers/pack_selection.py` — dropped the dead `market_type_upper` local in
+  `_apply_quality_and_signal_flags()`. #190 moved the projection_side_conflict check
+  upstream into `build_row()` and deleted the only consumer (ruff F841).
+- `tests/test_nfl_stress.py` — 2 regression tests (playoff/offseason boundaries; datetime,
+  ISO-timestamp and bare-date inputs plus the None cases).
+
+## Hosted CI (authoritative)
+Green on PR head `17145d2`: **Offline Pytest success**, **Static Type Checking success**
+(also both green on the code commit `e7d9075`). The Offline Pytest job installs the declared
+dependencies, so it is the authority for the `pack_selection.py` change and every other file
+this sandbox cannot import.
+
+## Verification
+- Offline suite **906 passed / 43 skipped** (was 904; +2 new tests). NFL suite
+  **294 passed / 2 skipped** (was 292/2). `mypy outlier_nfl` clean; ruff clean on all four
+  touched files; `compileall` clean; repo-wide ruff 20 → 19.
+- The 51 failures / 48 collection errors are **unchanged by this diff** and are all
+  `ModuleNotFoundError` (structlog, sqlalchemy, provider SDKs).
+- **Sandbox limitation (recurring, 3rd review running):** pypi.org and
+  files.pythonhosted.org return **403** from the egress proxy, so declared deps cannot be
+  installed. `pytest`/`ruff`/`mypy` were available at `/root/.local/bin` this run. A
+  `structlog` stand-in under the scratchpad clears 41 collection errors but `sqlalchemy`
+  still gates `pack*`/`verdict*`/`games`/`cards`. **Hosted CI is authoritative.**
+- `pack_selection.py` tests are sqlalchemy-gated, so the dead-store removal was verified by
+  a normalised bytecode diff of the function (jump targets/line numbers/addresses ignored):
+  **10 opcodes removed, 0 added**, all ten that one statement.
+- No reasoning models or paid desk calls were invoked (house rule respected).
+
+## Reviewed and found clean this run (no change needed)
+- `c6f739b` full-game scope gating: `prop.scope` is a real model field defaulting to
+  `"full_game"` and `detect_scope()` only returns the lowercase canonical tokens, so the new
+  `in (None, "", "full_game")` guards cannot silently zero out every TIER_1_ANCHOR.
+- `scripts/export_nfl_extra_pack.py` (new, 192 lines): exercised end-to-end against a payload
+  built from the real `NflPlayerProp` model. Field names align with `to_dict()`, `"records"`
+  matches what the pipeline writes, best-book resolution correct, period props filtered,
+  header written on zero rows.
+- The 4 `mypy outlier_scrapers` findings are **not** bugs: every flagged `float()`/`int()` is
+  already inside `try/except (ValueError, TypeError)` (`schema.py:256`,
+  `probable_pitchers.py:95`, `game_totals.py:1045`); the 4th is a missing
+  `types-python-dateutil` stub.
+
+## Next Steps / Open Items
+- Review and merge PR #197.
+- **Still open, needs a human call:** `matches_kickoff_window()` falls through to
+  `return True` for an unrecognised window token.
+- **Corrected inherited claim:** earlier handoffs listed "`--window` advertised but no
+  argparse wiring exists". That is now **stale** -- `--window` is fully wired
+  (`pipeline.py:524-529`) and threaded through `run(window=...)`. Do not re-chase it.
+- **Still open, needs a human call:** a `--window` run *does* clobber `*_latest.json`.
+  Every `*_latest.json` write (`pipeline.py:262,323,324,329,346,360,370,389,495`) is
+  unconditional and sits *outside* the `if window:` block, so `--window snf` overwrites
+  `nfl_props_latest.json` / `nfl_high_prob_props_latest.json` with only that window's subset
+  while also writing the `_{window_slug}` copies. Newly found downstream consequence:
+  `scripts/export_nfl_extra_pack.py::resolve_source()` falls back to
+  `nfl_high_prob_props_latest.json`, so after a window run the exported `nfl_only.csv` is a
+  partial slate with nothing marking it partial. Not fixed because the intended semantics are
+  genuinely ambiguous (should "latest" mean the most recent run, or the full slate?) -- a
+  one-line `if not window:` guard would settle it either way once the owner decides.
+- **Still open (from 2026-09-24):** the roster gate's bare-proximity pattern treats an
+  *opponent* mention as a violation ("leaky WAS secondary vs Jahan Dotson").
+- **Repo hygiene, needs a human call:** `.pytest_pr1_tmp/` (334 files) and
+  `.worktrees/test-pr97/` (364 files, ~3 MB) are tracked in git and pollute every repo-wide
+  grep with stale duplicates — the exact class of confusion the d05eb21 protocol exists to
+  prevent. Recommend `git rm --cached -r` plus `.gitignore` entries; not done here because it
+  rewrites ~698 tracked paths.
+- **Open:** repo-wide ruff reports 19 remaining F401 unused imports (`scratch.py`,
+  `script.py`, `append_feedback.py`, `tests/test_challenger_adversarial.py`,
+  `tests/test_nfl_roster.py`).

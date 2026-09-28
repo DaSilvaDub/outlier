@@ -479,6 +479,7 @@ PROP_FGM: str = "FGM"
 PROP_KICK_PTS: str = "KICK_PTS"
 PROP_TKL_AST: str = "TKL_AST"
 PROP_SACKS: str = "SACKS"
+PROP_TIMES_SACKED: str = "PASSING_TIMES_SACKED"  # QB sacks taken
 
 # Aliases mapping raw Outlier API proposition strings to canonical codes
 NFL_MARKET_ALIASES: dict[str, str] = {
@@ -567,6 +568,10 @@ NFL_MARKET_ALIASES: dict[str, str] = {
     "TOTALTACKLES": PROP_TKL_AST,
     "TACKLES": PROP_TKL_AST,
     "SACKS": PROP_SACKS,
+    "PASSINGTIMESSACKED": PROP_TIMES_SACKED,
+    "TIMESSACKED": PROP_TIMES_SACKED,
+    "SACKSTAKEN": PROP_TIMES_SACKED,
+    "QBSACKED": PROP_TIMES_SACKED,
 }
 
 # Sets for quick market identification

@@ -74,3 +74,6 @@ calibration/*.db
 calibration/*.sqlite3*
 calibration/.fuse_hidden*
 today_settlements.csv/
+
+# External adapter download cache (outlier_nfl/external Client)
+cache/

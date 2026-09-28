@@ -8,12 +8,13 @@ and persists normalized datasets to disk atomically.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from dataclasses import asdict
+from datetime import date, datetime, timezone
 import logging
 from pathlib import Path
 import sys
 from typing import Any
-from outlier_nfl.external import load_external_metrics
+from outlier_nfl.external import Client as ExternalClient, load_external_metrics
 
 # Ensure Windows stdout handles UTF-8 gracefully
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -25,7 +26,11 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
+from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
+from outlier_nfl.usage import append_signals, load_usage, usage_signals
+from outlier_nfl.weather import apply_weather, load_slate_weather
 from outlier_nfl.matchup import (
+    _event_team_codes,
     apply_matchup_signals,
     build_matchup_scripts,
     load_prior_week_tape,
@@ -50,6 +55,8 @@ from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.utils import (
     matches_kickoff_window,
+    nfl_season_for_date,
+    normalize_kickoff_window,
     safe_read_json,
     safe_write_json,
     to_eastern_date,
@@ -102,6 +109,8 @@ class NflPipeline:
         now_utc = datetime.now(timezone.utc).isoformat()
         target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
 
+        window = normalize_kickoff_window(window)
+        write_latest = window is None
         window_label = f" (window: {window})" if window else ""
         logger.info("Starting Outlier NFL Pipeline run for date: %s%s", target_date, window_label)
         self.normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -236,13 +245,27 @@ class NflPipeline:
         # =====================================================================
         tapes = load_prior_week_tape(self.nfl_dir)
         # Load external advanced metrics for the season
-        try:
-            season_year = int(target_date.split('-')[0])
-            external_metrics = load_external_metrics(season_year, through_week=22)
-            logger.info("Loaded %d external metric records", len(external_metrics))
-        except Exception as exc:
-            logger.warning("Failed loading external metrics: %s", exc)
-            external_metrics = []
+        # Offline fixture replays never touch the network.
+        external_metrics: list[dict[str, Any]] = []
+        if offline_fixtures_dir is None:
+            try:
+                # January/February playoff slates belong to the previous season.
+                season_year = nfl_season_for_date(target_date)
+                if season_year is None:
+                    logger.warning(
+                        "Could not derive an NFL season from target date %r; "
+                        "skipping external metrics",
+                        target_date,
+                    )
+                else:
+                    external_metrics = load_external_metrics(
+                        season_year,
+                        through_week=22,
+                        client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
+                    )
+                    logger.info("Loaded %d external metric records", len(external_metrics))
+            except Exception as exc:
+                logger.warning("Failed loading external metrics: %s", exc)
         # Persist external metrics to JSON for downstream use and analysis
         external_metrics_payload = {
             "date": target_date,
@@ -251,12 +274,16 @@ class NflPipeline:
             "count": len(external_metrics),
             "records": external_metrics,
         }
-        safe_write_json(self.normalized_dir / "nfl_external_metrics_latest.json", external_metrics_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_external_metrics_latest.json", external_metrics_payload)
         safe_write_json(self.normalized_dir / f"nfl_external_metrics_{target_date}.json", external_metrics_payload)
 
         matchup_scripts = build_matchup_scripts(
             all_game_lines,
             tapes,
+            injuries_by_event=injuries_by_event(
+                load_tape_inactives(self.nfl_dir), all_game_lines, slate_events
+            ),
             slate_events=slate_events,
         )
         if matchup_scripts:
@@ -265,6 +292,62 @@ class NflPipeline:
                 len(matchup_scripts),
                 len(tapes),
             )
+
+        # Game-day weather: open-air forecasts add pass-volume haircut signals.
+        if offline_fixtures_dir is None and matchup_scripts:
+            try:
+                weathers = load_slate_weather(
+                    slate_events,
+                    [r for r in external_metrics if r.get("source") == "schedule"],
+                )
+                matchup_scripts = apply_weather(matchup_scripts, weathers, tapes)
+                weather_payload = {
+                    "date": target_date,
+                    "window": window,
+                    "updated_at": now_utc,
+                    "count": len(weathers),
+                    "records": [w.to_dict() for w in weathers.values()],
+                }
+                safe_write_json(self.normalized_dir / f"nfl_weather_{target_date}.json", weather_payload)
+                logger.info(
+                    "Weather: %d games forecast, %d with a pass haircut",
+                    len(weathers),
+                    sum(1 for w in weathers.values() if w.pass_adjustment < 0),
+                )
+            except Exception as exc:
+                logger.warning("Weather calibration skipped: %s", exc)
+
+        # Player usage: vacated volume and efficiency regression re-base stale hit rates.
+        if offline_fixtures_dir is None and matchup_scripts:
+            try:
+                season = int(target_date[:4]) if int(target_date[5:7]) >= 3 else int(target_date[:4]) - 1
+                upcoming = [
+                    int(r["week"])
+                    for r in external_metrics
+                    if r.get("source") == "schedule" and str(r.get("gameday") or "") >= target_date
+                ]
+                profiles = load_usage(season, min(upcoming) if upcoming else None)
+                event_by_team: dict[str, str] = {}
+                for script in matchup_scripts:
+                    event_by_team[script.home_team] = script.event_id
+                    event_by_team[script.away_team] = script.event_id
+                usage = usage_signals(profiles, load_tape_inactives(self.nfl_dir), event_by_team)
+                matchup_scripts = append_signals(matchup_scripts, usage)
+                safe_write_json(
+                    self.normalized_dir / f"nfl_player_usage_{target_date}.json",
+                    {
+                        "date": target_date,
+                        "window": window,
+                        "updated_at": now_utc,
+                        "players": [
+                            p.to_dict() for p in profiles.values() if p.team in event_by_team
+                        ],
+                        "signals": [asdict(sig) for sig in usage],
+                    },
+                )
+                logger.info("Usage: %d profiles, %d signals", len(profiles), len(usage))
+            except Exception as exc:
+                logger.warning("Usage signals skipped: %s", exc)
 
         if all_player_props:
             consensus_props = select_consensus_player_props(all_player_props)
@@ -312,18 +395,24 @@ class NflPipeline:
         }
 
         # Write normalized outputs atomically
-        safe_write_json(self.normalized_dir / "nfl_games_latest.json", games_payload)
-        safe_write_json(self.normalized_dir / "nfl_props_latest.json", props_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_games_latest.json", games_payload)
+            safe_write_json(self.normalized_dir / "nfl_props_latest.json", props_payload)
         safe_write_json(self.normalized_dir / f"nfl_games_{target_date}.json", games_payload)
         safe_write_json(self.normalized_dir / f"nfl_props_{target_date}.json", props_payload)
 
         # Write calibrated and high-probability datasets
-        safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_calibrated_props_latest.json", props_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_calibrated_props_{target_date}.json", props_payload
         )
 
-        anchors = [p.to_dict() for p in calibrated_props if p.confidence_tier == "TIER_1_ANCHOR"]
+        anchors = [
+            p.to_dict()
+            for p in calibrated_props
+            if p.confidence_tier == "TIER_1_ANCHOR" and p.scope in (None, "", "full_game")
+        ]
         # Persist emit-time odds as close_* with honest source label (not book close).
         for row in anchors:
             attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
@@ -347,7 +436,8 @@ class NflPipeline:
                 ),
             },
         }
-        safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_high_prob_props_{target_date}.json", anchors_payload
         )
@@ -361,7 +451,8 @@ class NflPipeline:
             "teams_count": len(rosters),
             "rosters": rosters,
         }
-        safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_rosters_latest.json", rosters_payload)
         safe_write_json(self.normalized_dir / f"nfl_rosters_{target_date}.json", rosters_payload)
 
         scripts_payload = {
@@ -371,7 +462,8 @@ class NflPipeline:
             "count": len(matchup_scripts),
             "records": scripts_to_records(matchup_scripts),
         }
-        safe_write_json(self.normalized_dir / "nfl_matchup_scripts_latest.json", scripts_payload)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_matchup_scripts_latest.json", scripts_payload)
         safe_write_json(
             self.normalized_dir / f"nfl_matchup_scripts_{target_date}.json",
             scripts_payload,
@@ -404,9 +496,10 @@ class NflPipeline:
                 ),
             },
         }
-        safe_write_json(
-            self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
-        )
+        if write_latest:
+            safe_write_json(
+                self.normalized_dir / "nfl_matchup_props_latest.json", matchup_props_payload
+            )
         safe_write_json(
             self.normalized_dir / f"nfl_matchup_props_{target_date}.json",
             matchup_props_payload,
@@ -511,7 +604,8 @@ class NflPipeline:
             except Exception as exc:
                 logger.warning("Failed generating game script: %s", exc)
 
-        safe_write_json(self.normalized_dir / "summary_latest.json", summary)
+        if write_latest:
+            safe_write_json(self.normalized_dir / "summary_latest.json", summary)
         safe_write_json(self.normalized_dir / f"summary_{target_date}.json", summary)
         if window:
             safe_write_json(
@@ -529,6 +623,39 @@ class NflPipeline:
             tier_1_anchors_count,
         )
         return summary
+
+
+def injuries_by_event(
+    inactive_by_team: dict[str, list[str]],
+    game_lines: list[NflGameLine],
+    slate_events: list[dict[str, Any]] | None,
+) -> dict[str, list[str]]:
+    """Inactive player names for both teams of every slate event."""
+    if not inactive_by_team:
+        return {}
+    teams: dict[str, tuple[str, str]] = {}
+    for event in slate_events or []:
+        event_id = str(event.get("eventId") or event.get("id") or "")
+        if event_id:
+            teams[event_id] = _event_team_codes(event)
+    for line in game_lines:
+        if line.event_id and line.event_id not in teams:
+            teams[line.event_id] = (line.home_team, line.away_team)
+    return {
+        event_id: inactive_by_team.get(home, []) + inactive_by_team.get(away, [])
+        for event_id, (home, away) in teams.items()
+    }
+
+
+def _refresh_tape(nfl_dir: Path, target_date: str | None, last_n: int | None) -> None:
+    """Rebuild the matchup tape from games before the slate; keep the old tape on failure."""
+    raw = target_date or to_eastern_date(datetime.now(timezone.utc))
+    try:
+        slate = date.fromisoformat(str(raw))
+        season = slate.year if slate.month >= 3 else slate.year - 1
+        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n)
+    except Exception as exc:  # network/API failure must not block the slate run
+        logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
 
 
 def main() -> int:
@@ -570,6 +697,17 @@ def main() -> int:
         help="Automatically generate structured betting game script markdown report.",
     )
     parser.add_argument(
+        "--refresh-tape",
+        action="store_true",
+        help="Rebuild data/NFL/tape/prior_week.json from nflverse box scores before running.",
+    )
+    parser.add_argument(
+        "--tape-last-n",
+        type=int,
+        default=None,
+        help="With --refresh-tape, average only each team's last N games. Default: all.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable detailed logging.",
@@ -579,14 +717,21 @@ def main() -> int:
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+    if args.refresh_tape:
+        _refresh_tape(args.data_dir / "NFL", args.date, args.tape_last_n)
+
     try:
         pipeline = NflPipeline(data_dir=args.data_dir)
-        summary = pipeline.run(
-            date=args.date,
-            window=args.window,
-            offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
-            generate_game_script=args.generate_game_script,
-        )
+        try:
+            summary = pipeline.run(
+                date=args.date,
+                window=args.window,
+                offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
+                generate_game_script=args.generate_game_script,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         print("=" * 60)
         print("OUTLIER NFL PIPELINE EXECUTION SUMMARY")
         print(f"Date:                   {summary.get('date')}")

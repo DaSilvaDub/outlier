@@ -60,6 +60,7 @@ CANDIDATES_HEADER = [
     "outcome_id",
     "market_type",
     "player_id",
+    "player_position",
     "matchup",
     "team",
     "team_name",
@@ -70,6 +71,7 @@ CANDIDATES_HEADER = [
     "selection",
     "line",
     "priced_line",
+    "team_total",
     "price",
     "decimal_price",
     "book",
@@ -798,6 +800,14 @@ def _apply_quality_and_signal_flags(
         probable_pitchers,
         player_name=str(card.get("player") or ref.get("player") or row.get("player") or "") or None,
     )
+    # build_row already discarded a side conflict backed by a real projection, so
+    # anything still conflicting here is an audit-only fallback we deliberately
+    # keep. Keeping it silent would drop the warning the desk used to see, so the
+    # flag stays informational (it is not in DISQUALIFYING_DQ_FLAGS).
+    if (
+        identity["has_player"] or market_type_upper == "PLAYER_PROP"
+    ) and _projection_side_conflicts(row, headline_side):
+        dq_flags.append("projection_side_conflict")
     if ev_probability_mismatch:
         dq_flags.append("ev_probability_mismatch")
     movement_now = _to_float((side_view.get("movement") or {}).get("current_line"))

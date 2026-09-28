@@ -413,6 +413,44 @@ def test_empirical_hit_rate_tiering():
     assert by_name["DJ Moore"].confidence_tier == "STANDARD"
 
 
+def test_period_props_never_qualify_for_tier1_or_tier2_anchors():
+    """Period props (quarter/half) must NEVER qualify for TIER_1_ANCHOR or TIER_2_STRONG.
+
+    Even if a quarter or half prop has 100% L5 and 100% L10 hit rates across 4+ books,
+    micro-period markets have extreme small-sample noise and must remain STANDARD.
+    """
+    lines = [_make_game_line("SPREAD", -5.5, team="BUF")]
+
+    q4_olave = _make_prop(
+        "Chris Olave", "REC_YDS", 14.5, "OVER", l5=1.0, l10=1.0, books_count=4, scope="fourth_quarter"
+    )
+    h1_burrow = _make_prop(
+        "Joe Burrow", "PASS_TD", 0.5, "OVER", l5=1.0, l10=1.0, books_count=4, scope="first_half"
+    )
+    q1_mahomes = _make_prop(
+        "Patrick Mahomes", "PASS_YDS", 55.5, "OVER", l5=1.0, l10=1.0, books_count=4, scope="first_quarter"
+    )
+    full_olave = _make_prop(
+        "Chris Olave", "REC_YDS", 77.5, "OVER", l5=1.0, l10=0.90, books_count=4, scope="full_game"
+    )
+
+    calibrated = apply_game_script_calibration(
+        lines, [q4_olave, h1_burrow, q1_mahomes, full_olave]
+    )
+
+    by_scope = {(p.player_name, p.scope): p for p in calibrated}
+
+    # Period props must remain STANDARD
+    assert by_scope[("Chris Olave", "fourth_quarter")].confidence_tier == "STANDARD"
+    assert "HIGH_HIT_RATE_ANCHOR" not in by_scope[("Chris Olave", "fourth_quarter")].calibration_tags
+    assert by_scope[("Joe Burrow", "first_half")].confidence_tier == "STANDARD"
+    assert by_scope[("Patrick Mahomes", "first_quarter")].confidence_tier == "STANDARD"
+
+    # Full-game prop qualifies as TIER_1_ANCHOR
+    assert by_scope[("Chris Olave", "full_game")].confidence_tier == "TIER_1_ANCHOR"
+    assert "HIGH_HIT_RATE_ANCHOR" in by_scope[("Chris Olave", "full_game")].calibration_tags
+
+
 # =============================================================================
 # 3. Pipeline Integration & Game Script Generator Tests
 # =============================================================================
