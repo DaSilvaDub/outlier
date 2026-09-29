@@ -7,7 +7,7 @@ from OneDrive or file synchronizers.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import math
@@ -289,7 +289,7 @@ def to_eastern_date(dt_or_iso: datetime | str | None) -> str | None:
     return eastern_dt.strftime("%Y-%m-%d") if eastern_dt else None
 
 
-def nfl_season_for_date(dt_or_iso: datetime | str | None) -> int | None:
+def nfl_season_for_date(dt_or_iso: datetime | date | str | None) -> int | None:
     """Return the NFL season year a calendar date belongs to.
 
     A season is labelled by the year its September kickoff falls in and runs
@@ -300,12 +300,12 @@ def nfl_season_for_date(dt_or_iso: datetime | str | None) -> int | None:
     through August is the offseason and resolves to the season about to start,
     matching the nflverse convention.
 
-    Accepts a ``datetime``, a full ISO timestamp, or a bare ``YYYY-MM-DD``
-    slate date. Returns ``None`` when no year/month can be read.
+    Accepts a ``date``, a ``datetime``, a full ISO timestamp, or a bare
+    ``YYYY-MM-DD`` slate date. Returns ``None`` when no year/month can be read.
     """
     if dt_or_iso is None:
         return None
-    if isinstance(dt_or_iso, datetime):
+    if isinstance(dt_or_iso, date):  # also covers datetime, its subclass
         year, month = dt_or_iso.year, dt_or_iso.month
     else:
         text = str(dt_or_iso).strip()

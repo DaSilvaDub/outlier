@@ -540,6 +540,80 @@ def test_projection_v2_requires_three_prior_weeks():
     assert record["model_p_n_games"] == 3
 
 
+def test_hierarchy_keeps_the_projection_over_empirical_hit_rates():
+    """Hierarchy is projection → Laplace → raw, so a v2 stamp must survive.
+
+    ``attach_projection_model_p_record`` prefers the Gaussian/Poisson v2
+    projection over the v1 gamelog rate, so the hierarchy short-circuit has to
+    recognise every projection source. Matching only the v1 source let the
+    empirical Laplace shrink overwrite a live v2 projection and left the row
+    stamped ``empirical_hit_rate_laplace`` while still carrying the projection's
+    ``model_p_method`` / ``model_p_n_games``.
+    """
+    from outlier_nfl.boxscore import _token
+    from outlier_nfl.projection import (
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN,
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
+        attach_model_p_hierarchy_record,
+    )
+
+    three_weeks = [{"rushing_yards": 40}, {"rushing_yards": 60}, {"rushing_yards": 55}]
+    record = {
+        "player_name": "Test Back",
+        "market": "RUSH_YDS",
+        "line": 49.5,
+        "position": "OVER",
+        # Empirical rates are present, as they are on real Tier-1 / matchup rows.
+        "l5_hit_rate": 1.0,
+        "l10_hit_rate": 0.7,
+    }
+    week_index = {_token("Test Back"): three_weeks}
+
+    v2 = attach_model_p_hierarchy_record(dict(record), week_index=week_index)
+    assert v2["model_p_source"] == MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN
+    assert v2["model_p_method"] == "gamelog_gaussian"
+    assert v2["model_p_n_games"] == 3
+
+    # Thin history keeps the v1 rate, which must also survive the short-circuit.
+    v1 = attach_model_p_hierarchy_record(
+        dict(record), week_index={_token("Test Back"): three_weeks[:2]}
+    )
+    assert v1["model_p_source"] == MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+    assert v1["model_p_n_games"] == 2
+
+    # No projection available -> empirical, with no stale projection provenance.
+    empirical = attach_model_p_hierarchy_record(dict(record), week_index=None)
+    assert empirical["model_p_source"] == "empirical_hit_rate_laplace"
+    assert empirical.get("model_p_method") is None
+    assert empirical.get("model_p_n_games") is None
+
+
+def test_nflverse_boxscore_fetch_reads_a_january_slate_as_the_previous_season(monkeypatch):
+    """A January playoff slate belongs to the previous September's season.
+
+    ``season or event_date.year`` asked nflverse for a season that has not been
+    played, so every playoff shadow settle came back with no events and reported
+    ``event_not_found`` for every prediction instead of failing loudly.
+    """
+    from datetime import date as date_cls
+
+    import outlier_nfl.boxscore_nflverse as bn
+
+    seen: list[int] = []
+
+    def fake_load(*, season, event_date=None, week=None, cache_dir=None):
+        seen.append(season)
+        return []
+
+    monkeypatch.setattr(bn, "load_nflverse_events", fake_load)
+
+    bn.fetch_nflverse_boxscores_for_date(date_cls(2027, 1, 10))  # wild card
+    bn.fetch_nflverse_boxscores_for_date(date_cls(2027, 2, 7))  # Super Bowl
+    bn.fetch_nflverse_boxscores_for_date(date_cls(2026, 9, 27))  # regular season
+    bn.fetch_nflverse_boxscores_for_date(date_cls(2027, 1, 10), season=2025)  # explicit wins
+    assert seen == [2026, 2026, 2026, 2025]
+
+
 def test_team_codes_normalize_la_to_lar():
     from datetime import date
     from outlier_nfl.boxscore import NflBoxScoreEvent
