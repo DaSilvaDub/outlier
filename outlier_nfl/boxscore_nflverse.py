@@ -30,6 +30,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from outlier_nfl.boxscore import BoxScoreError, NflBoxScoreEvent, _number, _token
+from outlier_nfl.utils import nfl_season_for_date
 
 NFLVERSE_STATS_WEEK_URL = (
     "https://github.com/nflverse/nflverse-data/releases/download/"
@@ -272,8 +273,13 @@ def fetch_nflverse_boxscores_for_date(
     cache_dir: Path | None = None,
 ) -> list[NflBoxScoreEvent]:
     """Convenience: load all completed games on an Eastern slate date."""
-    season_year = season or event_date.year
-    # NFL season year equals the calendar year of Week 1 (Sep); Sep/Oct/Nov/Dec use that year.
+    # A season is labelled by the calendar year of its September Week 1 and runs
+    # through the Super Bowl in early February, so reading the year straight off
+    # the date asks nflverse for an unplayed season on every January/February
+    # playoff slate and comes back with no events at all.
+    season_year = season or nfl_season_for_date(event_date)
+    if season_year is None:
+        raise BoxScoreError(f"Could not derive an NFL season from slate date: {event_date!r}")
     return load_nflverse_events(
         season=season_year,
         event_date=event_date,
