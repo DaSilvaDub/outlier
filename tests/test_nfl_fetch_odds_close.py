@@ -16,6 +16,7 @@ def _load(name: str):
 
 
 def test_odds_market_mapping_and_position():
+    from outlier_nfl.config import PROP_LONG_PASS
     from outlier_nfl.fetch_odds_close import (
         odds_market_to_outlier,
         outcome_to_position,
@@ -26,6 +27,11 @@ def test_odds_market_mapping_and_position():
     assert odds_market_to_outlier("player_rush_yds_alternate") == "RUSH_YDS"
     assert odds_market_to_outlier("player_anytime_td") == "ANYTIME_TD"
     assert odds_market_to_outlier("h2h") is None
+    # The three "longest" markets all map to their canonical code, so a close row
+    # joins the Outlier prop on (player_name, market, line, position).
+    assert odds_market_to_outlier("player_reception_longest") == "LONG_REC"
+    assert odds_market_to_outlier("player_rush_longest") == "LONG_RUSH"
+    assert odds_market_to_outlier("player_pass_longest_completion") == PROP_LONG_PASS
     assert outcome_to_position("Over", market_outlier="RUSH_YDS") == "OVER"
     assert outcome_to_position("No", market_outlier="ANYTIME_TD") == "UNDER"
     assert better_american_odds(-110, -105) == -105

@@ -1,3 +1,48 @@
+# HANDOFF — 2026-09-28 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-xi4ctd` · **Last commit**: `83b1ac4`
+
+## Fixed
+- `outlier_nfl/weather.py` + `outlier_nfl/fetch_odds_close.py` — the QB longest-completion
+  market was written as `"LONGEST_PASSING_COMPLETION"` on both the signal side and the
+  Odds-API mapping side, but that string is not in `NFL_MARKET_ALIASES`; the normalizer
+  produces `PROP_LONG_PASS` ("LONG_PASS"). Since `apply_matchup_signals` joins on exact
+  `signal.market == prop.market` and `enrich_close._row_match_key_short` joins on the
+  uppercased `market` string, the weather haircut never reached the prop and the book close
+  never stamped. Both now emit `LONG_PASS`. Regression tests in
+  `tests/test_nfl_weather.py` and `tests/test_nfl_fetch_odds_close.py`.
+
+## Open — needs a look with real slate data (cloud sandbox has no `data/`)
+- `reports/NFL/2026-09-27_Signal_Scorecard.md` grades 102 signals vs the player average but
+  only **2** vs a consensus line, and `scorecard.py` calls the line grade "the
+  betting-relevant grade". Worth running `scripts/nfl_signal_scorecard.py --date 2026-09-27`
+  on the box with `data/NFL/normalized/nfl_calibrated_props_2026-09-27.json` present and
+  checking why `scorecard.consensus_lines` misses. Two candidates, both unproven here:
+  `consensus_lines` keys on `(team, name, market)` and requires exact team equality, while
+  the codebase's other signal↔prop join (`matchup._names_match`) deliberately skips the team
+  check when either side is blank (`props.extract_player_props` can leave `team=None`); and
+  it reads `p.get("scope", "full_game") != "full_game"`, which rejects a row whose `scope`
+  key is present but `None`/`""` — everywhere else (`calibration.py`, `pipeline.py`,
+  `export_nfl_extra_pack.py`) treats those as full game.
+
+## Environment note (cloud sandbox)
+- pypi is blocked by the network policy, so `structlog`, `sqlalchemy`, `pandas`, `openai`,
+  `anthropic`, `google-*`, `python-dateutil` cannot be installed: 48 test modules fail to
+  import. The runnable subset is green — 999 passed, 43 skipped, and all 51 reported
+  failures are `ModuleNotFoundError` from those same missing packages, not logic failures.
+  Full-suite verification still has to happen in CI or on the Windows box.
+
+## Pre-existing, not touched
+- `ruff check .` — 25 `F401` unused imports, all in `tests/` plus `append_feedback.py`,
+  `scratch.py`, `script.py`. `make lint-check` only lints changed files, so these stay out
+  of the gate.
+- `mypy outlier_scrapers` — 4 errors (unchanged baseline): three `float()`/`int()`-on-Optional
+  reports at `schema.py:256`, `probable_pitchers.py:95`, `game_totals.py:1045` that are each
+  already wrapped in `except (ValueError, TypeError)`, plus missing `types-python-dateutil`
+  stubs for `c_research.py`.
+
+---
+
 # Handoff — 2026-09-28 (claude)
 
 **Branch**: `claude/nifty-einstein-gbtl85` · **PR**: https://github.com/DaSilvaDub/outlier/pull/198 (merged master incl. #192, #196)

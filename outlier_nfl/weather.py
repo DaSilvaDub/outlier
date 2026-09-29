@@ -19,6 +19,7 @@ import logging
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
+from outlier_nfl.config import PROP_LONG_PASS
 from outlier_nfl.matchup import MatchupScript, PropSignal, _event_team_codes
 from outlier_nfl.tape_nflverse import fetch_bytes
 from outlier_nfl.utils import to_eastern_date
@@ -242,7 +243,7 @@ def weather_signals(
     ) + (" + rain" if "WEATHER_WET" in weather.tags else "")
     plan: list[tuple[str, str, str, float, str]] = [
         ("qb", "PASS_YDS", "UNDER", adj, confidence),
-        ("qb", "LONGEST_PASSING_COMPLETION", "UNDER", adj, confidence),
+        ("qb", PROP_LONG_PASS, "UNDER", adj, confidence),
         ("wr_deep", "REC_YDS", "UNDER", adj, confidence),
         ("wr_deep", "LONG_REC", "UNDER", adj, confidence),
         ("wr_slot", "REC_YDS", "UNDER", round(adj / 2, 2), "MEDIUM"),

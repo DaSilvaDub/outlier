@@ -108,7 +108,7 @@ ODDS_MARKET_TO_OUTLIER: dict[str, str] = dict(
         ("player_pass_interceptions", "INTERCEPTIONS_THROWN"),
         ("player_reception_longest", "LONG_REC"),
         ("player_rush_longest", "LONG_RUSH"),
-        ("player_pass_longest_completion", "LONGEST_PASSING_COMPLETION"),
+        ("player_pass_longest_completion", "LONG_PASS"),
         ("player_tds", "ANYTIME_TD"),  # over/under TD count; line usually 0.5
     )
 )
