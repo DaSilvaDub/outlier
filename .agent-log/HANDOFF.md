@@ -1,6 +1,9 @@
 # HANDOFF — 2026-09-30 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-40u1rb` · base `e09f399`
+**Branch**: `claude/inspiring-fermat-40u1rb` · **Last commit**: `55bcb4c` · base `e09f399`
+**PR**: https://github.com/DaSilvaDub/outlier/pull/203
+
+**Files touched**: `outlier_nfl/scorecard.py`, `tests/test_nfl_scorecard.py`
 
 ## Fixed — the scorecard consensus-line join (closes the open item from 2026-09-28)
 `outlier_nfl/scorecard.py`. The prior handoff flagged that
