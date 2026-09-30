@@ -1,3 +1,78 @@
+# HANDOFF — 2026-09-30 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-40u1rb` · base `e09f399`
+
+## Fixed — the scorecard consensus-line join (closes the open item from 2026-09-28)
+`outlier_nfl/scorecard.py`. The prior handoff flagged that
+`reports/NFL/2026-09-27_Signal_Scorecard.md` grades 102 signals vs the player average but
+only **2** vs a consensus line, and listed two unproven candidates. Both were tested:
+
+- **Team-code mismatch: ruled out.** `_team()` round-trips every nflverse abbreviation to the
+  same canonical code the props carry, legacy spellings included (`LA`→`LAR`, `WSH`→`WAS`,
+  `JAC`→`JAX`, `OAK`→`LV`, `SD`→`LAC`, `STL`→`LAR`). `normalize_team` returned `None` for none
+  of them, so nothing falls through to a raw code.
+- **Name-keying: ruled out.** `_name_key` is strictly *more* tolerant than
+  `matchup._names_match`, the join that does work — it collapses `D.K. Metcalf`/`DK Metcalf`,
+  which `_names_match` misses. Markets are aligned too (`PROP_REC_YARDS == "REC_YDS"`), and 39
+  `EFFICIENCY_COLD` `REC_YDS` signals got no line while 2 `REC_YDS` signals did, so the
+  failure was in the player/team key, not the market string.
+- **Blank prop team: confirmed and reproduced.** `team` is **not** in
+  `validate_player_prop_record`'s `required_fields`, so `extract_player_props` leaving `team`
+  unset (its `teamId` is neither a known code nor either of the event's two team ids) writes
+  `"team": null` straight into `nfl_calibrated_props_<date>.json`. `_team(None)` is `""`, so
+  the prop keys as `("", name, market)` and can never meet a signal keyed
+  `(team, name, market)`. Reproduced with real code: the signal keeps `hit_vs_avg` and
+  silently loses `line`/`hit_vs_line` — exactly the 102-vs-2 shape.
+  `matchup._names_match` already skips the team comparison when either side is blank, with a
+  comment giving this same reason; `unambiguous_lines()` now applies that rule to the
+  scorecard join. It is strictly additive — it can only turn a `None` line into a line, never
+  change one that already resolved — and it refuses to guess when two teams carry the same
+  player name and market at different lines.
+
+Also in the same predicate: `scope` was read as `p.get("scope", "full_game") != "full_game"`,
+which drops a row whose `scope` key is present but `None`/`""`. `pipeline.py:413` and
+`scripts/export_nfl_extra_pack.py:156` both treat those as full game. Latent today
+(`detect_scope` always returns a non-empty string), so this is hardening, not the cause.
+
+Regression tests in `tests/test_nfl_scorecard.py` (4 added); 3 of them fail on the pre-fix
+tree, the 4th pins exact-team precedence over the fallback.
+
+## Still needs the Windows box
+The **production** cause of the 2026-09-27 miss is still unconfirmed — this fixes a proven,
+reachable mechanism that reproduces the symptom, but the slate file itself is not in the
+sandbox (`data/` does not exist here). To confirm and to see the fix's effect:
+
+```powershell
+python -c "import json;r=json.load(open(r'data\NFL\normalized\nfl_calibrated_props_2026-09-27.json'))['records'];c=[p for p in r if p.get('is_consensus_line')];print('records',len(r),'consensus',len(c),'blank team',sum(1 for p in c if not p.get('team')))"
+python scripts\nfl_signal_scorecard.py --date 2026-09-27
+```
+
+A high "blank team" count confirms it. If instead `consensus` is near zero, the cause is
+upstream in `select_consensus_player_props` and needs a separate look.
+Note the run rewrites this date's rows in `data/NFL/scorecard/ledger.jsonl` (idempotent per
+date), so re-running is safe and will backfill the line grades.
+
+## Environment note (cloud sandbox) — unchanged from 2026-09-28
+pypi is blocked by the network policy (403 both direct and via the proxy), so `structlog`,
+`sqlalchemy`, `psycopg2`, `openai`, `anthropic`, `google-genai` cannot be installed. The
+toolchain came from the local `uv` cache instead (`pytest` 9.0.2, `ruff` 0.15.8, `mypy`
+1.19.1). Runnable subset: **1003 passed, 43 skipped, 51 failed — all 51 are
+`ModuleNotFoundError`** for those packages (47 structlog, 3 google, 1 sqlalchemy), zero logic
+failures. All 391 NFL tests pass. Full-suite verification still has to happen in CI or on the
+Windows box. `mypy>=2.3.1` (the requirements floor) is not in the cache either; 1.19.1 is
+what ran, and its `float()`-on-Optional reports are the documented false positives.
+
+## Pre-existing, not touched
+- `ruff check .` — 25 `F401` unused imports in `tests/` plus `append_feedback.py`,
+  `scratch.py`, `script.py`. `make lint-check` only lints changed files, so these stay out of
+  the gate; it passes clean on this branch's two files.
+- `mypy` — 4 errors in `outlier_scrapers`, 8 in `outlier_nfl`, all unchanged baseline. Each
+  `float()`/`int()`-on-Optional site was read and is already guarded by an `is not None` check
+  or `except (TypeError, ValueError)`; the rest are `MutableMapping` vs `dict` invariance in
+  `enrich_close.py` and missing `types-python-dateutil` stubs.
+
+---
+
 # HANDOFF — 2026-09-28 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-xi4ctd` · **Last commit**: `83b1ac4`

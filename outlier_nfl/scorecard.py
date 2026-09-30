@@ -90,7 +90,7 @@ def consensus_lines(props: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, 
     """
     found: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     for p in props:
-        if p.get("position") != "OVER" or p.get("scope", "full_game") != "full_game":
+        if p.get("position") != "OVER" or p.get("scope") not in (None, "", "full_game"):
             continue
         if not p.get("is_consensus_line"):
             continue
@@ -105,6 +105,31 @@ def consensus_lines(props: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, 
         mid = len(values) // 2
         out[key] = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
     return out
+
+
+def unambiguous_lines(
+    lines: Mapping[tuple[str, str, str], float],
+) -> dict[tuple[str, str], float]:
+    """(player key, market) -> line, for names carrying exactly one line this slate.
+
+    ``props.extract_player_props`` leaves ``team`` unset whenever the feed's
+    ``teamId`` is neither a known code nor one of the event's two team ids, and
+    ``team`` is not a required field in ``validate_player_prop_record``, so a
+    ``"team": null`` prop reaches the normalized file. It keys as
+    ``("", name, market)`` and can never meet a signal keyed
+    ``(team, name, market)``: the signal keeps its average grade and silently
+    loses its line grade. ``matchup._names_match`` skips the team comparison
+    when either side is blank for exactly this reason; this is the same rule for
+    the scorecard join.
+
+    Only unambiguous names are exposed. Two teams fielding the same player name
+    and market would make grading against either line a coin flip on which
+    player it credits, so those are dropped rather than guessed.
+    """
+    by_name: dict[tuple[str, str], set[float]] = defaultdict(set)
+    for (_team_code, name, market), line in lines.items():
+        by_name[(name, market)].add(line)
+    return {name_market: v.pop() for name_market, v in by_name.items() if len(v) == 1}
 
 
 def grade_signals(
@@ -130,6 +155,7 @@ def grade_signals(
         elif wk < week:
             history[key].append(r)
     lines = consensus_lines(props)
+    lines_by_name = unambiguous_lines(lines)
 
     graded: list[GradedSignal] = []
     skipped: list[dict[str, Any]] = []
@@ -161,6 +187,10 @@ def grade_signals(
                 prior_avg = round(sum(_actual(r, market) or 0.0 for r in prior) / len(prior), 2)
                 hit_avg = _direction_hit(side, actual, prior_avg)
             line = lines.get((*key, market))
+            if line is None:
+                # Either side may carry a blank team; fall back to the name when
+                # the slate leaves no doubt which line is meant.
+                line = lines_by_name.get((key[1], market))
             hit_line = _direction_hit(side, actual, line) if line is not None else None
             if hit_avg is None and hit_line is None and prior_avg is None:
                 skipped.append({**base, "reason": "fewer than 2 prior games and no line"})

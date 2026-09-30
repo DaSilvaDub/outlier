@@ -148,3 +148,67 @@ def test_slate_records_and_report_paths(tmp_path) -> None:
         load_slate_records(tmp_path, "../x", slate)
     out = write_report(tmp_path / "reports", slate, "# ok")
     assert out.name == "2026-09-27_Signal_Scorecard.md" and out.read_text() == "# ok"
+
+
+# `team` is not in validate_player_prop_record's required_fields, so
+# extract_player_props writing `team=None` reaches the normalized props file.
+# Such a prop keys as ("", name, market) and can never meet a signal keyed
+# (team, name, market): before the name fallback the signal kept its average
+# grade and silently lost its line grade.
+_BLANK_TEAM_SCRIPTS = [{"event_id": "E1", "prop_signals": [
+    {"event_id": "E1", "player_name": "Darnell Mooney", "team": "ATL",
+     "market": "REC_YDS", "side": "UNDER", "tag": "EFFICIENCY_HOT"},
+]}]
+_BLANK_TEAM_ROWS = [
+    _row("Darnell Mooney", "ATL", 1, receiving_yards=60),
+    _row("Darnell Mooney", "ATL", 2, receiving_yards=55),
+    _row("Darnell Mooney", "ATL", 3, receiving_yards=17),
+]
+
+
+def _mooney_prop(**over: object) -> dict[str, object]:
+    return {"event_id": "E1", "player_name": "Darnell Mooney", "market": "REC_YDS",
+            "position": "OVER", "line": 42.5, "is_consensus_line": True,
+            "scope": "full_game", "team": None, **over}
+
+
+def _only(props: list[dict[str, object]]) -> sc.GradedSignal:
+    graded, _ = sc.grade_signals("2026-09-27", 3, _BLANK_TEAM_SCRIPTS, _BLANK_TEAM_ROWS, props)
+    assert len(graded) == 1
+    return graded[0]
+
+
+def test_blank_prop_team_still_grades_against_its_line() -> None:
+    blank = _only([_mooney_prop()])
+    assert blank.line == 42.5 and blank.hit_vs_line is True
+    # Identical to the grade the same prop gets once the feed does resolve a team.
+    named = _only([_mooney_prop(team="ATL")])
+    assert (named.line, named.hit_vs_line) == (blank.line, blank.hit_vs_line)
+    # The average grade never depended on the line and must be unchanged either way.
+    assert blank.hit_vs_avg is True and named.hit_vs_avg is True
+
+
+def test_same_name_two_teams_is_never_guessed() -> None:
+    # Two different players share a name and market at different lines: neither
+    # line may be credited to the signal's player.
+    ambiguous = _only([_mooney_prop(), _mooney_prop(team="CHI", line=61.5)])
+    assert ambiguous.line is None and ambiguous.hit_vs_line is None
+    assert ambiguous.hit_vs_avg is True  # average grade survives the dropped line
+    # Same name on two teams at the same line is not ambiguous: grading is identical.
+    agreeing = _only([_mooney_prop(), _mooney_prop(team="CHI")])
+    assert agreeing.line == 42.5
+
+
+def test_exact_team_match_wins_over_the_name_fallback() -> None:
+    # The signal's own team carries 42.5; another team's same-named prop sits at
+    # 61.5. The exact key must win, so hit_vs_line reflects 42.5, not 61.5.
+    graded = _only([_mooney_prop(team="ATL"), _mooney_prop(team="CHI", line=61.5)])
+    assert graded.line == 42.5
+
+
+def test_blank_scope_counts_as_full_game() -> None:
+    # pipeline.py and scripts/export_nfl_extra_pack.py both read scope
+    # None/"" as full game; consensus_lines must not drop those rows.
+    for scope in (None, "", "full_game"):
+        assert _only([_mooney_prop(team="ATL", scope=scope)]).line == 42.5
+    assert _only([_mooney_prop(team="ATL", scope="first_quarter")]).line is None
