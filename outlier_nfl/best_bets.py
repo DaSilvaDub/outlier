@@ -10,7 +10,8 @@ and the probability change it contributed:
                      vacated-volume signals (VACATED_TARGETS/CARRIES).
 3. ``matchup``       opponent play-by-play EPA allowed for the prop's unit, the
                      matchup-script mismatch signals, positional sub-grades
-                     (opponent pass-rush grade for QBs, NGS separation for receivers).
+                     (opponent pass-rush grade for QBs, via the pass-suppress signal; NGS
+                     receiver separation vs league, a capped adjustment).
 4. ``injury_weather`` official injury report (Out/Doubtful), kickoff forecast and
                      weather signals; only a game-day refresh counts as current.
 5. ``market``        intraweek price history (``outlier_nfl.snapshots``): first-seen
@@ -65,6 +66,8 @@ SIGNAL_P_PER_VOLUME = 0.25  # a +10% volume signal moves P(hit) by 2.5 pts
 EPA_P_PER_Z = 0.01  # one league SD of EPA allowed moves P(hit) by 1 pt
 EPA_SHRINK_WEEKS = 2.0  # EPA z shrunk by n / (n + 2) weeks of defense data
 CONTRADICT_DELTA = -0.015  # a pillar pulling at least this hard against the side
+SEPARATION_P_PER_Z = 0.005  # one SD of receiver separation moves P(hit) by 0.5 pt
+SEPARATION_SHRINK_WEEKS = 2.0
 ROLE_COLLAPSE = 0.5  # last week's volume under half the player's average
 
 MOVE_LINE_STEP = 0.5
@@ -107,6 +110,14 @@ DEFENSE_EPA_KEY: dict[str, str] = dict(
 
 OPPORTUNITY_TAGS = frozenset({"VACATED_TARGETS", "VACATED_CARRIES"})
 HISTORICAL_TAGS = frozenset({"EFFICIENCY_HOT", "EFFICIENCY_COLD"})
+
+
+def _epa_weight(row: Mapping[str, Any], key: str) -> float:
+    plays = float(row.get("plays") or 0)
+    pass_rate = _f(row.get("pass_rate"))
+    if key == "epa_per_play" or pass_rate is None:
+        return plays
+    return plays * (pass_rate if key == "pass_epa_per_play" else 1.0 - pass_rate)
 
 
 def market_family(market: str) -> str | None:
@@ -211,7 +222,7 @@ class _Sources:
             elif source == "pbp" and rec.get("kind") == "team_defense":
                 defense[str(rec.get("team") or "")].append(rec)
         self.defense = self._defense_profiles(defense)
-        self.separation_median = self._separation_median()
+        self.separation = self._separation_profiles()
 
         self.usage: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for p in inputs.usage_players:
@@ -222,6 +233,7 @@ class _Sources:
             for team, names in (inputs.inactive_by_team or {}).items()
         }
 
+        self.ngs_misses: set[str] = set()
         self.matched_signals: dict[str, list[PropSignal]] = defaultdict(list)
         self.signals: dict[str, list[PropSignal]] = defaultdict(list)
         for script in inputs.scripts:
@@ -241,11 +253,13 @@ class _Sources:
         for team, rows in by_team.items():
             prof: dict[str, Any] = {"weeks": len(rows), "plays": sum(int(r.get("plays") or 0) for r in rows)}
             for key in ("pass_epa_per_play", "rush_epa_per_play", "epa_per_play"):
-                pairs: list[tuple[float, int]] = []
+                # Pass/rush EPA are per pass/rush play, so weight each week by that
+                # week's pass/rush plays, not by all plays.
+                pairs: list[tuple[float, float]] = []
                 for r in rows:
-                    value, plays = _f(r.get(key)), int(r.get("plays") or 0)
-                    if value is not None and plays > 0:
-                        pairs.append((value, plays))
+                    value, weight = _f(r.get(key)), _epa_weight(r, key)
+                    if value is not None and weight > 0:
+                        pairs.append((value, weight))
                 total = sum(n for _, n in pairs)
                 prof[key] = round(sum(v * n for v, n in pairs) / total, 4) if total else None
             profiles[team] = prof
@@ -259,15 +273,18 @@ class _Sources:
                     prof[f"{key}_z"] = round((prof[key] - mu) / sd, 3)
         return profiles
 
-    def _separation_median(self) -> float | None:
-        values = [
-            _f(r.get("avg_separation"))
-            for (_, kind), rows in self.ngs.items()
-            if kind == "receiving"
-            for r in rows
-        ]
-        clean = [v for v in values if v is not None]
-        return median(clean) if clean else None
+    def _separation_profiles(self) -> dict[str, Any]:
+        """League mean/SD of per-receiver average NGS separation (weeks pooled per player)."""
+        means = []
+        for (_, kind), rows in self.ngs.items():
+            if kind != "receiving":
+                continue
+            values = [v for v in (_f(r.get("avg_separation")) for r in rows) if v is not None]
+            if values:
+                means.append(mean(values))
+        if len(means) < 4:
+            return {}
+        return {"mean": mean(means), "sd": pstdev(means), "median": median(means), "n": len(means)}
 
     def ngs_rows(self, player: str, kind: str, team: str | None) -> list[dict[str, Any]]:
         rows = self.ngs.get((_name_key(player), kind), [])
@@ -371,6 +388,8 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
             if vol is not None:
                 weekly[int(r.get("week") or 0)] += vol
                 src.used["ngs"].add((_name_key(player), kind, r.get("week")))
+    if _ngs_kinds(market) and not weekly:
+        src.ngs_misses.add(player)
     if weekly:
         weeks = sorted(weekly)
         avg = mean(weekly.values())
@@ -429,12 +448,22 @@ def _matchup(
         for grade in ("pass_rush", "pressure_rate"):
             if opp_tape.get(grade) is not None:
                 pillar.evidence[f"opp_{grade}"] = opp_tape.get(grade)
+        if opp_tape.get("pass_rush") is not None:
+            pillar.evidence["opp_pressure_effect"] = "applied via MATCHUP_PASS_SUPPRESS signal"
     if fam == "rec":
         rows = src.ngs_rows(str(prop.get("player_name") or ""), "receiving", team)
         seps = [v for v in (_f(r.get("avg_separation")) for r in rows) if v is not None]
-        if seps and src.separation_median is not None:
-            pillar.evidence["ngs_avg_separation"] = round(mean(seps), 2)
-            pillar.evidence["league_median_separation"] = round(src.separation_median, 2)
+        league = src.separation
+        if seps and league and league["sd"] > 0:
+            z = (mean(seps) - league["mean"]) / league["sd"]
+            shrunk = z * len(seps) / (len(seps) + SEPARATION_SHRINK_WEEKS)
+            sep_delta = shrunk * SEPARATION_P_PER_Z * _side_sign(position)
+            pillar.delta += sep_delta
+            pillar.evidence.update(
+                {"ngs_avg_separation": round(mean(seps), 2),
+                 "league_median_separation": round(league["median"], 2),
+                 "separation_z": round(z, 3), "separation_delta": round(sep_delta, 4)}
+            )
     pillar.evidence["ol_vs_dl_grade"] = "not available (no offensive-line grade source)"
 
     for sig in src.matched_signals.get("matchup", []):
@@ -743,6 +772,16 @@ def _best_book(prop: Mapping[str, Any]) -> str | None:
 VERDICT_ORDER = {VALIDATED: 0, PROVISIONAL: 1, REJECTED: 2}
 
 
+def trace_settings() -> dict[str, Any]:
+    return {
+        "pillar_cap": PILLAR_CAP, "total_cap": TOTAL_CAP,
+        "signal_p_per_volume": SIGNAL_P_PER_VOLUME, "epa_p_per_z": EPA_P_PER_Z,
+        "separation_p_per_z": SEPARATION_P_PER_Z,
+        "quarter_kelly": QUARTER_KELLY, "max_stake": MAX_STAKE,
+        "note": "deltas are uncalibrated; tune against nfl_signal_scorecard results",
+    }
+
+
 def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
     """Trace and rank every candidate; returns the ``nfl_best_bets`` payload."""
     src = _Sources(inputs)
@@ -766,12 +805,7 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         "run_date": inputs.run_date,
         "candidates": len(picks),
         "counts": counts,
-        "settings": {
-            "pillar_cap": PILLAR_CAP, "total_cap": TOTAL_CAP,
-            "signal_p_per_volume": SIGNAL_P_PER_VOLUME, "epa_p_per_z": EPA_P_PER_Z,
-            "quarter_kelly": QUARTER_KELLY, "max_stake": MAX_STAKE,
-            "note": "deltas are uncalibrated; tune against nfl_signal_scorecard results",
-        },
+        "settings": trace_settings(),
         "picks": picks,
         "audit": _audit(inputs, src, picks),
     }
@@ -800,11 +834,8 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
                  "player_markets": sorted({str(p.get("market")) for p in player_props})}
             )
     candidate_players = {_name_key(p["player_name"]) for p in picks}
-    ngs_players = {k for (k, _) in src.ngs}
-    no_ngs = sorted(
-        {p["player_name"] for p in picks
-         if market_family(str(p["market"])) and _name_key(p["player_name"]) not in ngs_players}
-    )
+    # Players whose market's NGS kind (receiving/rushing/passing) found no rows.
+    no_ngs = sorted(src.ngs_misses)
     events = {str(p.get("event_id")) for p in picks}
     opponents = {p.get("opponent") for p in picks if p.get("opponent")}
     return {
@@ -915,9 +946,14 @@ def merge_payloads(payloads: Iterable[Mapping[str, Any]], run_date: str) -> dict
     """Combine per-slate-date payloads into one weekly ranking."""
     picks: list[dict[str, Any]] = []
     audits: list[Mapping[str, Any]] = []
+    settings: list[Any] = []
     for payload in payloads:
         picks.extend(dict(p) for p in payload.get("picks", []))
         audits.append(payload.get("audit", {}))
+        if payload.get("settings") not in settings:
+            settings.append(payload.get("settings"))
+    if len(settings) > 1:
+        raise ValueError(f"slate cards were traced with different settings: {settings}")
     picks.sort(key=_rank_key)
     for rank, pick in enumerate(picks, 1):
         pick["rank"] = rank
@@ -946,6 +982,7 @@ def merge_payloads(payloads: Iterable[Mapping[str, Any]], run_date: str) -> dict
         "run_date": run_date,
         "candidates": len(picks),
         "counts": {v: sum(1 for p in picks if p["verdict"] == v) for v in VERDICT_ORDER},
+        "settings": settings[0] if settings else trace_settings(),
         "picks": picks,
         "audit": merged_audit,
     }

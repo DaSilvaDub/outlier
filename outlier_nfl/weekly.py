@@ -67,10 +67,14 @@ def run_week(
         summary = pipeline.run(
             date=slate, offline_fixtures_dir=offline_fixtures_dir, write_latest=False
         )
+        if summary.get("best_bets_error"):
+            raise RuntimeError(f"{slate}: {summary['best_bets_error']}")
         summaries[slate] = summary.get("best_bets_counts", {})
         payload = safe_read_json(pipeline.normalized_dir / f"nfl_best_bets_{slate}.json")
-        if isinstance(payload, dict):
-            payloads.append(payload)
+        # Merge only the card this run wrote; an older file must never pass as a refresh.
+        if not isinstance(payload, dict) or payload.get("updated_at") != summary.get("timestamp_utc"):
+            raise RuntimeError(f"{slate}: best-bets card missing or not from this run")
+        payloads.append(payload)
 
     merged = merge_payloads(payloads, run_date=today.isoformat())
     merged.update({"week_start": week_start(today).isoformat(), "slate_dates": dates})

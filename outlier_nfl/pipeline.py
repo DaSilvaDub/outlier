@@ -591,7 +591,8 @@ class NflPipeline:
             "matchup_scripts_count": len(matchup_scripts),
             "matchup_tagged_props_count": len(matchup_prop_records),
             "best_bets_counts": best_bets.get("counts", {}),
-            "errors": errors,
+            "best_bets_error": best_bets.get("error"),
+            "errors": errors + ([best_bets["error"]] if best_bets.get("error") else []),
         }
 
         # Optional Game Script Generation — one markdown file per matchup
@@ -665,6 +666,7 @@ class NflPipeline:
         write_latest: bool,
     ) -> dict[str, Any]:
         """Snapshot this run's prices, then trace every candidate through all six pillars."""
+        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
         try:
             append_snapshot(self.nfl_dir, target_date, props_dict, now_utc)
             movement = movement_index(load_snapshots(snapshot_path(self.nfl_dir, target_date)))
@@ -681,11 +683,13 @@ class NflPipeline:
                     movement=movement,
                 )
             )
-        except Exception as exc:  # the trace must never block the slate's data outputs
-            logger.warning("Best-bets trace skipped: %s", exc)
-            return {}
+        except Exception as exc:  # the slate's data outputs above are already written
+            logger.error("Best-bets trace failed: %s", exc)
+            # Never leave an older card behind for a reader to mistake for this run's.
+            for stale in (f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"):
+                (self.normalized_dir / stale).unlink(missing_ok=True)
+            return {"error": f"best-bets trace failed: {exc}"}
         payload.update({"date": target_date, "window": window, "updated_at": now_utc})
-        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
         if write_latest:
             safe_write_json(self.normalized_dir / "nfl_best_bets_latest.json", payload)
         safe_write_json(self.normalized_dir / f"nfl_best_bets_{suffix}.json", payload)
@@ -698,13 +702,16 @@ class NflPipeline:
 
 
 def load_injury_report(nfl_dir: Path | str) -> dict[str, list[str]] | None:
-    """Injury-report inactives, or None when the tape carries no ``inactive`` block.
+    """Injury-report inactives, or None unless the tape confirms the report was fetched.
 
-    Distinguishes "report loaded, nobody out" ({}) from "no report" (None) so the
-    best-bets trace never treats a missing report as a clean one.
+    Distinguishes "report loaded, nobody out" ({}) from "no report / fetch failed"
+    (None) so the best-bets trace never treats a missing report as a clean one.
+    Tapes written before the ``injury_report_loaded`` marker existed read as None.
     """
     raw = safe_read_json(Path(nfl_dir) / "tape" / "prior_week.json", default=None)
-    if not isinstance(raw, dict) or not isinstance(raw.get("inactive"), dict):
+    if not isinstance(raw, dict) or raw.get("injury_report_loaded") is not True:
+        return None
+    if not isinstance(raw.get("inactive"), dict):
         return None
     return load_tape_inactives(nfl_dir)
 

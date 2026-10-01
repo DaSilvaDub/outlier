@@ -129,6 +129,7 @@ def test_auto_roles_fetch_failure_keeps_existing_roles(monkeypatch: pytest.Monke
     assert payload["teams"]["LAR"]["qb"] == "Manual QB"
     assert "pass_rush" not in payload["teams"]["LAR"] and payload["grades_source"] is None
     assert payload["inactive"] == {} and payload["roles_source"] == "existing tape"
+    assert payload["injury_report_loaded"] is False  # failed fetch is not an empty report
 
 
 def test_pipeline_maps_inactives_to_both_teams_of_each_event(tmp_path: Path) -> None:
@@ -257,6 +258,7 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
     assert written["teams"]["LAR"]["games"] == 2
     assert written["teams"]["LAR"]["wr_deep"] == "Davante Adams"  # Nacua Doubtful
     assert written["inactive"] == {"LAR": ["Puka Nacua"]}
+    assert written["injury_report_loaded"] is True
     assert written["roles_source"].startswith("nflverse")
     assert written["teams"]["LAR"]["qb_grade"] == 82.0  # Stafford QBR 60 vs Winston 20
     assert "qb_grade" not in written["teams"]["NYG"]  # no listed starter -> ungraded

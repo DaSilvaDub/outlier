@@ -73,8 +73,9 @@ def _external():
     for week, targets in ((1, 9), (2, 10), (3, 8)):
         records.append({"source": "ngs", "kind": "receiving", "week": week, "player": "A.J. Brown",
                         "team": "PHI", "targets": targets, "avg_separation": 3.4})
-        records.append({"source": "ngs", "kind": "receiving", "week": week, "player": "Other WR",
-                        "team": "NYG", "targets": 5, "avg_separation": 2.6})
+        for name, sep in (("Other WR", 2.6), ("Third WR", 2.9), ("Fourth WR", 3.0)):
+            records.append({"source": "ngs", "kind": "receiving", "week": week, "player": name,
+                            "team": "NYG", "targets": 5, "avg_separation": sep})
     # DAL leaks pass EPA; other teams spread around zero.
     for team, epa in (("DAL", 0.25), ("NYG", 0.0), ("SF", -0.1), ("KC", -0.05), ("PHI", 0.02)):
         for week in (1, 2, 3):
@@ -132,6 +133,7 @@ def test_fully_traced_pick_validates_on_game_day():
     assert pick["pillars"]["opportunity"]["evidence"]["usage_target_share"] == 0.27
     assert pick["pillars"]["matchup"]["evidence"]["opp_epa_z"] > 0
     assert pick["pillars"]["matchup"]["evidence"]["ngs_avg_separation"] == 3.4
+    assert pick["pillars"]["matchup"]["evidence"]["separation_delta"] > 0  # applied, not just shown
     assert pick["pillars"]["injury_weather"]["evidence"]["opponent_inactive"] == ["Trevon Diggs"]
     assert pick["pillars"]["price"]["evidence"]["devig"] == "two_sided"
     assert pick["final_p"] > pick["base_p"]  # leaky DAL pass D + market moving toward OVER
@@ -270,6 +272,33 @@ def test_merge_payloads_reranks_across_dates():
     merged = merge_payloads([b, a], run_date=GAME_DAY)
     assert merged["picks"][0]["verdict"] == VALIDATED
     assert [p["rank"] for p in merged["picks"]] == list(range(1, len(merged["picks"]) + 1))
+    assert merged["settings"] == a["settings"]
+    b["settings"] = {**b["settings"], "pillar_cap": 0.05}
+    with pytest.raises(ValueError):
+        merge_payloads([a, b], run_date=GAME_DAY)
+
+
+def test_epa_is_weighted_by_pass_plays_not_all_plays():
+    from outlier_nfl.best_bets import _Sources
+
+    rows = [
+        {"source": "pbp", "kind": "team_defense", "team": "DAL", "week": 1, "plays": 60,
+         "pass_rate": 0.9, "pass_epa_per_play": 0.4, "rush_epa_per_play": 0.0, "epa_per_play": 0.1},
+        {"source": "pbp", "kind": "team_defense", "team": "DAL", "week": 2, "plays": 60,
+         "pass_rate": 0.1, "pass_epa_per_play": -0.4, "rush_epa_per_play": 0.0, "epa_per_play": 0.1},
+    ]
+    src = _Sources(TraceInputs(props=[], run_date=GAME_DAY, external_metrics=rows))
+    # 54 pass plays at +0.4 and 6 at -0.4: (54*0.4 - 6*0.4) / 60 = 0.32 (all-plays weighting gives 0.0)
+    assert src.defense["DAL"]["pass_epa_per_play"] == pytest.approx(0.32)
+
+
+def test_ngs_audit_checks_the_markets_own_kind():
+    ext = [r for r in _external() if not (r.get("source") == "ngs" and r.get("player") == "A.J. Brown")]
+    ext.append({"source": "ngs", "kind": "rushing", "week": 1, "player": "A.J. Brown", "team": "PHI",
+                "rush_attempts": 1})
+    payload = build_best_bets(_inputs(external_metrics=ext, usage_players=[]))
+    assert payload["audit"]["candidates_without_ngs"] == ["A.J. Brown"]
+    assert _pick(payload)["pillars"]["opportunity"]["status"] == MISSING
 
 
 # --- snapshots --------------------------------------------------------------
@@ -317,7 +346,15 @@ def test_load_injury_report_distinguishes_missing_from_empty(tmp_path):
     assert load_injury_report(tmp_path) is None
     tape = tmp_path / "tape"
     tape.mkdir()
-    (tape / "prior_week.json").write_text(json.dumps({"teams": {}, "inactive": {}}), encoding="utf-8")
+    report = tape / "prior_week.json"
+    # A tape whose injury fetch failed still carries an empty "inactive" block.
+    report.write_text(json.dumps({"teams": {}, "inactive": {}, "injury_report_loaded": False}),
+                      encoding="utf-8")
+    assert load_injury_report(tmp_path) is None
+    report.write_text(json.dumps({"teams": {}, "inactive": {}}), encoding="utf-8")  # pre-marker tape
+    assert load_injury_report(tmp_path) is None
+    report.write_text(json.dumps({"teams": {}, "inactive": {}, "injury_report_loaded": True}),
+                      encoding="utf-8")
     assert load_injury_report(tmp_path) == {}
 
 
@@ -335,3 +372,26 @@ def test_pipeline_run_writes_snapshot_and_traced_card(tmp_path):
         assert pick["verdict"] != VALIDATED  # one snapshot: market movement is never verified
     snapshots = list((tmp_path / "NFL" / "snapshots").glob("nfl_prop_snapshots_*.jsonl"))
     assert len(snapshots) == 1
+
+
+def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeypatch):
+    import outlier_nfl.pipeline as pipeline_mod
+    from outlier_nfl.weekly import run_week
+
+    normalized = tmp_path / "NFL" / "normalized"
+    normalized.mkdir(parents=True)
+    stale = normalized / "nfl_best_bets_2026-09-13.json"
+    stale.write_text(json.dumps({"picks": [], "updated_at": "old"}), encoding="utf-8")
+
+    def boom(_inputs):
+        raise RuntimeError("trace exploded")
+
+    monkeypatch.setattr(pipeline_mod, "build_best_bets", boom)
+    pipeline = NflPipeline(data_dir=tmp_path)
+    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
+    assert "trace exploded" in summary["best_bets_error"]
+    assert not stale.exists()
+    events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
+    with pytest.raises(RuntimeError, match="trace exploded"):
+        run_week(pipeline, date(2026, 9, 13), events=events, offline_fixtures_dir=FIXTURES_DIR,
+                 reports_dir=tmp_path / "reports")
