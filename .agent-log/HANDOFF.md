@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-01 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-j81j64` · **Last commit**: `9191d87` · **PR**: https://github.com/DaSilvaDub/outlier/pull/205
+**Branch**: `claude/inspiring-fermat-j81j64` · **Last commit**: `176186a` · **PR**: https://github.com/DaSilvaDub/outlier/pull/205
 
 ## Fixed — closes the open `hit_vs_line` item from the 2026-09-28 handoff
 Both candidate causes listed there were real; both were in `outlier_nfl/scorecard.py`.
@@ -19,8 +19,29 @@ Both candidate causes listed there were real; both were in `outlier_nfl/scorecar
   across teams stays unmatched rather than grading the wrong player's line.
 
 3 regression tests in `tests/test_nfl_scorecard.py`, each confirmed to fail against the
-unfixed code. Full runnable suite 1248 passed / 43 skipped (was 1245; delta = the 3 new
-tests). ruff clean; mypy unchanged at 8 pre-existing narrowing false-positives.
+unfixed code.
+
+## Then fixed again — Copilot review finding on #205 (`176186a`), correct and confirmed
+The blank-team fallback in `9191d87` searched the **whole slate**, so an unresolved-team prop
+for one game's "Mike Williams" could hand its line to a different game's same-named player.
+The joins that commit cited as precedent are the proof it was wrong: `best_bets.py:316`
+selects signals by `prop.event_id` and `matchup.py:712-715` works inside one game script, so
+both reach `_names_match`'s blank-team check *already scoped to one game*. The original
+collision test missed it because both fixture entries carried a team.
+
+- `consensus_lines` now keys on `(event_id, team, player, market)` — no callers outside the
+  module, so the wider key is contained.
+- `lookup_consensus_line` takes the signal's `event_id` and falls back only within it. Two
+  teams carrying the name in that game stay unmatched unless the signal's team pins it
+  exactly. A blank prop `event_id` counts as unknown, not a different game, so a
+  still-matching team keeps working (degenerate records only — the real pipeline always sets
+  it; it cannot reintroduce the cross-player hazard, since two teams always give two entries
+  and that returns None).
+
+5 regression tests total; the 2 new ones fail when the event filter is removed. Full runnable
+suite 1250 passed / 43 skipped (baseline 1245; delta = the 5 new tests), failures and
+collection errors unchanged at 67/29. ruff clean; mypy unchanged at 8 pre-existing narrowing
+false-positives. Review thread replied to and resolved.
 
 ## Open — needs the Windows box (no `data/` in the cloud sandbox)
 - The 2 rows that *did* get a line in `reports/NFL/2026-09-27_Signal_Scorecard.md` look like
