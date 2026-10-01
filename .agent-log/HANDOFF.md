@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-01 (Claude, NFL traced best bets)
 
-**Branch**: `claude/festive-sagan-n0hlpu`
+**Branch**: `claude/festive-sagan-n0hlpu` · **Last code commit**: `4757b72` · **PR**: https://github.com/DaSilvaDub/outlier/pull/204
 
 ## Built
 - `outlier_nfl/best_bets.py` — six-pillar trace (historical, opportunity, matchup,
