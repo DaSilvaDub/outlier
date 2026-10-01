@@ -443,19 +443,28 @@ def _advanced_grades(
 
 def _auto_roles(
     season: int, before: date | None, game_rows: list[dict[str, str]]
-) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]]]:
-    """Depth-chart roles and inactives; empty on any fetch/parse failure."""
+) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None]:
+    """Depth-chart roles and inactives.
+
+    Inactives are None when the injury report could not be fetched, so callers
+    never mistake a failed fetch for a report with nobody out. Roles are empty
+    on any depth-chart failure.
+    """
     try:
-        injuries = inactive_players(
+        injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
             fetch_csv(INJURIES_URL.format(season=season)), slate_week(game_rows, season, before)
         )
+    except Exception as exc:  # the trace reports the injury pillar as MISSING
+        logger.warning("Injury report unavailable: %s", exc)
+        injuries = None
+    try:
         roles = depth_chart_roles(
-            fetch_csv(DEPTH_CHART_URL.format(season=season)), injuries, as_of=before
+            fetch_csv(DEPTH_CHART_URL.format(season=season)), injuries or {}, as_of=before
         )
-        return roles, injuries
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
-        return {}, {}
+        roles = {}
+    return roles, injuries
 
 
 def build_tape_payload(
@@ -484,6 +493,8 @@ def build_tape_payload(
         game_rows = fetch_csv(SCHEDULES_URL)
     if auto_roles and depth_roles is None and inactive is None:
         depth_roles, inactive = _auto_roles(season, before, game_rows)
+    # Only an injury report that was actually fetched (or supplied) counts as loaded.
+    injury_report_loaded = inactive is not None
     merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
     for team, team_roles in (depth_roles or {}).items():
         merged.setdefault(team, {}).update(team_roles)
@@ -508,6 +519,7 @@ def build_tape_payload(
         "roles_source": "nflverse depth_charts + injuries" if depth_roles else "existing tape",
         "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
+        "injury_report_loaded": injury_report_loaded,
         "teams": teams,
     }
 
