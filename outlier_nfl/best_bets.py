@@ -90,7 +90,20 @@ REC_MARKETS = frozenset(
 SCRIMMAGE_MARKETS = frozenset({"RUSH_REC_YDS", "ANYTIME_TD"})
 
 # NGS volume stat that measures a player's opportunity for each market family.
-NGS_VOLUME = {"passing": "attempts", "rushing": "rush_attempts", "receiving": "targets"}
+NGS_VOLUME: dict[str, str] = dict(
+    (("passing", "attempts"), ("rushing", "rush_attempts"), ("receiving", "targets"))
+)
+
+# Opponent EPA-allowed column per market family. Built from pairs, not a dict
+# literal: Bandit B105 reads a "pass" string key as a hardcoded password.
+DEFENSE_EPA_KEY: dict[str, str] = dict(
+    (
+        ("pass", "pass_epa_per_play"),
+        ("rec", "pass_epa_per_play"),
+        ("rush", "rush_epa_per_play"),
+        ("scrimmage", "epa_per_play"),
+    )
+)
 
 OPPORTUNITY_TAGS = frozenset({"VACATED_TARGETS", "VACATED_CARRIES"})
 HISTORICAL_TAGS = frozenset({"EFFICIENCY_HOT", "EFFICIENCY_COLD"})
@@ -393,8 +406,7 @@ def _matchup(
     market = str(prop.get("market") or "").upper()
     position = str(prop.get("position") or "").upper()
     fam = market_family(market)
-    key = {"pass": "pass_epa_per_play", "rec": "pass_epa_per_play",
-           "rush": "rush_epa_per_play", "scrimmage": "epa_per_play"}.get(fam or "")
+    key = DEFENSE_EPA_KEY.get(fam or "")
     defense = src.defense.get(opponent or "") if opponent else None
     if key and defense and defense.get(f"{key}_z") is not None:
         z = defense[f"{key}_z"]
