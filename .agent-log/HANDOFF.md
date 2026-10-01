@@ -1,3 +1,32 @@
+# HANDOFF — 2026-10-01 (Claude, NFL traced best bets)
+
+**Branch**: `claude/festive-sagan-n0hlpu`
+
+## Built
+- `outlier_nfl/best_bets.py` — six-pillar trace (historical, opportunity, matchup,
+  injury_weather, market, price) with a per-pick contribution ledger. NGS volume/separation,
+  PBP defensive EPA z-scores, usage profiles, weather, injury report, matchup/usage/weather
+  signals and price history all feed the final probability or gate a pillar. VALIDATED only
+  when all six pillars are VERIFIED (game-day refresh, two-sided de-vig, >=2 snapshots,
+  injury report loaded) and edge > 0; any CONTRADICTS or inactive player = REJECTED.
+  Deltas capped ±3 pts/pillar, ±8 total (uncalibrated — tune via scorecard).
+- Orphan audit: signals that reached no prop, split into `market_not_joined` (LONG_PASS bug
+  class) vs `no_prop_offered`; plus external-source loaded/consumed counts.
+- `outlier_nfl/snapshots.py` — append-only weekly JSONL (`data/NFL/snapshots/`, week starts Tue).
+- `outlier_nfl/pipeline.py` — every run snapshots + writes `nfl_best_bets_{date}.json/.md`;
+  new `write_latest` override; `load_injury_report` (None = no report, {} = nobody out).
+- `outlier_nfl/weekly.py` + `scripts/run_nfl_weekly_snapshots.ps1 -Install` — Task Scheduler
+  Tue 10:00/18:00, Thu 15:00, Sun 10:30, Mon 15:00 (machine-local clock; set for ET).
+
+## Next
+- Install the tasks on the Windows box and check the first Tuesday card's audit section
+  (orphans, `candidates_without_ngs`, `opponents_without_pbp_defense`).
+- Check whether Outlier `books[]` ever carries a sharp book (Pinnacle/Circa); else
+  sharp money stays NOT_VERIFIED.
+- Calibrate pillar deltas against settled results (`nfl_signal_scorecard.py`).
+
+---
+
 # HANDOFF — 2026-09-28 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-xi4ctd` · **Last commit**: `83b1ac4`

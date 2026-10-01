@@ -52,6 +52,8 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.roster import build_team_roster_index
+from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
+from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.utils import (
     matches_kickoff_window,
@@ -92,6 +94,7 @@ class NflPipeline:
         offline_fixtures_dir: Path | str | None = None,
         generate_game_script: bool = False,
         reports_dir: Path | str | None = None,
+        write_latest: bool | None = None,
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -102,6 +105,9 @@ class NflPipeline:
             generate_game_script: If True, automatically synthesize game script report.
             reports_dir: Directory the game script markdown is written to. Defaults to
                 ./reports/NFL relative to the working directory.
+            write_latest: Override whether ``*_latest.json`` files are written. Defaults to
+                True only for an unwindowed run; the weekly runner passes False so one
+                slate date does not overwrite another's ``latest``.
 
         Returns:
             NflExtractionSummary dictionary.
@@ -110,7 +116,8 @@ class NflPipeline:
         target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
 
         window = normalize_kickoff_window(window)
-        write_latest = window is None
+        if write_latest is None:
+            write_latest = window is None
         window_label = f" (window: {window})" if window else ""
         logger.info("Starting Outlier NFL Pipeline run for date: %s%s", target_date, window_label)
         self.normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -293,6 +300,9 @@ class NflPipeline:
                 len(tapes),
             )
 
+        weather_records: list[dict[str, Any]] = []
+        usage_players: list[dict[str, Any]] = []
+
         # Game-day weather: open-air forecasts add pass-volume haircut signals.
         if offline_fixtures_dir is None and matchup_scripts:
             try:
@@ -301,12 +311,13 @@ class NflPipeline:
                     [r for r in external_metrics if r.get("source") == "schedule"],
                 )
                 matchup_scripts = apply_weather(matchup_scripts, weathers, tapes)
+                weather_records = [w.to_dict() for w in weathers.values()]
                 weather_payload = {
                     "date": target_date,
                     "window": window,
                     "updated_at": now_utc,
                     "count": len(weathers),
-                    "records": [w.to_dict() for w in weathers.values()],
+                    "records": weather_records,
                 }
                 safe_write_json(self.normalized_dir / f"nfl_weather_{target_date}.json", weather_payload)
                 logger.info(
@@ -333,15 +344,16 @@ class NflPipeline:
                     event_by_team[script.away_team] = script.event_id
                 usage = usage_signals(profiles, load_tape_inactives(self.nfl_dir), event_by_team)
                 matchup_scripts = append_signals(matchup_scripts, usage)
+                usage_players = [
+                    p.to_dict() for p in profiles.values() if p.team in event_by_team
+                ]
                 safe_write_json(
                     self.normalized_dir / f"nfl_player_usage_{target_date}.json",
                     {
                         "date": target_date,
                         "window": window,
                         "updated_at": now_utc,
-                        "players": [
-                            p.to_dict() for p in profiles.values() if p.team in event_by_team
-                        ],
+                        "players": usage_players,
                         "signals": [asdict(sig) for sig in usage],
                     },
                 )
@@ -534,6 +546,19 @@ class NflPipeline:
                 matchup_props_payload,
             )
 
+        best_bets = self._trace_best_bets(
+            target_date=target_date,
+            window=window,
+            now_utc=now_utc,
+            props_dict=props_dict,
+            scripts_records=scripts_to_records(matchup_scripts),
+            external_metrics=external_metrics,
+            usage_players=usage_players,
+            weather_records=weather_records,
+            tapes=tapes,
+            write_latest=write_latest,
+        )
+
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
         totals_count = sum(1 for g in all_game_lines if g.market == "TOTAL")
@@ -565,6 +590,7 @@ class NflPipeline:
             "starting_qbs": starting_qbs,
             "matchup_scripts_count": len(matchup_scripts),
             "matchup_tagged_props_count": len(matchup_prop_records),
+            "best_bets_counts": best_bets.get("counts", {}),
             "errors": errors,
         }
 
@@ -623,6 +649,64 @@ class NflPipeline:
             tier_1_anchors_count,
         )
         return summary
+
+    def _trace_best_bets(
+        self,
+        *,
+        target_date: str,
+        window: str | None,
+        now_utc: str,
+        props_dict: list[dict[str, Any]],
+        scripts_records: list[dict[str, Any]],
+        external_metrics: list[dict[str, Any]],
+        usage_players: list[dict[str, Any]],
+        weather_records: list[dict[str, Any]],
+        tapes: dict[str, dict[str, Any]],
+        write_latest: bool,
+    ) -> dict[str, Any]:
+        """Snapshot this run's prices, then trace every candidate through all six pillars."""
+        try:
+            append_snapshot(self.nfl_dir, target_date, props_dict, now_utc)
+            movement = movement_index(load_snapshots(snapshot_path(self.nfl_dir, target_date)))
+            payload = build_best_bets(
+                TraceInputs(
+                    props=props_dict,
+                    run_date=to_eastern_date(now_utc) or target_date,
+                    scripts=scripts_records,
+                    external_metrics=external_metrics,
+                    usage_players=usage_players,
+                    weather=weather_records,
+                    inactive_by_team=load_injury_report(self.nfl_dir),
+                    tapes=tapes,
+                    movement=movement,
+                )
+            )
+        except Exception as exc:  # the trace must never block the slate's data outputs
+            logger.warning("Best-bets trace skipped: %s", exc)
+            return {}
+        payload.update({"date": target_date, "window": window, "updated_at": now_utc})
+        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_best_bets_latest.json", payload)
+        safe_write_json(self.normalized_dir / f"nfl_best_bets_{suffix}.json", payload)
+        (self.normalized_dir / f"nfl_best_bets_{suffix}.md").write_text(
+            render_best_bets_markdown(payload, title=f"NFL Traced Best Bets - slate {suffix}"),
+            encoding="utf-8",
+        )
+        logger.info("Best bets: %s", payload.get("counts"))
+        return payload
+
+
+def load_injury_report(nfl_dir: Path | str) -> dict[str, list[str]] | None:
+    """Injury-report inactives, or None when the tape carries no ``inactive`` block.
+
+    Distinguishes "report loaded, nobody out" ({}) from "no report" (None) so the
+    best-bets trace never treats a missing report as a clean one.
+    """
+    raw = safe_read_json(Path(nfl_dir) / "tape" / "prior_week.json", default=None)
+    if not isinstance(raw, dict) or not isinstance(raw.get("inactive"), dict):
+        return None
+    return load_tape_inactives(nfl_dir)
 
 
 def injuries_by_event(
