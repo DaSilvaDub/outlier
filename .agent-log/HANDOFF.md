@@ -1,3 +1,59 @@
+# HANDOFF — 2026-10-01 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-j81j64` · **Last commit**: `9191d87` · **PR**: https://github.com/DaSilvaDub/outlier/pull/205
+
+## Fixed — closes the open `hit_vs_line` item from the 2026-09-28 handoff
+Both candidate causes listed there were real; both were in `outlier_nfl/scorecard.py`.
+
+- **scope gate** (`consensus_lines`): `p.get("scope", "full_game") != "full_game"` only
+  defaults when the key is *absent*. A serialized `NflPlayerProp` always carries `scope`
+  and it can be `None`/`""`, which this dropped as a period market. Now uses the repo's
+  standard `str(p.get("scope") or "full_game")` — the form `calibration.py:391`,
+  `pipeline.py:426`, `snapshots.py:62,90` and `best_bets.py:662` all already use.
+- **team gate** (line lookup): required exact normalized team equality, but
+  `NflPlayerProp.team` is `str | None` and `props.extract_player_props` (props.py:76-84)
+  leaves it empty when the feed's team id resolves through neither the alias table nor the
+  event's home/away map. New `lookup_consensus_line()` keeps an exact-team match
+  authoritative and falls back to player+market only when one side's team is blank —
+  matching `matchup._names_match` / `best_bets._matching_signals`. A same-name collision
+  across teams stays unmatched rather than grading the wrong player's line.
+
+3 regression tests in `tests/test_nfl_scorecard.py`, each confirmed to fail against the
+unfixed code. Full runnable suite 1248 passed / 43 skipped (was 1245; delta = the 3 new
+tests). ruff clean; mypy unchanged at 8 pre-existing narrowing false-positives.
+
+## Open — needs the Windows box (no `data/` in the cloud sandbox)
+- The 2 rows that *did* get a line in `reports/NFL/2026-09-27_Signal_Scorecard.md` look like
+  **alt ladder lines**, which `consensus_lines`' docstring says must never be used:
+  Darnell Mooney REC_YDS prior avg 37.5 / line 17.5, Juwan Johnson 60.0 / 35.5 — both
+  graded `miss` against a line ~half the player's average. Suspected path: the fallback
+  branch of `consensus.identify_consensus_lines_for_group` (most-quoted *priced* line, no
+  balance requirement) can flag an alt rung as consensus when the main line is one-sided or
+  off the board. Not fixed — consensus selection feeds the whole pipeline, so it needs real
+  data and a deliberate call. Check against
+  `data/NFL/normalized/nfl_calibrated_props_2026-09-27.json`.
+- Re-run `scripts/nfl_signal_scorecard.py --date 2026-09-27` on the box to see how many of
+  the 102 signals this PR actually recovers. Unverifiable here.
+- Still open from the 2026-10-01 best-bets handoff: install the weekly snapshot tasks, check
+  whether Outlier `books[]` ever carries a sharp book, calibrate the pillar deltas.
+
+## Reviewed clean (no findings)
+`outlier_nfl/best_bets.py`, `snapshots.py`, `pipeline.py`, `weekly.py`, `tape_nflverse.py` —
+the whole PR #204 surface. The newest code consistently uses the tolerant scope and team
+forms; `scorecard.py` was the lone holdout.
+
+## Environment note (cloud sandbox)
+pypi is blocked at the proxy gateway (403 on CONNECT; pypi.org is also in `noProxy`, so pip
+goes direct and is refused). `structlog`, `sqlalchemy`, `pandas`, `openai`, `anthropic`,
+`google-*`, `python-dateutil` cannot be installed. Workaround used this run: pytest 9.1.1,
+ruff, mypy and librt were linked out of `/root/.cache/uv/archive-v0` into a scratch venv, and
+a minimal `structlog` shim (its only use is `outlier_scrapers/api.py` logging) was written
+into that venv — **scratch only, nothing added to the repo**. That lifted the runnable set
+from 1024 to 1248 tests. The residual 67 failures / 29 collection errors are all
+sqlalchemy/google/anthropic/openai/dateutil imports.
+
+---
+
 # HANDOFF — 2026-10-01 (Claude, NFL traced best bets)
 
 **Branch**: `claude/festive-sagan-n0hlpu` · **Last code commit**: `4757b72` · **PR**: https://github.com/DaSilvaDub/outlier/pull/204
