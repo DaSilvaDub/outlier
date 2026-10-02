@@ -19,6 +19,7 @@ from outlier_nfl.best_bets import (
     VALIDATED,
     VERIFIED,
     TraceInputs,
+    american_to_decimal,
     build_best_bets,
     merge_payloads,
     render_best_bets_markdown,
@@ -189,6 +190,20 @@ def test_one_sided_price_is_estimated_not_verified():
     assert pick["pillars"]["price"]["status"] == ESTIMATED
     assert pick["pillars"]["price"]["evidence"]["devig"] == "assumed_-110_overround"
     assert pick["verdict"] == PROVISIONAL
+
+
+def test_zero_price_is_even_money_and_never_sinks_the_card():
+    """A feed quoting 0 must not divide by zero and lose every other pick."""
+    assert american_to_decimal(0) == 2.0
+    props = [
+        _prop(odds=0, implied=50.0, books=[{"book": "FanDuel", "odds": 0, "odds_raw": "0"}]),
+        _prop("UNDER", odds=-110, implied=52.381),
+        _prop(player_name="DeVonta Smith", player_id="p2", line=55.5),
+    ]
+    payload = build_best_bets(_inputs(props=props))
+    assert len(payload["picks"]) == 3  # the junk price costs no other candidate
+    zero = _pick(payload)
+    assert zero["pillars"]["price"]["evidence"]["decimal"] == 2.0
 
 
 def test_weather_signal_flows_once_and_misnamed_market_is_orphaned():
@@ -391,6 +406,14 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale.exists()
+
+    # A write_latest run would have overwritten _latest, so the previous run's
+    # card must not survive under the name readers treat as this run's.
+    stale_latest = normalized / "nfl_best_bets_latest.json"
+    stale_latest.write_text(json.dumps({"picks": [], "updated_at": "old"}), encoding="utf-8")
+    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=True)
+    assert "trace exploded" in summary["best_bets_error"]
+    assert not stale_latest.exists()
     events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
     with pytest.raises(RuntimeError, match="trace exploded"):
         run_week(pipeline, date(2026, 9, 13), events=events, offline_fixtures_dir=FIXTURES_DIR,

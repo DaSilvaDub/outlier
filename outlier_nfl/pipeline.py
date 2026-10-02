@@ -686,7 +686,12 @@ class NflPipeline:
         except Exception as exc:  # the slate's data outputs above are already written
             logger.error("Best-bets trace failed: %s", exc)
             # Never leave an older card behind for a reader to mistake for this run's.
-            for stale in (f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"):
+            stale_cards = [f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"]
+            # This run would have overwritten _latest, so a surviving one is the
+            # previous run's card under the name readers treat as current.
+            if write_latest:
+                stale_cards.append("nfl_best_bets_latest.json")
+            for stale in stale_cards:
                 (self.normalized_dir / stale).unlink(missing_ok=True)
             return {"error": f"best-bets trace failed: {exc}"}
         payload.update({"date": target_date, "window": window, "updated_at": now_utc})
