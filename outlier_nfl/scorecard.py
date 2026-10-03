@@ -81,16 +81,19 @@ def _direction_hit(side: str, actual: float, reference: float) -> bool | None:
     return actual > reference if side == "OVER" else actual < reference
 
 
-def consensus_lines(props: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, str], float]:
-    """(team, player key, market) -> full-game consensus OVER line.
+def consensus_lines(props: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, str, str], float]:
+    """(event id, team, player key, market) -> full-game consensus OVER line.
+
+    The event is part of the key because a line belongs to one game: two
+    same-named players on the slate must not share a line.
 
     Only rows flagged ``is_consensus_line`` count (median if several). Alternate
     ladder lines are never used: grading against a low alt line makes every
     under look wrong and every over look right.
     """
-    found: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    found: dict[tuple[str, str, str, str], list[float]] = defaultdict(list)
     for p in props:
-        if p.get("position") != "OVER" or p.get("scope", "full_game") != "full_game":
+        if p.get("position") != "OVER" or str(p.get("scope") or "full_game") != "full_game":
             continue
         if not p.get("is_consensus_line"):
             continue
@@ -98,13 +101,61 @@ def consensus_lines(props: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str, 
             line = float(p["line"])
         except (KeyError, TypeError, ValueError):
             continue
-        found[(*_player_key(p.get("team"), p.get("player_name")), str(p.get("market")))].append(line)
-    out: dict[tuple[str, str, str], float] = {}
+        found[(
+            str(p.get("event_id") or ""),
+            *_player_key(p.get("team"), p.get("player_name")),
+            str(p.get("market")),
+        )].append(line)
+    out: dict[tuple[str, str, str, str], float] = {}
     for key, values in found.items():
         values.sort()
         mid = len(values) // 2
         out[key] = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
     return out
+
+
+def lookup_consensus_line(
+    lines: Mapping[tuple[str, str, str, str], float],
+    event_id: str,
+    team: str,
+    name: str,
+    market: str,
+) -> float | None:
+    """Consensus line for a signal, tolerating a blank team within its own game.
+
+    ``props.extract_player_props`` leaves ``team`` empty when neither the alias
+    table nor the event's home/away id map resolves the feed's team, so keying
+    the lookup on an exact team match silently drops those lines and leaves
+    ``hit_vs_line`` -- the betting-relevant grade -- blank.
+
+    The codebase's other signal-to-prop joins tolerate a blank team the same
+    way, but only inside one game: ``best_bets._matching_signals`` selects
+    signals by ``prop.event_id`` first, and ``matchup.apply_matchup_signals``
+    works within a single game script, before either reaches
+    ``_names_match``'s blank-team check. So the fallback here is scoped to the
+    signal's own event -- without that, an unresolved-team prop for one game's
+    "Mike Williams" would hand its line to another game's same-named player.
+    Two teams carrying the name in the same game stay unmatched unless the
+    signal's own team pins it exactly.
+    """
+    exact = lines.get((event_id, team, name, market))
+    if exact is not None:
+        return exact
+    # Same player and market within this game, keyed by the prop's team. Two
+    # entries mean two distinct players, so no fallback is safe.
+    in_event = {
+        row_team: value
+        for (row_event, row_team, row_name, row_market), value in lines.items()
+        if row_name == name
+        and row_market == market
+        and (not row_event or not event_id or row_event == event_id)
+    }
+    if len(in_event) != 1:
+        return None
+    (only_team, only_line), = in_event.items()
+    # A blank event on the prop side is unknown, not a different game, so a team
+    # that still matches exactly is kept rather than dropped.
+    return only_line if (not only_team or not team or only_team == team) else None
 
 
 def grade_signals(
@@ -160,7 +211,9 @@ def grade_signals(
             elif len(prior) >= MIN_PRIOR_GAMES:
                 prior_avg = round(sum(_actual(r, market) or 0.0 for r in prior) / len(prior), 2)
                 hit_avg = _direction_hit(side, actual, prior_avg)
-            line = lines.get((*key, market))
+            line = lookup_consensus_line(
+                lines, str(s.get("event_id") or ""), key[0], key[1], market
+            )
             hit_line = _direction_hit(side, actual, line) if line is not None else None
             if hit_avg is None and hit_line is None and prior_avg is None:
                 skipped.append({**base, "reason": "fewer than 2 prior games and no line"})

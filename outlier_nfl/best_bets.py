@@ -156,6 +156,12 @@ def _f(value: Any) -> float | None:
 
 
 def american_to_decimal(odds: int) -> float:
+    # 0 is not a real American price, but a feed can quote it. Read it as even
+    # money, like every other converter here (fetch_odds_close,
+    # outlier_scrapers.pack_market / utils): dividing by zero instead would
+    # raise out of the whole trace and lose the slate's entire card.
+    if odds == 0:
+        return 2.0
     return 1.0 + (odds / 100.0 if odds > 0 else 100.0 / -odds)
 
 

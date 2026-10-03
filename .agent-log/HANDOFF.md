@@ -20,6 +20,136 @@
 
 ---
 
+# HANDOFF — 2026-10-02 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-lw6unk` · **Last commit**: `fb8c706` · **PR**: https://github.com/DaSilvaDub/outlier/pull/206
+
+## Fixed (both reproduced on `tests/fixtures/nfl` before the fix)
+- `outlier_nfl/best_bets.py` — `american_to_decimal(0)` raised ZeroDivisionError. `0` is not a
+  real American price but nothing upstream rejects it (`extract_book_prices` keeps `int(0)`,
+  `coerce_odds(0)` → `0`, `is_candidate` only checks `best_odds is not None`), so one junk quote
+  on one prop propagated out of `build_best_bets` and cost the whole slate its card (fixture
+  slate: 8 candidates → no card); through `weekly.run_week` it aborts the entire weekly run.
+  Now reads `0` as even money (2.0) like the other three converters in the repo
+  (`fetch_odds_close`, `outlier_scrapers.pack_market`, `outlier_scrapers.utils`) and like
+  `games.american_to_implied_probability` (50.0).
+- `outlier_nfl/pipeline.py` — `_trace_best_bets`' failure path removed the dated card but not
+  `nfl_best_bets_latest.json`, so on a `write_latest` run the previous run's picks survived
+  under the name readers treat as current — the exact stale card its own comment says it
+  prevents. The existing test missed it because it runs `write_latest=False`.
+  `_latest` is only unlinked when `write_latest` is set.
+
+## Scorecard `hit_vs_line` item — closed by someone else mid-run
+- I investigated the 2026-09-28 open item (102 signals graded vs player average, only 2 vs a
+  consensus line) and independently reached the same two causes in `scorecard.py`: the
+  `p.get("scope", "full_game")` gate (which only defaults when the key is *absent*) and the
+  exact-team key in the line lookup, where `matchup._names_match` deliberately skips the team
+  check when either side is blank. **PR #205 landed that fix on `master` (854edc1) while this
+  run was in progress**, with the stronger `lookup_consensus_line()` + event scoping. Nothing
+  left to do here; this branch merges 854edc1 rather than touching `scorecard.py`.
+- Worth knowing for next time: running the pipeline offline against `tests/fixtures/nfl`
+  produces props with `team` ('KC'/'BAL'), `scope='full_game'` and `is_consensus_line=True`,
+  so the fixture path never exposes either gate. That is why this looked data-dependent.
+
+## Checked clean this run
+- All 5 upgrade markers present; branch was level with `origin/master` at `b408fae`.
+- `ruff check` across the repo: 25 findings, all F401 unused imports in `tests/`,
+  `scratch.py`, `script.py`, `append_feedback.py`. Cosmetic, pre-existing, left alone.
+- `mypy outlier_scrapers` (4) + `mypy outlier_nfl` (8) + `pyright`: every finding is a
+  narrowing false positive (the call is inside `try/except (TypeError, ValueError)` or behind
+  an `is not None` guard) or a missing third-party stub. `pipeline.py:639 window_slug possibly
+  unbound` is guarded by the same `if window:` as its assignment.
+- Audited every signal-market literal in `matchup.py` / `usage.py` / `weather.py` against
+  `NFL_MARKET_ALIASES` for more LONG_PASS-class join bugs: none. `usage.RECEIVING_TARGETS`
+  is not an alias target but survives `normalize_market`'s raw-string fallback, and
+  `TARGET_MARKETS` also emits `REC`/`REC_YDS`, so the vacated-volume effect still lands.
+
+## Environment note (cloud sandbox)
+- pypi is blocked by the network policy (403 from the egress proxy on `pypi.org`), so
+  **pytest could not be installed at all this run** — unlike 2026-09-28, when a runnable
+  subset existed. Test bodies were executed with a stdlib runner plus a minimal `pytest`
+  stand-in kept in the scratchpad (not committed); it cannot resolve `conftest` fixtures, so
+  modules relying on them report failures under it. The comparison that matters: pre-change
+  and post-change results are identical across all 17 `test_nfl_*` modules, and
+  `test_nfl_best_bets` went 25 → 26 passed. `ruff`, `mypy` and `pyright` are installed in the
+  image and did run. The `Offline Pytest` CI job is the authoritative suite.
+# HANDOFF — 2026-10-01 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-j81j64` · **Last commit**: `176186a` · **PR**: https://github.com/DaSilvaDub/outlier/pull/205
+
+## Fixed — closes the open `hit_vs_line` item from the 2026-09-28 handoff
+Both candidate causes listed there were real; both were in `outlier_nfl/scorecard.py`.
+
+- **scope gate** (`consensus_lines`): `p.get("scope", "full_game") != "full_game"` only
+  defaults when the key is *absent*. A serialized `NflPlayerProp` always carries `scope`
+  and it can be `None`/`""`, which this dropped as a period market. Now uses the repo's
+  standard `str(p.get("scope") or "full_game")` — the form `calibration.py:391`,
+  `pipeline.py:426`, `snapshots.py:62,90` and `best_bets.py:662` all already use.
+- **team gate** (line lookup): required exact normalized team equality, but
+  `NflPlayerProp.team` is `str | None` and `props.extract_player_props` (props.py:76-84)
+  leaves it empty when the feed's team id resolves through neither the alias table nor the
+  event's home/away map. New `lookup_consensus_line()` keeps an exact-team match
+  authoritative and falls back to player+market only when one side's team is blank —
+  matching `matchup._names_match` / `best_bets._matching_signals`. A same-name collision
+  across teams stays unmatched rather than grading the wrong player's line.
+
+3 regression tests in `tests/test_nfl_scorecard.py`, each confirmed to fail against the
+unfixed code.
+
+## Then fixed again — Copilot review finding on #205 (`176186a`), correct and confirmed
+The blank-team fallback in `9191d87` searched the **whole slate**, so an unresolved-team prop
+for one game's "Mike Williams" could hand its line to a different game's same-named player.
+The joins that commit cited as precedent are the proof it was wrong: `best_bets.py:316`
+selects signals by `prop.event_id` and `matchup.py:712-715` works inside one game script, so
+both reach `_names_match`'s blank-team check *already scoped to one game*. The original
+collision test missed it because both fixture entries carried a team.
+
+- `consensus_lines` now keys on `(event_id, team, player, market)` — no callers outside the
+  module, so the wider key is contained.
+- `lookup_consensus_line` takes the signal's `event_id` and falls back only within it. Two
+  teams carrying the name in that game stay unmatched unless the signal's team pins it
+  exactly. A blank prop `event_id` counts as unknown, not a different game, so a
+  still-matching team keeps working (degenerate records only — the real pipeline always sets
+  it; it cannot reintroduce the cross-player hazard, since two teams always give two entries
+  and that returns None).
+
+5 regression tests total; the 2 new ones fail when the event filter is removed. Full runnable
+suite 1250 passed / 43 skipped (baseline 1245; delta = the 5 new tests), failures and
+collection errors unchanged at 67/29. ruff clean; mypy unchanged at 8 pre-existing narrowing
+false-positives. Review thread replied to and resolved.
+
+## Open — needs the Windows box (no `data/` in the cloud sandbox)
+- The 2 rows that *did* get a line in `reports/NFL/2026-09-27_Signal_Scorecard.md` look like
+  **alt ladder lines**, which `consensus_lines`' docstring says must never be used:
+  Darnell Mooney REC_YDS prior avg 37.5 / line 17.5, Juwan Johnson 60.0 / 35.5 — both
+  graded `miss` against a line ~half the player's average. Suspected path: the fallback
+  branch of `consensus.identify_consensus_lines_for_group` (most-quoted *priced* line, no
+  balance requirement) can flag an alt rung as consensus when the main line is one-sided or
+  off the board. Not fixed — consensus selection feeds the whole pipeline, so it needs real
+  data and a deliberate call. Check against
+  `data/NFL/normalized/nfl_calibrated_props_2026-09-27.json`.
+- Re-run `scripts/nfl_signal_scorecard.py --date 2026-09-27` on the box to see how many of
+  the 102 signals this PR actually recovers. Unverifiable here.
+- Still open from the 2026-10-01 best-bets handoff: install the weekly snapshot tasks, check
+  whether Outlier `books[]` ever carries a sharp book, calibrate the pillar deltas.
+
+## Reviewed clean (no findings)
+`outlier_nfl/best_bets.py`, `snapshots.py`, `pipeline.py`, `weekly.py`, `tape_nflverse.py` —
+the whole PR #204 surface. The newest code consistently uses the tolerant scope and team
+forms; `scorecard.py` was the lone holdout.
+
+## Environment note (cloud sandbox)
+pypi is blocked at the proxy gateway (403 on CONNECT; pypi.org is also in `noProxy`, so pip
+goes direct and is refused). `structlog`, `sqlalchemy`, `pandas`, `openai`, `anthropic`,
+`google-*`, `python-dateutil` cannot be installed. Workaround used this run: pytest 9.1.1,
+ruff, mypy and librt were linked out of `/root/.cache/uv/archive-v0` into a scratch venv, and
+a minimal `structlog` shim (its only use is `outlier_scrapers/api.py` logging) was written
+into that venv — **scratch only, nothing added to the repo**. That lifted the runnable set
+from 1024 to 1248 tests. The residual 67 failures / 29 collection errors are all
+sqlalchemy/google/anthropic/openai/dateutil imports.
+
+---
+
 # HANDOFF — 2026-10-01 (Claude, NFL traced best bets)
 
 **Branch**: `claude/festive-sagan-n0hlpu` · **Last code commit**: `4757b72` · **PR**: https://github.com/DaSilvaDub/outlier/pull/204
