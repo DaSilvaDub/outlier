@@ -1,3 +1,25 @@
+# HANDOFF — 2026-10-03 (Claude, future-dated pack export guard)
+
+**Branch**: `fix/organize-pack-date-guard` · **Last code commit**: `bdcb1f7` · **PR**: https://github.com/DaSilvaDub/outlier/pull/208
+
+## Fixed
+- Root cause of the 2026-10-01 "pack date: 2099-07-07" export:
+  `tests/test_pack.py::test_main_does_not_validate_projections_for_a_skipped_empty_slate_league`
+  ran `pack.main()` without patching `paths.PROJECT_ROOT`, so every full pytest run wrote
+  the fixture pack to the real `packs/2099-07-07`. Now patched to `tmp_path`.
+- `tests/conftest.py` autouse `_no_writes_to_real_packs_dir`: fails (never deletes) any
+  test that creates an entry under the real `packs/`.
+- `scripts/organize_today_run2.py` and `generate_prompts.py`: `--date YYYY-MM-DD` (exact,
+  no fallback). Default is the newest pack dated on or before today (local), with a loud stderr WARNING for
+  future-dated dirs. Names must parse as real dates. The organizer passes `--date` to generate_prompts.
+
+## Next
+- The test suite also rewrites the real `calibration/blend_weights.json` (and likely
+  `calibration/alerts/*.json`, `stake_calibration.json`). Same leak class, not fixed here.
+- The worktree's `packs/2026-07-07` may be a stale leak from an older test. Check it before trusting it.
+
+---
+
 # HANDOFF — 2026-10-01 (Claude, NFL traced best bets)
 
 **Branch**: `claude/festive-sagan-n0hlpu` · **Last code commit**: `4757b72` · **PR**: https://github.com/DaSilvaDub/outlier/pull/204
