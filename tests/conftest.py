@@ -1,5 +1,40 @@
+import os
+from pathlib import Path
+
 import pytest
 from outlier_scrapers.portfolio import PortfolioPolicy
+
+# Resolved at import, before any test monkeypatches paths.PROJECT_ROOT.
+_REAL_PACKS_DIR = Path(__file__).resolve().parents[1] / "packs"
+
+
+def _pack_entries() -> set[str]:
+    try:
+        return {entry.name for entry in os.scandir(_REAL_PACKS_DIR)}
+    except FileNotFoundError:
+        return set()
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_to_real_packs_dir():
+    """Fail any test that creates an entry under the repo's real ``packs/``.
+
+    A test that ran ``pack.main()`` without redirecting ``paths.PROJECT_ROOT``
+    left a fixture pack at ``packs/2099-07-07``; organize_today_run2.py then
+    exported that fake slate instead of today's. Tests must write packs under
+    ``tmp_path``. This only fails -- it never deletes, because a real daily run
+    may legitimately create today's pack while pytest is running.
+    """
+    before = _pack_entries()
+    yield
+    leaked = sorted(_pack_entries() - before)
+    if leaked:
+        pytest.fail(
+            f"test created {leaked} under the real {_REAL_PACKS_DIR}; "
+            "write packs under tmp_path (monkeypatch paths.PROJECT_ROOT). "
+            "Remove the stray dir(s) by hand.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

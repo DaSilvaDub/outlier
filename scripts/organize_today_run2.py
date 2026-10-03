@@ -48,6 +48,8 @@ DEFAULT_OUT_DIRS = [
     Path(r"G:\My Drive\today"),
 ]
 
+_PACK_DIR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
 HIT_FIELDNAMES = ["player", "market_label", "side", "line", "team", "matchup"]
 
 
@@ -305,15 +307,61 @@ def write_hit_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def parse_pack_date(name: str) -> date | None:
+    """Return the date a pack dir is named for, or None if it is not ``YYYY-MM-DD``."""
+    if not _PACK_DIR_RE.fullmatch(name):
+        return None
+    try:
+        return date.fromisoformat(name)
+    except ValueError:
+        return None
+
+
 def find_all_pack_dirs(search_paths: list[Path] | None = None) -> list[Path]:
     search_paths = search_paths or DEFAULT_PACK_SEARCH
     packs_map: dict[str, Path] = {}
     for p in search_paths:
         if p.exists():
             for d in p.iterdir():
-                if d.is_dir() and d.name.replace("-", "").isdigit():
+                if d.is_dir() and parse_pack_date(d.name) is not None:
                     packs_map[d.name] = d
     return sorted(packs_map.values(), key=lambda d: d.name)
+
+
+def select_pack_dir(
+    pack_dirs: list[Path],
+    target_date: date | None = None,
+    today: date | None = None,
+) -> Path | None:
+    """Pick the pack to export.
+
+    With ``target_date``, return exactly that pack or None -- never a fallback.
+    Without it, return the newest pack dated on or before ``today`` (local
+    date): a far-future dir (e.g. a leaked test fixture at ``packs/2099-07-07``)
+    would otherwise win a max-by-name pick on every run.
+    """
+    if target_date is not None:
+        wanted = target_date.isoformat()
+        for d in pack_dirs:
+            if d.name == wanted:
+                return d
+        print(f"Error: no pack directory found for --date {wanted}.", file=sys.stderr)
+        return None
+
+    today = today or date.today()
+    future = [d for d in pack_dirs if (parse_pack_date(d.name) or date.min) > today]
+    if future:
+        print(
+            f"WARNING: ignoring {len(future)} pack dir(s) dated after today ({today}): "
+            + ", ".join(str(d) for d in future)
+            + "  -- pass --date to export one deliberately; delete it if it is a stray.",
+            file=sys.stderr,
+        )
+    eligible = [d for d in pack_dirs if d not in future]
+    if not eligible:
+        print(f"Error: no pack directory dated on or before {today}.", file=sys.stderr)
+        return None
+    return eligible[-1]
 
 
 def resolve_candidates_csv(pack_dir: Path) -> Path:
@@ -615,14 +663,22 @@ def organize_today_additive(
     out_dirs: list[Path] | None = None,
     run_generate_prompts: bool = True,
     include_sequential_prompts: bool = False,
+    target_date: date | None = None,
+    today: date | None = None,
 ) -> Path | None:
-    """Organize latest pack into today folders. Returns latest_pack path or None."""
+    """Organize a pack into today folders. Returns the exported pack path or None.
+
+    ``target_date`` selects that exact pack; otherwise the newest pack dated on
+    or before ``today`` (default: local date) is used. See select_pack_dir.
+    """
     subdirs = find_all_pack_dirs(pack_search)
     if not subdirs:
         print("Error: No pack directories found in packs/.")
         return None
 
-    latest_pack = subdirs[-1]
+    latest_pack = select_pack_dir(subdirs, target_date=target_date, today=today)
+    if latest_pack is None:
+        return None
     today_str = latest_pack.name
     suffix = "_latest"
 
@@ -680,7 +736,8 @@ def organize_today_additive(
                 r"\export-manual-outlier-packs\scripts\generate_prompts.py"
             )
         if gen_script.exists():
-            gen_command = ["python", str(gen_script), "--no-clean"]
+            # Pin to the pack selected above so both stages export the same slate.
+            gen_command = ["python", str(gen_script), "--no-clean", "--date", today_str]
             if include_sequential_prompts:
                 gen_command.append("--include-sequential-prompts")
             subprocess.run(gen_command, check=True)
@@ -779,15 +836,32 @@ def organize_today_additive(
     return latest_pack
 
 
-def main() -> None:
+def _date_arg(value: str) -> date:
+    parsed = parse_pack_date(value)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"invalid date {value!r}; expected YYYY-MM-DD")
+    return parsed
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--include-sequential-prompts",
         action="store_true",
         help="Opt in to generating and exporting the ordered Q/R/W/X/S prompt bundle",
     )
-    args = parser.parse_args()
-    organize_today_additive(include_sequential_prompts=args.include_sequential_prompts)
+    parser.add_argument(
+        "--date",
+        type=_date_arg,
+        default=None,
+        help="Pack date to export (YYYY-MM-DD). Default: newest pack dated on or "
+        "before today (local); future-dated pack dirs are ignored with a warning.",
+    )
+    args = parser.parse_args(argv)
+    organize_today_additive(
+        include_sequential_prompts=args.include_sequential_prompts,
+        target_date=args.date,
+    )
 
 
 if __name__ == "__main__":
