@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-03 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `a4ed5f2` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207
+**Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `f067334` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207
 
 ## Fixed — close-feed short key served another game's close
 One defect, two sites, both reproduced before the fix. The close join has a full key
@@ -27,6 +27,34 @@ with the same full key still de-duplicates. A skipped alignment is labeled
 `close_enrichment`, which `attach_close_fields` already reports honestly. Impact is the
 measurement layer (shadow-settle CLV, which `trace_settings` points at for tuning), not
 bet selection.
+
+## Follow-up on review — same-game name collision (`f067334`)
+Copilot filed two High-severity findings on #207; both were correct and both reproduced.
+`a4ed5f2` only caught the *cross-game* collision, because neither join key carries
+`team` or `player_id`:
+- `_row_match_key` has the game but no identity, so two different players named
+  "Mike Williams" on opposing teams in one game share the **full** key. `owner ==
+  full_key` read that as "duplicate row", leaving the short key enabled and letting the
+  second payload overwrite the first (LAR prediction got the NYJ close, -120 -> 140).
+- `_short_join_key` has neither game nor identity, so the alignment side saw equal
+  event_id/matchup and stamped the later prediction's identity onto the close row.
+
+The keys cannot carry identity — Odds-API close rows have no `team` and no `player_id`,
+so adding either would break the join the short key exists for. Identity is therefore
+used only to tell two rows apart *under* one key, via new `row_identity()` /
+`identities_conflict()` in `enrich_close` (imported by `fetch_odds_close`, which already
+imported `CLOSE_SOURCE_BOOK` from it, so no new import edge). A blank side is unknown
+rather than a mismatch, the same tolerance `matchup._names_match` and
+`scorecard.lookup_consensus_line` apply. A key two conflicting identities claim is
+dropped, full key included.
+
+Three more tests: same-game collision on both keys, the alignment side, and a **control
+pinning the identity-less Odds-API join** so neither this fix nor a later one can key on
+identity. The two collision tests fail on `a86b95b`. Suite 1256 passed / 43 skipped
+(67/29 unchanged); `ruff` clean on both changed files; `mypy outlier_nfl` 8,
+`mypy outlier_scrapers` 4, `pyright` on the changed files 6 — all unchanged; pipeline and
+settle smoke runs unchanged.
+
 
 ## Checked clean this run
 - All 5 upgrade markers present; branch started level with `origin/master` at `a50b843`.
