@@ -2091,6 +2091,9 @@ def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(tmp
     (wnba_normalized / "wnba_projections_latest.json").write_text(
         json.dumps({"date": "2026-08-30", "generated_at": "PROJ", "projections": []})
     )
+    # main() writes to paths.PROJECT_ROOT / "packs" / <date>; without this the
+    # 2099-07-07 fixture pack lands in the real repo and hijacks daily exports.
+    monkeypatch.setattr(P, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr("outlier_scrapers.pack.paths.league_paths", fake_lp)
     monkeypatch.setattr("outlier_scrapers.pack_projections.paths.league_paths", fake_lp)
     monkeypatch.setattr("outlier_scrapers.pack_publish.paths.league_paths", fake_lp)
@@ -2129,6 +2132,7 @@ def test_main_does_not_validate_projections_for_a_skipped_empty_slate_league(tmp
 
     out_dir = pack.main(["--leagues", "MLB,WNBA", "--no-feedback-ledger"])
 
+    assert out_dir.parent == tmp_path / "packs"
     assert (out_dir / "candidates.csv").exists()
     with open(out_dir / "candidates.csv", newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

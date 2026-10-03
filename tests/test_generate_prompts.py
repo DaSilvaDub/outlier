@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import io
+from datetime import date
 from pathlib import Path
 
 
@@ -398,3 +399,42 @@ def test_find_all_pack_dirs_is_scoped_to_canonical_root(tmp_path):
     (mirror / "2100-01-01").mkdir(parents=True)
 
     assert module.find_all_pack_dirs(canonical) == [canonical / "2099-12-31"]
+
+
+def test_find_all_pack_dirs_skips_names_that_are_not_real_dates(tmp_path):
+    module = _load_module()
+    packs = tmp_path / "packs"
+    for name in ("2026-09-30", "2026-13-45", "20260930"):
+        (packs / name).mkdir(parents=True)
+
+    assert module.find_all_pack_dirs(packs) == [packs / "2026-09-30"]
+
+
+def test_select_pack_dir_ignores_future_packs_unless_requested(tmp_path, capsys):
+    module = _load_module()
+    packs = tmp_path / "packs"
+    for name in ("2026-09-30", "2026-10-01", "2099-07-07"):
+        (packs / name).mkdir(parents=True)
+    found = module.find_all_pack_dirs(packs)
+
+    assert module.select_pack_dir(found, today=date(2026, 10, 1)) == packs / "2026-10-01"
+    assert "2099-07-07" in capsys.readouterr().err
+    assert (
+        module.select_pack_dir(found, target_date=date(2099, 7, 7), today=date(2026, 10, 1))
+        == packs / "2099-07-07"
+    )
+    assert module.select_pack_dir(found, target_date=date(2026, 9, 1)) is None
+
+
+def test_main_date_arg_selects_that_pack(tmp_path, monkeypatch, capsys):
+    module = _load_module()
+    packs = tmp_path / "packs"
+    for name in ("2026-09-30", "2026-10-01"):
+        (packs / name).mkdir(parents=True)
+    real_find = module.find_all_pack_dirs
+    monkeypatch.setattr(module, "find_all_pack_dirs", lambda pack_root=None: real_find(packs))
+
+    module.main(["--date", "2026-09-30", "--no-clean"])
+
+    out = capsys.readouterr().out
+    assert "Generating prompts for pack date: 2026-09-30" in out

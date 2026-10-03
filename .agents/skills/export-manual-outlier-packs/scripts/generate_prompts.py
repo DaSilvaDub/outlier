@@ -594,6 +594,19 @@ def _write_desk2_prompts(
     return desk2_count
 
 
+_PACK_DIR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def parse_pack_date(name: str) -> date | None:
+    """Return the date a pack dir is named for, or None if it is not ``YYYY-MM-DD``."""
+    if not _PACK_DIR_RE.fullmatch(name):
+        return None
+    try:
+        return date.fromisoformat(name)
+    except ValueError:
+        return None
+
+
 def find_all_pack_dirs(pack_root: Path | None = None) -> list[Path]:
     """Return dated packs from the canonical checkout only."""
     canonical_root = pack_root or (Path(__file__).resolve().parents[4] / "packs")
@@ -603,14 +616,61 @@ def find_all_pack_dirs(pack_root: Path | None = None) -> list[Path]:
         (
             path
             for path in canonical_root.iterdir()
-            if path.is_dir() and path.name.replace("-", "").isdigit()
+            if path.is_dir() and parse_pack_date(path.name) is not None
         ),
         key=lambda path: path.name,
     )
 
 
-def main() -> None:
+def select_pack_dir(
+    pack_dirs: list[Path],
+    target_date: date | None = None,
+    today: date | None = None,
+) -> Path | None:
+    """Exactly ``target_date``'s pack, else the newest pack dated on or before today.
+
+    Mirrors scripts/organize_today_run2.py: a far-future dir (e.g. a leaked test
+    fixture at packs/2099-07-07) must never win a max-by-name pick.
+    """
+    if target_date is not None:
+        wanted = target_date.isoformat()
+        match = [d for d in pack_dirs if d.name == wanted]
+        if not match:
+            print(f"Error: no pack directory found for --date {wanted}.", file=sys.stderr)
+            return None
+        return match[0]
+
+    today = today or date.today()
+    future = [d for d in pack_dirs if (parse_pack_date(d.name) or date.min) > today]
+    if future:
+        print(
+            f"WARNING: ignoring {len(future)} pack dir(s) dated after today ({today}): "
+            + ", ".join(str(d) for d in future),
+            file=sys.stderr,
+        )
+    eligible = [d for d in pack_dirs if d not in future]
+    if not eligible:
+        print(f"Error: no pack directory dated on or before {today}.", file=sys.stderr)
+        return None
+    return eligible[-1]
+
+
+def _date_arg(value: str) -> date:
+    parsed = parse_pack_date(value)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"invalid date {value!r}; expected YYYY-MM-DD")
+    return parsed
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate prompt files from Outlier packs")
+    parser.add_argument(
+        "--date",
+        type=_date_arg,
+        default=None,
+        help="Pack date to use (YYYY-MM-DD). Default: newest pack dated on or before "
+        "today (local); future-dated pack dirs are ignored with a warning.",
+    )
     parser.add_argument(
         "--out-dir",
         action="append",
@@ -627,7 +687,7 @@ def main() -> None:
         action="store_true",
         help="Opt in to generating the ordered Q/R/W/X/S Desk2_Manual prompt bundle",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
     subdirs = find_all_pack_dirs()
@@ -635,7 +695,9 @@ def main() -> None:
         print("Error: No pack directories found in packs/.")
         return
 
-    latest_pack = subdirs[-1]
+    latest_pack = select_pack_dir(subdirs, target_date=args.date)
+    if latest_pack is None:
+        return
     date_str = latest_pack.name
 
     print(f"Generating prompts for pack date: {date_str}")

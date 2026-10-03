@@ -5,7 +5,10 @@ from __future__ import annotations
 import csv
 import json
 import sys
+from datetime import date
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -483,3 +486,172 @@ def test_generate_playable_props_empty_disclaimer_when_no_fallbacks(tmp_path: Pa
     content = md_file.read_text(encoding="utf-8")
     assert "*No qualifying alternate team total fallbacks identified for current slate.*" in content
 
+
+
+def _minimal_pack(packs: Path, name: str) -> Path:
+    pack = packs / name
+    pack.mkdir(parents=True)
+    _write_candidates(pack / "candidates.csv", [])
+    (pack / "briefing.md").write_text(f"PACK {name}\n", encoding="utf-8")
+    return pack
+
+
+def test_find_all_pack_dirs_skips_names_that_are_not_real_dates(tmp_path: Path):
+    packs = tmp_path / "packs"
+    for name in ("2026-09-30", "2026-13-45", "20260930", "2026-9-30", "notes"):
+        (packs / name).mkdir(parents=True)
+
+    found = org.find_all_pack_dirs([packs])
+
+    assert [d.name for d in found] == ["2026-09-30"]
+
+
+def test_select_pack_dir_ignores_future_packs_by_default(tmp_path: Path, capsys):
+    packs = tmp_path / "packs"
+    for name in ("2026-09-29", "2026-10-01", "2026-10-02", "2099-07-07"):
+        _minimal_pack(packs, name)
+    found = org.find_all_pack_dirs([packs])
+
+    chosen = org.select_pack_dir(found, today=date(2026, 10, 1))
+
+    assert chosen is not None and chosen.name == "2026-10-01"
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "2099-07-07" in err and "2026-10-02" in err
+
+
+def test_select_pack_dir_falls_back_to_most_recent_past_pack(tmp_path: Path, capsys):
+    packs = tmp_path / "packs"
+    for name in ("2026-09-28", "2026-09-30", "2099-07-07"):
+        _minimal_pack(packs, name)
+
+    chosen = org.select_pack_dir(org.find_all_pack_dirs([packs]), today=date(2026, 10, 1))
+
+    assert chosen is not None and chosen.name == "2026-09-30"
+
+
+def test_select_pack_dir_returns_none_when_only_future_packs(tmp_path: Path, capsys):
+    packs = tmp_path / "packs"
+    _minimal_pack(packs, "2099-07-07")
+
+    chosen = org.select_pack_dir(org.find_all_pack_dirs([packs]), today=date(2026, 10, 1))
+
+    assert chosen is None
+    assert "2099-07-07" in capsys.readouterr().err
+
+
+def test_select_pack_dir_explicit_date_matches_exactly(tmp_path: Path, capsys):
+    packs = tmp_path / "packs"
+    for name in ("2026-09-30", "2026-10-01", "2099-07-07"):
+        _minimal_pack(packs, name)
+    found = org.find_all_pack_dirs([packs])
+
+    chosen = org.select_pack_dir(found, target_date=date(2026, 9, 30), today=date(2026, 10, 1))
+    assert chosen is not None and chosen.name == "2026-09-30"
+
+    # An explicit request is honored even for a future date ...
+    future = org.select_pack_dir(found, target_date=date(2099, 7, 7), today=date(2026, 10, 1))
+    assert future is not None and future.name == "2099-07-07"
+
+    # ... but a missing date never falls back to some other pack.
+    assert org.select_pack_dir(found, target_date=date(2026, 9, 1), today=date(2026, 10, 1)) is None
+    assert "2026-09-01" in capsys.readouterr().err
+
+
+def test_organize_ignores_stray_future_pack(tmp_path: Path, capsys):
+    """Regression: a test fixture pack at packs/2099-07-07 hijacked every export."""
+    packs = tmp_path / "packs"
+    real = _minimal_pack(packs, "2026-10-01")
+    _minimal_pack(packs, "2099-07-07")
+    today_dir = tmp_path / "today"
+
+    result = org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[today_dir],
+        run_generate_prompts=False,
+        today=date(2026, 10, 1),
+    )
+
+    assert result == real
+    assert (today_dir / "extracted_data_2026-10-01_latest" / "briefing.md").exists()
+    assert not (today_dir / "extracted_data_2099-07-07_latest").exists()
+    assert "2099-07-07" in capsys.readouterr().err
+
+
+def test_organize_with_explicit_date_exports_that_pack(tmp_path: Path):
+    packs = tmp_path / "packs"
+    older = _minimal_pack(packs, "2026-09-30")
+    _minimal_pack(packs, "2026-10-01")
+    today_dir = tmp_path / "today"
+
+    result = org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[today_dir],
+        run_generate_prompts=False,
+        target_date=date(2026, 9, 30),
+        today=date(2026, 10, 1),
+    )
+
+    assert result == older
+    assert (today_dir / "extracted_data_2026-09-30_latest" / "briefing.md").exists()
+
+
+def test_organize_with_missing_explicit_date_exports_nothing(tmp_path: Path):
+    packs = tmp_path / "packs"
+    _minimal_pack(packs, "2026-10-01")
+    today_dir = tmp_path / "today"
+
+    result = org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[today_dir],
+        run_generate_prompts=False,
+        target_date=date(2026, 9, 1),
+    )
+
+    assert result is None
+    assert not today_dir.exists()
+
+
+def test_main_parses_date_arg(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(
+        org, "organize_today_additive", lambda **kwargs: seen.update(kwargs) or Path("x")
+    )
+
+    org.main(["--date", "2026-09-30"])
+    assert seen["target_date"] == date(2026, 9, 30)
+
+    seen.clear()
+    org.main([])
+    assert seen["target_date"] is None
+
+
+def test_main_rejects_invalid_date(monkeypatch, capsys):
+    monkeypatch.setattr(org, "organize_today_additive", lambda **kwargs: Path("x"))
+    with pytest.raises(SystemExit):
+        org.main(["--date", "2026-13-45"])
+    assert "YYYY-MM-DD" in capsys.readouterr().err
+
+
+def test_organize_pins_generate_prompts_to_selected_pack(tmp_path: Path, monkeypatch):
+    """generate_prompts.py picks its own pack; it must be told which one we chose."""
+    packs = tmp_path / "packs"
+    _minimal_pack(packs, "2026-10-01")
+    _minimal_pack(packs, "2099-07-07")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(org.subprocess, "run", lambda cmd, **_kw: commands.append(cmd))
+
+    org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[tmp_path / "today"],
+        run_generate_prompts=True,
+        today=date(2026, 10, 1),
+    )
+
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert cmd[cmd.index("--date") + 1] == "2026-10-01"
