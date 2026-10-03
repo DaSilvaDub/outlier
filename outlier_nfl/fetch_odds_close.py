@@ -29,7 +29,7 @@ from outlier_nfl.close_feed import (
     validate_close_feed_records,
     write_close_feed,
 )
-from outlier_nfl.enrich_close import CLOSE_SOURCE_BOOK
+from outlier_nfl.enrich_close import CLOSE_SOURCE_BOOK, identities_conflict, row_identity
 from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.utils import safe_read_json
 
@@ -390,11 +390,13 @@ def align_close_records_to_predictions(
     Enables full ``_row_match_key`` hits in ``enrich_close`` without inventing
     closes for unmatched pack rows.
 
-    The short key carries no game, so two predictions for same-named players in
-    different games collide on it (anytime-TD props all sit on 0.5, so any such
-    pair collides). Stamping either one's ``event_id`` would turn the guess into
-    a full-key match in ``enrich_close`` and hand the close to the wrong game, so
-    an ambiguous key is left unaligned instead.
+    The short key names a player but identifies none of them. It carries no game,
+    so two predictions for same-named players in different games collide on it
+    (anytime-TD props all sit on 0.5, so any such pair collides), and it carries
+    no team or player id, so two on opposing teams in one game collide too.
+    Stamping either one's ``event_id`` would turn the guess into a full-key match
+    in ``enrich_close`` and hand the close to the wrong player, so an ambiguous
+    key is left unaligned instead.
     """
     if isinstance(predictions, Mapping):
         pred_rows = predictions.get("records") or []
@@ -410,6 +412,7 @@ def align_close_records_to_predictions(
         if prior is not None and (
             str(prior.get("event_id") or "") != str(raw.get("event_id") or "")
             or str(prior.get("matchup") or "") != str(raw.get("matchup") or "")
+            or identities_conflict(row_identity(prior), row_identity(raw))
         ):
             ambiguous.add(key)
         by_short[key] = raw

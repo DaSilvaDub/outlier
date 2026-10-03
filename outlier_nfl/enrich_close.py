@@ -89,20 +89,46 @@ def _row_match_key_short(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def row_identity(row: Mapping[str, Any]) -> tuple[str, str]:
+    """``(player_id, team)`` as far as the row knows them; ``""`` means unknown.
+
+    Neither join key carries either field — Odds-API close rows have no team and
+    no player id, so putting them in a key would break the join the short key
+    exists for. They are used only to tell two players apart under one key.
+    """
+    return (
+        str(row.get("player_id") or "").strip().upper(),
+        str(row.get("team") or "").strip().upper(),
+    )
+
+
+def identities_conflict(left: tuple[str, str], right: tuple[str, str]) -> bool:
+    """Whether two rows under one key are *known* to be different players.
+
+    A blank side is unknown rather than a mismatch, the same tolerance
+    ``matchup._names_match`` and ``scorecard.lookup_consensus_line`` apply.
+    """
+    return any(a and b and a != b for a, b in zip(left, right))
+
+
 def index_book_close_records(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[Any, ...], dict[str, Any]]:
     """Index close-feed rows under full and short join keys.
 
-    The short key drops matchup/event_id, so two games' rows for same-named
-    players with the same market/line/side land on it. Serving one of them would
-    attach the wrong game's close; those short keys are dropped instead, leaving
-    the row without a close (which ``attach_close_fields`` already reports
-    honestly) rather than with someone else's.
+    Neither key identifies a player. The short key drops matchup/event_id, so
+    two games' rows for same-named players with the same market/line/side land on
+    it; the full key carries the game but no team or player id, so two
+    same-named players on opposing teams in one game land on *that*. Serving
+    either would attach another player's close, so a key two conflicting
+    identities claim is dropped, leaving the row without a close (which
+    ``attach_close_fields`` already reports honestly) rather than someone
+    else's.
     """
     index: dict[tuple[Any, ...], dict[str, Any]] = {}
     short_owner: dict[tuple[Any, ...], tuple[Any, ...]] = {}
-    ambiguous_short: set[tuple[Any, ...]] = set()
+    owner_identity: dict[tuple[Any, ...], tuple[str, str]] = {}
+    ambiguous: set[tuple[Any, ...]] = set()
     for raw in records:
         if not isinstance(raw, Mapping):
             continue
@@ -119,17 +145,33 @@ def index_book_close_records(
             "close_implied": close_implied,
             "close_source": CLOSE_SOURCE_BOOK,
         }
+        identity = row_identity(raw)
         full_key = _row_match_key(raw)
         short_key = _row_match_key_short(raw)
-        index[full_key] = payload
-        owner = short_owner.get(short_key)
-        if owner is None or owner == full_key:
-            short_owner[short_key] = full_key
-            index[short_key] = payload
-        else:
-            ambiguous_short.add(short_key)
-    for short_key in ambiguous_short:
-        index.pop(short_key, None)
+
+        if full_key not in ambiguous:
+            prior = owner_identity.get(full_key)
+            if prior is not None and identities_conflict(prior, identity):
+                # Same name, market, line, side and game, different players.
+                ambiguous.add(full_key)
+            else:
+                owner_identity[full_key] = identity
+                index[full_key] = payload
+
+        if short_key not in ambiguous:
+            prior = owner_identity.get(short_key)
+            claimed = short_owner.get(short_key)
+            if (prior is not None and identities_conflict(prior, identity)) or (
+                claimed is not None and claimed != full_key
+            ):
+                ambiguous.add(short_key)
+            else:
+                short_owner[short_key] = full_key
+                owner_identity[short_key] = identity
+                index[short_key] = payload
+
+    for key in ambiguous:
+        index.pop(key, None)
     return index
 
 

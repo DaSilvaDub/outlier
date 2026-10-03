@@ -322,3 +322,63 @@ def test_align_does_not_stamp_an_event_id_the_short_key_cannot_pin():
     assert aligned["aligned_to_predictions"] is True
     assert aligned["event_id"] == "E-KC-BAL"
     assert aligned["matchup"] == "KC @ BAL"
+
+
+def test_same_game_name_collision_is_rejected_on_both_keys():
+    """Opposing teams carry the name in ONE game: the full key collides too.
+
+    Neither `_row_match_key` nor `_row_match_key_short` carries team or
+    player_id, so the game alone cannot tell these two players apart. Mirrors
+    `test_nfl_scorecard.py::test_exact_team_wins_and_same_name_collision_stays_unmatched`.
+    """
+    from outlier_nfl.enrich_close import index_book_close_records, lookup_book_close_row
+
+    lar = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR",
+                          close_line=45.5, close_odds=-120)
+    nyj = dict(lar, player_id="p-nyj-9", team="NYJ", close_odds=140)
+    index = index_book_close_records([lar, nyj])
+
+    assert lookup_book_close_row(index, {k: v for k, v in lar.items()
+                                         if not k.startswith("close_")}) is None
+    assert lookup_book_close_row(index, {"player_name": "Mike Williams", "market": "REC_YDS",
+                                         "line": 45.5, "position": "OVER"}) is None
+
+    # Control: one player under the key and both lookups resolve again.
+    solo = index_book_close_records([lar])
+    assert lookup_book_close_row(solo, {k: v for k, v in lar.items()
+                                       if not k.startswith("close_")})["close_odds"] == -120
+
+
+def test_identityless_close_row_still_joins_a_prediction_that_has_identity():
+    """Odds-API rows carry no team or player_id; a blank is unknown, not a clash.
+
+    Guards the join the short key exists for: if identity were part of the key,
+    or a blank counted as a mismatch, every Odds-API close would stop matching.
+    """
+    from outlier_nfl.enrich_close import index_book_close_records, lookup_book_close_row
+
+    feed_row = {"player_name": "Mike Williams", "market": "REC_YDS", "line": 45.5,
+                "position": "OVER", "close_line": 45.5, "close_odds": -120}
+    prediction = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR")
+    hit = lookup_book_close_row(index_book_close_records([feed_row]), prediction)
+    assert hit is not None and hit["close_odds"] == -120
+
+
+def test_align_rejects_two_same_game_predictions_with_different_identities():
+    from outlier_nfl.fetch_odds_close import align_close_records_to_predictions
+
+    close_row = {"player_name": "Mike Williams", "market": "REC_YDS", "line": 45.5,
+                 "position": "OVER", "close_odds": -120, "event_id": "odds-api-1",
+                 "matchup": "New York Jets @ Los Angeles Rams"}
+    lar = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR")
+    nyj = _same_name_prop("e1", "NYJ @ LAR", player_id="p-nyj-9", team="NYJ")
+
+    (ambiguous,) = align_close_records_to_predictions([dict(close_row)], [lar, nyj])
+    assert ambiguous["aligned_to_predictions"] is False
+    assert ambiguous["alignment_skipped"] == "ambiguous_short_key"
+    assert ambiguous["event_id"] == "odds-api-1"
+
+    # Same player listed twice (identical identity) is a duplicate, not a clash.
+    (aligned,) = align_close_records_to_predictions([dict(close_row)], [lar, dict(lar)])
+    assert aligned["aligned_to_predictions"] is True
+    assert aligned["event_id"] == "e1"
