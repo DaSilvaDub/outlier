@@ -92,8 +92,17 @@ def _row_match_key_short(row: Mapping[str, Any]) -> tuple[Any, ...]:
 def index_book_close_records(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[Any, ...], dict[str, Any]]:
-    """Index close-feed rows under full and short join keys."""
+    """Index close-feed rows under full and short join keys.
+
+    The short key drops matchup/event_id, so two games' rows for same-named
+    players with the same market/line/side land on it. Serving one of them would
+    attach the wrong game's close; those short keys are dropped instead, leaving
+    the row without a close (which ``attach_close_fields`` already reports
+    honestly) rather than with someone else's.
+    """
     index: dict[tuple[Any, ...], dict[str, Any]] = {}
+    short_owner: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+    ambiguous_short: set[tuple[Any, ...]] = set()
     for raw in records:
         if not isinstance(raw, Mapping):
             continue
@@ -110,8 +119,17 @@ def index_book_close_records(
             "close_implied": close_implied,
             "close_source": CLOSE_SOURCE_BOOK,
         }
-        index[_row_match_key(raw)] = payload
-        index[_row_match_key_short(raw)] = payload
+        full_key = _row_match_key(raw)
+        short_key = _row_match_key_short(raw)
+        index[full_key] = payload
+        owner = short_owner.get(short_key)
+        if owner is None or owner == full_key:
+            short_owner[short_key] = full_key
+            index[short_key] = payload
+        else:
+            ambiguous_short.add(short_key)
+    for short_key in ambiguous_short:
+        index.pop(short_key, None)
     return index
 
 

@@ -258,3 +258,67 @@ def test_missing_key_blocker_unchanged():
     # Direct blocker text still documents the CLI.
     assert "ODDS_API_KEY" in close_feed_blocker_message()
     assert "fetch_odds_close" in close_feed_blocker_message() or "close-feed" in close_feed_blocker_message()
+
+
+def _same_name_prop(event_id: str, matchup: str, **kw):
+    """Two different players share a name; same market/line/side on one slate."""
+    row = {
+        "player_name": "Mike Williams",
+        "market": "REC_YDS",
+        "line": 45.5,
+        "position": "OVER",
+        "event_id": event_id,
+        "matchup": matchup,
+    }
+    row.update(kw)
+    return row
+
+
+def test_ambiguous_short_key_does_not_hand_over_another_games_close():
+    """Two games' same-named players collide on the short key; serve neither."""
+    from outlier_nfl.enrich_close import index_book_close_records, lookup_book_close_row
+
+    kc = _same_name_prop("E-KC-BAL", "KC @ BAL", close_line=45.5, close_odds=-120)
+    sf = _same_name_prop("E-SF-LAR", "SF @ LAR", close_line=45.5, close_odds=140)
+    index = index_book_close_records([kc, sf])
+
+    # Full keys still resolve to their own game's close.
+    assert lookup_book_close_row(index, _same_name_prop("E-KC-BAL", "KC @ BAL"))["close_odds"] == -120
+    assert lookup_book_close_row(index, _same_name_prop("E-SF-LAR", "SF @ LAR"))["close_odds"] == 140
+
+    # A row that can only join on the short key gets no close rather than a guess.
+    unresolved = {"player_name": "Mike Williams", "market": "REC_YDS", "line": 45.5,
+                  "position": "OVER"}
+    assert lookup_book_close_row(index, unresolved) is None
+
+    # A short key only one game claims still joins.
+    solo = index_book_close_records([kc])
+    assert lookup_book_close_row(solo, unresolved)["close_odds"] == -120
+
+
+def test_align_does_not_stamp_an_event_id_the_short_key_cannot_pin():
+    """Stamping either candidate would forge a full-key match on the wrong game."""
+    from outlier_nfl.fetch_odds_close import align_close_records_to_predictions
+
+    close_row = {
+        "player_name": "Mike Williams",
+        "market": "REC_YDS",
+        "line": 45.5,
+        "position": "OVER",
+        "close_odds": -120,
+        "event_id": "odds-api-1",
+        "matchup": "Kansas City Chiefs @ Baltimore Ravens",
+    }
+    preds = [_same_name_prop("E-KC-BAL", "KC @ BAL"), _same_name_prop("E-SF-LAR", "SF @ LAR")]
+
+    (ambiguous,) = align_close_records_to_predictions([dict(close_row)], preds)
+    assert ambiguous["aligned_to_predictions"] is False
+    assert ambiguous["alignment_skipped"] == "ambiguous_short_key"
+    assert ambiguous["event_id"] == "odds-api-1"  # untouched, never the wrong game's
+    assert ambiguous["matchup"] == "Kansas City Chiefs @ Baltimore Ravens"
+
+    # One candidate only: the alignment this function exists for still happens.
+    (aligned,) = align_close_records_to_predictions([dict(close_row)], preds[:1])
+    assert aligned["aligned_to_predictions"] is True
+    assert aligned["event_id"] == "E-KC-BAL"
+    assert aligned["matchup"] == "KC @ BAL"

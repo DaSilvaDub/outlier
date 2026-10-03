@@ -389,21 +389,36 @@ def align_close_records_to_predictions(
 
     Enables full ``_row_match_key`` hits in ``enrich_close`` without inventing
     closes for unmatched pack rows.
+
+    The short key carries no game, so two predictions for same-named players in
+    different games collide on it (anytime-TD props all sit on 0.5, so any such
+    pair collides). Stamping either one's ``event_id`` would turn the guess into
+    a full-key match in ``enrich_close`` and hand the close to the wrong game, so
+    an ambiguous key is left unaligned instead.
     """
     if isinstance(predictions, Mapping):
         pred_rows = predictions.get("records") or []
     else:
         pred_rows = predictions
     by_short: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    ambiguous: set[tuple[Any, ...]] = set()
     for raw in pred_rows:
         if not isinstance(raw, Mapping):
             continue
-        by_short[_short_join_key(raw)] = raw
+        key = _short_join_key(raw)
+        prior = by_short.get(key)
+        if prior is not None and (
+            str(prior.get("event_id") or "") != str(raw.get("event_id") or "")
+            or str(prior.get("matchup") or "") != str(raw.get("matchup") or "")
+        ):
+            ambiguous.add(key)
+        by_short[key] = raw
 
     out: list[dict[str, Any]] = []
     for raw in close_records:
         row = dict(raw)
-        hit = by_short.get(_short_join_key(row))
+        short_key = _short_join_key(row)
+        hit = None if short_key in ambiguous else by_short.get(short_key)
         if hit is not None:
             if hit.get("matchup"):
                 row["matchup"] = hit.get("matchup")
@@ -412,6 +427,8 @@ def align_close_records_to_predictions(
             row["aligned_to_predictions"] = True
         else:
             row["aligned_to_predictions"] = False
+            if short_key in ambiguous:
+                row["alignment_skipped"] = "ambiguous_short_key"
         out.append(row)
     return out
 
