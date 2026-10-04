@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-04 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-uwwa7c` · **Last commit**: `cc13dc3` · **PR**: https://github.com/DaSilvaDub/outlier/pull/209
+**Branch**: `claude/inspiring-fermat-uwwa7c` · **Last commit**: `e310d90` · **PR**: https://github.com/DaSilvaDub/outlier/pull/209
 
 ## Fixed (reproduced before the fix)
 - `outlier_nfl/alt_floors.py` — `export_alt_floors` gated `nfl_alt_floors_latest.json` and
@@ -12,6 +12,19 @@
   `_trace_best_bets` stale-latest bug closed in #206. The undated CSV is now written only when
   `write_latest` is set, and `outputs["csv"]` reports the dated CSV on a windowed run.
   Regression test: `tests/test_nfl_alt_floors.py::test_windowed_run_does_not_clobber_the_undated_csv`.
+
+- `outlier_nfl/weekly.py` + 7 NFL test files — `NflPipeline.run`'s report writers fall back to
+  the CWD-relative `Path("reports/NFL")`, i.e. the *tracked* reports directory, when no
+  `reports_dir` is passed. Harmless while the only writer was the game-script block (behind
+  `generate_game_script=False`), but #207's alt-floors block runs unconditionally. Result:
+  (a) every `pytest` run overwrote the real `reports/NFL/Alt_Floors_latest.md` with an empty
+  fixture-dated report — 9 `pipeline.run()` call sites across 7 test files omitted
+  `reports_dir`; (b) `run_week` accepted `reports_dir`, used it for its own weekly card, but
+  never forwarded it to the per-slate `pipeline.run()`, so weekly runs scattered per-slate
+  alt-floor reports into `reports/NFL` regardless of the requested directory. Both fixed.
+  Guard: `tests/test_nfl_ops_hygiene.py::test_pipeline_run_writes_no_reports_into_the_repository`
+  snapshots the repo's `reports/NFL` around a run and fails on any new file (verified
+  non-vacuous). The full offline suite now leaves the worktree clean.
 
 ## Reviewed, not changed (needs a ruling / no evidence of a live defect)
 - **Contradictory parlay guidance in the generated Alt Floors report** —
@@ -45,7 +58,10 @@ vendored wheelhouse).
 
 ## Files Touched
 - `outlier_nfl/alt_floors.py`
-- `tests/test_nfl_alt_floors.py`
+- `outlier_nfl/weekly.py`
+- `tests/test_nfl_alt_floors.py`, `tests/test_nfl_ops_hygiene.py`, `tests/test_nfl_pipeline.py`,
+  `tests/test_nfl_best_bets.py`, `tests/test_nfl_calibration.py`, `tests/test_nfl_external.py`,
+  `tests/test_nfl_weather.py`
 - `.agent-log/HANDOFF.md`
 
 ## Next Steps
