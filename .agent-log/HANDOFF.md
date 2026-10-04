@@ -1,3 +1,61 @@
+# HANDOFF — 2026-10-04 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-uwwa7c` · **Last commit**: `cc13dc3` · **PR**: https://github.com/DaSilvaDub/outlier/pull/209
+
+## Fixed (reproduced before the fix)
+- `outlier_nfl/alt_floors.py` — `export_alt_floors` gated `nfl_alt_floors_latest.json` and
+  `Alt_Floors_latest.md` on `write_latest` but wrote the undated `nfl_alt_floors.csv`
+  unconditionally, though that file is the same kind of current-slate artifact.
+  `NflPipeline.run` sets `write_latest = window is None`, so any `--window early/late` run
+  rewrote the slate-wide CSV from a partial subset: a 3-prop full run then a 1-prop windowed
+  run left the CSV at 1 row while `nfl_alt_floors_latest.json` still held 3. Same class as the
+  `_trace_best_bets` stale-latest bug closed in #206. The undated CSV is now written only when
+  `write_latest` is set, and `outputs["csv"]` reports the dated CSV on a windowed run.
+  Regression test: `tests/test_nfl_alt_floors.py::test_windowed_run_does_not_clobber_the_undated_csv`.
+
+## Reviewed, not changed (needs a ruling / no evidence of a live defect)
+- **Contradictory parlay guidance in the generated Alt Floors report** —
+  `render_alt_floors_markdown` guideline 1 recommends a *same-game* parlay of alt floor legs
+  ("QB Passing Floor + Workhorse RB Rushing Floor"), while guideline 3 says "Per pipeline
+  invariants, alternate player props must be parlayed across different games". The cross-game
+  restriction in AGENTS.md / CLAUDE.md HOUSE RULE 3 is MLB-only, so guideline 3 also
+  misattributes it to NFL. Whether NFL alt floors may be combined same-game is a desk policy
+  call — not something an agent should silently pick. Needs your ruling, then one of the two
+  guidelines goes.
+- **Hit-rate scale in `alt_floors`** — `discover_alt_floor_candidates` reads `l5/l10/season_hit_rate`
+  raw, while `calibration._normalize_hit_rate` (used by `best_bets`) defensively accepts both
+  0–1 and 0–100 and divides by 100. If the feed ever emits percentages, every alt-floor
+  confidence score would clamp to 1.0 and all ranking discrimination would be lost. Fixtures and
+  all tests use 0–1 and there is no data on disk showing otherwise, so this is an unproven
+  robustness gap, not a confirmed bug. Routing the three reads through `_normalize_hit_rate`
+  would close it cheaply.
+- `tapes=` is accepted by `discover_alt_floor_candidates` / `generate_alt_floors_pipeline` and
+  never read. Dead parameter, harmless.
+- 25 pre-existing ruff F401/E402 warnings, all in test files (12 in
+  `tests/test_challenger_adversarial.py`, 5 in `tests/test_nfl_alt_floors.py`). No ruff gate in
+  CI, so cosmetic. Left alone — unrelated cleanup.
+
+## Sandbox limitation worth knowing
+This cloud session cannot install Python packages: PyPI returns **403** behind the network
+policy (`pip` and `uv` both). So `structlog`, `anthropic`, `google-genai` and `sqlalchemy` are
+missing and 48 test modules fail to collect / 51 tests fail on import alone — identical before
+and after any change. 1037 tests do run and pass. If you want a cloud agent to see a genuinely
+green suite, the environment needs those wheels pre-installed (a SessionStart hook or a
+vendored wheelhouse).
+
+## Files Touched
+- `outlier_nfl/alt_floors.py`
+- `tests/test_nfl_alt_floors.py`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Rule on the same-game vs cross-game question above so the Alt Floors report stops
+  contradicting itself.
+- Still open from 2026-10-04 (Antigravity): verify weekly replay / shadow settlement against
+  actual box scores once Week 4 concludes.
+
+---
+
 # HANDOFF — 2026-10-04 (Antigravity, Sportsbook Alternate Floor Props)
 
 **Branch**: `feat/nfl-alt-floors` · **Last commit**: `2dc5495`
