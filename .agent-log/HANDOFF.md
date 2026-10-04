@@ -1,3 +1,40 @@
+# HANDOFF — 2026-10-04 (Antigravity, Sportsbook Alternate Floor Props)
+
+**Branch**: `feat/nfl-alt-floors` · **Last commit**: `2dc5495`
+
+## Implemented & Baked into Pipeline
+- **Dynamic Sportsbook Alternate Floor Props (`outlier_nfl/alt_floors.py`)**:
+  - Replaces rigid, static prop filters (fixed 50 rush / 200 pass) with dynamic, player-specific floor detection.
+  - Tailored to sportsbook alternate ladders (Hard Rock Bet default via `HARDROCK`/`HARDROCK_R`, with retail consensus fallback).
+  - Handles ladder shifts cleanly: detects elite QB floors (e.g. Joe Burrow OVER 224.5 vs other QBs at 199.5/174.5/149.5), RB floors (Derrick Henry OVER 64.5 vs Walker 49.5 and Swift/Brown 39.5), and WR/TE floors (Nacua 39.5/49.5, JSN 64.5).
+  - Composite confidence score: blends historical hit rate stability (`L10` 35%, `L5` 30%, `Season` 15%), safety cushion below consensus (`cushion_ratio` 10%), book implied probability / juice (10%), and situational weather/game-script adjustments.
+  - Automatically extracts Top 3 in Passing, Top 3 in Rushing, Top 3 in Receiving, and ranks an overall Master Confidence list (1–9).
+  - Exports artifacts on every pipeline run:
+    - `data/NFL/exports/nfl_alt_floors_{date}.json` (and `nfl_alt_floors_latest.json`)
+    - `data/NFL/exports/nfl_alt_floors.csv` (and `nfl_alt_floors_{date}.csv`)
+    - `reports/NFL/{date}_Alt_Floors.md` (and `reports/NFL/Alt_Floors_latest.md`)
+- **Pipeline Integration (`outlier_nfl/pipeline.py`)**:
+  - Hooked directly into `NflPipeline.run()` after best-bets trace and attached to execution summary dictionary.
+  - Added `--target-alt-book` CLI option (defaults to `HARDROCK`).
+  - Added dedicated summary console printout showing top category plays and overall #1 confidence play.
+- **Unit Tests (`tests/test_nfl_alt_floors.py`)**:
+  - 6 unit tests covering odds conversion, book extraction, dynamic floor discovery, category and master ranking, file exports, and weather calibration. All 6 passed in 0.61s.
+- **Documentation**:
+  - Documented heuristic in `.agents/AGENTS.md`.
+
+## Files Touched
+- `outlier_nfl/alt_floors.py` (new)
+- `outlier_nfl/pipeline.py`
+- `outlier_nfl/__init__.py`
+- `tests/test_nfl_alt_floors.py` (new)
+- `.agents/AGENTS.md`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Verify weekly replay / shadow settlement against actual box scores when Week 4 games conclude.
+
+---
+
 # HANDOFF — 2026-10-02 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-lw6unk` · **Last commit**: `fb8c706` · **PR**: https://github.com/DaSilvaDub/outlier/pull/206
