@@ -1,3 +1,37 @@
+# HANDOFF — 2026-10-04 (Antigravity/Gemini, WNBA Playoff Calibration & Daily Pipeline Run)
+
+**Branch**: `master` · **Last commit**: `2a2f171`
+
+## Implemented & Baked into Pipeline
+- **WNBA Postseason Calibration & Rotation Gating**:
+  - `is_wnba_playoffs()` window detection for late-September and October postseason slates.
+  - Enhanced `low_volume_3pt_shooter()` with fallback for unpopulated `l5` to check `hit_rate_component` and `historical_edge_pct`, and automatically disqualifies non-perimeter bigs (Centers) on 3PT Overs in playoff rotations.
+  - Added `wnba_playoff_role_player_over_risk()` to `DISQUALIFYING_DQ_FLAGS` to protect against postseason bench trimming variance.
+  - Added `apply_wnba_playoff_total_cap()` attaching `wnba_playoff_half_court_pace` sizing flag to protect against slower half-court pace in playoff totals.
+  - In `wnba_projection_record()`: calibrated star minutes expansion (+10% up to 38.0 MPG) and bench contraction (-15%) for postseason slates.
+  - 296 unit tests passing across `test_slate_quality.py`, `test_projections.py`, `test_cards.py`, and `test_pack.py`.
+- **Pipeline Execution (2026-10-04)**:
+  - Ran `daily_job.py --date 2026-10-04 --analysis-profile local` cleanly (offline/deterministic mode adhering strictly to house rule).
+  - Executed `scripts/organize_today_run2.py` exporting pack artifacts, Master Prompts, and reports to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+  - 3 Board A Actionable WNBA plays qualified for 2026-10-04:
+    - Angel Reese - Points OVER 15.5 (+117, 1.0U, +6.61% edge)
+    - Jewell Loyd - Three Pointers OVER 1.5 (+120, 1.0U, +5.51% edge)
+    - Jewell Loyd - Points OVER 7.5 (+105, 1.0U, +5.15% edge)
+
+## Files Touched
+- `outlier_scrapers/slate_quality.py`
+- `outlier_scrapers/pack_selection.py`
+- `outlier_scrapers/projections.py`
+- `outlier_scrapers/cards.py`
+- `tests/test_slate_quality.py`
+- `tests/test_projections.py`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Reconcile 2026-10-04 WNBA postseason results and NFL Week 4 box scores upon game completion.
+
+---
+
 # HANDOFF — 2026-10-04 (Antigravity, Sportsbook Alternate Floor Props)
 
 **Branch**: `feat/nfl-alt-floors` · **Last commit**: `2dc5495`
