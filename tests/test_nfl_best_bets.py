@@ -375,7 +375,12 @@ def test_load_injury_report_distinguishes_missing_from_empty(tmp_path):
 
 def test_pipeline_run_writes_snapshot_and_traced_card(tmp_path):
     pipeline = NflPipeline(data_dir=tmp_path)
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=False,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     normalized = tmp_path / "NFL" / "normalized"
     payload = json.loads((normalized / "nfl_best_bets_2026-09-13.json").read_text(encoding="utf-8"))
     assert summary["best_bets_counts"] == payload["counts"]
@@ -403,7 +408,12 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
 
     monkeypatch.setattr(pipeline_mod, "build_best_bets", boom)
     pipeline = NflPipeline(data_dir=tmp_path)
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=False,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale.exists()
 
@@ -411,7 +421,12 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     # card must not survive under the name readers treat as this run's.
     stale_latest = normalized / "nfl_best_bets_latest.json"
     stale_latest.write_text(json.dumps({"picks": [], "updated_at": "old"}), encoding="utf-8")
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=True)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=True,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale_latest.exists()
     events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]

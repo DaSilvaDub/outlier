@@ -65,7 +65,14 @@ def run_week(
     summaries: dict[str, Any] = {}
     for slate in dates:
         summary = pipeline.run(
-            date=slate, offline_fixtures_dir=offline_fixtures_dir, write_latest=False
+            date=slate,
+            offline_fixtures_dir=offline_fixtures_dir,
+            write_latest=False,
+            # Forward the caller's reports_dir: report writers inside run() fall
+            # back to the CWD-relative Path("reports/NFL"), so without this a
+            # weekly run scatters its per-slate reports outside the directory it
+            # was told to use.
+            reports_dir=reports_dir,
         )
         if summary.get("best_bets_error"):
             raise RuntimeError(f"{slate}: {summary['best_bets_error']}")

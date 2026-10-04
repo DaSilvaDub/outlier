@@ -63,6 +63,7 @@ def test_pipeline_window_skips_latest_writes(tmp_path: Path, mock_api_client):
         date="2026-09-13",
         window="1pm",
         offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports" / "NFL",
     )
     assert summary["status"] == "OK"
     assert summary.get("window") == "1pm"
@@ -79,7 +80,37 @@ def test_pipeline_unknown_window_raises(tmp_path: Path, mock_api_client):
             date="2026-09-13",
             window="not-a-window",
             offline_fixtures_dir=FIXTURES_DIR,
+            reports_dir=tmp_path / "reports" / "NFL",
         )
+
+
+def test_pipeline_run_writes_no_reports_into_the_repository(tmp_path: Path, mock_api_client):
+    """A test-suite pipeline run must not touch the repo's own reports/NFL.
+
+    Report-writing blocks in ``NflPipeline.run`` fall back to the CWD-relative
+    ``Path("reports/NFL")`` when no ``reports_dir`` is given -- which, for anyone
+    running pytest from the repo root, is the tracked directory holding real
+    reports. The game script block is behind ``generate_game_script=False`` so it
+    never fired from a test, but the alt floor props block runs unconditionally
+    and overwrote ``reports/NFL/Alt_Floors_latest.md`` -- the report readers
+    treat as current -- with an empty, fixture-dated one on every pytest run.
+
+    Any new unconditional report write has to be given an isolated directory by
+    its caller, and this test is what says so.
+    """
+    repo_reports = Path(__file__).resolve().parent.parent / "reports" / "NFL"
+    before = {p.name for p in repo_reports.iterdir()} if repo_reports.is_dir() else set()
+
+    pipeline = NflPipeline(client=mock_api_client, data_dir=tmp_path)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
+    assert summary["status"] == "OK"
+
+    after = {p.name for p in repo_reports.iterdir()} if repo_reports.is_dir() else set()
+    assert after == before, f"pipeline run wrote into the repo's reports/NFL: {sorted(after - before)}"
 
 
 def test_market_context_marks_default_placeholders():

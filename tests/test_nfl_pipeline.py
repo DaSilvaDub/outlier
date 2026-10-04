@@ -144,7 +144,11 @@ def test_safe_write_json_and_winerror_retry(tmp_path: Path):
 @pytest.mark.skipif(not HAS_PIPELINE, reason="outlier_nfl.pipeline not yet implemented in M1")
 def test_pipeline_run_end_to_end(tmp_path: Path, mock_api_client):
     pipeline = NflPipeline(client=mock_api_client, data_dir=tmp_path)
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
 
     assert summary["status"] == "OK"
     assert summary["game_lines_count"] > 0
@@ -187,7 +191,7 @@ def test_pipeline_empty_schedule_graceful_degradation(tmp_path: Path, mock_api_c
     mock_api_client.fetch_schedule.return_value = {"events": []}
     pipeline = NflPipeline(client=mock_api_client, data_dir=tmp_path)
 
-    summary = pipeline.run(date="2026-09-13")
+    summary = pipeline.run(date="2026-09-13", reports_dir=tmp_path / "reports" / "NFL")
     assert summary["status"] == "OK"
     assert summary["game_lines_count"] == 0
     assert summary["player_props_count"] == 0
