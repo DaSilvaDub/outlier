@@ -482,12 +482,16 @@ def export_alt_floors(
         for r in records:
             writer.writerow(r)
 
+    # The undated CSV is the "current slate" artifact, same role as
+    # nfl_alt_floors_latest.json -- a windowed run (write_latest=False) carries
+    # only part of the slate and must not overwrite it.
     csv_main = exports_dir / "nfl_alt_floors.csv"
-    with open(csv_main, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for r in records:
-            writer.writerow(r)
+    if write_latest:
+        with open(csv_main, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for r in records:
+                writer.writerow(r)
 
     # 3. Markdown Report
     md_content = render_alt_floors_markdown(
@@ -503,7 +507,7 @@ def export_alt_floors(
     logger.info("Exported %d alt floor props to %s and %s", len(records), json_dated, md_dated)
     return {
         "json": str(json_dated),
-        "csv": str(csv_main),
+        "csv": str(csv_main if write_latest else csv_dated),
         "markdown": str(md_dated),
     }
 
