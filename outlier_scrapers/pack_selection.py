@@ -176,6 +176,7 @@ DISQUALIFYING_DQ_FLAGS = {
     "star_scorer_usage_up_under",
     "team_total_scoring_conflict",
     "opponent_high_k_lineup",
+    "wnba_playoff_role_player_risk",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
@@ -892,6 +893,8 @@ def _apply_quality_and_signal_flags(
         dq_flags.append("team_total_scoring_conflict")
     if slate_quality.opponent_high_k_rate_conflict(row):
         dq_flags.append("opponent_high_k_lineup")
+    if slate_quality.wnba_playoff_role_player_over_risk(row):
+        dq_flags.append("wnba_playoff_role_player_risk")
     returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
     )
@@ -912,6 +915,7 @@ def _apply_quality_and_signal_flags(
         row["recommended_units_pre_news"] = ""
     slate_quality.apply_local_devig_unit_cap(row)
     slate_quality.apply_wnba_heavy_dog_spread_cap(row, injury_view)
+    slate_quality.apply_wnba_playoff_total_cap(row)
     edge_pct_val = _to_float(row.get("edge_pct"))
     if edge_pct_val is not None and edge_pct_val <= 0.035 and "thin_liquidity" in dq_flags:
         dq_flags.append("edge_suspect_thin_liquidity")

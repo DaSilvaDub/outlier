@@ -2,9 +2,11 @@ from outlier_scrapers.slate_quality import (
     LOCAL_DEVIG_UNIT_CAP,
     apply_local_devig_unit_cap,
     apply_wnba_heavy_dog_spread_cap,
+    apply_wnba_playoff_total_cap,
     classify_injuries,
     dossier_injury_section,
     guard_rebound_over_signal,
+    is_wnba_playoffs,
     low_volume_3pt_shooter,
     opponent_high_k_rate_conflict,
     pitcher_identity_flags,
@@ -15,6 +17,7 @@ from outlier_scrapers.slate_quality import (
     summarize_pitcher_identity,
     team_total_scoring_conflict,
     usage_up_under,
+    wnba_playoff_role_player_over_risk,
 )
 
 
@@ -484,3 +487,65 @@ def test_guard_rebound_boost_requires_verified_perimeter_role():
     for role in (None, "", "C", "PF", "F"):
         assert not guard_rebound_over_signal({**row, "player_position": role})
     assert guard_rebound_over_signal({**row, "player_position": "SG"})
+
+
+def test_is_wnba_playoffs_date_window():
+    regular_season_row = {"_event_starts_at": "2026-07-15T19:00:00Z"}
+    playoff_row_sept = {"_event_starts_at": "2026-09-27T20:00:00Z"}
+    playoff_row_oct = {"_event_starts_at": "2026-10-05T20:00:00Z"}
+    assert is_wnba_playoffs(regular_season_row) is False
+    assert is_wnba_playoffs(playoff_row_sept) is True
+    assert is_wnba_playoffs(playoff_row_oct) is True
+
+
+def test_wnba_playoff_center_3pt_over_disqualified():
+    boston_playoff_row = {
+        "sport": "WNBA",
+        "market_type": "3PTS",
+        "selection": "Aliyah Boston - Three Pointers OVER 0.5",
+        "line": 0.5,
+        "player_position": "C",
+        "_event_starts_at": "2026-09-27T20:00:00Z",
+        "hit_rate_component": 41.8,
+        "historical_edge_pct": -0.3033,
+    }
+    assert low_volume_3pt_shooter(boston_playoff_row) is True
+
+
+def test_wnba_playoff_role_player_over_risk_flagged():
+    risky_role_player = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "selection": "Bench Player Over 8.5 Points",
+        "_event_starts_at": "2026-09-27T20:00:00Z",
+        "hit_rate_component": 40.0,
+        "historical_edge_pct": -0.25,
+    }
+    star_player = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "selection": "Paige Bueckers Over 19.5 Points",
+        "_event_starts_at": "2026-09-27T20:00:00Z",
+        "hit_rate_component": 64.2,
+        "historical_edge_pct": 0.3739,
+    }
+    assert wnba_playoff_role_player_over_risk(risky_role_player) is True
+    assert wnba_playoff_role_player_over_risk(star_player) is False
+
+
+def test_wnba_playoff_total_cap_and_pace_flag():
+    playoff_total = {
+        "sport": "WNBA",
+        "market_type": "GAMELINE",
+        "market_label": "Total O/U",
+        "selection": "IND @ LVA Total O/U OVER 165.5",
+        "_event_starts_at": "2026-09-27T20:00:00Z",
+        "recommended_units_pre_news": 1.0,
+        "sizing_flags": "",
+    }
+    apply_wnba_playoff_total_cap(playoff_total)
+    assert playoff_total["recommended_units_pre_news"] == 0.5
+    assert "wnba_playoff_half_court_pace" in playoff_total["sizing_flags"]
+

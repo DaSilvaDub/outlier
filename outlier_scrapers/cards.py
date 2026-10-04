@@ -1348,6 +1348,11 @@ def _board_a_flags(side: str, view: dict[str, Any], card: dict[str, Any] | None 
         l5 = _to_float(hit_rates.get("l5_pct") if hit_rates.get("l5_pct") is not None else card_dict.get("l5_pct"))
         if l5 is not None and 0.0 <= l5 <= 20.0:
             flags.append("low_volume_3pt_shooter")
+        else:
+            from outlier_scrapers import slate_quality
+            merged = {**view, **card_dict}
+            if slate_quality.low_volume_3pt_shooter(merged, l5_pct=l5):
+                flags.append("low_volume_3pt_shooter")
     return flags
 
 
