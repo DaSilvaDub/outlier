@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-03 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `f067334` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207
+**Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `8a40e43` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207
 
 ## Fixed — close-feed short key served another game's close
 One defect, two sites, both reproduced before the fix. The close join has a full key
@@ -56,6 +56,40 @@ identity. The two collision tests fail on `a86b95b`. Suite 1256 passed / 43 skip
 settle smoke runs unchanged.
 
 
+## Second review round — identity had to accumulate, not latest-win (`8a40e43`)
+The PR review (2026-10-05, owner) found a real hole in `f067334`: `owner_identity` and the
+align path's `by_short` stored the *newest* row's identity, so a blank-identity row between
+two conflicting ones erased what the key knew. Orderings that were broken vs fine:
+
+| Order | Before `8a40e43` | After |
+| --- | --- | --- |
+| LAR, NYJ | rejected | rejected |
+| blank, LAR, NYJ | rejected | rejected |
+| LAR, blank, NYJ | **served the NYJ close (140)** | rejected |
+| NYJ, blank, LAR | **served the LAR close (-120)** | rejected |
+
+That is why the `f067334` tests passed. New `merge_identities()` pools the non-blank side
+per field, so the check is order-independent: non-conflicting identities are treated as one
+player, the first genuine conflict still drops the key, and a blank row beside one known
+player still merges and still joins.
+
+Also from that review:
+- Documented in `align_close_records_to_predictions` what is **not** covered: two *close*
+  rows for same-named players in one game. Odds-API rows carry no team and no `player_id`,
+  so nothing in the feed separates them and the last still wins. Needs feed-side identity.
+- Both test gaps it listed are covered: the blank/known ordering (parametrized over all
+  three permutations, two of which fail on `5f376c3`) and two books under one full key,
+  which must stay multi-book dedup rather than read as two players.
+- Noted for the first live settle: `n_book_close` will dip on slates with name collisions.
+  Intended; the per-row `alignment_skipped="ambiguous_short_key"` marker makes any dip
+  attributable.
+
+Suite 1261 passed / 43 skipped (67/29 unchanged). `ruff` clean on both modules; mypy 8 /
+4 and pyright 6 on the changed files — all unchanged. Pipeline and settle smoke unchanged.
+The module's `pytest` F401 is genuinely resolved (the new parametrize uses it); the other
+five are local imports in an older test, left alone.
+
+
 ## Checked clean this run
 - All 5 upgrade markers present; branch started level with `origin/master` at `a50b843`.
 - CI on `master` green at `a50b843` (Offline Pytest + Static Type Checking).
@@ -103,7 +137,8 @@ settle smoke runs unchanged.
   models, desk runners or provider calls were invoked.
 
 ## Next steps
-- PR #207 awaiting review/CI.
+- PR #207: reviewed by the owner 2026-10-05, called mergeable as is; the one real
+  finding is fixed in `8a40e43`. Awaiting CI on that head, then merge.
 - Decide on the `safe_write_json` fsync question above.
 # HANDOFF — 2026-10-02 (Claude, daily automated debug review)
 
