@@ -69,6 +69,148 @@
 
 ---
 
+# HANDOFF — 2026-10-03 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `8a40e43` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207
+
+## Fixed — close-feed short key served another game's close
+One defect, two sites, both reproduced before the fix. The close join has a full key
+(player, market, line, side, matchup, event_id) and a short key that drops the game,
+because Odds-API rows carry no Outlier event id. The short key identifies a player
+*name*, not a player: two same-named players on one slate collide whenever market,
+line and side agree, and anytime-TD props all sit on 0.5, so for that market any
+same-named pair collides. Both sites were last-write-wins.
+
+- `enrich_close.index_book_close_records` — stored each row under both keys, so the
+  second game's close overwrote the first under the shared short key. A prediction row
+  that can only join short (`props.extract_player_props` leaves matchup/team unresolved
+  when the feed's team id resolves through neither the alias table nor the event's
+  home/away map) got the other game's `close_line`/`close_odds`/`close_implied`.
+- `fetch_odds_close.align_close_records_to_predictions` — worse: it stamps the matched
+  prediction's `event_id`/`matchup` onto the close row, so a collision **forged a
+  full-key match on the wrong game**. The right game's prediction lost its close
+  entirely; the wrong one gained a bogus CLV.
+
+Both now treat an ambiguous short key as no match, as PR #205 settled the same hazard in
+`scorecard.lookup_consensus_line`. Unambiguous short keys are unchanged; a repeated row
+with the same full key still de-duplicates. A skipped alignment is labeled
+`alignment_skipped="ambiguous_short_key"`; a dropped close lowers `n_book_close` in
+`close_enrichment`, which `attach_close_fields` already reports honestly. Impact is the
+measurement layer (shadow-settle CLV, which `trace_settings` points at for tuning), not
+bet selection.
+
+## Follow-up on review — same-game name collision (`f067334`)
+Copilot filed two High-severity findings on #207; both were correct and both reproduced.
+`a4ed5f2` only caught the *cross-game* collision, because neither join key carries
+`team` or `player_id`:
+- `_row_match_key` has the game but no identity, so two different players named
+  "Mike Williams" on opposing teams in one game share the **full** key. `owner ==
+  full_key` read that as "duplicate row", leaving the short key enabled and letting the
+  second payload overwrite the first (LAR prediction got the NYJ close, -120 -> 140).
+- `_short_join_key` has neither game nor identity, so the alignment side saw equal
+  event_id/matchup and stamped the later prediction's identity onto the close row.
+
+The keys cannot carry identity — Odds-API close rows have no `team` and no `player_id`,
+so adding either would break the join the short key exists for. Identity is therefore
+used only to tell two rows apart *under* one key, via new `row_identity()` /
+`identities_conflict()` in `enrich_close` (imported by `fetch_odds_close`, which already
+imported `CLOSE_SOURCE_BOOK` from it, so no new import edge). A blank side is unknown
+rather than a mismatch, the same tolerance `matchup._names_match` and
+`scorecard.lookup_consensus_line` apply. A key two conflicting identities claim is
+dropped, full key included.
+
+Three more tests: same-game collision on both keys, the alignment side, and a **control
+pinning the identity-less Odds-API join** so neither this fix nor a later one can key on
+identity. The two collision tests fail on `a86b95b`. Suite 1256 passed / 43 skipped
+(67/29 unchanged); `ruff` clean on both changed files; `mypy outlier_nfl` 8,
+`mypy outlier_scrapers` 4, `pyright` on the changed files 6 — all unchanged; pipeline and
+settle smoke runs unchanged.
+
+
+## Second review round — identity had to accumulate, not latest-win (`8a40e43`)
+The PR review (2026-10-05, owner) found a real hole in `f067334`: `owner_identity` and the
+align path's `by_short` stored the *newest* row's identity, so a blank-identity row between
+two conflicting ones erased what the key knew. Orderings that were broken vs fine:
+
+| Order | Before `8a40e43` | After |
+| --- | --- | --- |
+| LAR, NYJ | rejected | rejected |
+| blank, LAR, NYJ | rejected | rejected |
+| LAR, blank, NYJ | **served the NYJ close (140)** | rejected |
+| NYJ, blank, LAR | **served the LAR close (-120)** | rejected |
+
+That is why the `f067334` tests passed. New `merge_identities()` pools the non-blank side
+per field, so the check is order-independent: non-conflicting identities are treated as one
+player, the first genuine conflict still drops the key, and a blank row beside one known
+player still merges and still joins.
+
+Also from that review:
+- Documented in `align_close_records_to_predictions` what is **not** covered: two *close*
+  rows for same-named players in one game. Odds-API rows carry no team and no `player_id`,
+  so nothing in the feed separates them and the last still wins. Needs feed-side identity.
+- Both test gaps it listed are covered: the blank/known ordering (parametrized over all
+  three permutations, two of which fail on `5f376c3`) and two books under one full key,
+  which must stay multi-book dedup rather than read as two players.
+- Noted for the first live settle: `n_book_close` will dip on slates with name collisions.
+  Intended; the per-row `alignment_skipped="ambiguous_short_key"` marker makes any dip
+  attributable.
+
+Suite 1261 passed / 43 skipped (67/29 unchanged). `ruff` clean on both modules; mypy 8 /
+4 and pyright 6 on the changed files — all unchanged. Pipeline and settle smoke unchanged.
+The module's `pytest` F401 is genuinely resolved (the new parametrize uses it); the other
+five are local imports in an older test, left alone.
+
+
+## Checked clean this run
+- All 5 upgrade markers present; branch started level with `origin/master` at `a50b843`.
+- CI on `master` green at `a50b843` (Offline Pytest + Static Type Checking).
+- `movement_index` ↔ `_market` key join verified live: the market pillar came back
+  VERIFIED with populated snapshot evidence on the fixture slate, so the
+  LONG_PASS-class join bug is not present there.
+- `_side_sign` in `best_bets._market` looked inverted; it is not. `test_nfl_best_bets`
+  pins the intent explicitly (69.5 → 72.5 = "market moving toward OVER"), i.e. a rising
+  line is read as consensus direction, not as a worse number for the OVER. Left alone.
+- Audited every canonical `PROP_*` player market against `boxscore.player_actual`:
+  `LONG_PASS`, `LONG_RUSH`, `LONG_REC` and `PASSING_TIMES_SACKED` have no mapping, so
+  settle skips them as `unsupported_or_missing_stat`. Not a silent drop (it is in
+  `skip_reasons`) and nflverse weekly stats carry no "longest" column, so this is a
+  coverage gap, not a bug. `LONG_RUSH`/`LONG_REC` are reachable from an ESPN box score
+  (`RUSHING:LONG` / `RECEIVING:LONG`) if the ESPN path is ever made primary.
+- Division sites in `outlier_nfl` (projection, scorecard, tape_nflverse, usage, weather,
+  settle, best_bets) are all guarded against empty denominators.
+- `to_eastern_date` shifts a bare `YYYY-MM-DD` back a day (midnight UTC → previous
+  Eastern evening). Every caller passes a full timestamp or a `datetime`, so no live
+  bug; worth remembering before adding a caller.
+- `ruff check`: 25 findings repo-wide, all pre-existing `F401` in `tests/`, `scratch.py`,
+  `script.py`, `append_feedback.py`. `mypy outlier_scrapers` 4, `mypy outlier_nfl` 8,
+  `pyright outlier_scrapers` 1 error / 9 warnings — counts identical before and after
+  this change (verified by stashing it); all narrowing false positives or missing stubs.
+
+## Not fixed — reported only
+- `utils.safe_write_json` calls `f.flush()` but never `os.fsync()` before the atomic
+  replace, while `snapshots.append_snapshot` does fsync. The docstring says
+  "atomically write", and after `os.replace` the rename can be durable while the data
+  is not, so a crash or power loss can leave a truncated card under a name readers
+  treat as current. Every normalized artifact goes through this function, so it is a
+  one-line change with repo-wide blast radius — left for a human to decide.
+
+## Environment note (cloud sandbox)
+- pypi is still blocked (403 from the egress proxy), so `sqlalchemy`, `google`,
+  `anthropic`, `openai` and `dateutil` cannot be installed. Unlike 2026-10-02, `pytest`
+  **is** present in the image (uv tool, 9.1.1), and a `structlog` stand-in kept in the
+  scratchpad (never committed — only `api.py` imports structlog, and only
+  `configure`/`get_logger`) unblocks 200 more tests. Result: **1253 passed / 43 skipped**,
+  with 67 failures / 29 collection errors all traced to the five missing packages.
+  `ruff`, `mypy` and `pyright` are installed and did run. `Offline Pytest` in CI remains
+  the authoritative suite.
+- NFL pipeline smoke run offline against `tests/fixtures/nfl`: `Status: OK`, best bets
+  `{VALIDATED: 0, PROVISIONAL: 7, REJECTED: 1}` — unchanged by this fix. No reasoning
+  models, desk runners or provider calls were invoked.
+
+## Next steps
+- PR #207: reviewed by the owner 2026-10-05, called mergeable as is; the one real
+  finding is fixed in `8a40e43`. Awaiting CI on that head, then merge.
+- Decide on the `safe_write_json` fsync question above.
 # HANDOFF — 2026-10-02 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-lw6unk` · **Last commit**: `fb8c706` · **PR**: https://github.com/DaSilvaDub/outlier/pull/206
