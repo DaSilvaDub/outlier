@@ -76,4 +76,12 @@ def fetch(client, season: int, through_week: int = 22):
 
 When adding a new adapter name to `__init__.py`, always create the stub file in the same commit. The pipeline treats missing external data gracefully (falls back to `[]`), so stubs are always safe to ship.
 
+## NFL Sportsbook Alternate Floor Props Calibration (Hard Rock Bet & Dynamic Ladders)
+Never use static, arbitrary thresholds (such as fixed 50 rush / 50 rec / 200 pass) across all NFL players. Sportsbooks like Hard Rock Bet set custom alternate floor ladders based on individual player tier and consensus expectations (e.g. Joe Burrow's lowest available alternate passing line is 224.5, Derrick Henry's lowest alternate rushing line is 64.5, and JSN's lowest alternate receiving line is 64.5, whereas other players have ladders starting at 149.5, 174.5, 199.5, 39.5, or 49.5).
+1. **Dynamic Floor Evaluation:** The pipeline evaluates each player's true available floor lines on the target book (`HARDROCK`, with retail consensus fallback).
+2. **Floor Confidence Formula:** Composite confidence blends historical stability (`L10` 35%, `L5` 30%, `Season` 15%), safety cushion below consensus line (`cushion_ratio` 10%), book implied probability / juice (10%), and situational weather/script calibration (penalizing passing in >=15 mph winds / rain and upgrading rush volume).
+3. **Comparative Floor Selection:** If an elite player clearing a higher floor line (e.g., Joe Burrow OVER 224.5 or Derrick Henry OVER 64.5) demonstrates higher hit rate convergence (L5 100%, L10 80%–90%) and a larger cushion below their consensus median than a lower-volume player clearing a 199.5 or 49.5 line, the elite player must be selected and ranked higher.
+4. **Automated Exports:** The pipeline exports `data/NFL/exports/nfl_alt_floors_{date}.json`, `data/NFL/exports/nfl_alt_floors.csv`, and `reports/NFL/{date}_Alt_Floors.md`, featuring Top 3 in Passing, Top 3 in Rushing, Top 3 in Receiving, and an overall Master Confidence Rank 1–9.
+
+
 

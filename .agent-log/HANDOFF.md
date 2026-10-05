@@ -1,3 +1,74 @@
+# HANDOFF — 2026-10-04 (Antigravity/Gemini, WNBA Playoff Calibration & Daily Pipeline Run)
+
+**Branch**: `master` · **Last commit**: `2a2f171`
+
+## Implemented & Baked into Pipeline
+- **WNBA Postseason Calibration & Rotation Gating**:
+  - `is_wnba_playoffs()` window detection for late-September and October postseason slates.
+  - Enhanced `low_volume_3pt_shooter()` with fallback for unpopulated `l5` to check `hit_rate_component` and `historical_edge_pct`, and automatically disqualifies non-perimeter bigs (Centers) on 3PT Overs in playoff rotations.
+  - Added `wnba_playoff_role_player_over_risk()` to `DISQUALIFYING_DQ_FLAGS` to protect against postseason bench trimming variance.
+  - Added `apply_wnba_playoff_total_cap()` attaching `wnba_playoff_half_court_pace` sizing flag to protect against slower half-court pace in playoff totals.
+  - In `wnba_projection_record()`: calibrated star minutes expansion (+10% up to 38.0 MPG) and bench contraction (-15%) for postseason slates.
+  - 296 unit tests passing across `test_slate_quality.py`, `test_projections.py`, `test_cards.py`, and `test_pack.py`.
+- **Pipeline Execution (2026-10-04)**:
+  - Ran `daily_job.py --date 2026-10-04 --analysis-profile local` cleanly (offline/deterministic mode adhering strictly to house rule).
+  - Executed `scripts/organize_today_run2.py` exporting pack artifacts, Master Prompts, and reports to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+  - 3 Board A Actionable WNBA plays qualified for 2026-10-04:
+    - Angel Reese - Points OVER 15.5 (+117, 1.0U, +6.61% edge)
+    - Jewell Loyd - Three Pointers OVER 1.5 (+120, 1.0U, +5.51% edge)
+    - Jewell Loyd - Points OVER 7.5 (+105, 1.0U, +5.15% edge)
+
+## Files Touched
+- `outlier_scrapers/slate_quality.py`
+- `outlier_scrapers/pack_selection.py`
+- `outlier_scrapers/projections.py`
+- `outlier_scrapers/cards.py`
+- `tests/test_slate_quality.py`
+- `tests/test_projections.py`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Reconcile 2026-10-04 WNBA postseason results and NFL Week 4 box scores upon game completion.
+
+---
+
+# HANDOFF — 2026-10-04 (Antigravity, Sportsbook Alternate Floor Props)
+
+**Branch**: `feat/nfl-alt-floors` · **Last commit**: `2dc5495`
+
+## Implemented & Baked into Pipeline
+- **Dynamic Sportsbook Alternate Floor Props (`outlier_nfl/alt_floors.py`)**:
+  - Replaces rigid, static prop filters (fixed 50 rush / 200 pass) with dynamic, player-specific floor detection.
+  - Tailored to sportsbook alternate ladders (Hard Rock Bet default via `HARDROCK`/`HARDROCK_R`, with retail consensus fallback).
+  - Handles ladder shifts cleanly: detects elite QB floors (e.g. Joe Burrow OVER 224.5 vs other QBs at 199.5/174.5/149.5), RB floors (Derrick Henry OVER 64.5 vs Walker 49.5 and Swift/Brown 39.5), and WR/TE floors (Nacua 39.5/49.5, JSN 64.5).
+  - Composite confidence score: blends historical hit rate stability (`L10` 35%, `L5` 30%, `Season` 15%), safety cushion below consensus (`cushion_ratio` 10%), book implied probability / juice (10%), and situational weather/game-script adjustments.
+  - Automatically extracts Top 3 in Passing, Top 3 in Rushing, Top 3 in Receiving, and ranks an overall Master Confidence list (1–9).
+  - Exports artifacts on every pipeline run:
+    - `data/NFL/exports/nfl_alt_floors_{date}.json` (and `nfl_alt_floors_latest.json`)
+    - `data/NFL/exports/nfl_alt_floors.csv` (and `nfl_alt_floors_{date}.csv`)
+    - `reports/NFL/{date}_Alt_Floors.md` (and `reports/NFL/Alt_Floors_latest.md`)
+- **Pipeline Integration (`outlier_nfl/pipeline.py`)**:
+  - Hooked directly into `NflPipeline.run()` after best-bets trace and attached to execution summary dictionary.
+  - Added `--target-alt-book` CLI option (defaults to `HARDROCK`).
+  - Added dedicated summary console printout showing top category plays and overall #1 confidence play.
+- **Unit Tests (`tests/test_nfl_alt_floors.py`)**:
+  - 6 unit tests covering odds conversion, book extraction, dynamic floor discovery, category and master ranking, file exports, and weather calibration. All 6 passed in 0.61s.
+- **Documentation**:
+  - Documented heuristic in `.agents/AGENTS.md`.
+
+## Files Touched
+- `outlier_nfl/alt_floors.py` (new)
+- `outlier_nfl/pipeline.py`
+- `outlier_nfl/__init__.py`
+- `tests/test_nfl_alt_floors.py` (new)
+- `.agents/AGENTS.md`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Verify weekly replay / shadow settlement against actual box scores when Week 4 games conclude.
+
+---
+
 # HANDOFF — 2026-10-03 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-ukn98l` · **Last commit**: `8a40e43` · **PR**: https://github.com/DaSilvaDub/outlier/pull/207

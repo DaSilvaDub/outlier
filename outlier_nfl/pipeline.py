@@ -95,6 +95,7 @@ class NflPipeline:
         generate_game_script: bool = False,
         reports_dir: Path | str | None = None,
         write_latest: bool | None = None,
+        target_alt_book: str = "HARDROCK",
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -572,6 +573,35 @@ class NflPipeline:
 
         starting_qbs = {t: r["starting_qb"] for t, r in rosters.items() if r.get("starting_qb")}
 
+        # =====================================================================
+        # Sportsbook Alternate Floor Props (e.g. Hard Rock Bet)
+        # =====================================================================
+        alt_floors_summary: dict[str, Any] = {}
+        try:
+            from outlier_nfl.alt_floors import generate_alt_floors_pipeline
+
+            starting_qbs_set = {
+                r["starting_qb"] for r in rosters.values() if r.get("starting_qb")
+            }
+            alt_floors_summary = generate_alt_floors_pipeline(
+                props=all_player_props,
+                exports_dir=self.data_dir / "NFL" / "exports",
+                reports_dir=Path(reports_dir) if reports_dir is not None else Path("reports/NFL"),
+                date_str=target_date,
+                target_book=target_alt_book,
+                starting_qbs=starting_qbs_set,
+                weather_records=weather_records,
+                tapes=tapes,
+                write_latest=write_latest,
+            )
+            logger.info(
+                "Alt floor props generated: %d ranked props for %s",
+                alt_floors_summary.get("count", 0),
+                target_alt_book,
+            )
+        except Exception as exc:
+            logger.warning("Failed generating alt floor props: %s", exc)
+
         summary: dict[str, Any] = {
             "status": "OK",
             "date": target_date,
@@ -592,6 +622,8 @@ class NflPipeline:
             "matchup_tagged_props_count": len(matchup_prop_records),
             "best_bets_counts": best_bets.get("counts", {}),
             "best_bets_error": best_bets.get("error"),
+            "alt_floors": alt_floors_summary,
+            "alt_floors_count": alt_floors_summary.get("count", 0),
             "errors": errors + ([best_bets["error"]] if best_bets.get("error") else []),
         }
 
@@ -804,6 +836,12 @@ def main() -> int:
         help="With --refresh-tape, average only each team's last N games. Default: all.",
     )
     parser.add_argument(
+        "--target-alt-book",
+        type=str,
+        default="HARDROCK",
+        help="Target sportsbook for alternate floor props (default: HARDROCK).",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable detailed logging.",
@@ -824,6 +862,7 @@ def main() -> int:
                 window=args.window,
                 offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
                 generate_game_script=args.generate_game_script,
+                target_alt_book=args.target_alt_book,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -851,6 +890,38 @@ def main() -> int:
             print("VERIFIED ACTIVE STARTING QUARTERBACKS (FROM FEED):")
             for t, qb in sorted(summary["starting_qbs"].items()):
                 print(f"  {t:4s}: {qb}")
+        alt_data = summary.get("alt_floors") or {}
+        if alt_data.get("count"):
+            print("-" * 60)
+            print(f"SPORTSBOOK ALTERNATE FLOOR PROPS ({args.target_alt_book.upper()}):")
+            top3_cat = alt_data.get("top3_by_category") or {}
+            for mkt, title in [
+                ("PASS_YDS", "PASSING YARDS"),
+                ("RUSH_YDS", "RUSHING YARDS"),
+                ("REC_YDS", "RECEIVING YARDS"),
+            ]:
+                mkt_props = top3_cat.get(mkt, [])
+                if mkt_props:
+                    print(f"  {title} (TOP {len(mkt_props)}):")
+                    for p in mkt_props:
+                        odds_s = (
+                            f"{p.get('target_odds'):+d}"
+                            if isinstance(p.get("target_odds"), int)
+                            else f"{p.get('target_odds')}"
+                        )
+                        print(
+                            f"    #{p.get('category_rank')} {p.get('player_name'):<20} ({p.get('team')}): "
+                            f"OVER {p.get('line'):<5} | Odds: {odds_s:<6} | Cons: {p.get('consensus_line'):<5} "
+                            f"(Cush: +{p.get('cushion')} yds) | Score: {p.get('confidence_score'):.3f}"
+                        )
+            master_list = alt_data.get("master_pool") or []
+            if master_list:
+                top1 = master_list[0]
+                print(
+                    f"  TOP OVERALL CONFIDENCE PLAY: #{top1.get('master_rank')} {top1.get('player_name')} "
+                    f"({top1.get('team')}) - OVER {top1.get('line')} {top1.get('market_display')} "
+                    f"(Score: {top1.get('confidence_score'):.3f})"
+                )
         print("=" * 60)
         return 0
     except Exception as exc:
