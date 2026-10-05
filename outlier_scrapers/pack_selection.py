@@ -958,6 +958,16 @@ def _apply_quality_and_signal_flags(
     if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
+    # Re-derive the tier from the final flags. The earlier pass above is still
+    # needed -- apply_learned_probability_blend segments on the tier -- but every
+    # gate between it and here can append a flag, so a row disqualified by one of
+    # them was exported HIGH while data_quality_tier(disqualifying=True) is
+    # defined to return LOW. Calibration and segmentation then read that tier.
+    row["data_quality_tier"] = probability_blend.data_quality_tier(
+        row["data_quality_flags"],
+        row.get("projection_quality_flags"),
+        disqualifying=disqualifying,
+    )
 
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
     row["insight_component"] = _blank_neutral_component(signal.get("insight_component"))

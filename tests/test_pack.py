@@ -4210,7 +4210,7 @@ def test_low_volume_3pt_shooter_disqualifies_actionable_board_a():
     assert row["board"] == "A_FLAGGED"
 
 
-def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal():
+def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal(monkeypatch):
     """The playoff role-player gate must see the recency fields build_row derives.
 
     ``wnba_playoff_role_player_over_risk`` reads ``hit_rate_component`` and
@@ -4218,6 +4218,15 @@ def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal():
     ``signal``, so a regression that stamps them after the quality gates run
     leaves this gate reading the base row's "" placeholder and never firing.
     """
+    # build_row's projection fallback calls get_wnba_player_features, which hits
+    # ESPN with a 30s timeout on a cache miss. Stub it: a None feature snapshot is
+    # what a failed fetch already yields, so the row is unchanged -- just offline.
+    from outlier_scrapers import projections as projections_mod
+
+    monkeypatch.setattr(
+        projections_mod, "get_wnba_player_features", lambda *a, **kw: None
+    )
+
     def _card(hit_component, hit_pct):
         return _ctx_card(
             "SEA",
@@ -4268,10 +4277,14 @@ def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal():
     assert float(cold["historical_edge_pct"]) < -0.10
     assert "wnba_playoff_role_player_risk" in cold["data_quality_flags"]
     assert cold["actionable"] == "false"
+    # The gate runs after the first data_quality_tier pass, so the tier has to be
+    # re-derived from the final flags or a disqualified row exports as HIGH.
+    assert cold["data_quality_tier"] == "LOW"
 
     warm = make_row(_card(72.0, 85.0), ev, sport="WNBA", event_starts=starts)
     assert warm is not None
     assert "wnba_playoff_role_player_risk" not in warm["data_quality_flags"]
+    assert warm["data_quality_tier"] == "HIGH"
 
 
 def test_opponent_high_k_disqualifies_so_under():
