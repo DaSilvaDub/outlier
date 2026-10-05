@@ -1,3 +1,103 @@
+# HANDOFF — 2026-10-05 (claude, Daily Automated Debug Review)
+
+**Branch**: `claude/inspiring-fermat-h49p2m` · **Last commit**: `00aa0b9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/210
+
+## Three defects found and fixed, each reproduced before the fix
+
+1. **`outlier_scrapers/pack_selection.py` — the new WNBA postseason gates were
+   dead code.** `wnba_playoff_role_player_over_risk()` (its flag is in
+   `DISQUALIFYING_DQ_FLAGS`) and `low_volume_3pt_shooter()`'s new fallbacks,
+   both added in `2a2f171`, read `hit_rate_component` / `historical_edge_pct`
+   off the row. Both fields were written ~70 lines *below* those gates inside
+   the same `_apply_quality_and_signal_flags`, so every gate read the `""`
+   placeholder `_build_base_row` seeds from `CANDIDATES_HEADER`. Hoisted the two
+   assignments above the gates — pure code motion, both derive from
+   `side_view["signal"]` and `row["decimal_price"]` / `row["push_prob"]`, all
+   set earlier by `_apply_price_and_sizing`. Row field values verified
+   identical pre/post; the only delta is that the gates now see them.
+   **Watch the next WNBA postseason pack**: these gates were dormant, so rows
+   the 2026-10-04 run let through may now come back `A_FLAGGED`.
+
+2. **`outlier_nfl/weekly.py` — `--reports-dir` was silently half-applied.**
+   `run_week()` honoured it for the merged weekly card but never forwarded it
+   to the inner `pipeline.run()`, so the per-slate alt-floors report (written
+   unconditionally since `2dc5495`) went to `./reports/NFL` relative to the
+   working directory instead. The same unset default made the test suite write
+   `reports/NFL/2026-09-13_Alt_Floors.md` and `Alt_Floors_latest.md` into a
+   clean checkout. Forwarded the parameter, and scoped the eight
+   `NflPipeline.run()` test call sites to `tmp_path / "reports" / "NFL"` the way
+   `test_pipeline_calibrated_and_high_prob_artifacts` already did. Full suite
+   now leaves the tree clean.
+
+3. **`outlier_scrapers/pack_selection.py` — `data_quality_tier` was stale.**
+   Found by Copilot on the PR and verified: the tier is computed once *before*
+   the quality gates run, so any gate that appends a flag afterwards left the
+   row exported `HIGH` while `probability_blend.data_quality_tier` returns
+   `LOW` for `disqualifying=True` — and `segment_context()` feeds that tier
+   into calibration and segmentation. Pre-existing and wider than fix 1:
+   reproduced on the untouched regular-season `low_volume_3pt_shooter` path
+   too, so it already applied to `usage_up_under`,
+   `star_scorer_usage_up_under`, `low_volume_3pt_shooter`,
+   `team_total_scoring_conflict`, `opponent_high_k_lineup`,
+   `PITCHER_RETURNING_FROM_IL` and both `edge_suspect_*` flags. No test
+   asserted the tier through `build_row`, which is why it survived. Now
+   re-derived from the final flags; the earlier pass stays because
+   `apply_learned_probability_blend` segments on the tier and runs between the
+   two.
+
+## Files Touched
+- `outlier_scrapers/pack_selection.py`
+- `outlier_nfl/weekly.py`
+- `tests/test_pack.py` (new regression test)
+- `tests/test_nfl_best_bets.py` (new regression test + scoped call sites)
+- `tests/test_nfl_calibration.py`, `tests/test_nfl_external.py`,
+  `tests/test_nfl_ops_hygiene.py`, `tests/test_nfl_pipeline.py`,
+  `tests/test_nfl_weather.py` (scoped call sites)
+- `.agent-log/HANDOFF.md`
+
+## Verification
+- `pytest --continue-on-collection-errors`: **1929 passed**, 45 skipped;
+  25 failed / 8 collection errors, all this sandbox's blocked PyPI egress
+  (sqlalchemy, google, anthropic, openai, six — see
+  `docs/CLOUD-SANDBOX-LIMITATIONS.md`). Failure list byte-identical to the
+  pre-change baseline.
+- Both new tests verified to fail on the pre-fix tree.
+- `ruff check` clean on every changed file.
+- `mypy outlier_scrapers` / `pyright outlier_scrapers`: unchanged from baseline.
+
+## Reported, Not Fixed (needs a decision)
+- **`blend_segment` still records the pre-gate `data_quality_tier`.** Fix 3
+  re-derives the exported tier but deliberately leaves the earlier pass that
+  `apply_learned_probability_blend` segments on, so a row disqualified by a
+  late gate is still blended under its pre-gate tier. Changing a fitted
+  model's segmentation key is a modelling decision, not a debugging fix.
+- **`./reports/NFL` is CWD-relative by design.** `run()`'s docstring and
+  `weekly.py`'s CLI both document it, while `exports_dir` is rooted at
+  `data_dir`. Re-rooting reports at `data_dir` would make the two consistent
+  but moves production output — owner's call.
+- **Every WNBA `build_row` test makes a live ESPN call.**
+  `projections.get_wnba_minutes_features` (projections.py:1317) fetches on
+  cache miss; failures are swallowed as a warning, so the suite passes but is
+  slow, network-dependent, and silently degrades the projection. Pre-existing
+  (the 2026-09 WNBA tests do it too). Wants an offline fixture or an
+  autouse cache seed, not a one-line patch.
+- **`is_wnba_playoffs()` is duplicated.** `slate_quality.is_wnba_playoffs()`
+  and `projections._is_wnba_playoff_row()` carry the same Sept-18/October
+  window but read different row keys and disagree on which date wins when a
+  row has several. Worth collapsing to one helper.
+- **`requirements.txt` floors mypy at 2.3.1**; the sandbox resolves 1.20.2,
+  which is why `schema.py:256`, `probable_pitchers.py:95` and
+  `game_totals.py:1045` report `arg-type` false positives on
+  `x not in (None, "")`. Exactly what the requirements comment predicts — CI,
+  which installs from `requirements.txt`, does not see them.
+
+## Next Steps
+- Review and merge the PR, then re-run the WNBA pack and check whether the
+  now-live postseason gates change the Board A set.
+- Reconcile 2026-10-04 WNBA postseason results and NFL Week 4 box scores.
+
+---
+
 # HANDOFF — 2026-10-04 (Antigravity/Gemini, WNBA Playoff Calibration & Daily Pipeline Run)
 
 **Branch**: `master` · **Last commit**: `2a2f171`

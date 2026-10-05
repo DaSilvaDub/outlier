@@ -375,7 +375,12 @@ def test_load_injury_report_distinguishes_missing_from_empty(tmp_path):
 
 def test_pipeline_run_writes_snapshot_and_traced_card(tmp_path):
     pipeline = NflPipeline(data_dir=tmp_path)
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=False,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     normalized = tmp_path / "NFL" / "normalized"
     payload = json.loads((normalized / "nfl_best_bets_2026-09-13.json").read_text(encoding="utf-8"))
     assert summary["best_bets_counts"] == payload["counts"]
@@ -387,6 +392,39 @@ def test_pipeline_run_writes_snapshot_and_traced_card(tmp_path):
         assert pick["verdict"] != VALIDATED  # one snapshot: market movement is never verified
     snapshots = list((tmp_path / "NFL" / "snapshots").glob("nfl_prop_snapshots_*.jsonl"))
     assert len(snapshots) == 1
+
+
+def test_run_week_forwards_reports_dir_to_each_slate_run(tmp_path, monkeypatch):
+    """run_week's --reports-dir has to reach the per-slate run, not just the card.
+
+    Each slate run writes reports of its own (alt floors, game script). Leaving
+    reports_dir unset on the inner pipeline.run() sent those to ./reports/NFL
+    relative to the working directory while the weekly card honoured the
+    caller's directory -- so the option was silently half-applied, and a test
+    run wrote into the repository.
+    """
+    from outlier_nfl.weekly import run_week
+
+    monkeypatch.chdir(tmp_path)
+    cwd_reports = tmp_path / "reports" / "NFL"
+    reports_dir = tmp_path / "weekly_reports"
+    pipeline = NflPipeline(data_dir=tmp_path / "data")
+    events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
+
+    result = run_week(
+        pipeline,
+        date(2026, 9, 13),
+        events=events,
+        offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=reports_dir,
+    )
+
+    assert result["dates"]
+    assert Path(result["report"]).parent == reports_dir
+    # Every per-slate report belongs under the caller's directory, and nothing
+    # may land in a ./reports/NFL beside the working directory.
+    assert sorted(p.name for p in reports_dir.glob("*_Alt_Floors.md"))
+    assert not cwd_reports.exists()
 
 
 def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeypatch):
@@ -403,7 +441,12 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
 
     monkeypatch.setattr(pipeline_mod, "build_best_bets", boom)
     pipeline = NflPipeline(data_dir=tmp_path)
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=False)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=False,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale.exists()
 
@@ -411,7 +454,12 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     # card must not survive under the name readers treat as this run's.
     stale_latest = normalized / "nfl_best_bets_latest.json"
     stale_latest.write_text(json.dumps({"picks": [], "updated_at": "old"}), encoding="utf-8")
-    summary = pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR, write_latest=True)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        write_latest=True,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale_latest.exists()
     events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
