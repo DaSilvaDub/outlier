@@ -316,7 +316,11 @@ def test_consensus_is_empty_when_the_whole_market_is_unpriced():
 def test_generator_load_data_reads_pipeline_output(tmp_path):
     """load_data must pick up the normalized files a pipeline run writes."""
     pipeline = NflPipeline(data_dir=tmp_path)
-    pipeline.run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR)
+    pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports" / "NFL",
+    )
 
     generator = NflGameScriptGenerator(data_dir=tmp_path / "NFL" / "normalized")
     games, props = generator.load_data("2026-09-13")
