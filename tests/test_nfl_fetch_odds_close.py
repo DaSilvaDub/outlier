@@ -382,3 +382,75 @@ def test_align_rejects_two_same_game_predictions_with_different_identities():
     (aligned,) = align_close_records_to_predictions([dict(close_row)], [lar, dict(lar)])
     assert aligned["aligned_to_predictions"] is True
     assert aligned["event_id"] == "e1"
+
+
+@pytest.mark.parametrize("order", ["known_blank_known", "blank_known_known", "known_blank_first"])
+def test_a_blank_identity_row_between_two_players_cannot_hide_the_collision(order: str):
+    """Identity must accumulate per key, not track the newest row.
+
+    Replacing it lets a blank-identity row in the middle erase what the key knew,
+    so the later conflicting row is compared against blank and the collision is
+    missed. Each ordering must reject the key.
+    """
+    from outlier_nfl.enrich_close import index_book_close_records, lookup_book_close_row
+
+    lar = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR",
+                          close_line=45.5, close_odds=-120)
+    blank = _same_name_prop("e1", "NYJ @ LAR", close_line=45.5, close_odds=-105)
+    nyj = dict(lar, player_id="p-nyj-9", team="NYJ", close_odds=140)
+    rows = {
+        "known_blank_known": [lar, blank, nyj],
+        "blank_known_known": [blank, lar, nyj],
+        "known_blank_first": [nyj, blank, lar],
+    }[order]
+
+    index = index_book_close_records(rows)
+    prediction = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR")
+    assert lookup_book_close_row(index, prediction) is None
+    assert lookup_book_close_row(index, {"player_name": "Mike Williams", "market": "REC_YDS",
+                                         "line": 45.5, "position": "OVER"}) is None
+
+    # A blank row beside ONE known player is the same player, not a clash: the
+    # two identities merge and the join still resolves.
+    merged = index_book_close_records([blank, lar])
+    assert lookup_book_close_row(merged, prediction)["close_odds"] == -120
+
+
+def test_two_books_for_one_player_stay_a_duplicate_not_a_collision():
+    """Same full key twice with one identity is multi-book dedup, not ambiguity."""
+    from outlier_nfl.enrich_close import index_book_close_records, lookup_book_close_row
+
+    dk = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR",
+                         close_line=45.5, close_odds=-120, bookmaker="draftkings")
+    fd = dict(dk, close_odds=-115, bookmaker="fanduel")
+    prediction = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR")
+
+    hit = lookup_book_close_row(index_book_close_records([dk, fd]), prediction)
+    assert hit is not None, "two books for one player must not be read as two players"
+    assert hit["close_odds"] == -115  # last write wins, as before this change
+
+    # The short key stays usable too.
+    short = lookup_book_close_row(index_book_close_records([dk, fd]),
+                                  {"player_name": "Mike Williams", "market": "REC_YDS",
+                                   "line": 45.5, "position": "OVER"})
+    assert short is not None and short["close_odds"] == -115
+
+
+def test_align_blank_identity_prediction_cannot_hide_a_collision():
+    from outlier_nfl.fetch_odds_close import align_close_records_to_predictions
+
+    close_row = {"player_name": "Mike Williams", "market": "REC_YDS", "line": 45.5,
+                 "position": "OVER", "close_odds": -120, "event_id": "odds-api-1",
+                 "matchup": "New York Jets @ Los Angeles Rams"}
+    lar = _same_name_prop("e1", "NYJ @ LAR", player_id="p-lar-1", team="LAR")
+    blank = _same_name_prop("e1", "NYJ @ LAR")
+    nyj = _same_name_prop("e1", "NYJ @ LAR", player_id="p-nyj-9", team="NYJ")
+
+    (ambiguous,) = align_close_records_to_predictions([dict(close_row)], [lar, blank, nyj])
+    assert ambiguous["aligned_to_predictions"] is False
+    assert ambiguous["alignment_skipped"] == "ambiguous_short_key"
+
+    # Blank beside one known player merges rather than clashing.
+    (aligned,) = align_close_records_to_predictions([dict(close_row)], [blank, lar])
+    assert aligned["aligned_to_predictions"] is True
+    assert aligned["event_id"] == "e1"

@@ -111,6 +111,18 @@ def identities_conflict(left: tuple[str, str], right: tuple[str, str]) -> bool:
     return any(a and b and a != b for a, b in zip(left, right))
 
 
+def merge_identities(left: tuple[str, str], right: tuple[str, str]) -> tuple[str, str]:
+    """Everything two non-conflicting rows together know about one player.
+
+    Accumulating is what makes the ambiguity check order-independent. Replacing
+    the stored identity instead lets a blank-identity row in the middle erase
+    what the key already knew, so a later conflicting row is compared against
+    blank and the collision is missed -- with rows ordered LAR, blank, NYJ, the
+    LAR prediction came back with the NYJ player's close.
+    """
+    return tuple(a or b for a, b in zip(left, right))  # type: ignore[return-value]
+
+
 def index_book_close_records(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[Any, ...], dict[str, Any]]:
@@ -155,7 +167,9 @@ def index_book_close_records(
                 # Same name, market, line, side and game, different players.
                 ambiguous.add(full_key)
             else:
-                owner_identity[full_key] = identity
+                owner_identity[full_key] = (
+                    merge_identities(prior, identity) if prior is not None else identity
+                )
                 index[full_key] = payload
 
         if short_key not in ambiguous:
@@ -167,7 +181,9 @@ def index_book_close_records(
                 ambiguous.add(short_key)
             else:
                 short_owner[short_key] = full_key
-                owner_identity[short_key] = identity
+                owner_identity[short_key] = (
+                    merge_identities(prior, identity) if prior is not None else identity
+                )
                 index[short_key] = payload
 
     for key in ambiguous:

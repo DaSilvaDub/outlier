@@ -29,7 +29,12 @@ from outlier_nfl.close_feed import (
     validate_close_feed_records,
     write_close_feed,
 )
-from outlier_nfl.enrich_close import CLOSE_SOURCE_BOOK, identities_conflict, row_identity
+from outlier_nfl.enrich_close import (
+    CLOSE_SOURCE_BOOK,
+    identities_conflict,
+    merge_identities,
+    row_identity,
+)
 from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.utils import safe_read_json
 
@@ -397,24 +402,35 @@ def align_close_records_to_predictions(
     Stamping either one's ``event_id`` would turn the guess into a full-key match
     in ``enrich_close`` and hand the close to the wrong player, so an ambiguous
     key is left unaligned instead.
+
+    Not covered: two *close* rows for same-named players in one game. Odds-API
+    rows carry no team and no player id, so nothing in the feed tells them apart
+    and the last one still wins. Detecting that needs identity from the feed.
     """
     if isinstance(predictions, Mapping):
         pred_rows = predictions.get("records") or []
     else:
         pred_rows = predictions
     by_short: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    # Identity accumulates per key rather than tracking the newest row, so a
+    # blank-identity prediction between two conflicting ones cannot erase what
+    # the key already knew and hide the collision.
+    known: dict[tuple[Any, ...], tuple[str, str]] = {}
     ambiguous: set[tuple[Any, ...]] = set()
     for raw in pred_rows:
         if not isinstance(raw, Mapping):
             continue
         key = _short_join_key(raw)
         prior = by_short.get(key)
+        identity = row_identity(raw)
         if prior is not None and (
             str(prior.get("event_id") or "") != str(raw.get("event_id") or "")
             or str(prior.get("matchup") or "") != str(raw.get("matchup") or "")
-            or identities_conflict(row_identity(prior), row_identity(raw))
+            or identities_conflict(known[key], identity)
         ):
             ambiguous.add(key)
+            continue
+        known[key] = merge_identities(known[key], identity) if prior is not None else identity
         by_short[key] = raw
 
     out: list[dict[str, Any]] = []
