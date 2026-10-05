@@ -1,8 +1,8 @@
 # HANDOFF — 2026-10-05 (claude, Daily Automated Debug Review)
 
-**Branch**: `claude/inspiring-fermat-h49p2m` · **Last commit**: `fa36243` · **PR**: see branch
+**Branch**: `claude/inspiring-fermat-h49p2m` · **Last commit**: `00aa0b9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/210
 
-## Two defects found and fixed, each reproduced before the fix
+## Three defects found and fixed, each reproduced before the fix
 
 1. **`outlier_scrapers/pack_selection.py` — the new WNBA postseason gates were
    dead code.** `wnba_playoff_role_player_over_risk()` (its flag is in
@@ -29,6 +29,22 @@
    `test_pipeline_calibrated_and_high_prob_artifacts` already did. Full suite
    now leaves the tree clean.
 
+3. **`outlier_scrapers/pack_selection.py` — `data_quality_tier` was stale.**
+   Found by Copilot on the PR and verified: the tier is computed once *before*
+   the quality gates run, so any gate that appends a flag afterwards left the
+   row exported `HIGH` while `probability_blend.data_quality_tier` returns
+   `LOW` for `disqualifying=True` — and `segment_context()` feeds that tier
+   into calibration and segmentation. Pre-existing and wider than fix 1:
+   reproduced on the untouched regular-season `low_volume_3pt_shooter` path
+   too, so it already applied to `usage_up_under`,
+   `star_scorer_usage_up_under`, `low_volume_3pt_shooter`,
+   `team_total_scoring_conflict`, `opponent_high_k_lineup`,
+   `PITCHER_RETURNING_FROM_IL` and both `edge_suspect_*` flags. No test
+   asserted the tier through `build_row`, which is why it survived. Now
+   re-derived from the final flags; the earlier pass stays because
+   `apply_learned_probability_blend` segments on the tier and runs between the
+   two.
+
 ## Files Touched
 - `outlier_scrapers/pack_selection.py`
 - `outlier_nfl/weekly.py`
@@ -50,6 +66,11 @@
 - `mypy outlier_scrapers` / `pyright outlier_scrapers`: unchanged from baseline.
 
 ## Reported, Not Fixed (needs a decision)
+- **`blend_segment` still records the pre-gate `data_quality_tier`.** Fix 3
+  re-derives the exported tier but deliberately leaves the earlier pass that
+  `apply_learned_probability_blend` segments on, so a row disqualified by a
+  late gate is still blended under its pre-gate tier. Changing a fitted
+  model's segmentation key is a modelling decision, not a debugging fix.
 - **`./reports/NFL` is CWD-relative by design.** `run()`'s docstring and
   `weekly.py`'s CLI both document it, while `exports_dir` is rooted at
   `data_dir`. Re-rooting reports at `data_dir` would make the two consistent
