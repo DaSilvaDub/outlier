@@ -68,6 +68,8 @@ Join strategy: **team pair + Eastern slate date + player name**.
 high-prob / matchup emit defaults to **`empirical_hit_rate_market_prior`**.
 Settle scorecards include **Calibration by model_p bucket** (predicted vs actual).
 
+High-prob artifacts also apply a **same-player correlation guard**: full `records` stay Tier-1; `actionable_records` keeps one PRIMARY per `(event_id, player)` (tiebreak: `sportsbook_edge_pts` → `model_p` → `best_odds`). Correlated rows are tagged `CORRELATED_SAME_PLAYER`.
+
 ### Shrink discipline / α lock (multi-slate, 2026-09-26)
 
 See full table: [`docs/nfl/artifacts/alpha_lock_multi_slate.md`](artifacts/alpha_lock_multi_slate.md).
