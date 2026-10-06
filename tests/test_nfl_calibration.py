@@ -789,3 +789,180 @@ def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
     assert out["sportsbook_edge_pts"] == expected
     assert out["sportsbook_edge_pts"] != stale_edge
 
+# =============================================================================
+# Same-player correlation guard (issue #217 PR2)
+# =============================================================================
+
+
+def test_same_player_correlation_guard_keeps_one_actionable():
+    """Two Mooney-like overs on the same player → one PRIMARY, one correlated."""
+    from outlier_nfl.high_prob_rank import (
+        CORRELATION_ROLE_CORRELATED,
+        CORRELATION_ROLE_PRIMARY,
+        actionable_high_prob_records,
+        apply_same_player_correlation_guard,
+        correlation_guard_summary,
+    )
+
+    mooney_yds = {
+        "event_id": "evt-ari-nyg",
+        "player_id": "p_mooney",
+        "player_name": "Darnell Mooney",
+        "market": "REC_YDS",
+        "position": "OVER",
+        "line": 19.5,
+        "model_p": 0.78,
+        "sportsbook_edge_pts": 0.12,
+        "best_odds": -106,
+        "outcome_id": "o_yds",
+    }
+    mooney_rec = {
+        "event_id": "evt-ari-nyg",
+        "player_id": "p_mooney",
+        "player_name": "Darnell Mooney",
+        "market": "REC",
+        "position": "OVER",
+        "line": 1.5,
+        "model_p": 0.78,
+        "sportsbook_edge_pts": 0.05,  # worse sportsbook edge → correlated
+        "best_odds": -115,
+        "outcome_id": "o_rec",
+    }
+    odunze = {
+        "event_id": "evt-nyj-chi",
+        "player_id": "p_odunze",
+        "player_name": "Rome Odunze",
+        "market": "REC_YDS",
+        "position": "OVER",
+        "line": 32.5,
+        "model_p": 0.71,
+        "sportsbook_edge_pts": 0.08,
+        "best_odds": -112,
+        "outcome_id": "o_odu",
+    }
+
+    tagged = apply_same_player_correlation_guard([mooney_yds, mooney_rec, odunze])
+    by_outcome = {r["outcome_id"]: r for r in tagged}
+
+    assert by_outcome["o_yds"]["correlation_role"] == CORRELATION_ROLE_PRIMARY
+    assert by_outcome["o_yds"]["actionable"] is True
+    assert by_outcome["o_rec"]["correlation_role"] == CORRELATION_ROLE_CORRELATED
+    assert by_outcome["o_rec"]["actionable"] is False
+    assert by_outcome["o_rec"]["correlation_excluded_reason"] == CORRELATION_ROLE_CORRELATED
+    # Different player unaffected
+    assert by_outcome["o_odu"]["correlation_role"] == CORRELATION_ROLE_PRIMARY
+    assert by_outcome["o_odu"]["actionable"] is True
+
+    actionable = actionable_high_prob_records(tagged)
+    assert len(actionable) == 2
+    assert {r["outcome_id"] for r in actionable} == {"o_yds", "o_odu"}
+    # Full dump still has three rows
+    assert len(tagged) == 3
+
+    summary = correlation_guard_summary(tagged)
+    assert summary["n_primary"] == 2
+    assert summary["n_correlated_same_player"] == 1
+    assert summary["n_actionable"] == 2
+
+
+def test_same_player_correlation_falls_back_to_model_p_then_best_odds():
+    """Without sportsbook_edge_pts, prefer higher model_p; then best_odds."""
+    from outlier_nfl.high_prob_rank import (
+        CORRELATION_ROLE_CORRELATED,
+        CORRELATION_ROLE_PRIMARY,
+        apply_same_player_correlation_guard,
+    )
+
+    low_model = {
+        "event_id": "e1",
+        "player_name": "Hunter Henry",
+        "market": "REC",
+        "position": "UNDER",
+        "line": 3.5,
+        "model_p": 0.71,
+        "best_odds": -125,
+        "outcome_id": "a",
+    }
+    high_model = {
+        "event_id": "e1",
+        "player_name": "Hunter Henry",
+        "market": "REC_YDS",
+        "position": "UNDER",
+        "line": 49.5,
+        "model_p": 0.80,
+        "best_odds": -306,
+        "outcome_id": "b",
+    }
+    tagged = apply_same_player_correlation_guard([low_model, high_model])
+    by_id = {r["outcome_id"]: r for r in tagged}
+    assert by_id["b"]["correlation_role"] == CORRELATION_ROLE_PRIMARY
+    assert by_id["a"]["correlation_role"] == CORRELATION_ROLE_CORRELATED
+
+    # Equal model_p → higher (less-negative) best_odds wins
+    a = {
+        "event_id": "e2",
+        "player_id": "p1",
+        "player_name": "Same",
+        "market": "RUSH_ATT",
+        "position": "UNDER",
+        "line": 4.5,
+        "model_p": 0.75,
+        "best_odds": -110,
+        "outcome_id": "x",
+    }
+    b = {
+        "event_id": "e2",
+        "player_id": "p1",
+        "player_name": "Same",
+        "market": "RUSH_YDS",
+        "position": "UNDER",
+        "line": 21.5,
+        "model_p": 0.75,
+        "best_odds": 110,  # better American price
+        "outcome_id": "y",
+    }
+    tagged2 = apply_same_player_correlation_guard([a, b])
+    by_id2 = {r["outcome_id"]: r for r in tagged2}
+    assert by_id2["y"]["correlation_role"] == CORRELATION_ROLE_PRIMARY
+    assert by_id2["x"]["correlation_role"] == CORRELATION_ROLE_CORRELATED
+
+
+def test_pipeline_high_prob_includes_actionable_records(tmp_path):
+    """Pipeline high_prob artifact exposes actionable_records + correlation_guard."""
+    pipeline = NflPipeline(data_dir=tmp_path)
+    summary = pipeline.run(
+        date="2026-09-13",
+        offline_fixtures_dir=FIXTURES_DIR,
+        generate_game_script=False,
+    )
+    assert summary["status"] == "OK"
+    assert "tier_1_actionable_count" in summary
+    assert summary["tier_1_actionable_count"] <= summary["tier_1_anchors_count"]
+
+    high_prob = json.loads(
+        (tmp_path / "NFL" / "normalized" / "nfl_high_prob_props_2026-09-13.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "actionable_records" in high_prob
+    assert "correlation_guard" in high_prob
+    assert high_prob["actionable_count"] == len(high_prob["actionable_records"])
+    assert high_prob["correlation_guard"]["n_actionable"] == high_prob["actionable_count"]
+    for row in high_prob["actionable_records"]:
+        assert row.get("actionable") is True
+        assert row.get("correlation_role") == "PRIMARY"
+
+
+def test_missing_identity_rows_stay_singleton_primary():
+    """Empty event_id+player must not collapse into one correlation group."""
+    from outlier_nfl.high_prob_rank import (
+        CORRELATION_ROLE_PRIMARY,
+        apply_same_player_correlation_guard,
+    )
+
+    a = {"market": "REC", "outcome_id": "o1", "model_p": 0.7, "best_odds": -110}
+    b = {"market": "REC", "outcome_id": "o2", "model_p": 0.8, "best_odds": -105}
+    tagged = apply_same_player_correlation_guard([a, b])
+    assert all(r["correlation_role"] == CORRELATION_ROLE_PRIMARY for r in tagged)
+    assert all(r["actionable"] is True for r in tagged)
+

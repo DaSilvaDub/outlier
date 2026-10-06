@@ -63,6 +63,11 @@ from outlier_nfl.calibration import (
     DEFAULT_MARKET_PRIOR_KAPPA,
     model_p_bucket_counts,
 )
+from outlier_nfl.high_prob_rank import (
+    actionable_high_prob_records,
+    apply_same_player_correlation_guard,
+    correlation_guard_summary,
+)
 from outlier_nfl.utils import (
     matches_kickoff_window,
     nfl_season_for_date,
@@ -438,12 +443,18 @@ class NflPipeline:
         # Persist emit-time odds as close_* with honest source label (not book close).
         for row in anchors:
             attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_market_prior", overwrite_model_p=True)
+        # Same-player correlation guard: tag PRIMARY vs CORRELATED_SAME_PLAYER;
+        # full Tier-1 dump kept in records; actionable_records is the action set.
+        anchors = apply_same_player_correlation_guard(anchors)
+        actionable_anchors = actionable_high_prob_records(anchors)
         anchors_payload = {
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
             "count": len(anchors),
+            "actionable_count": len(actionable_anchors),
             "records": anchors,
+            "actionable_records": actionable_anchors,
             "close_enrichment": {
                 "mode": "snapshot_best",
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
@@ -459,6 +470,7 @@ class NflPipeline:
                 ),
             },
             "model_p_distribution": model_p_bucket_counts(anchors),
+            "correlation_guard": correlation_guard_summary(anchors),
         }
         if write_latest:
             safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
@@ -578,6 +590,7 @@ class NflPipeline:
         team_totals_count = sum(1 for g in all_game_lines if g.market_type == "TEAM_PROP")
         consensus_props_count = sum(1 for p in calibrated_props if p.is_consensus_line)
         tier_1_anchors_count = len(anchors)
+        tier_1_actionable_count = len(actionable_anchors)
 
         prop_breakdown: dict[str, int] = {}
         for p in all_player_props:
@@ -628,6 +641,7 @@ class NflPipeline:
             "props_count": len(all_player_props),
             "consensus_props_count": consensus_props_count,
             "tier_1_anchors_count": tier_1_anchors_count,
+            "tier_1_actionable_count": tier_1_actionable_count,
             "player_props_breakdown": prop_breakdown,
             "starting_qbs": starting_qbs,
             "matchup_scripts_count": len(matchup_scripts),
@@ -893,6 +907,7 @@ def main() -> int:
         print(f"Player Props Count:     {summary.get('player_props_count')}")
         print(f"Consensus Props Count:  {summary.get('consensus_props_count')}")
         print(f"Tier-1 Anchors Count:   {summary.get('tier_1_anchors_count')}")
+        print(f"Tier-1 Actionable:      {summary.get('tier_1_actionable_count')}")
         print(f"Matchup Scripts:        {summary.get('matchup_scripts_count')}")
         print(f"Matchup-Tagged Props:   {summary.get('matchup_tagged_props_count')}")
         if summary.get("game_script_file"):
