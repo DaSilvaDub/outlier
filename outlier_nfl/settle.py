@@ -141,6 +141,7 @@ class SettleReport:
     skip_reasons: dict[str, int] = field(default_factory=dict)
     by_tier: dict[str, dict[str, Any]] = field(default_factory=dict)
     by_source: dict[str, dict[str, Any]] = field(default_factory=dict)
+    by_model_p_bucket: dict[str, dict[str, Any]] = field(default_factory=dict)
     rows: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -375,6 +376,7 @@ def settle_predictions(
     clv_vals: list[float] = []
     tier_buckets: dict[str, dict[str, int]] = {}
     source_buckets: dict[str, dict[str, int]] = {}
+    model_p_buckets: dict[str, dict[str, Any]] = {}
 
     def _bump(bucket: dict[str, dict[str, int]], key: str, field_name: str) -> None:
         stats = bucket.setdefault(key, {"n": 0, "wins": 0, "losses": 0, "pushes": 0, "skipped": 0})
@@ -496,6 +498,28 @@ def settle_predictions(
             _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "pushes")
             _bump(source_buckets, snap.source, "pushes")
 
+        if model_prob is not None and result in {"W", "L", "P"}:
+            bkey = f"{round(model_prob, 6):.6f}"
+            mb = model_p_buckets.setdefault(
+                bkey,
+                {
+                    "model_p": round(model_prob, 6),
+                    "n": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "pushes": 0,
+                    "sum_model_p": 0.0,
+                },
+            )
+            mb["n"] += 1
+            mb["sum_model_p"] += float(model_prob)
+            if result == "W":
+                mb["wins"] += 1
+            elif result == "L":
+                mb["losses"] += 1
+            else:
+                mb["pushes"] += 1
+
     report.n_settled = sum(1 for r in rows if r.status == "settled")
     report.n_skipped = sum(1 for r in rows if r.status == "skipped")
     decided = report.n_wins + report.n_losses
@@ -546,6 +570,19 @@ def settle_predictions(
         }
         for key, vals in source_buckets.items()
     }
+    report.by_model_p_bucket = {}
+    for key, vals in sorted(model_p_buckets.items(), key=lambda kv: -kv[1]["n"]):
+        decided_b = vals["wins"] + vals["losses"]
+        n_b = vals["n"]
+        report.by_model_p_bucket[key] = {
+            "model_p": vals["model_p"],
+            "n": n_b,
+            "wins": vals["wins"],
+            "losses": vals["losses"],
+            "pushes": vals["pushes"],
+            "predicted_hit_rate": (vals["sum_model_p"] / n_b) if n_b else None,
+            "actual_hit_rate": (vals["wins"] / decided_b) if decided_b else None,
+        }
     report.rows = [r.to_dict() for r in rows]
     return report
 
@@ -610,6 +647,22 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
             f"W/L/P={stats.get('wins', 0)}/{stats.get('losses', 0)}/{stats.get('pushes', 0)} "
             f"hit_rate={stats.get('hit_rate')} skipped={stats.get('skipped', 0)}"
         )
+    lines.extend(["", "## Calibration by model_p bucket", ""])
+    lines.append(
+        "Predicted = mean `model_p` in bucket; actual = W/(W+L). "
+        "Units: probability on [0, 1]."
+    )
+    lines.append("")
+    if report.by_model_p_bucket:
+        for _key, stats in report.by_model_p_bucket.items():
+            lines.append(
+                f"- `model_p={stats.get('model_p')}`: n={stats.get('n', 0)} "
+                f"W/L/P={stats.get('wins', 0)}/{stats.get('losses', 0)}/{stats.get('pushes', 0)} "
+                f"predicted={stats.get('predicted_hit_rate')} "
+                f"actual={stats.get('actual_hit_rate')}"
+            )
+    else:
+        lines.append("- (no settled rows with model_p)")
     lines.append("")
     return "\n".join(lines)
 

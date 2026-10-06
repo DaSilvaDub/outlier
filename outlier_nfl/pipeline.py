@@ -59,6 +59,10 @@ from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
 from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
 from outlier_nfl.enrich_close import attach_close_fields
+from outlier_nfl.calibration import (
+    DEFAULT_MARKET_PRIOR_KAPPA,
+    model_p_bucket_counts,
+)
 from outlier_nfl.utils import (
     matches_kickoff_window,
     nfl_season_for_date,
@@ -433,7 +437,7 @@ class NflPipeline:
         ]
         # Persist emit-time odds as close_* with honest source label (not book close).
         for row in anchors:
-            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_market_prior", overwrite_model_p=True)
         anchors_payload = {
             "date": target_date,
             "window": window,
@@ -445,14 +449,16 @@ class NflPipeline:
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
             },
             "model_p_enrichment": {
-                "mode": "empirical_hit_rate_laplace",
-                "alpha": 2.0,
+                "mode": "empirical_hit_rate_market_prior",
+                "kappa": DEFAULT_MARKET_PRIOR_KAPPA,
                 "note": (
-                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
-                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
-                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                    "model_p = Beta shrink of L10/L20/L5/season hit rates toward "
+                    "sportsbook-only implied prior (source=empirical_hit_rate_market_prior); "
+                    "PrizePicks excluded from prior/edge; never a raw copy of implied_probability. "
+                    "Laplace still available via enrich_close --attach-model-p empirical_hit_rate_laplace."
                 ),
             },
+            "model_p_distribution": model_p_bucket_counts(anchors),
         }
         if write_latest:
             safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
@@ -493,7 +499,7 @@ class NflPipeline:
             if any(str(tag).startswith("MATCHUP_") for tag in p.calibration_tags)
         ]
         for row in matchup_prop_records:
-            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_market_prior", overwrite_model_p=True)
         matchup_props_payload = {
             "date": target_date,
             "window": window,
@@ -505,12 +511,13 @@ class NflPipeline:
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
             },
             "model_p_enrichment": {
-                "mode": "empirical_hit_rate_laplace",
-                "alpha": 2.0,
+                "mode": "empirical_hit_rate_market_prior",
+                "kappa": DEFAULT_MARKET_PRIOR_KAPPA,
                 "note": (
-                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
-                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
-                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                    "model_p = Beta shrink of L10/L20/L5/season hit rates toward "
+                    "sportsbook-only implied prior (source=empirical_hit_rate_market_prior); "
+                    "PrizePicks excluded from prior/edge; never a raw copy of implied_probability. "
+                    "Laplace still available via enrich_close --attach-model-p empirical_hit_rate_laplace."
                 ),
             },
         }
