@@ -645,6 +645,20 @@ def test_trench_rushing_mismatch_upgrades_attacking_score():
     assert script.home_score == 20.0
 
 
+def test_inactive_rb1_falls_back_to_next_healthy_depth_chart_back():
+    from outlier_nfl.matchup import build_matchup_script
+    from outlier_nfl.roster import get_team_depth_chart
+
+    starter, backup = get_team_depth_chart("PHI")["rbs"][:2]
+    tape = {
+        "CAR": {"rush_defense": 35.0, "opp_rush_yards_allowed": 165.0},
+        "PHI": {"rush_offense": 85.0, "rush_yards": 180.0},  # no tape rb1 -> depth chart
+    }
+    script = build_matchup_script("e", "CAR", "PHI", [], tape, injuries=[starter])
+    rush = [s for s in script.prop_signals if s.tag == "MATCHUP_RUSH_MISMATCH"]
+    assert rush and {s.player_name for s in rush} == {backup}
+
+
 def test_dome_band_needs_a_trench_or_injury_edge_to_lean_over():
     from outlier_nfl.matchup import build_matchup_script
 

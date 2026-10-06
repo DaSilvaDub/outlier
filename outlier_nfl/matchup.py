@@ -166,22 +166,43 @@ def _depth(team: str) -> dict[str, Any]:
         return dict(NFL_2026_FULL_DEPTH_CHARTS.get(team.upper(), {}))
 
 
-def _role_player(tape: Mapping[str, Any], team: str, role: str) -> str | None:
+def _role_player(
+    tape: Mapping[str, Any], team: str, role: str, inactive: Iterable[str] = ()
+) -> str | None:
+    """Tape role, else the depth chart's first player for it who is not ``inactive``.
+
+    When every candidate is inactive the depth-chart default comes back and the
+    caller's eligibility check drops it.
+    """
+    out = set(inactive)
+
+    def active(name: str | None) -> bool:
+        return bool(name) and str(name).strip().lower() not in out
+
     named = _text(tape, role)
-    if named:
+    if active(named):
         return named
     chart = _depth(team)
     if role == "qb":
-        return chart.get("starting_qb")
+        qb = chart.get("starting_qb")
+        return qb if active(qb) else None
     if role == "rb1":
         rbs = chart.get("rbs") or []
-        return rbs[0] if rbs else None
+        return next((r for r in rbs if active(r)), rbs[0] if rbs else None)
     if role == "te":
-        return chart.get("te")
+        te = chart.get("te")
+        return te if active(te) else None
     wrs = list(chart.get("wrs") or [])
+    active_wrs = [w for w in wrs if active(w)]
     if role == "wr_slot":
+        if len(active_wrs) > 1:
+            return active_wrs[1]
+        if active_wrs:
+            return active_wrs[0]
         return wrs[1] if len(wrs) > 1 else (wrs[0] if wrs else None)
     if role == "wr_deep":
+        if active_wrs:
+            return active_wrs[0]
         return wrs[0] if wrs else None
     return None
 
@@ -448,7 +469,7 @@ def build_matchup_script(
             f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; "
             f"+{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}."
         )
-        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1"))
+        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive))
         if not rb1:
             return
         mismatches.append(f"{rb1} rush vs {defend_team} run D")
@@ -485,7 +506,7 @@ def build_matchup_script(
         # The pass rush drives sacks; a weak-QB gate added nothing in the backtest.
         if not _is_strong_pass_rush(rush_unit):
             return
-        qb = _eligible(_role_player(qb_tape, qb_team, "qb"))
+        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive))
         if not qb:
             return
         grade = rush_unit.get("pass_rush")
@@ -510,8 +531,8 @@ def build_matchup_script(
         if not _is_leaky_pass_d(defend_unit):
             return
         pass_tape = home_tape if pass_team == home else away_tape
-        te = _eligible(_role_player(pass_tape, pass_team, "te"))
-        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot"))
+        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive))
+        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive))
         mismatches.append(f"{pass_team} underneath vs {defend_team} secondary")
         if te:
             signals.append(

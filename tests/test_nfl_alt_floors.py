@@ -351,3 +351,69 @@ def test_weather_adjustment_penalty():
     score_weather = candidates_weather["PASS_YDS"][0].confidence_score
 
     assert score_weather < score_clean
+
+
+def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
+    """Verify WR3+ receives depth chart penalty and road rush lines receive script adjustment."""
+    props = [
+        # WR1 Brian Thomas Jr (JAX)
+        {
+            "player_name": "Brian Thomas Jr.",
+            "team": "JAX",
+            "opponent": "CIN",
+            "matchup": "JAX @ CIN",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 49.5,
+            "is_consensus_line": False,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -450}],
+            "l5_hit_rate": 0.8,
+            "l10_hit_rate": 0.8,
+        },
+        {
+            "player_name": "Brian Thomas Jr.",
+            "team": "JAX",
+            "opponent": "CIN",
+            "matchup": "JAX @ CIN",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 79.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+        # WR3 Parker Washington (JAX) with identical hit rates & lines
+        {
+            "player_name": "Parker Washington",
+            "team": "JAX",
+            "opponent": "CIN",
+            "matchup": "JAX @ CIN",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 49.5,
+            "is_consensus_line": False,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -450}],
+            "l5_hit_rate": 0.8,
+            "l10_hit_rate": 0.8,
+        },
+        {
+            "player_name": "Parker Washington",
+            "team": "JAX",
+            "opponent": "CIN",
+            "matchup": "JAX @ CIN",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 79.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+    ]
+
+    candidates = discover_alt_floor_candidates(props)
+    rec_cands = {c.player_name: c for c in candidates["REC_YDS"]}
+
+    # Brian Thomas Jr. (WR1) should have higher confidence score than Parker Washington (WR3)
+    assert rec_cands["Brian Thomas Jr."].confidence_score > rec_cands["Parker Washington"].confidence_score

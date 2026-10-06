@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from outlier_nfl.roster import get_team_depth_chart
+
 logger = logging.getLogger("outlier_nfl.alt_floors")
 
 DEFAULT_TARGET_BOOK = "HARDROCK"
@@ -208,6 +210,35 @@ def discover_alt_floor_candidates(
                     situational_adj -= 0.05
             elif mkt == "RUSH_YDS" and (w_mph >= 15.0 or p_adj < 0):
                 situational_adj += 0.03  # Ground game upgrade in foul weather
+
+        # Depth chart & Game script situational adjustments
+        team_str = str(row.get("team") or "").strip().upper()
+        depth_chart = get_team_depth_chart(team_str)
+        player_clean = player.strip().lower()
+
+        if mkt == "RUSH_YDS":
+            # Deficit-risk / negative script discount on road or trailing rushing lines
+            matchup_str = str(row.get("matchup") or "")
+            tags = [str(t).upper() for t in (row.get("calibration_tags") or [])]
+            is_road_team = (
+                "@" in matchup_str
+                and matchup_str.split("@", 1)[0].strip().upper() == team_str
+            )
+            if is_road_team or any("DEFICIT" in t or "TRAIL" in t or "COMEBACK" in t for t in tags):
+                situational_adj -= 0.04
+
+        elif mkt == "REC_YDS":
+            wrs = [w.strip().lower() for w in depth_chart.get("wrs", [])]
+            te_name = str(depth_chart.get("te") or "").strip().lower()
+            # WR depth chart hierarchy penalty (WR1 gets 0, WR2 gets -0.04, WR3+ gets -0.08)
+            if any(player_clean in w for w in wrs):
+                wr_idx = next(i for i, w in enumerate(wrs) if player_clean in w)
+                if wr_idx >= 1:
+                    situational_adj -= min(0.08, 0.04 * wr_idx)
+            # TE shallow ADOT risk (yardage suppression on low cushion)
+            elif te_name and player_clean in te_name:
+                if cushion_pct < 35.0:
+                    situational_adj -= 0.04
 
         # Composite confidence formula:
         # 35% L10 stability + 30% L5 form + 15% Season + 10% Cushion ratio + 10% Implied + context

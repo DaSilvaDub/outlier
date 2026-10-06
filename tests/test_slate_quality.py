@@ -549,3 +549,51 @@ def test_wnba_playoff_total_cap_and_pace_flag():
     assert playoff_total["recommended_units_pre_news"] == 0.5
     assert "wnba_playoff_half_court_pace" in playoff_total["sizing_flags"]
 
+
+def test_severe_line_discount_trap_detects_minute_injury_cap():
+    from outlier_scrapers.slate_quality import severe_line_discount_trap
+
+    # Jewell Loyd style collapse: line 7.5 PTS with historical edge > 0.35 (normal ~19 PPG)
+    loyd_pts_trap = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "selection": "Jewell Loyd Over 7.5 Points",
+        "line": 7.5,
+        "historical_edge_pct": 0.5006,
+        "projection_mean": 9.0,
+    }
+    assert severe_line_discount_trap(loyd_pts_trap) is True
+
+    # 3PT line collapse: 1.5 threes with 74% historical edge
+    loyd_3pt_trap = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "3PTS",
+        "selection": "Jewell Loyd Over 1.5 Three Pointers",
+        "line": 1.5,
+        "historical_edge_pct": 0.7446,
+    }
+    assert severe_line_discount_trap(loyd_3pt_trap) is True
+
+    # General projection mean collapse: line 10.0 vs projection mean 20.0 (50% <= 60%)
+    general_trap = {
+        "market_type": "PLAYER_PROP",
+        "selection": "Star Player Over 10.0 Points",
+        "line": 10.0,
+        "projection_mean": 20.0,
+    }
+    assert severe_line_discount_trap(general_trap) is True
+
+    # Normal fair line: line 18.5 vs projection 19.5 (95% > 60%)
+    normal_prop = {
+        "sport": "WNBA",
+        "market_type": "PLAYER_PROP",
+        "market": "PTS",
+        "selection": "Angel Reese Over 15.5 Points",
+        "line": 15.5,
+        "projection_mean": 16.5,
+        "historical_edge_pct": 0.08,
+    }
+    assert severe_line_discount_trap(normal_prop) is False
+

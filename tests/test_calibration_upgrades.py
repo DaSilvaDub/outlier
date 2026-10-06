@@ -338,3 +338,33 @@ def test_live_stake_calibration_matches_policy_source_column():
     assert Path(policy["calibration"]["artifact_path"]).as_posix() == (
         "calibration/stake_calibration.json"
     )
+
+
+def test_severe_line_discount_trap_disqualifies_from_board_a():
+    card = _so_card(side="OVER", event_id="ev_trap", card_id="mkt_trap", outcome_id="out_trap")
+    card["sides"]["OVER"]["line"] = 2.5
+    ev_records = _so_ev(market_id="mkt_trap", outcome_id="out_trap", event_id="ev_trap", side="OVER")
+    ev_records[0]["current_line"] = 2.5
+    proj = _so_projection(outcome_id="out_trap", event_id="ev_trap", market_id="mkt_trap", side="OVER")
+    proj["distribution"]["line"] = 2.5
+    proj["distribution"]["mean"] = 5.0
+
+    row = build_row(
+        card,
+        ev_records,
+        {"out_trap": ev_records},
+        sport="MLB",
+        odds_ts="2026-09-07T12:00:00Z",
+        norm_ts="2026-09-07T12:00:00Z",
+        source_ts={},
+        event_starts={"ev_trap": "2026-09-07T20:00:00Z"},
+        injuries={"ev_trap": ""},
+        projections_by_outcome={"out_trap": proj},
+        probable_pitchers={"SD": {"pitcher": "Nick Pivetta", "confirmed": True}},
+    )
+
+    assert row is not None
+    assert "severe_line_discount_trap" in row["data_quality_flags"]
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
+    assert row["board"] == "A_FLAGGED"
