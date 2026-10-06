@@ -1,3 +1,42 @@
+# HANDOFF — 2026-10-06 (Antigravity/Gemini, Refresh DAG Concurrency Fix & MLB/WNBA Pipeline Execution)
+
+**Branch**: `master` · **Last commit**: `4a7e06b` · **PR**: [#213](https://github.com/DaSilvaDub/outlier/pull/213)
+
+## Accomplished
+1. **Refresh DAG Concurrency Fix & Atomic JSON Writes (PR #213)**:
+   - Root-caused `MLB cards: failed (Expecting ':' delimiter: line 14867 column 27 (char 427717))` during concurrent execution of `refresh_plan.py`. `cards` previously depended only on `("props", "line_movement")`, but reads `games_enrichment` and `insights`. While `games` was actively writing a 7MB `mlb_games_enrichment_latest.json`, `cards` was executing concurrently, reading a half-written file.
+   - Updated `REFRESH_TASKS` in `outlier_scrapers/refresh_plan.py` so `cards` explicitly depends on `("props", "line_movement", "insights", "games")`.
+   - Added `safe_write_json` to `outlier_scrapers/utils.py` with atomic temporary file writes, fsync, and retry loops for Windows file locks (WinError 32/33).
+   - Replaced non-atomic file writing in `games.py`, `cards.py`, `props.py`, and `probable_pitchers.py` with `safe_write_json`.
+   - Added retry loop to `load_latest` in `cards.py` for read resilience.
+   - Verified tests: `tests/test_refresh_plan.py` (6 passed) and `tests/test_cards.py` (62 passed). PR #213 created and merged to `master`.
+
+2. **Executed Daily Pipeline for 2026-10-06 Slate**:
+   - Ran `python -m outlier_scrapers.daily_job --date 2026-10-06 --analysis-profile local`.
+   - Pipeline completed successfully with exit code 0 (`PARTIAL` local profile).
+   - Pitcher identity audit: `status=ok so=3 mismatch=0 unconfirmed=0`.
+   - WNBA scheduled games = 0 (cleanly skipped per slate integrity rules).
+   - Renamed stray directory `packs/2099-07-07` to `packs/_test_fixture_2099-07-07-clean` per Codebase Quirk invariant rules.
+   - Ran `python scripts/organize_today_run2.py` exporting prompts and reports to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+
+3. **Slate Audit**:
+   - `packs/2026-10-06/candidates.csv`: 14 rows total. 0 actionable Board A plays (all prospective EV plays flagged with `september_pitcher_so_under` side restriction, `thin_liquidity`, or `reverse_line_movement`). All decisions in `decisions.csv` are `STAND_DOWN`.
+
+## Files Touched
+- `outlier_scrapers/refresh_plan.py`
+- `outlier_scrapers/utils.py`
+- `outlier_scrapers/games.py`
+- `outlier_scrapers/cards.py`
+- `outlier_scrapers/props.py`
+- `outlier_scrapers/probable_pitchers.py`
+- `packs/2026-10-06/`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Monitor tomorrow's slate runs.
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Post-Game Accuracy Reconciliations & Severe Line Trap Upgrades)
 
 **Branch**: `feat/accuracy-upgrades-and-injury-trap-guard` · **Last commit**: `ba317d4` · **PR**: [#211](https://github.com/DaSilvaDub/outlier/pull/211)
