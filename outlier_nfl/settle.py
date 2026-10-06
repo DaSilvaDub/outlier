@@ -509,14 +509,17 @@ def settle_predictions(
                     "losses": 0,
                     "pushes": 0,
                     "sum_model_p": 0.0,
+                    "sum_model_p_decided": 0.0,
                 },
             )
             mb["n"] += 1
             mb["sum_model_p"] += float(model_prob)
             if result == "W":
                 mb["wins"] += 1
+                mb["sum_model_p_decided"] += float(model_prob)
             elif result == "L":
                 mb["losses"] += 1
+                mb["sum_model_p_decided"] += float(model_prob)
             else:
                 mb["pushes"] += 1
 
@@ -580,7 +583,10 @@ def settle_predictions(
             "wins": vals["wins"],
             "losses": vals["losses"],
             "pushes": vals["pushes"],
-            "predicted_hit_rate": (vals["sum_model_p"] / n_b) if n_b else None,
+            # Predicted mean uses W+L only — pushes out of the denom (match actual).
+            "predicted_hit_rate": (
+                (vals["sum_model_p_decided"] / decided_b) if decided_b else None
+            ),
             "actual_hit_rate": (vals["wins"] / decided_b) if decided_b else None,
         }
     report.rows = [r.to_dict() for r in rows]
@@ -649,8 +655,8 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
         )
     lines.extend(["", "## Calibration by model_p bucket", ""])
     lines.append(
-        "Predicted = mean `model_p` in bucket; actual = W/(W+L). "
-        "Units: probability on [0, 1]."
+        "Predicted = mean `model_p` over W+L (pushes excluded from denom); "
+        "actual = W/(W+L). Units: probability on [0, 1]."
     )
     lines.append("")
     if report.by_model_p_bucket:

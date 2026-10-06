@@ -132,17 +132,13 @@ def compute_sportsbook_edge_pts(
     """``model_p − sportsbook_implied_01`` in probability points on [0, 1].
 
     Multiply by 100 for percentage points (e.g. 0.279 → +27.9 pts).
+    Both sides are normalized with :func:`probability_to_01` (0–1 or 0–100).
     """
     if model_p is None or sportsbook_implied is None:
         return None
     prior = probability_to_01(sportsbook_implied)
-    if prior is None:
-        return None
-    try:
-        mp = float(model_p)
-    except (TypeError, ValueError):
-        return None
-    if not (mp == mp):
+    mp = probability_to_01(model_p)
+    if prior is None or mp is None:
         return None
     return round(mp - prior, 6)
 

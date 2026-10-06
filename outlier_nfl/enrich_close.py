@@ -366,6 +366,10 @@ def attach_close_fields(
             alpha=alpha,
         )
 
+    # Projection/hierarchy (and any mode) may overwrite model_p after the
+    # initial sportsbook_* stamp — refresh edge against the final model_p.
+    attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
+
     return dict(record)
 
 

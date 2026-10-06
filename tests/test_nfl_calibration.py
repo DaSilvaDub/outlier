@@ -736,3 +736,56 @@ def test_oct4_style_market_prior_spreads_model_p(tmp_path: Path):
             row["model_p"], american_to_implied_probability(-137)
         )
         assert row["sportsbook_edge_pts"] != pp_edge
+
+
+def test_compute_sportsbook_edge_normalizes_model_p_pct():
+    """model_p expressed as 0–100 must not produce a ~70pt bogus edge."""
+    edge = compute_sportsbook_edge_pts(71.4, 57.81)  # 71.4% vs ~57.81%
+    assert edge is not None
+    assert abs(edge - (0.714 - 0.5781)) < 1e-4
+    edge01 = compute_sportsbook_edge_pts(0.714, 57.81)
+    assert edge01 is not None
+    assert abs(edge - edge01) < 1e-6
+
+
+def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
+    """After projection overwrites model_p, sportsbook_edge_pts must track it."""
+    from outlier_nfl import enrich_close as ec
+    from outlier_nfl.projection import ProjectionResult, MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+
+    record = {
+        "player_name": "Test WR",
+        "market": "REC_YDS",
+        "position": "WR",
+        "line": 49.5,
+        "model_p": 0.80,
+        "model_p_source": "empirical_hit_rate_market_prior",
+        "books": [
+            {"book": "DRAFTKINGS", "odds": -110},
+            {"book": "PRIZEPICKS", "odds": -137},
+        ],
+        "best_odds": -137,
+    }
+    # Stamp edge from stale model_p first via sportsbook attach alone
+    from outlier_nfl.calibration import attach_sportsbook_fields_record, compute_sportsbook_edge_pts
+
+    attach_sportsbook_fields_record(record, model_p=0.80)
+    stale_edge = record["sportsbook_edge_pts"]
+
+    def _fake_attach(rec, **kwargs):
+        rec["model_p"] = 0.55
+        rec["model_p_source"] = MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+        return rec
+
+    monkeypatch.setattr(ec, "attach_projection_model_p_record", _fake_attach)
+    out = ec.attach_close_fields(
+        record,
+        attach_model_p="projection_nflverse_rate",
+        week_index={"test": []},
+        overwrite_model_p=True,
+    )
+    assert out["model_p"] == 0.55
+    expected = compute_sportsbook_edge_pts(0.55, out["sportsbook_implied_probability"])
+    assert out["sportsbook_edge_pts"] == expected
+    assert out["sportsbook_edge_pts"] != stale_edge
+
