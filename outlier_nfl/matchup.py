@@ -12,7 +12,6 @@ from dataclasses import asdict, dataclass, replace
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from outlier_nfl.config import PROP_TIMES_SACKED, is_team_total, normalize_team
@@ -40,13 +39,23 @@ HIGH_RUSH_ADJ = 0.20
 # unaffected (r ~ 0), so the old PASS_YDS UNDER target was retired.
 PASS_RUSH_SACK_ADJ = 0.08
 REC_ADJ = 0.15
-
+# Projected-score boosts (not yet backtested): an offense facing a defense missing
+# first-string starters (tape ``defensive_starters_out``), and a run game that
+# overpowers the opposing front.
+DIDF_SCORE_BOOST = 3.5
+# One missing starter is routine (16 of 27 injury-listed teams in 2026 week 4);
+# the boost needs at least this many starters out on the same defense.
+DIDF_MIN_STARTERS = 2
+TRENCH_SCORE_BOOST = 3.5
+# Indoor and retractable-roof home venues. In a competitive dome game with a
+# trench or defensive-injury edge, totals above DOME_GRIND_TOTAL (up to
+# GRIND_TOTAL) lean OVER instead of UNDER.
 DOME_TEAMS: frozenset[str] = frozenset(
-    {"DET", "LV", "MIN", "NO", "LAR", "LAC", "ATL", "IND", "HOU", "DAL", "ARI"}
+    {"ARI", "ATL", "DAL", "DET", "HOU", "IND", "LAC", "LAR", "LV", "MIN", "NO"}
 )
 DOME_GRIND_TOTAL = 43.5
-TRENCH_SCORE_BOOST = 3.5
-DIDF_SCORE_BOOST = 3.5
+# A favorite laying this many points or fewer keeps the lean when it owns the run game.
+TRENCH_PROTECT_SPREAD = 2.5
 
 
 @dataclass(frozen=True)
@@ -158,119 +167,44 @@ def _depth(team: str) -> dict[str, Any]:
 
 
 def _role_player(
-    tape: Mapping[str, Any], team: str, role: str, inactive: set[str] | None = None
+    tape: Mapping[str, Any], team: str, role: str, inactive: Iterable[str] = ()
 ) -> str | None:
+    """Tape role, else the depth chart's first player for it who is not ``inactive``.
+
+    When every candidate is inactive the depth-chart default comes back and the
+    caller's eligibility check drops it.
+    """
+    out = set(inactive)
+
+    def active(name: str | None) -> bool:
+        return bool(name) and str(name).strip().lower() not in out
+
     named = _text(tape, role)
-    if named and (not inactive or named.strip().lower() not in inactive):
+    if active(named):
         return named
     chart = _depth(team)
     if role == "qb":
         qb = chart.get("starting_qb")
-        return qb if (not inactive or (qb and qb.strip().lower() not in inactive)) else None
+        return qb if active(qb) else None
     if role == "rb1":
         rbs = chart.get("rbs") or []
-        for r in rbs:
-            if not inactive or (r and r.strip().lower() not in inactive):
-                return r
-        return rbs[0] if rbs else None
+        return next((r for r in rbs if active(r)), rbs[0] if rbs else None)
     if role == "te":
         te = chart.get("te")
-        return te if (not inactive or (te and te.strip().lower() not in inactive)) else None
+        return te if active(te) else None
     wrs = list(chart.get("wrs") or [])
-    active_wrs = [w for w in wrs if not inactive or (w and w.strip().lower() not in inactive)]
+    active_wrs = [w for w in wrs if active(w)]
     if role == "wr_slot":
         if len(active_wrs) > 1:
             return active_wrs[1]
-        return active_wrs[0] if active_wrs else (wrs[1] if len(wrs) > 1 else (wrs[0] if wrs else None))
+        if active_wrs:
+            return active_wrs[0]
+        return wrs[1] if len(wrs) > 1 else (wrs[0] if wrs else None)
     if role == "wr_deep":
-        return active_wrs[0] if active_wrs else (wrs[0] if wrs else None)
+        if active_wrs:
+            return active_wrs[0]
+        return wrs[0] if wrs else None
     return None
-
-
-def _team_offensive_names(team: str) -> set[str]:
-    chart = _depth(team)
-    names: set[str] = set()
-    qb = chart.get("starting_qb")
-    if qb:
-        names.add(qb.strip().lower())
-    for r in chart.get("rbs") or []:
-        if r:
-            names.add(r.strip().lower())
-    for w in chart.get("wrs") or []:
-        if w:
-            names.add(w.strip().lower())
-    te = chart.get("te")
-    if te:
-        names.add(te.strip().lower())
-    return names
-
-
-def _defensive_inactives(team: str, inactives: Sequence[str]) -> list[str]:
-    off_names = _team_offensive_names(team)
-    return [p for p in inactives if p.strip().lower() not in off_names]
-
-
-def _normalize_injuries(
-    injuries: Iterable[str] | Mapping[str, Any] | None,
-    home: str,
-    away: str,
-    home_tape: Mapping[str, Any],
-    away_tape: Mapping[str, Any],
-) -> tuple[set[str], list[str], list[str]]:
-    """Return (all_inactive_names_lower, home_inactives, away_inactives)."""
-    all_inactive: set[str] = set()
-    home_inactives: list[str] = []
-    away_inactives: list[str] = []
-
-    if isinstance(injuries, Mapping):
-        for item in (injuries.get(home) or injuries.get("home") or []):
-            if item:
-                name = str(item.get("name") if isinstance(item, Mapping) else item).strip()
-                if name:
-                    home_inactives.append(name)
-                    all_inactive.add(name.lower())
-        for item in (injuries.get(away) or injuries.get("away") or []):
-            if item:
-                name = str(item.get("name") if isinstance(item, Mapping) else item).strip()
-                if name:
-                    away_inactives.append(name)
-                    all_inactive.add(name.lower())
-    elif injuries:
-        home_tape_inact = {str(x).strip().lower() for x in (home_tape.get("inactive") or [])}
-        away_tape_inact = {str(x).strip().lower() for x in (away_tape.get("inactive") or [])}
-        home_off = _team_offensive_names(home)
-        away_off = _team_offensive_names(away)
-
-        for item in injuries:
-            if not item:
-                continue
-            name = str(item.get("name") if isinstance(item, Mapping) else item).strip()
-            if not name:
-                continue
-            all_inactive.add(name.lower())
-
-            name_upper = name.upper()
-            if name_upper.startswith(f"{home}:") or f"({home})" in name_upper:
-                clean = re.sub(rf"^{home}:\s*|\s*\({home}\)", "", name, flags=re.IGNORECASE).strip()
-                home_inactives.append(clean)
-            elif name_upper.startswith(f"{away}:") or f"({away})" in name_upper:
-                clean = re.sub(rf"^{away}:\s*|\s*\({away}\)", "", name, flags=re.IGNORECASE).strip()
-                away_inactives.append(clean)
-            elif name.lower() in home_tape_inact or name.lower() in home_off:
-                home_inactives.append(name)
-            elif name.lower() in away_tape_inact or name.lower() in away_off:
-                away_inactives.append(name)
-
-    for x in (home_tape.get("inactive") or []):
-        if x and str(x).strip().lower() not in {n.lower() for n in home_inactives}:
-            home_inactives.append(str(x).strip())
-            all_inactive.add(str(x).strip().lower())
-    for x in (away_tape.get("inactive") or []):
-        if x and str(x).strip().lower() not in {n.lower() for n in away_inactives}:
-            away_inactives.append(str(x).strip())
-            all_inactive.add(str(x).strip().lower())
-
-    return all_inactive, home_inactives, away_inactives
 
 
 EXPLICIT_GRADES = ("rush_offense", "rush_defense", "pass_defense", "pass_rush")
@@ -473,9 +407,15 @@ def build_matchup_script(
     away_team: str,
     game_lines: list[NflGameLine],
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
-    injuries: Iterable[str] | Mapping[str, Any] | None = None,
+    injuries: Iterable[str] | None = None,
+    defensive_out: Mapping[str, Sequence[str]] | None = None,
 ) -> MatchupScript:
-    """Build the highest-probability script and mismatch card for one game."""
+    """Build the highest-probability script and mismatch card for one game.
+
+    ``injuries`` is the flat inactive list used to drop players from signals;
+    ``defensive_out`` maps team -> first-string defenders ruled out and drives
+    the defensive-injury score boost.
+    """
     home = home_team.strip().upper()
     away = away_team.strip().upper()
     tape_map = {str(k).upper(): dict(v) for k, v in (tapes or {}).items()}
@@ -484,49 +424,29 @@ def build_matchup_script(
     home_unit = _unit_score(home_tape)
     away_unit = _unit_score(away_tape)
     ctx = _market_context(game_lines, home, away)
-    inactive, home_inactives, away_inactives = _normalize_injuries(
-        injuries, home, away, home_tape, away_tape
-    )
+    inactive = {name.strip().lower() for name in (injuries or []) if name}
 
     signals: list[PropSignal] = []
     mismatches: list[str] = []
     notes: list[str] = []
-    injury_boost: dict[str, float] = {home: 0.0, away: 0.0}
-    trench_boost: dict[str, float] = {home: 0.0, away: 0.0}
+    score_boost: dict[str, float] = {home: 0.0, away: 0.0}
 
-    # Defensive Injury Degradation Factor (DIDF)
-    home_def_inactives = _defensive_inactives(home, home_inactives)
-    away_def_inactives = _defensive_inactives(away, away_inactives)
-
-    if home_def_inactives:
-        pen = 15.0 * min(3, len(home_def_inactives))
-        if home_unit.get("rush_defense") is not None:
-            home_unit["rush_defense"] = max(20.0, float(home_unit["rush_defense"]) - pen)
-        if home_unit.get("pass_defense") is not None:
-            home_unit["pass_defense"] = max(20.0, float(home_unit["pass_defense"]) - 10.0 * min(3, len(home_def_inactives)))
-        if home_unit.get("opp_rush_yards_allowed") is not None:
-            home_unit["opp_rush_yards_allowed"] = float(home_unit["opp_rush_yards_allowed"]) + 25.0 * min(2, len(home_def_inactives))
-        if home_unit.get("opp_pass_yards_allowed") is not None:
-            home_unit["opp_pass_yards_allowed"] = float(home_unit["opp_pass_yards_allowed"]) + 20.0 * min(2, len(home_def_inactives))
-        injury_boost[away] = DIDF_SCORE_BOOST
-        names_str = ", ".join(home_def_inactives[:3])
-        mismatches.append(f"{away} offense vs depleted {home} defense ({names_str})")
-        notes.append(f"DIDF: {home} missing defensive starters ({names_str}); +{DIDF_SCORE_BOOST:.1f} pts to {away}.")
-
-    if away_def_inactives:
-        pen = 15.0 * min(3, len(away_def_inactives))
-        if away_unit.get("rush_defense") is not None:
-            away_unit["rush_defense"] = max(20.0, float(away_unit["rush_defense"]) - pen)
-        if away_unit.get("pass_defense") is not None:
-            away_unit["pass_defense"] = max(20.0, float(away_unit["pass_defense"]) - 10.0 * min(3, len(away_def_inactives)))
-        if away_unit.get("opp_rush_yards_allowed") is not None:
-            away_unit["opp_rush_yards_allowed"] = float(away_unit["opp_rush_yards_allowed"]) + 25.0 * min(2, len(away_def_inactives))
-        if away_unit.get("opp_pass_yards_allowed") is not None:
-            away_unit["opp_pass_yards_allowed"] = float(away_unit["opp_pass_yards_allowed"]) + 20.0 * min(2, len(away_def_inactives))
-        injury_boost[home] = DIDF_SCORE_BOOST
-        names_str = ", ".join(away_def_inactives[:3])
-        mismatches.append(f"{home} offense vs depleted {away} defense ({names_str})")
-        notes.append(f"DIDF: {away} missing defensive starters ({names_str}); +{DIDF_SCORE_BOOST:.1f} pts to {home}.")
+    # Points only: degrading the defense's unit grades as well would re-trigger the
+    # trench mismatch below and count the same injuries twice.
+    out_by_team = {
+        str(t).strip().upper(): [n for n in names if n] for t, names in (defensive_out or {}).items()
+    }
+    for defend_team, attack_team in ((home, away), (away, home)):
+        out = out_by_team.get(defend_team) or []
+        if len(out) < DIDF_MIN_STARTERS:
+            continue
+        score_boost[attack_team] += DIDF_SCORE_BOOST
+        names = ", ".join(out[:3])
+        mismatches.append(f"{attack_team} offense vs depleted {defend_team} defense ({names})")
+        notes.append(
+            f"DIDF: {defend_team} missing defensive starters ({names}); "
+            f"+{DIDF_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
 
     def _eligible(name: str | None) -> str | None:
         if not name:
@@ -544,9 +464,12 @@ def build_matchup_script(
             (_is_strong_rush(attack_unit) and _is_leaky_run_d(defend_unit)) or gap >= RUSH_GRADE_GAP
         ):
             return
-        trench_boost[attack_team] = TRENCH_SCORE_BOOST
-        notes.append(f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; +{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}.")
-        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive=inactive))
+        score_boost[attack_team] += TRENCH_SCORE_BOOST
+        notes.append(
+            f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; "
+            f"+{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
+        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive))
         if not rb1:
             return
         mismatches.append(f"{rb1} rush vs {defend_team} run D")
@@ -583,7 +506,7 @@ def build_matchup_script(
         # The pass rush drives sacks; a weak-QB gate added nothing in the backtest.
         if not _is_strong_pass_rush(rush_unit):
             return
-        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive=inactive))
+        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive))
         if not qb:
             return
         grade = rush_unit.get("pass_rush")
@@ -608,8 +531,8 @@ def build_matchup_script(
         if not _is_leaky_pass_d(defend_unit):
             return
         pass_tape = home_tape if pass_team == home else away_tape
-        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive=inactive))
-        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive=inactive))
+        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive))
+        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive))
         mismatches.append(f"{pass_team} underneath vs {defend_team} secondary")
         if te:
             signals.append(
@@ -668,8 +591,6 @@ def build_matchup_script(
         if favorite
         else False
     )
-    is_dome = home in DOME_TEAMS
-
     if favorite and abs_spread >= FAVORITE_SPREAD and total <= GRIND_TOTAL and (has_fav_rush or not tape_map):
         script_type = "FRONT_RUNNER_GRIND"
         spread_lean = "HOME" if favorite_is_home else "AWAY"
@@ -687,35 +608,31 @@ def build_matchup_script(
         spread_lean = (
             "HOME" if (favorite_is_home is True) else ("AWAY" if (favorite_is_home is False) else "NEUTRAL")
         )
-        has_mismatches = bool(mismatches or signals)
-        has_boosts = bool(
-            trench_boost.get(home, 0.0) > 0
-            or trench_boost.get(away, 0.0) > 0
-            or injury_boost.get(home, 0.0) > 0
-            or injury_boost.get(away, 0.0) > 0
+        dome_edge = (
+            home in DOME_TEAMS
+            and DOME_GRIND_TOTAL < total <= GRIND_TOTAL
+            and any(score_boost.values())
         )
-        if is_dome:
-            if total <= DOME_GRIND_TOTAL:
-                total_lean = "UNDER"
-            elif total >= 44.0 and (has_mismatches or has_boosts):
-                total_lean = "OVER"
-                notes.append(
-                    f"Indoor dome pace ({home}): controlled venue + mismatches elevate scoring floor; lean OVER."
-                )
-            else:
-                total_lean = "UNDER" if total <= DOME_GRIND_TOTAL else "OVER"
+        if dome_edge:
+            total_lean = "OVER"
+            notes.append(
+                f"Dome pace ({home}): indoor venue plus a trench/injury edge; "
+                f"OVER {total:.1f} instead of the outdoor grind UNDER."
+            )
         else:
             total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
 
-    # Spread lean elasticity & trench protection
-    if favorite and abs_spread <= 2.5 and has_fav_rush:
+    # Every script branch already leans the favorite; this pins that lean for short
+    # favorites that own the run game so a future branch cannot flip it to the dog.
+    if favorite and abs_spread <= TRENCH_PROTECT_SPREAD and has_fav_rush:
         spread_lean = "HOME" if favorite_is_home else "AWAY"
         notes.append(
-            f"Trench protection: {favorite} holds verified rushing mismatch in short spread ({abs_spread:.1f}); lock lean to favorite."
+            f"Trench protection: {favorite} owns the run game at {abs_spread:.1f}; "
+            "lean stays on the favorite."
         )
 
-    home_score = round(ctx["home_tt"] + injury_boost.get(home, 0.0) + trench_boost.get(home, 0.0))
-    away_score = round(ctx["away_tt"] + injury_boost.get(away, 0.0) + trench_boost.get(away, 0.0))
+    home_score = round(ctx["home_tt"] + score_boost[home])
+    away_score = round(ctx["away_tt"] + score_boost[away])
     if home_score == away_score and abs_spread > 0 and favorite:
         fav_pts = round((total + abs_spread) / 2.0)
         dog_pts = round((total - abs_spread) / 2.0)
@@ -780,8 +697,12 @@ def build_matchup_scripts(
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries_by_event: Mapping[str, Iterable[str]] | None = None,
     slate_events: Iterable[Mapping[str, Any]] | None = None,
+    defensive_out_by_team: Mapping[str, Sequence[str]] | None = None,
 ) -> list[MatchupScript]:
-    """Build one script per unique event_id on the slate, including games with no lines yet."""
+    """Build one script per unique event_id on the slate, including games with no lines yet.
+
+    ``defensive_out_by_team`` is the tape's ``defensive_starters_out`` block.
+    """
     by_event: dict[str, list[NflGameLine]] = {}
     meta: dict[str, tuple[str, str]] = {}
     order: list[str] = []
@@ -815,6 +736,7 @@ def build_matchup_scripts(
                 game_lines=by_event.get(event_id, []),
                 tapes=tapes,
                 injuries=injured,
+                defensive_out=defensive_out_by_team,
             )
         )
     return scripts
@@ -976,13 +898,12 @@ def render_matchup_markdown(
             f"**Projected:** {home} {script.home_score:.0f}, {away} {script.away_score:.0f}"
             f"{src_note}"
         )
+        # Name the backed side with its own line: "AWAY (ATL -1.5)", not "AWAY (+1.5 NO)".
         if script.spread_lean == "AWAY":
-            spread_display = f"AWAY ({away} {-script.home_spread:+.1f})"
-        elif script.spread_lean == "HOME":
-            spread_display = f"HOME ({home} {script.home_spread:+.1f})"
+            backed = f"{away} {-script.home_spread:+.1f}"
         else:
-            spread_display = f"NEUTRAL ({home} {script.home_spread:+.1f})"
-        lines.append(f"- **Spread lean:** {spread_display}")
+            backed = f"{home} {script.home_spread:+.1f}"
+        lines.append(f"- **Spread lean:** {script.spread_lean} ({backed})")
         total_tag = " (placeholder)" if script.total_source == "default" else ""
         lines.append(
             f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"

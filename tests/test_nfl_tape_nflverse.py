@@ -130,6 +130,7 @@ def test_auto_roles_fetch_failure_keeps_existing_roles(monkeypatch: pytest.Monke
     assert "pass_rush" not in payload["teams"]["LAR"] and payload["grades_source"] is None
     assert payload["inactive"] == {} and payload["roles_source"] == "existing tape"
     assert payload["injury_report_loaded"] is False  # failed fetch is not an empty report
+    assert payload["defensive_starters_out"] == {}
 
 
 def test_pipeline_maps_inactives_to_both_teams_of_each_event(tmp_path: Path) -> None:
@@ -143,6 +144,75 @@ def test_pipeline_maps_inactives_to_both_teams_of_each_event(tmp_path: Path) -> 
     mapped = nfl_pipeline.injuries_by_event(inactive, [], events)
     assert mapped == {"e1": ["Puka Nacua"]}
     assert nfl_pipeline.injuries_by_event({}, [], events) == {}
+
+
+DEF_DEPTH = [
+    _depth("2026-09-01T12:00:00Z", "NO", "MLB", "5", 1, "Benched Linebacker"),
+    _depth(DT_OLD, "NO", "WLB", "4", 1, "Kaden Elliss", "00-ELLISS"),
+    _depth(DT_NEW, "NO", "RDE", "1", 1, "Carl Granderson"),
+    _depth(DT_NEW, "NO", "WLB", "4", 2, "Kaden Elliss", "00-ELLISS"),  # demoted once ruled out
+    _depth(DT_NEW, "NO", "RCB", "9", 2, "Backup Corner"),
+    _depth(DT_NEW, "NO", "WR", "1", 1, "Chris Olave"),
+    _depth(DT_AFTER, "NO", "SS", "11", 1, "Future Safety"),
+]
+for _row in DEF_DEPTH:
+    _row["pos_grp"] = "Base 4-3 D" if _row["pos_abb"] != "WR" else "3WR 1TE"
+DEF_INACTIVE = {
+    "NO": [
+        {"name": "Carl Granderson", "gsis_id": "", "status": "Out", "position": "DE"},
+        {"name": "Kaden Elliss", "gsis_id": "00-ELLISS", "status": "Out", "position": "LB"},
+        {"name": "Backup Corner", "gsis_id": "", "status": "Out", "position": "CB"},
+        {"name": "Chris Olave", "gsis_id": "", "status": "Out", "position": "WR"},
+        {"name": "Future Safety", "gsis_id": "", "status": "Out", "position": "S"},
+        {"name": "Benched Linebacker", "gsis_id": "", "status": "Out", "position": "LB"},
+    ]
+}
+
+
+def test_defensive_starters_out_keeps_only_ruled_out_defensive_starters() -> None:
+    out = tape.defensive_starters_out(DEF_DEPTH, DEF_INACTIVE, date(2026, 9, 27))
+    # Elliss still counts from his pre-injury snapshot a week earlier; the backup
+    # CB, the WR, a starter last seen weeks ago and a post-slate snapshot do not.
+    assert out == {"NO": ["Carl Granderson", "Kaden Elliss"]}
+    assert tape.defensive_starters_out(DEF_DEPTH, {}, date(2026, 9, 27)) == {}
+
+
+def test_tape_payload_records_defensive_starters_out(tmp_path: Path) -> None:
+    payload = tape.build_tape_payload(
+        2026, team_rows=TEAM_ROWS, game_rows=GAMES, depth_roles={}, inactive=DEF_INACTIVE,
+        defensive_out={"NO": ["Carl Granderson"]}, grades={},
+    )
+    assert payload["defensive_starters_out"] == {"NO": ["Carl Granderson"]}
+    (tmp_path / "tape").mkdir()
+    (tmp_path / "tape" / "prior_week.json").write_text(json.dumps(payload))
+    assert tape.load_tape_defensive_out(tmp_path) == {"NO": ["Carl Granderson"]}
+
+
+def test_auto_roles_derive_defensive_starters_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    injuries = [
+        {"season_type": "REG", "week": "3", "team": "NO", "full_name": "Carl Granderson",
+         "gsis_id": "", "report_status": "Out", "position": "DE"},
+    ]
+
+    def fake_fetch(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
+        if "injuries" in url:
+            return injuries
+        if "depth_charts" in url:
+            return DEF_DEPTH
+        raise OSError("not needed")
+
+    monkeypatch.setattr(tape, "fetch_csv", fake_fetch)
+    payload = tape.build_tape_payload(
+        2026, before=date(2026, 9, 27), team_rows=TEAM_ROWS, game_rows=GAMES, grades={}
+    )
+    assert payload["defensive_starters_out"] == {"NO": ["Carl Granderson"]}
+
+
+def test_old_tape_without_defensive_block_loads_empty(tmp_path: Path) -> None:
+    (tmp_path / "tape").mkdir()
+    (tmp_path / "tape" / "prior_week.json").write_text(json.dumps({"inactive": {}, "teams": {}}))
+    assert tape.load_tape_defensive_out(tmp_path) == {}
+    assert tape.load_tape_defensive_out(tmp_path / "missing") == {}
 
 
 PFR_DEF = [
