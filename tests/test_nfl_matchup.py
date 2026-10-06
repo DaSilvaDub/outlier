@@ -551,3 +551,103 @@ def test_non_points_team_props_do_not_become_projected_scores():
     )
     assert script.home_score != 4.0
 
+
+def test_defensive_injury_degradation_factor_upgrades_opponent_score():
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=1.5, position="HOME", team="NO", home="NO", away="ATL"),
+        _line(market="SPREAD", line=-1.5, position="AWAY", team="ATL", home="NO", away="ATL"),
+        _line(market="TOTAL", line=47.5, position="OVER", team=None, home="NO", away="ATL"),
+        _line(market="POINTS", line=23.0, team="NO", home="NO", away="ATL", market_type="TEAM_PROP", proposition="POINTS"),
+        _line(market="POINTS", line=24.0, team="ATL", home="NO", away="ATL", market_type="TEAM_PROP", proposition="POINTS"),
+    ]
+    tape = {
+        "NO": {"rush_defense": 65.0, "opp_rush_yards_allowed": 130.0, "pass_defense": 60.0},
+        "ATL": {"rush_offense": 80.0, "rush_yards": 170.0, "rb1": "Bijan Robinson"},
+    }
+    injuries = {"NO": ["Carl Granderson", "Kaden Elliss"]}
+    script = build_matchup_script("evt-atl-no", "NO", "ATL", lines, tape, injuries=injuries)
+    assert any("depleted NO defense" in m for m in script.mismatches)
+    # Opponent (ATL) gets DIDF boost and trench boost
+    assert script.away_score >= 27.5
+
+
+def test_trench_rushing_mismatch_upgrades_attacking_score():
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=3.0, position="HOME", team="CAR", home="CAR", away="PHI"),
+        _line(market="SPREAD", line=-3.0, position="AWAY", team="PHI", home="CAR", away="PHI"),
+        _line(market="TOTAL", line=44.0, position="OVER", team=None, home="CAR", away="PHI"),
+        _line(market="POINTS", line=20.0, team="CAR", home="CAR", away="PHI", market_type="TEAM_PROP", proposition="POINTS"),
+        _line(market="POINTS", line=24.0, team="PHI", home="CAR", away="PHI", market_type="TEAM_PROP", proposition="POINTS"),
+    ]
+    tape = {
+        "CAR": {"rush_defense": 35.0, "opp_rush_yards_allowed": 165.0},
+        "PHI": {"rush_offense": 85.0, "rush_yards": 180.0, "rb1": "Saquon Barkley"},
+    }
+    script = build_matchup_script("evt-phi-car", "CAR", "PHI", lines, tape)
+    assert any("Saquon Barkley rush vs CAR run D" in m for m in script.mismatches)
+    # PHI gets trench boost (+3.5 pts)
+    assert script.away_score >= 27.0
+
+
+def test_indoor_dome_pace_and_mismatches_lean_over():
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=1.5, position="HOME", team="NO", home="NO", away="ATL"),
+        _line(market="SPREAD", line=-1.5, position="AWAY", team="ATL", home="NO", away="ATL"),
+        _line(market="TOTAL", line=47.5, position="OVER", team=None, home="NO", away="ATL"),
+        _line(market="POINTS", line=23.0, team="NO", home="NO", away="ATL", market_type="TEAM_PROP", proposition="POINTS"),
+        _line(market="POINTS", line=24.0, team="ATL", home="NO", away="ATL", market_type="TEAM_PROP", proposition="POINTS"),
+    ]
+    tape = {
+        "NO": {"rush_defense": 50.0, "opp_rush_yards_allowed": 140.0},
+        "ATL": {"rush_offense": 85.0, "rush_yards": 175.0, "rb1": "Bijan Robinson"},
+    }
+    injuries = {"NO": ["Carl Granderson", "Kaden Elliss"]}
+    script = build_matchup_script("evt-atl-no", "NO", "ATL", lines, tape, injuries=injuries)
+    # Superdome is a dome venue with mismatches -> leans OVER 47.5
+    assert script.total_lean == "OVER"
+
+
+def test_trench_protection_locks_favorite_on_micro_spread():
+    from outlier_nfl.matchup import build_matchup_script
+
+    lines = [
+        _line(market="SPREAD", line=1.5, position="HOME", team="NO", home="NO", away="ATL"),
+        _line(market="SPREAD", line=-1.5, position="AWAY", team="ATL", home="NO", away="ATL"),
+        _line(market="TOTAL", line=47.5, position="OVER", team=None, home="NO", away="ATL"),
+    ]
+    tape = {
+        "NO": {"rush_defense": 40.0, "opp_rush_yards_allowed": 160.0},
+        "ATL": {"rush_offense": 85.0, "rush_yards": 175.0, "rb1": "Bijan Robinson"},
+    }
+    script = build_matchup_script("evt-atl-no", "NO", "ATL", lines, tape)
+    assert script.spread_lean == "AWAY"
+    assert any("Trench protection" in n for n in script.notes)
+
+
+def test_render_matchup_markdown_spread_display_clarity():
+    from outlier_nfl.matchup import MatchupScript, render_matchup_markdown
+
+    script = MatchupScript(
+        event_id="evt-atl-no",
+        matchup="ATL @ NO",
+        home_team="NO",
+        away_team="ATL",
+        script_type="COMPETITIVE",
+        spread_lean="AWAY",
+        total_lean="OVER",
+        home_score=23.0,
+        away_score=31.0,
+        home_spread=1.5,
+        total=47.5,
+        mismatches=(),
+        prop_signals=(),
+    )
+    md = render_matchup_markdown(script, date="2026-10-05")
+    assert "- **Spread lean:** AWAY (ATL -1.5)" in md
+
