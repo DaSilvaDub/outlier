@@ -86,6 +86,20 @@ def american_to_implied(odds: int | float | None) -> float:
         return 0.50
 
 
+def _depth_chart(team: str) -> dict[str, Any]:
+    """Depth chart for ``team``, or empty when the code is blank/unknown.
+
+    ``NflPlayerProp.team`` is ``str | None`` -- an unresolved feed teamId leaves
+    it blank -- and ``get_team_depth_chart`` raises on anything that is not one
+    of the 32 franchise codes. Raising here aborted the whole alt-floors scan on
+    a single unattributed row, so degrade to "no depth signal" instead.
+    """
+    try:
+        return get_team_depth_chart(team)
+    except ValueError:
+        return {}
+
+
 def _extract_book_quote(
     books: list[dict[str, Any]], target_book: str = DEFAULT_TARGET_BOOK
 ) -> tuple[str, int | float | None]:
@@ -213,7 +227,7 @@ def discover_alt_floor_candidates(
 
         # Depth chart & Game script situational adjustments
         team_str = str(row.get("team") or "").strip().upper()
-        depth_chart = get_team_depth_chart(team_str)
+        depth_chart = _depth_chart(team_str)
         player_clean = player.strip().lower()
 
         if mkt == "RUSH_YDS":

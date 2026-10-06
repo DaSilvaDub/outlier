@@ -417,3 +417,64 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
 
     # Brian Thomas Jr. (WR1) should have higher confidence score than Parker Washington (WR3)
     assert rec_cands["Brian Thomas Jr."].confidence_score > rec_cands["Parker Washington"].confidence_score
+
+
+def test_unresolved_team_does_not_abort_the_alt_floor_scan():
+    """A row whose feed teamId never resolved must not take the whole scan down.
+
+    ``NflPlayerProp.team`` is ``str | None`` and ``get_team_depth_chart`` raises
+    ValueError on anything outside the 32 franchise codes, so the depth-chart
+    lookup has to degrade to "no depth signal" for that row and keep scanning.
+    """
+    props = [
+        {
+            "player_name": "Unattributed Back",
+            "team": None,
+            "matchup": "JAX @ CIN",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 44.5,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -400}],
+            "l5_hit_rate": 0.9,
+            "l10_hit_rate": 0.9,
+        },
+        {
+            "player_name": "Unattributed Back",
+            "team": None,
+            "matchup": "JAX @ CIN",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 64.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+        {
+            "player_name": "Travis Etienne",
+            "team": "JAX",
+            "matchup": "JAX @ CIN",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 44.5,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -400}],
+            "l5_hit_rate": 0.9,
+            "l10_hit_rate": 0.9,
+        },
+        {
+            "player_name": "Travis Etienne",
+            "team": "JAX",
+            "matchup": "JAX @ CIN",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 64.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+    ]
+
+    candidates = discover_alt_floor_candidates(props)
+    found = {c.player_name for c in candidates.get("RUSH_YDS", [])}
+    assert found == {"Unattributed Back", "Travis Etienne"}

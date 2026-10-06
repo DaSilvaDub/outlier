@@ -1,3 +1,61 @@
+# HANDOFF — 2026-10-06 (Claude, Daily Automated Debug Review)
+
+**Branch**: `claude/inspiring-fermat-oy704w` · **Base**: `f95fa4c` · **PR**: see branch
+
+## Accomplished
+1. **Fixed an unguarded `get_team_depth_chart` crash in `outlier_nfl/alt_floors.py`** (introduced by
+   `ba317d4`, the depth-chart hierarchy work). `discover_alt_floor_candidates` called
+   `get_team_depth_chart(team_str)` for every prop row with no guard, and that helper *raises*
+   `ValueError` for anything outside the 32 franchise codes. `NflPlayerProp.team` is `str | None`
+   (`props.py` leaves it unset when `normalize_team` and the event_info fallback both fail), so one
+   unattributed row aborted the entire NFL alt-floors scan and report.
+   - Reproduced: `ValueError: Unknown NFL franchise code:` on a `team=None` row.
+   - Fix: new `_depth_chart()` helper wrapping the call in `try/except ValueError -> {}`, mirroring
+     the pattern `matchup.py::_depth` already uses for the same helper.
+   - Regression test added: `tests/test_nfl_alt_floors.py::test_unresolved_team_does_not_abort_the_alt_floor_scan`
+     (verified failing before the fix, passing after).
+
+## Reviewed, no change made
+- `outlier_scrapers/utils.py::safe_write_json` + the `games/cards/props/probable_pitchers` conversions
+  (PR #213): atomic-write pattern matches the existing `safe_write_text`/`_write_csv` helpers. Temp
+  files are dot-prefixed `*.json` in the target directory; `pathlib.Path.glob("*.json")` *does*
+  match dotfiles, but no reader globs `*.json` in those directories today. Worth keeping in mind.
+- `pack_selection.py` new gates (`severe_line_discount_trap`, `negative_learned_edge`,
+  `low_quality_tier_disqualified`): field names (`implied_prob`,
+  `learned_conservative_probability`, `data_quality_tier`, `historical_edge_pct`) all resolve, and
+  `historical_edge_pct` is a fraction, so the 0.35/0.60 thresholds in `slate_quality.py` are in the
+  right units.
+- `matchup.py` trench-protection block: `favorite` is falsy exactly when `favorite_is_home is None`,
+  so `"HOME" if favorite_is_home else "AWAY"` cannot mis-lean. Same idiom as the pre-existing
+  FRONT_RUNNER_GRIND branch.
+
+## Open items for a human
+1. **Projected score vs. total lean can now contradict each other.** `DIDF_SCORE_BOOST` /
+   `TRENCH_SCORE_BOOST` are added to `home_score`/`away_score` but not to `total`, and `total_lean`
+   only flips to OVER under the narrow `dome_edge` condition (home in `DOME_TEAMS` and
+   `43.5 < total <= 47.5`). Outside that window a report can print projected scores summing well
+   above the total while leaning UNDER it. Modelling call, not a mechanical fix.
+2. **`is_road_team` in `alt_floors.py` depends on the `"AWAY @ HOME"` matchup spelling.** The repo
+   builds it that way, but `props.py` prefers the feed's own `event_info["matchup"]` when present.
+   If that ever carries full team names, the road/deficit rushing discount silently no-ops. Worth a
+   cheap assertion or normalisation if feed spellings vary.
+3. **Sandbox cannot run the `outlier_scrapers` suite.** PyPI egress is blocked (403 on
+   `pypi.org/simple`), so `structlog`, `sqlalchemy`, `anthropic`, `openai`, `google-genai` and
+   `dateutil` are unavailable: 48 collection errors + 51 failures, all traced to those six imports
+   and none to repository code. `outlier_nfl` + 1069 tests run clean. A cloud session that needs
+   the full suite needs those wheels pre-baked into the image or PyPI allowed in the egress policy.
+
+## Files Touched
+- `outlier_nfl/alt_floors.py`
+- `tests/test_nfl_alt_floors.py`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Decide on open item 1 (score-boost vs. total-lean coherence).
+- No reasoning/desk models were run this session (house rule: not explicitly asked).
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Refresh DAG Concurrency Fix & MLB/WNBA Pipeline Execution)
 
 **Branch**: `master` · **Last commit**: `4a7e06b` · **PR**: [#213](https://github.com/DaSilvaDub/outlier/pull/213)
