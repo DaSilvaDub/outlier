@@ -830,3 +830,14 @@ this sandbox cannot import.
 - **Open:** repo-wide ruff reports 19 remaining F401 unused imports (`scratch.py`,
   `script.py`, `append_feedback.py`, `tests/test_challenger_adversarial.py`,
   `tests/test_nfl_roster.py`).
+
+## 2026-10-06 — NFL forensic audit (Codex)
+
+- **Last Commit SHA:** `aeec3a8743e4dfc1807ee440584fea1ff3c81891` (audit artifact commit; this coordination update follows it).
+- **Audited source SHA:** `b7638f7213e09d14775544f0b00b557405d99d02`.
+- **Branch / draft PR:** `codex/nfl-forensic-audit`; https://github.com/DaSilvaDub/outlier/pull/216.
+- **Files Touched:** `docs/reviews/nfl-forensic-2026-10-06/REPORT.md`, offline reproducer and patch generator, unapplied `candidate.patch`, three evidence JSON files, and this handoff. Product sources and saved outputs were unchanged. Canonical pre-existing edits/untracked helpers were preserved.
+- **Verification:** 452 NFL baseline tests and 13 pipeline/ops tests passed; 19 new baseline probes reproduced defects. The isolated candidate passed 10 repair checks and 112 existing targeted tests (4.46s). Ruff and candidate apply check passed; NFL MyPy still has 8 errors / 4 files. Diff whitespace validation excludes blank-at-eol because unified-diff context markers in the patch artifact are intentional. No live ingestion or paid reasoning calls.
+- **Diagnosis:** 30 prioritized findings. Critical source-cutoff/provenance paths, incomplete/invalid-stage publication, negative-EV validation, model/settlement semantics, identity/scope/close joins and replaceable run persistence prevent production qualification. Saved October 4 has 106/674 validated rows with nonpositive emitted EV; October 5 has 5/34. Existing prediction versions remain preserved.
+- **Next Steps:** Follow REPORT sections 10–11: archive originals, establish immutable as-of/run contracts and fail-closed stage gates, then land bounded repairs with permanent tests and push-aware EV. Repair identity/source eligibility/close contracts before rebuilding affected versioned cards and grades. Recover original pregame inputs for overwritten dates; current downloads cannot recreate historical availability. Verify live readiness only after regression/rebuild gates pass. The candidate patch is review material, not a complete remediation.
+- **Review:** Native read-only audit/review checked ingestion, models and storage; corrected the already-existing matchup scope filter and added Poisson UNDER 0 coverage. Historical contamination and deployed scheduler/live-source state remain explicitly unproven.
