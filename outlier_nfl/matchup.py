@@ -43,6 +43,9 @@ REC_ADJ = 0.15
 # first-string starters (tape ``defensive_starters_out``), and a run game that
 # overpowers the opposing front.
 DIDF_SCORE_BOOST = 3.5
+# One missing starter is routine (16 of 27 injury-listed teams in 2026 week 4);
+# the boost needs at least this many starters out on the same defense.
+DIDF_MIN_STARTERS = 2
 TRENCH_SCORE_BOOST = 3.5
 # Indoor and retractable-roof home venues. In a competitive dome game with a
 # trench or defensive-injury edge, totals above DOME_GRIND_TOTAL (up to
@@ -413,8 +416,8 @@ def build_matchup_script(
         str(t).strip().upper(): [n for n in names if n] for t, names in (defensive_out or {}).items()
     }
     for defend_team, attack_team in ((home, away), (away, home)):
-        out = out_by_team.get(defend_team)
-        if not out:
+        out = out_by_team.get(defend_team) or []
+        if len(out) < DIDF_MIN_STARTERS:
             continue
         score_boost[attack_team] += DIDF_SCORE_BOOST
         names = ", ".join(out[:3])

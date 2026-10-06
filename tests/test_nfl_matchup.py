@@ -600,15 +600,27 @@ def test_flat_injury_list_never_counts_as_defensive_starters():
     assert (script.home_score, script.away_score) == (23.0, 24.0)
 
 
+def test_single_defensive_starter_out_is_not_enough():
+    from outlier_nfl.matchup import build_matchup_script
+
+    script = build_matchup_script(
+        "evt-atl-no", "NO", "ATL", _atl_no_lines(45.5), {},
+        defensive_out={"NO": ["Carl Granderson"]},
+    )
+    assert not any("depleted" in m for m in script.mismatches)
+    assert (script.home_score, script.away_score) == (23.0, 24.0)
+    assert script.total_lean == "UNDER"  # no edge, so no dome OVER either
+
+
 def test_build_matchup_scripts_routes_defensive_out_to_each_game():
     from outlier_nfl.matchup import build_matchup_scripts
 
     scripts = build_matchup_scripts(
         _atl_no_lines(), NEUTRAL_TAPE,
-        defensive_out_by_team={"NO": ["Carl Granderson"], "KC": ["Chris Jones"]},
+        defensive_out_by_team={"NO": ["Carl Granderson", "Kaden Elliss"], "KC": ["Chris Jones", "Nick Bolton"]},
     )
     (script,) = scripts
-    assert script.mismatches == ("ATL offense vs depleted NO defense (Carl Granderson)",)
+    assert script.mismatches == ("ATL offense vs depleted NO defense (Carl Granderson, Kaden Elliss)",)
 
 
 def test_trench_rushing_mismatch_upgrades_attacking_score():
@@ -639,7 +651,8 @@ def test_dome_band_needs_a_trench_or_injury_edge_to_lean_over():
     plain = build_matchup_script("evt-atl-no", "NO", "ATL", _atl_no_lines(45.5), {})
     assert plain.total_lean == "UNDER"  # indoors alone is not an edge
     edged = build_matchup_script(
-        "evt-atl-no", "NO", "ATL", _atl_no_lines(45.5), {}, defensive_out={"NO": ["Carl Granderson"]}
+        "evt-atl-no", "NO", "ATL", _atl_no_lines(45.5), {},
+        defensive_out={"NO": ["Carl Granderson", "Kaden Elliss"]},
     )
     assert edged.total_lean == "OVER"
     assert any("Dome pace" in n for n in edged.notes)
@@ -648,7 +661,7 @@ def test_dome_band_needs_a_trench_or_injury_edge_to_lean_over():
 def test_dome_rule_leaves_low_totals_and_outdoor_games_alone():
     from outlier_nfl.matchup import build_matchup_script
 
-    injured = {"NO": ["Carl Granderson"], "KC": ["Chris Jones"]}
+    injured = {"NO": ["Carl Granderson", "Kaden Elliss"], "KC": ["Chris Jones", "Nick Bolton"]}
     low = build_matchup_script(
         "evt-atl-no", "NO", "ATL", _atl_no_lines(43.5), {}, defensive_out=injured
     )
