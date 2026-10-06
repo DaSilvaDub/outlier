@@ -951,3 +951,18 @@ def test_pipeline_high_prob_includes_actionable_records(tmp_path):
     for row in high_prob["actionable_records"]:
         assert row.get("actionable") is True
         assert row.get("correlation_role") == "PRIMARY"
+
+
+def test_missing_identity_rows_stay_singleton_primary():
+    """Empty event_id+player must not collapse into one correlation group."""
+    from outlier_nfl.high_prob_rank import (
+        CORRELATION_ROLE_PRIMARY,
+        apply_same_player_correlation_guard,
+    )
+
+    a = {"market": "REC", "outcome_id": "o1", "model_p": 0.7, "best_odds": -110}
+    b = {"market": "REC", "outcome_id": "o2", "model_p": 0.8, "best_odds": -105}
+    tagged = apply_same_player_correlation_guard([a, b])
+    assert all(r["correlation_role"] == CORRELATION_ROLE_PRIMARY for r in tagged)
+    assert all(r["actionable"] is True for r in tagged)
+

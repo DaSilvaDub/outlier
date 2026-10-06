@@ -28,12 +28,23 @@ CORRELATION_GUARD_NOTE = (
 
 
 def player_correlation_key(row: Mapping[str, Any]) -> tuple[str, str]:
-    """Group key: (event_id, player identity). Prefer player_id over name."""
+    """Group key: (event_id, player identity). Prefer player_id over name.
+
+    Rows missing both event_id and player identity each get a unique key so
+    they stay singleton PRIMARY (never collapsed into one empty bucket).
+    """
     event_id = str(row.get("event_id") or "").strip()
     player_id = str(row.get("player_id") or "").strip()
+    name = str(row.get("player_name") or "").strip().casefold()
+    if not event_id and not player_id and not name:
+        uniq = str(
+            row.get("outcome_id")
+            or row.get("market_id")
+            or id(row)
+        )
+        return ("__missing__", f"singleton:{uniq}")
     if player_id:
         return (event_id, f"id:{player_id}")
-    name = str(row.get("player_name") or "").strip().casefold()
     return (event_id, f"name:{name}")
 
 
