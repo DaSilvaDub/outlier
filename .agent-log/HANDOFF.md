@@ -208,7 +208,6 @@
 - Review and merge the PR, then re-run the WNBA pack and check whether the
   now-live postseason gates change the Board A set.
 - Reconcile 2026-10-04 WNBA postseason results and NFL Week 4 box scores.
->>>>>>> origin/master
 
 ---
 
