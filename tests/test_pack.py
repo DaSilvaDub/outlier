@@ -4240,7 +4240,7 @@ def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal(mon
             sides={
                 "OVER": {
                     "outcome_id": "o1",
-                    "line": 7.5,
+                    "line": 12.5,
                     "best_odds": 110,
                     "ev": {
                         "is_alt_line_fallback": False,
@@ -4269,6 +4269,8 @@ def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal(mon
         }
     ]
     # Late-September / October slate date puts the row inside the WNBA postseason.
+    # Line is above the severe_line_discount_trap PTS<=9.5 cutoff so the warm
+    # control stays about the role-player gate only.
     starts = {"ev1": "2026-10-05T19:00:00Z"}
 
     cold = make_row(_card(41.0, 32.0), ev, sport="WNBA", event_starts=starts)

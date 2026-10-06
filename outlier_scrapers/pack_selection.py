@@ -944,13 +944,16 @@ def _apply_quality_and_signal_flags(
     line_with_side = slate_quality.signed_line_moved_with_side(row)
     if line_with_side:
         dq_flags = [flag for flag in dq_flags if flag != "reverse_line_movement"]
+    # Flag even when units were already cleared by an earlier gate (e.g.
+    # low_quality_tier_disqualified after movement_line_mismatch). The desk
+    # still needs the stale-line diagnosis; withholding stake is idempotent.
     if (
-        row.get("recommended_units_pre_news") not in ("", None)
-        and "reverse_line_movement" in dq_flags
+        "reverse_line_movement" in dq_flags
         and "thin_liquidity" in dq_flags
         and not line_with_side
     ):
-        dq_flags.append("edge_suspect_stale_line")
+        if "edge_suspect_stale_line" not in dq_flags:
+            dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
     slate_quality.apply_local_devig_unit_cap(row)
     slate_quality.apply_wnba_heavy_dog_spread_cap(row, injury_view)
