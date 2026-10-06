@@ -13,6 +13,33 @@
 
 ---
 
+# HANDOFF — 2026-10-06 (Claude, NFL matchup rework: DIDF on real inputs, milder dome lean)
+
+**Branch**: `claude/nfl-matchup-injuries-refactor-7ae225` (merged) · **Last commit**: `4e35275` · **PR**: [#212](https://github.com/DaSilvaDub/outlier/pull/212) (merge `081adfe`)
+
+## Accomplished
+1. **Reviewed Gemini's `fe59061` (PR #211)** and found the defensive-injury boost (DIDF) never fired in production. `injuries_by_event` sends a flat name list, and per-team tapes have no `inactive` key, so `_normalize_injuries` dropped every defender. It also counted any non-offensive name (OL, K, backups) as a defender, and penalized unit grades too, so the trench boost double-counted. The dome rule leaned OVER on every competitive dome total above 43.5, and trench protection was a no-op.
+2. **Reworked on PR #212** (merged over #211, which landed on master mid-review):
+   - `tape_nflverse.defensive_starters_out()` writes the tape block `defensive_starters_out`: Out/Doubtful players with a rank-1 spot in a defensive depth-chart group (`pos_grp` ending " D") within 14 days of the slate, which catches post-injury demotions. Read via `load_tape_defensive_out()` and wired through `pipeline.py` into `build_matchup_scripts(defensive_out_by_team=...)`.
+   - DIDF needs `DIDF_MIN_STARTERS = 2` on the same defense (user ruling) and adds +3.5 points only, with no grade changes. On real 2026 week-4 data it fires for 6 teams (DAL, LAR, NE, NO, PHI, TB) instead of 16.
+   - Dome rule, made milder per user: a dome total in (43.5, 47.5] leans OVER only with a trench or DIDF edge.
+   - Trench protection kept (user ruling) as a guard; trench mismatch +3.5 kept.
+   - Spread label now names the backed side: `AWAY (ATL -1.5)`.
+   - Kept Gemini's `_role_player` fallback to the next healthy depth-chart player, and added a test for it.
+3. **Data check**: LAR's Aaron Donald (`00-0031388`) is real 2026 data. He's the rank-1 DE, played weeks 2–3, and is Out week 4 (back), so the LAR DIDF is legitimate.
+
+## Verification
+- `pytest -k nfl`: 471 passed. ruff clean. mypy: no new errors.
+- Live sync: `report-sync.ps1` → `REPORT STATUS: OK` (RUN-NONCE `ada177efc68947dc`, head `f95fa4c`).
+
+## Known Issues / Next Steps
+- **master CI `core` is red** since #211: `tests/test_pack.py::test_over_line_steam_keeps_stale_gate` and `::test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal`. A separate session (task "Fix two test_pack failures on master") is on it.
+- The +3.5 boosts, the 43.5 dome cutoff and the 14-day lookback are **not backtested**.
+- `reports/NFL/2026-10-05_ATL_NO_Game_Script.md` (from #211) was hand-generated with team-keyed injuries and doesn't match the merged engine output.
+- #211 also committed unrelated `calibration/blend_weights.json` / `daily_pipeline_status.json` churn. Canonical had an uncommitted `blend_weights.json` edit at sync time; it was left in place (no hard reset).
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Refresh DAG Concurrency Fix & MLB/WNBA Pipeline Execution)
 
 **Branch**: `master` · **Last commit**: `4a7e06b` · **PR**: [#213](https://github.com/DaSilvaDub/outlier/pull/213)
