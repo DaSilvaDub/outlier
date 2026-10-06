@@ -10,16 +10,12 @@ from .api import AuthRequiredError, OutlierApiClient, OutlierApiError
 from .normalizer import build_normalized_payload
 from .paths import league_paths
 from .registry import get_sport_config, supported_leagues
-from .utils import safe_write_text
+from .utils import safe_write_json, safe_write_text
 
 
 MAX_SCHEDULE_EVENT_FETCHES = 50
 
-
-def write_json(path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+write_json = safe_write_json
 
 
 def _referenced_event_ids(props_payload: dict[str, Any]) -> set[str]:
