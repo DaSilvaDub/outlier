@@ -804,6 +804,48 @@ def apply_wnba_playoff_total_cap(row: dict[str, Any]) -> None:
         row["recommended_units_pre_news"] = 0.5
 
 
+def severe_line_discount_trap(row: dict[str, Any]) -> bool:
+    """True when a player prop OVER is set dramatically below normal scoring baselines.
+
+    Sportsbooks slash lines by >40% only for impending minute restrictions,
+    injury limitations, or bench demotions. Naive models mistake this for EV.
+    """
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+
+    line = _to_float(row.get("line"))
+    if line is None or line <= 0:
+        return False
+
+    proj_mean = _to_float(row.get("projection_mean"))
+    if proj_mean is not None and proj_mean > 0:
+        if (line / proj_mean) <= 0.60:
+            return True
+
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market") or row.get("market_type") or "").upper()
+    if sport in {"WNBA", "NBA", "BASKETBALL"}:
+        hist_edge = _to_float(row.get("historical_edge_pct"))
+        if (
+            market in {"PTS", "POINTS"}
+            and line <= 9.5
+            and hist_edge is not None
+            and hist_edge >= 0.35
+        ):
+            return True
+        if (
+            market in {"3PTS", "3PT", "THREES"}
+            and line <= 1.5
+            and hist_edge is not None
+            and hist_edge >= 0.60
+        ):
+            return True
+
+    return False
+
+
 def _signal_flag_set(row: dict[str, Any]) -> set[str]:
     return {part.strip() for part in str(row.get("signal_flags") or "").split(";") if part.strip()}
 
