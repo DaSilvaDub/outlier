@@ -890,6 +890,23 @@ def _apply_quality_and_signal_flags(
             else (row.get("l10_pct") if row.get("l10_pct") is not None else row.get("hit_l10"))
         )
     )
+    # ``low_volume_3pt_shooter`` and ``wnba_playoff_role_player_over_risk`` read
+    # hit_rate_component / historical_edge_pct off the row, so both have to be
+    # stamped before those gates run. They used to be written further down with
+    # the rest of the signal block, which left every gate reading the base row's
+    # "" placeholder and made the hit-rate paths unreachable.
+    signal = side_view.get("signal") or {}
+    row["hit_rate_component"] = _blank_neutral_component(signal.get("hit_component"))
+    # Descriptive-only: edge implied by the raw recency hit rate. Reads
+    # signal["hit_pct"] (None when Outlier had no recency data), NOT
+    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
+    hist_edge = compute_historical_edge(
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
+        decimal_price=_to_float(row.get("decimal_price")),
+        push_prob=_to_float(row.get("push_prob")),
+    )
+    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     if slate_quality.low_volume_3pt_shooter(row, dq_flags, l5_pct=l5_rate, l10_pct=l10_rate):
         dq_flags.append("low_volume_3pt_shooter")
     if slate_quality.team_total_scoring_conflict(row):
@@ -963,10 +980,18 @@ def _apply_quality_and_signal_flags(
     if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
+    # Re-derive the tier from the final flags. The earlier pass above is still
+    # needed -- apply_learned_probability_blend segments on the tier -- but every
+    # gate between it and here can append a flag, so a row disqualified by one of
+    # them was exported HIGH while data_quality_tier(disqualifying=True) is
+    # defined to return LOW. Calibration and segmentation then read that tier.
+    row["data_quality_tier"] = probability_blend.data_quality_tier(
+        row["data_quality_flags"],
+        row.get("projection_quality_flags"),
+        disqualifying=disqualifying,
+    )
 
-    signal = side_view.get("signal") or {}
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
-    row["hit_rate_component"] = _blank_neutral_component(signal.get("hit_component"))
     row["insight_component"] = _blank_neutral_component(signal.get("insight_component"))
     if movement_corroboration is None:
         row["movement_component"] = ""
@@ -979,16 +1004,6 @@ def _apply_quality_and_signal_flags(
     row["public_money_component"] = pm_component if pm_component is not None else ""
     pm_div = signal.get("public_money_divergence_pct", "")
     row["public_money_divergence_pct"] = pm_div if pm_div is not None else ""
-    # Descriptive-only: edge implied by the raw recency hit rate. Reads
-    # signal["hit_pct"] (None when Outlier had no recency data), NOT
-    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
-    hit_rate_pct = _to_float(signal.get("hit_pct"))
-    hist_edge = compute_historical_edge(
-        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
-        decimal_price=_to_float(row.get("decimal_price")),
-        push_prob=_to_float(row.get("push_prob")),
-    )
-    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     signal_flags: list[str] = []
     for value, flag in (
         (_to_float(row.get("hit_rate_component")), "hit_rate_support"),

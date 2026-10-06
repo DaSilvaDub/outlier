@@ -29,7 +29,12 @@ from outlier_nfl.close_feed import (
     validate_close_feed_records,
     write_close_feed,
 )
-from outlier_nfl.enrich_close import CLOSE_SOURCE_BOOK
+from outlier_nfl.enrich_close import (
+    CLOSE_SOURCE_BOOK,
+    identities_conflict,
+    merge_identities,
+    row_identity,
+)
 from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.utils import safe_read_json
 
@@ -389,21 +394,50 @@ def align_close_records_to_predictions(
 
     Enables full ``_row_match_key`` hits in ``enrich_close`` without inventing
     closes for unmatched pack rows.
+
+    The short key names a player but identifies none of them. It carries no game,
+    so two predictions for same-named players in different games collide on it
+    (anytime-TD props all sit on 0.5, so any such pair collides), and it carries
+    no team or player id, so two on opposing teams in one game collide too.
+    Stamping either one's ``event_id`` would turn the guess into a full-key match
+    in ``enrich_close`` and hand the close to the wrong player, so an ambiguous
+    key is left unaligned instead.
+
+    Not covered: two *close* rows for same-named players in one game. Odds-API
+    rows carry no team and no player id, so nothing in the feed tells them apart
+    and the last one still wins. Detecting that needs identity from the feed.
     """
     if isinstance(predictions, Mapping):
         pred_rows = predictions.get("records") or []
     else:
         pred_rows = predictions
     by_short: dict[tuple[Any, ...], Mapping[str, Any]] = {}
+    # Identity accumulates per key rather than tracking the newest row, so a
+    # blank-identity prediction between two conflicting ones cannot erase what
+    # the key already knew and hide the collision.
+    known: dict[tuple[Any, ...], tuple[str, str]] = {}
+    ambiguous: set[tuple[Any, ...]] = set()
     for raw in pred_rows:
         if not isinstance(raw, Mapping):
             continue
-        by_short[_short_join_key(raw)] = raw
+        key = _short_join_key(raw)
+        prior = by_short.get(key)
+        identity = row_identity(raw)
+        if prior is not None and (
+            str(prior.get("event_id") or "") != str(raw.get("event_id") or "")
+            or str(prior.get("matchup") or "") != str(raw.get("matchup") or "")
+            or identities_conflict(known[key], identity)
+        ):
+            ambiguous.add(key)
+            continue
+        known[key] = merge_identities(known[key], identity) if prior is not None else identity
+        by_short[key] = raw
 
     out: list[dict[str, Any]] = []
     for raw in close_records:
         row = dict(raw)
-        hit = by_short.get(_short_join_key(row))
+        short_key = _short_join_key(row)
+        hit = None if short_key in ambiguous else by_short.get(short_key)
         if hit is not None:
             if hit.get("matchup"):
                 row["matchup"] = hit.get("matchup")
@@ -412,6 +446,8 @@ def align_close_records_to_predictions(
             row["aligned_to_predictions"] = True
         else:
             row["aligned_to_predictions"] = False
+            if short_key in ambiguous:
+                row["alignment_skipped"] = "ambiguous_short_key"
         out.append(row)
     return out
 
