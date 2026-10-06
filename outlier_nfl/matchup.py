@@ -39,6 +39,20 @@ HIGH_RUSH_ADJ = 0.20
 # unaffected (r ~ 0), so the old PASS_YDS UNDER target was retired.
 PASS_RUSH_SACK_ADJ = 0.08
 REC_ADJ = 0.15
+# Projected-score boosts (not yet backtested): an offense facing a defense missing
+# first-string starters (tape ``defensive_starters_out``), and a run game that
+# overpowers the opposing front.
+DIDF_SCORE_BOOST = 3.5
+TRENCH_SCORE_BOOST = 3.5
+# Indoor and retractable-roof home venues. In a competitive dome game with a
+# trench or defensive-injury edge, totals above DOME_GRIND_TOTAL (up to
+# GRIND_TOTAL) lean OVER instead of UNDER.
+DOME_TEAMS: frozenset[str] = frozenset(
+    {"ARI", "ATL", "DAL", "DET", "HOU", "IND", "LAC", "LAR", "LV", "MIN", "NO"}
+)
+DOME_GRIND_TOTAL = 43.5
+# A favorite laying this many points or fewer keeps the lean when it owns the run game.
+TRENCH_PROTECT_SPREAD = 2.5
 
 
 @dataclass(frozen=True)
@@ -370,8 +384,14 @@ def build_matchup_script(
     game_lines: list[NflGameLine],
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries: Iterable[str] | None = None,
+    defensive_out: Mapping[str, Sequence[str]] | None = None,
 ) -> MatchupScript:
-    """Build the highest-probability script and mismatch card for one game."""
+    """Build the highest-probability script and mismatch card for one game.
+
+    ``injuries`` is the flat inactive list used to drop players from signals;
+    ``defensive_out`` maps team -> first-string defenders ruled out and drives
+    the defensive-injury score boost.
+    """
     home = home_team.strip().upper()
     away = away_team.strip().upper()
     tape_map = {str(k).upper(): dict(v) for k, v in (tapes or {}).items()}
@@ -385,6 +405,24 @@ def build_matchup_script(
     signals: list[PropSignal] = []
     mismatches: list[str] = []
     notes: list[str] = []
+    score_boost: dict[str, float] = {home: 0.0, away: 0.0}
+
+    # Points only: degrading the defense's unit grades as well would re-trigger the
+    # trench mismatch below and count the same injuries twice.
+    out_by_team = {
+        str(t).strip().upper(): [n for n in names if n] for t, names in (defensive_out or {}).items()
+    }
+    for defend_team, attack_team in ((home, away), (away, home)):
+        out = out_by_team.get(defend_team)
+        if not out:
+            continue
+        score_boost[attack_team] += DIDF_SCORE_BOOST
+        names = ", ".join(out[:3])
+        mismatches.append(f"{attack_team} offense vs depleted {defend_team} defense ({names})")
+        notes.append(
+            f"DIDF: {defend_team} missing defensive starters ({names}); "
+            f"+{DIDF_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
 
     def _eligible(name: str | None) -> str | None:
         if not name:
@@ -402,6 +440,11 @@ def build_matchup_script(
             (_is_strong_rush(attack_unit) and _is_leaky_run_d(defend_unit)) or gap >= RUSH_GRADE_GAP
         ):
             return
+        score_boost[attack_team] += TRENCH_SCORE_BOOST
+        notes.append(
+            f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; "
+            f"+{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
         rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1"))
         if not rb1:
             return
@@ -541,10 +584,31 @@ def build_matchup_script(
         spread_lean = (
             "HOME" if (favorite_is_home is True) else ("AWAY" if (favorite_is_home is False) else "NEUTRAL")
         )
-        total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
+        dome_edge = (
+            home in DOME_TEAMS
+            and DOME_GRIND_TOTAL < total <= GRIND_TOTAL
+            and any(score_boost.values())
+        )
+        if dome_edge:
+            total_lean = "OVER"
+            notes.append(
+                f"Dome pace ({home}): indoor venue plus a trench/injury edge; "
+                f"OVER {total:.1f} instead of the outdoor grind UNDER."
+            )
+        else:
+            total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
 
-    home_score = round(ctx["home_tt"])
-    away_score = round(ctx["away_tt"])
+    # Every script branch already leans the favorite; this pins that lean for short
+    # favorites that own the run game so a future branch cannot flip it to the dog.
+    if favorite and abs_spread <= TRENCH_PROTECT_SPREAD and has_fav_rush:
+        spread_lean = "HOME" if favorite_is_home else "AWAY"
+        notes.append(
+            f"Trench protection: {favorite} owns the run game at {abs_spread:.1f}; "
+            "lean stays on the favorite."
+        )
+
+    home_score = round(ctx["home_tt"] + score_boost[home])
+    away_score = round(ctx["away_tt"] + score_boost[away])
     if home_score == away_score and abs_spread > 0 and favorite:
         fav_pts = round((total + abs_spread) / 2.0)
         dog_pts = round((total - abs_spread) / 2.0)
@@ -609,8 +673,12 @@ def build_matchup_scripts(
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries_by_event: Mapping[str, Iterable[str]] | None = None,
     slate_events: Iterable[Mapping[str, Any]] | None = None,
+    defensive_out_by_team: Mapping[str, Sequence[str]] | None = None,
 ) -> list[MatchupScript]:
-    """Build one script per unique event_id on the slate, including games with no lines yet."""
+    """Build one script per unique event_id on the slate, including games with no lines yet.
+
+    ``defensive_out_by_team`` is the tape's ``defensive_starters_out`` block.
+    """
     by_event: dict[str, list[NflGameLine]] = {}
     meta: dict[str, tuple[str, str]] = {}
     order: list[str] = []
@@ -644,6 +712,7 @@ def build_matchup_scripts(
                 game_lines=by_event.get(event_id, []),
                 tapes=tapes,
                 injuries=injured,
+                defensive_out=defensive_out_by_team,
             )
         )
     return scripts
@@ -805,7 +874,12 @@ def render_matchup_markdown(
             f"**Projected:** {home} {script.home_score:.0f}, {away} {script.away_score:.0f}"
             f"{src_note}"
         )
-        lines.append(f"- **Spread lean:** {script.spread_lean} ({script.home_spread:+.1f} {home})")
+        # Name the backed side with its own line: "AWAY (ATL -1.5)", not "AWAY (+1.5 NO)".
+        if script.spread_lean == "AWAY":
+            backed = f"{away} {-script.home_spread:+.1f}"
+        else:
+            backed = f"{home} {script.home_spread:+.1f}"
+        lines.append(f"- **Spread lean:** {script.spread_lean} ({backed})")
         total_tag = " (placeholder)" if script.total_source == "default" else ""
         lines.append(
             f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"

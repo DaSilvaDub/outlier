@@ -26,7 +26,11 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
-from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
+from outlier_nfl.tape_nflverse import (
+    load_tape_defensive_out,
+    load_tape_inactives,
+    refresh_prior_week_tape,
+)
 from outlier_nfl.usage import append_signals, load_usage, usage_signals
 from outlier_nfl.weather import apply_weather, load_slate_weather
 from outlier_nfl.matchup import (
@@ -293,6 +297,7 @@ class NflPipeline:
                 load_tape_inactives(self.nfl_dir), all_game_lines, slate_events
             ),
             slate_events=slate_events,
+            defensive_out_by_team=load_tape_defensive_out(self.nfl_dir),
         )
         if matchup_scripts:
             logger.info(
