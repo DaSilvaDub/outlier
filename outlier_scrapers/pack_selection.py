@@ -177,6 +177,9 @@ DISQUALIFYING_DQ_FLAGS = {
     "team_total_scoring_conflict",
     "opponent_high_k_lineup",
     "wnba_playoff_role_player_risk",
+    "severe_line_discount_trap",
+    "low_quality_tier_disqualified",
+    "negative_learned_edge",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
@@ -895,6 +898,25 @@ def _apply_quality_and_signal_flags(
         dq_flags.append("opponent_high_k_lineup")
     if slate_quality.wnba_playoff_role_player_over_risk(row):
         dq_flags.append("wnba_playoff_role_player_risk")
+    if slate_quality.severe_line_discount_trap(row):
+        dq_flags.append("severe_line_discount_trap")
+
+    learned_cons_p = _to_float(row.get("learned_conservative_probability"))
+    implied_p = _to_float(row.get("implied_prob"))
+    if (
+        learned_cons_p is not None
+        and implied_p is not None
+        and learned_cons_p < implied_p
+    ):
+        dq_flags.append("negative_learned_edge")
+        row["recommended_units_pre_news"] = ""
+
+    if (
+        row.get("data_quality_tier") == "LOW"
+        and str(card.get("board") or row.get("board") or "").upper() == "A"
+    ):
+        dq_flags.append("low_quality_tier_disqualified")
+        row["recommended_units_pre_news"] = ""
     returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
     )
