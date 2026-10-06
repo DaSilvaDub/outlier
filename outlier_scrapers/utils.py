@@ -7,6 +7,7 @@ and event scheduling to reduce code duplication and break circular dependencies.
 from __future__ import annotations
 
 import csv
+import json
 import os
 import tempfile
 import time
@@ -149,6 +150,34 @@ def safe_write_text(path: Path, content: str, retries: int = 5, delay: float = 0
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
             handle.write(content)
+        _replace_with_retry(tmp_path, path, retries=retries, delay=delay)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def safe_write_json(
+    path: Path,
+    payload: Any,
+    retries: int = 5,
+    delay: float = 0.2,
+    indent: int = 2,
+) -> None:
+    """Atomically write JSON and fail closed if a cloud-sync lock never clears."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path_str = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.stem}_tmp_", suffix=".json"
+    )
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=indent, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
         _replace_with_retry(tmp_path, path, retries=retries, delay=delay)
     finally:
         if tmp_path.exists():
