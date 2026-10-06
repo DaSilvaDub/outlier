@@ -1,3 +1,38 @@
+# HANDOFF — 2026-10-06 (Antigravity/Gemini, NFL Matchup Game Script Accuracy Upgrades)
+
+**Branch**: `feat/accuracy-upgrades-and-injury-trap-guard` · **Last commit**: `fe59061`
+
+## Implemented & Baked into Pipeline
+- **Defensive Injury Degradation Factor (DIDF)**:
+  - Added `_normalize_injuries()` supporting team-mapped (`{team: [names]}`) and flat list inactives, extracting team prefixes and reconciling with tape and offensive depth charts.
+  - Added `_defensive_inactives()` to detect defensive starters/contributors missing.
+  - Penalizes defensive unit grades (-15 run D, -10 pass D, +25 opp rush yds allowed, +20 opp pass yds allowed).
+  - Directly boosts the opposing attacking team's projected score by `+3.5 pts` (`DIDF_SCORE_BOOST`).
+  - Emits descriptive mismatch note (e.g. `ATL offense vs depleted NO defense (Carl Granderson, Kaden Elliss)`).
+- **Trench Rushing Mismatch Scoring Upgrade**:
+  - When `MATCHUP_RUSH_MISMATCH` triggers, adds a direct `+3.5 pts` (`TRENCH_SCORE_BOOST`) to the attacking team's projected score, reflecting point-of-attack dominance.
+- **Indoor Dome Pace & Total Floor Calibration**:
+  - Added `DOME_TEAMS` registry covering all 11 NFL indoor/retractable venues (`DET`, `LV`, `MIN`, `NO`, `LAR`, `LAC`, `ATL`, `IND`, `HOU`, `DAL`, `ARI`).
+  - Lowers grind total threshold in indoor domes (`DOME_GRIND_TOTAL = 43.5` vs outdoor `47.5`).
+  - In competitive games, if `total >= 44.0` in a dome with offensive mismatches or defensive injuries, total lean shifts to `OVER`.
+- **Spread Lean Elasticity & Trench Protection**:
+  - In competitive games with short spreads (`abs_spread <= 2.5`), if the favorite holds a verified rushing mismatch, locks spread lean to the favorite.
+  - Fixed markdown rendering in `render_matchup_markdown()` to display clear, unambiguous side and spread (e.g. `AWAY (ATL -1.5)` instead of `AWAY (+1.5 NO)`).
+- **Replay & Validation**:
+  - Re-ran 2026-10-05 ATL @ NO Monday Night Football game script: shifted from pre-game `NO 23, ATL 24, UNDER 47.5` to **ATL 30, NO 24, Spread lean: AWAY (ATL -1.5), Total lean: OVER 47.5** with high-confidence Bijan Robinson rush & TD signals.
+  - Added 5 unit tests in `tests/test_nfl_matchup.py`; all 21/21 matchup tests and all 450 NFL test suite tests pass.
+
+## Files Touched
+- `outlier_nfl/matchup.py`
+- `tests/test_nfl_matchup.py`
+- `reports/NFL/2026-10-05_ATL_NO_Game_Script.md`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Re-run full weekly snapshot suite when Week 6 slates open.
+
+---
+
 # HANDOFF — 2026-10-04 (Antigravity/Gemini, WNBA Playoff Calibration & Daily Pipeline Run)
 
 **Branch**: `master` · **Last commit**: `2a2f171`
