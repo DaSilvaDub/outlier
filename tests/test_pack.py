@@ -4281,7 +4281,10 @@ def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal(mon
     # re-derived from the final flags or a disqualified row exports as HIGH.
     assert cold["data_quality_tier"] == "LOW"
 
-    warm = make_row(_card(72.0, 85.0), ev, sport="WNBA", event_starts=starts)
+    # Warm, but not so hot that historical_edge_pct (0.62 * 2.10 - 1 = 0.302) crosses
+    # severe_line_discount_trap's 0.35 bar for a <=9.5 PTS OVER -- that trap is a
+    # separate gate and would otherwise force this row LOW.
+    warm = make_row(_card(72.0, 62.0), ev, sport="WNBA", event_starts=starts)
     assert warm is not None
     assert "wnba_playoff_role_player_risk" not in warm["data_quality_flags"]
     assert warm["data_quality_tier"] == "HIGH"

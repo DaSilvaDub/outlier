@@ -918,6 +918,10 @@ def _apply_quality_and_signal_flags(
     if slate_quality.severe_line_discount_trap(row):
         dq_flags.append("severe_line_discount_trap")
 
+    # Both flags below are in DISQUALIFYING_DQ_FLAGS, so the final disqualifying
+    # sweep clears the stake. Do not blank units here: the stale-line gate further
+    # down only fires while units are still set, and clearing early silently
+    # dropped its edge_suspect_stale_line diagnostic on already-LOW rows.
     learned_cons_p = _to_float(row.get("learned_conservative_probability"))
     implied_p = _to_float(row.get("implied_prob"))
     if (
@@ -926,14 +930,12 @@ def _apply_quality_and_signal_flags(
         and learned_cons_p < implied_p
     ):
         dq_flags.append("negative_learned_edge")
-        row["recommended_units_pre_news"] = ""
 
     if (
         row.get("data_quality_tier") == "LOW"
         and str(card.get("board") or row.get("board") or "").upper() == "A"
     ):
         dq_flags.append("low_quality_tier_disqualified")
-        row["recommended_units_pre_news"] = ""
     returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
     )
