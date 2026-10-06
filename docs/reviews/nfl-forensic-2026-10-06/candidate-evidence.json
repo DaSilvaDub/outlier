@@ -1,0 +1,103 @@
+{
+  "mode": "verify_candidate",
+  "probes": [
+    {
+      "probe": "negative_ev_price",
+      "observed": {
+        "status": "CONTRADICTS",
+        "devig": "two_sided",
+        "opposite_implied": 0.5238,
+        "best_odds": -110,
+        "decimal": 1.9091,
+        "implied": 0.5238,
+        "fair_p": 0.5,
+        "model_p": 0.51,
+        "edge": 0.01,
+        "ev_per_unit": -0.0264,
+        "stake_if_validated": 0.0
+      },
+      "correct_behavior": "Reject p=.51 at -110: EV=-.02636",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "v2_hierarchy",
+      "observed": {
+        "direct_p": 1.0,
+        "hierarchy": {
+          "player_name": "Test Player",
+          "market": "PASS_YDS",
+          "line": 200.5,
+          "position": "OVER",
+          "l10_hit_rate": 0.2,
+          "model_p": 1.0,
+          "model_p_source": "projection_nflverse_gaussian",
+          "model_p_n_games": 3,
+          "model_p_method": "gamelog_gaussian"
+        }
+      },
+      "correct_behavior": "Preserve successful Gaussian/Poisson result and matching metadata",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "integer_poisson_under",
+      "observed": {
+        "observed_p": 0.406006,
+        "strict_p": 0.4060058497098381,
+        "push_p": 0.2706705664732254
+      },
+      "correct_behavior": "UNDER 2 wins only at 0 or 1 reception",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "poisson_under_zero",
+      "observed": {
+        "0": 0.0,
+        "2": 0.0
+      },
+      "correct_behavior": "UNDER 0 has zero win probability at both zero and positive rates",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "passing_td_is_not_scored_td",
+      "observed": 0.0,
+      "correct_behavior": "QB passing TDs do not count as scored TDs",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "first_td_needs_sequence",
+      "observed": null,
+      "correct_behavior": "Aggregate box score cannot settle first-scorer; leave unsupported",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "nan_is_not_push",
+      "observed": "BoxScoreError",
+      "correct_behavior": "Reject nonfinite lines before grading",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "january_boxscore_season",
+      "observed": 2026,
+      "correct_behavior": "January 2027 belongs to NFL 2026",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "settle_cli_does_not_override_season",
+      "observed": null,
+      "correct_behavior": "Let season-aware provider infer season when CLI --season is absent",
+      "status": "REPAIR_VERIFIED"
+    },
+    {
+      "probe": "raw_market_aliases",
+      "observed": {
+        "LONGEST_PASSING_COMPLETION": "LONG_PASS",
+        "PASSING_COMPLETIONS": "PASS_COMP",
+        "INTERCEPTIONS_THROWN": "INT",
+        "MADE_FIELD_GOALS": "FGM"
+      },
+      "correct_behavior": "Canonical markets must reach matching weather/projection/settlement consumers",
+      "status": "REPAIR_VERIFIED"
+    }
+  ],
+  "stored_card_observations": []
+}

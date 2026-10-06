@@ -1,0 +1,341 @@
+{
+  "mode": "observe_baseline",
+  "probes": [
+    {
+      "probe": "negative_ev_price",
+      "observed": {
+        "status": "VERIFIED",
+        "devig": "two_sided",
+        "opposite_implied": 0.5238,
+        "best_odds": -110,
+        "decimal": 1.9091,
+        "implied": 0.5238,
+        "fair_p": 0.5,
+        "model_p": 0.51,
+        "edge": 0.01,
+        "ev_per_unit": -0.0264,
+        "stake_if_validated": 0.0
+      },
+      "correct_behavior": "Reject p=.51 at -110: EV=-.02636",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "v2_hierarchy",
+      "observed": {
+        "direct_p": 1.0,
+        "hierarchy": {
+          "player_name": "Test Player",
+          "market": "PASS_YDS",
+          "line": 200.5,
+          "position": "OVER",
+          "l10_hit_rate": 0.2,
+          "model_p": 0.285714,
+          "model_p_source": "empirical_hit_rate_laplace",
+          "model_p_n_games": 3,
+          "model_p_method": "gamelog_gaussian"
+        }
+      },
+      "correct_behavior": "Preserve successful Gaussian/Poisson result and matching metadata",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "integer_poisson_under",
+      "observed": {
+        "observed_p": 0.676676,
+        "strict_p": 0.4060058497098381,
+        "push_p": 0.2706705664732254
+      },
+      "correct_behavior": "UNDER 2 wins only at 0 or 1 reception",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "passing_td_is_not_scored_td",
+      "observed": 2.0,
+      "correct_behavior": "QB passing TDs do not count as scored TDs",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "first_td_needs_sequence",
+      "observed": 1.0,
+      "correct_behavior": "Aggregate box score cannot settle first-scorer; leave unsupported",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "nan_is_not_push",
+      "observed": "P",
+      "correct_behavior": "Reject nonfinite lines before grading",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "january_boxscore_season",
+      "observed": 2027,
+      "correct_behavior": "January 2027 belongs to NFL 2026",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "settle_cli_does_not_override_season",
+      "observed": 2027,
+      "correct_behavior": "Let season-aware provider infer season when CLI --season is absent",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "raw_market_aliases",
+      "observed": {
+        "LONGEST_PASSING_COMPLETION": null,
+        "PASSING_COMPLETIONS": null,
+        "INTERCEPTIONS_THROWN": null,
+        "MADE_FIELD_GOALS": null
+      },
+      "correct_behavior": "Canonical markets must reach matching weather/projection/settlement consumers",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "failed_page_returns_partial_success",
+      "observed": {
+        "props": [
+          {
+            "id": "one"
+          }
+        ],
+        "pagination": {
+          "pages": 2,
+          "pageNumber": 1
+        }
+      },
+      "correct_behavior": "Incomplete pagination must raise or carry an enforced incomplete status",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "unknown_period_defaults_full_game",
+      "observed": {
+        "Q1": "full_game",
+        "H1": "full_game",
+        "1ST_QUARTER": "full_game",
+        "OT": "full_game"
+      },
+      "correct_behavior": "Known period encodings canonicalize; unknown encodings remain unsupported",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "missing_stat_is_zero",
+      "observed": 0.0,
+      "correct_behavior": "Missing stat must remain unknown",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "missing_usage_cutoff",
+      "observed": {
+        "unbounded": {
+          "player": "Test Player",
+          "player_id": "p",
+          "team": "KC",
+          "position": "WR",
+          "games": 4,
+          "target_share": 0.0,
+          "carry_share": 0.0,
+          "targets_pg": 0.0,
+          "carries_pg": 0.0,
+          "rec_yds_pg": 175.0,
+          "rush_yds_pg": 0.0,
+          "rec_yds_exp_pg": null,
+          "rush_yds_exp_pg": null,
+          "last_week": 9,
+          "team_last_week": 9
+        },
+        "before_week4": {
+          "player": "Test Player",
+          "player_id": "p",
+          "team": "KC",
+          "position": "WR",
+          "games": 3,
+          "target_share": 0.0,
+          "carry_share": 0.0,
+          "targets_pg": 0.0,
+          "carries_pg": 0.0,
+          "rec_yds_pg": 66.7,
+          "rush_yds_pg": 0.0,
+          "rec_yds_exp_pg": null,
+          "rush_yds_exp_pg": null,
+          "last_week": 3,
+          "team_last_week": 3
+        }
+      },
+      "correct_behavior": "Production must require a verified cutoff before calling usage",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "empty_forecast_verifies",
+      "observed": {
+        "status": "VERIFIED",
+        "delta": 0.0,
+        "evidence": {
+          "team_inactive": [],
+          "opponent_inactive": [],
+          "weather": {
+            "venue": "outdoor",
+            "wind_mph": null,
+            "gust_mph": null,
+            "temp_f": null,
+            "precip_prob": null,
+            "pass_adjustment": 0,
+            "tags": []
+          }
+        },
+        "notes": []
+      },
+      "correct_behavior": "Unknown outdoor conditions must not validate weather",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "missing_tape_falls_back",
+      "observed": 32,
+      "correct_behavior": "Missing production tape must remain unavailable, with explicit fixture mode",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "window_overwrites_full_slate",
+      "observed": {
+        "changed": true,
+        "before_count": 3,
+        "after_count": 1
+      },
+      "correct_behavior": "Window run must write only window-qualified outputs",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "fixture_date_mismatch",
+      "observed": {
+        "date": "2026-10-08",
+        "events": 3
+      },
+      "correct_behavior": "Replay must not relabel unmatched fixture dates",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "validation_does_not_gate_publication",
+      "observed": {
+        "status": "OK",
+        "errors": [
+          "invalid",
+          "invalid"
+        ]
+      },
+      "correct_behavior": "Invalid normalized data must not be published as successful",
+      "status": "DEFECT_REPRODUCED"
+    },
+    {
+      "probe": "ingestion_failure_success",
+      "observed": {
+        "status": "OK",
+        "events_count": 3,
+        "game_lines_count": 0,
+        "player_props_count": 0,
+        "errors": []
+      },
+      "correct_behavior": "Required fetch failures must invalidate the run",
+      "status": "DEFECT_REPRODUCED"
+    }
+  ],
+  "stored_card_observations": [
+    {
+      "date": "2026-10-01",
+      "validated": 0,
+      "nonpositive_ev": 0,
+      "examples": []
+    },
+    {
+      "date": "2026-10-04",
+      "validated": 674,
+      "nonpositive_ev": 106,
+      "examples": [
+        {
+          "player_name": "Ashton Jeanty",
+          "market": "LONG_REC",
+          "position": "UNDER",
+          "final_p": 0.5165,
+          "best_odds": -107,
+          "ev_per_unit": -0.0008
+        },
+        {
+          "player_name": "Elijah Higgins",
+          "market": "REC",
+          "position": "OVER",
+          "final_p": 0.5774,
+          "best_odds": -137,
+          "ev_per_unit": -0.0011
+        },
+        {
+          "player_name": "Xavier Hutchinson",
+          "market": "RECEIVING_TARGETS",
+          "position": "OVER",
+          "final_p": 0.5103,
+          "best_odds": -105,
+          "ev_per_unit": -0.0038
+        },
+        {
+          "player_name": "Jameis Winston",
+          "market": "PASS_TD",
+          "position": "UNDER",
+          "final_p": 0.6543,
+          "best_odds": -192,
+          "ev_per_unit": -0.0049
+        },
+        {
+          "player_name": "James Cook III",
+          "market": "REC",
+          "position": "OVER",
+          "final_p": 0.5045,
+          "best_odds": -103,
+          "ev_per_unit": -0.0057
+        }
+      ]
+    },
+    {
+      "date": "2026-10-05",
+      "validated": 34,
+      "nonpositive_ev": 5,
+      "examples": [
+        {
+          "player_name": "Brian Robinson",
+          "market": "RUSH_ATT",
+          "position": "UNDER",
+          "final_p": 0.4969,
+          "best_odds": -102,
+          "ev_per_unit": -0.0159
+        },
+        {
+          "player_name": "Drake London",
+          "market": "LONG_REC",
+          "position": "OVER",
+          "final_p": 0.5152,
+          "best_odds": -115,
+          "ev_per_unit": -0.0369
+        },
+        {
+          "player_name": "Juwan Johnson",
+          "market": "RECEIVING_TARGETS",
+          "position": "OVER",
+          "final_p": 0.5082,
+          "best_odds": -115,
+          "ev_per_unit": -0.0499
+        },
+        {
+          "player_name": "Chris Olave",
+          "market": "RECEIVING_TARGETS",
+          "position": "UNDER",
+          "final_p": 0.5022,
+          "best_odds": -115,
+          "ev_per_unit": -0.0611
+        },
+        {
+          "player_name": "Bijan Robinson",
+          "market": "RECEIVING_TARGETS",
+          "position": "OVER",
+          "final_p": 0.5037,
+          "best_odds": -119,
+          "ev_per_unit": -0.073
+        }
+      ]
+    }
+  ]
+}
