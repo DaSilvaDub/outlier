@@ -1,3 +1,35 @@
+# HANDOFF — 2026-10-06 (Antigravity/Gemini, Post-Game Accuracy Reconciliations & Severe Line Trap Upgrades)
+
+**Branch**: `feat/accuracy-upgrades-and-injury-trap-guard` · **Last commit**: `ba317d4` · **PR**: [#211](https://github.com/DaSilvaDub/outlier/pull/211)
+
+## Implemented & Baked into Pipeline
+- **Severe Line Discount Trap Guard (`severe_line_discount_trap`)**:
+  - Implemented in `outlier_scrapers/slate_quality.py` and added to `DISQUALIFYING_DQ_FLAGS` in `outlier_scrapers/pack_selection.py`.
+  - Disqualifies player props where line is $\le 60\%$ of projection mean or where basketball star scoring lines are collapsed ($line \le 9.5$ with large historical edge), preventing the pipeline from chasing bookmaker minute-restriction / injury traps (such as Jewell Loyd 7.5 PTS / 0 actual).
+  - Routes disqualified rows to `actionable = false`, `recommended_units_pre_news = ""`, and `board = "A_FLAGGED"`.
+- **Fail-Closed Board A Quality & Learned Edge Gate**:
+  - Automatically disqualifies candidates with `data_quality_tier == "LOW"` or `learned_conservative_probability < implied_probability` from receiving Board A units (`negative_learned_edge`, `low_quality_tier_disqualified`).
+- **NFL Depth Chart Hierarchy & Script Scaling (`outlier_nfl/alt_floors.py`)**:
+  - Added WR depth chart hierarchy scaling: WR2 options receive a -0.04 confidence adjustment; WR3+ options receive -0.08, preventing backup/slot receivers (such as Parker Washington) from masquerading as low-floor anchors above target hogs.
+  - Added TE ADOT yardage variance cushion check (cushion < 35% penalized by -0.04).
+  - Added road/deficit rushing game script adjustment (-0.04) for running backs facing trailing risk.
+- **Unit Tests**:
+  - Added tests in `tests/test_slate_quality.py`, `tests/test_calibration_upgrades.py`, and `tests/test_nfl_alt_floors.py`. All 47 tests pass.
+
+## Files Touched
+- `outlier_scrapers/slate_quality.py`
+- `outlier_scrapers/pack_selection.py`
+- `outlier_nfl/alt_floors.py`
+- `tests/test_slate_quality.py`
+- `tests/test_calibration_upgrades.py`
+- `tests/test_nfl_alt_floors.py`
+- `.agent-log/HANDOFF.md`
+
+## Next Steps
+- Merge PR #211 to `master`.
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, NFL Matchup Game Script Accuracy Upgrades)
 
 **Branch**: `feat/accuracy-upgrades-and-injury-trap-guard` · **Last commit**: `fe59061`
