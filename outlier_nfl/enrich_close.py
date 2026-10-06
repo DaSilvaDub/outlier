@@ -11,7 +11,8 @@ Honest contract:
   ``close_source="book_close"``. Refuses to copy snapshot odds as book close.
 - ``model_p`` / ``p_model`` are never copied from ``implied_probability``.
   Attach modes: pass | empirical_hit_rate | empirical_hit_rate_laplace |
-  empirical_hit_rate_beta | projection_nflverse_rate | hierarchy.
+  empirical_hit_rate_beta | empirical_hit_rate_market_prior |
+  projection_nflverse_rate | hierarchy.
 """
 
 from __future__ import annotations
@@ -22,10 +23,13 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 from outlier_nfl.calibration import (
     DEFAULT_LAPLACE_ALPHA,
+    DEFAULT_MARKET_PRIOR_KAPPA,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
+    MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
     attach_empirical_model_p_record,
+    attach_sportsbook_fields_record,
 )
 from outlier_nfl.projection import (
     MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
@@ -43,6 +47,7 @@ ATTACH_MODEL_P_MODES = (
     "empirical_hit_rate",
     "empirical_hit_rate_laplace",
     "empirical_hit_rate_beta",
+    "empirical_hit_rate_market_prior",
     "projection_nflverse_rate",
     "hierarchy",
 )
@@ -233,6 +238,7 @@ def attach_close_fields(
     attach_model_p: str | None = None,
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     overwrite_model_p: bool = False,
@@ -294,9 +300,13 @@ def attach_close_fields(
                 # Preserve pre-existing non-book closes only if already stamped.
                 pass
 
+    # Always refresh sportsbook_* (does not redefine best_odds).
+    attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
+
     if model_mode == "pass":
         record.setdefault("model_p", record.get("model_p"))
         record.setdefault("model_p_source", record.get("model_p_source"))
+        attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
     elif model_mode == "empirical_hit_rate":
         attach_empirical_model_p_record(
             record, overwrite=overwrite_model_p, method="raw"  # type: ignore[arg-type]
@@ -317,6 +327,13 @@ def attach_close_fields(
             alpha=alpha,
             beta=beta,
         )
+    elif model_mode == "empirical_hit_rate_market_prior":
+        attach_empirical_model_p_record(
+            record,
+            overwrite=overwrite_model_p,
+            method="market_prior",
+            kappa=kappa,
+        )
     elif model_mode == "projection_nflverse_rate":
         if week_index is None:
             raise ValueError(
@@ -329,6 +346,7 @@ def attach_close_fields(
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA,
+            MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
         }:
             record.pop("model_p", None)
             record.pop("model_p_source", None)
@@ -348,10 +366,19 @@ def attach_close_fields(
             alpha=alpha,
         )
 
+    # Projection/hierarchy (and any mode) may overwrite model_p after the
+    # initial sportsbook_* stamp — refresh edge against the final model_p.
+    attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
+
     return dict(record)
 
 
-def _model_p_note(model_mode: str, alpha: float, beta: float | None) -> str:
+def _model_p_note(
+    model_mode: str,
+    alpha: float,
+    beta: float | None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
+) -> str:
     if model_mode == "empirical_hit_rate":
         return (
             f"model_p from L10/L20/L5/season hit rates "
@@ -367,6 +394,12 @@ def _model_p_note(model_mode: str, alpha: float, beta: float | None) -> str:
         return (
             f"Beta(α,β) shrink of empirical hit rates (α={alpha}, β={beta}, "
             f"source={MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA}); never market."
+        )
+    if model_mode == "empirical_hit_rate_market_prior":
+        return (
+            f"Beta shrink of empirical hit rates toward sportsbook-only implied "
+            f"prior (κ={kappa}, source={MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR}); "
+            "PrizePicks excluded from prior; never a raw copy of implied_probability."
         )
     if model_mode == "projection_nflverse_rate":
         return (
@@ -386,9 +419,10 @@ def enrich_prediction_payload(
     payload: Mapping[str, Any],
     *,
     mode: str = "snapshot_best",
-    attach_model_p: str | None = "empirical_hit_rate_laplace",
+    attach_model_p: str | None = "empirical_hit_rate_market_prior",
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     overwrite_model_p: bool = False,
@@ -417,6 +451,7 @@ def enrich_prediction_payload(
             attach_model_p=model_mode,
             alpha=alpha,
             beta=beta,
+            kappa=kappa,
             week_index=week_index,
             book_close_index=book_close_index,
             overwrite_model_p=overwrite_model_p,
@@ -451,9 +486,10 @@ def enrich_prediction_payload(
         "mode": model_mode,
         "alpha": alpha,
         "beta": beta,
+        "kappa": kappa,
         "n_with_model_p": n_model,
         "by_source": sources,
-        "note": _model_p_note(model_mode, alpha, beta),
+        "note": _model_p_note(model_mode, alpha, beta, kappa),
     }
     return out
 
@@ -483,11 +519,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--attach-model-p",
         choices=ATTACH_MODEL_P_MODES,
-        default="empirical_hit_rate_laplace",
+        default="empirical_hit_rate_market_prior",
         help=(
-            "empirical_hit_rate_laplace (default α=2) shrinks L10/L20/L5/season; "
+            "empirical_hit_rate_market_prior (default) shrinks L10/L20/L5/season "
+            "toward sportsbook-only implied (κ); laplace shrinks toward 0.5; "
             "hierarchy prefers nflverse projection then Laplace then raw; "
-            "never from implied_probability."
+            "never a raw copy of implied_probability."
         ),
     )
     parser.add_argument(
@@ -501,6 +538,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=None,
         help="Beta prior β (defaults to α when omitted; only used for beta mode).",
+    )
+    parser.add_argument(
+        "--kappa",
+        type=float,
+        default=DEFAULT_MARKET_PRIOR_KAPPA,
+        help=(
+            f"Market-prior Beta strength κ (default {DEFAULT_MARKET_PRIOR_KAPPA}); "
+            "α=prior·κ, β=(1−prior)·κ."
+        ),
     )
     parser.add_argument(
         "--nflverse-week-stats",
@@ -563,6 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         attach_model_p=args.attach_model_p,
         alpha=args.alpha,
         beta=args.beta,
+        kappa=args.kappa,
         week_index=week_index,
         book_close_index=book_index,
         overwrite_model_p=args.overwrite_model_p
@@ -570,6 +617,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         in {
             "empirical_hit_rate_laplace",
             "empirical_hit_rate_beta",
+            "empirical_hit_rate_market_prior",
             "projection_nflverse_rate",
             "hierarchy",
         },

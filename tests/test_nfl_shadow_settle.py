@@ -554,3 +554,62 @@ def test_team_codes_normalize_la_to_lar():
         players={},
     )
     assert event.team_codes == frozenset({"NYG", "LAR"})
+
+
+def test_model_p_bucket_predicted_excludes_pushes():
+    """Push-only bucket must not invent a predicted_hit_rate via push denom."""
+    from outlier_nfl.settle import PredictionSnap, parse_simplified_events, settle_predictions
+
+    def snap(name: str, line: float, model_p: float = 0.70) -> PredictionSnap:
+        return PredictionSnap(
+            source="test",
+            event_id="e1",
+            event_starts_at="2026-09-17T20:15:00-04:00",
+            slate_date="2026-09-17",
+            matchup="DET @ BUF",
+            team="DET",
+            opponent="BUF",
+            player_name=name,
+            player_id=None,
+            market="REC_YDS",
+            position="OVER",
+            line=line,
+            implied_probability=52.0,
+            confidence_tier="TIER_1_ANCHOR",
+            calibration_tags=(),
+            best_odds=-110,
+            model_p=model_p,
+        )
+
+    events = parse_simplified_events(
+        {
+            "events": [
+                {
+                    "provider_event_id": "x",
+                    "event_date": "2026-09-17",
+                    "away": "DET",
+                    "home": "BUF",
+                    "away_score": 10,
+                    "home_score": 20,
+                    "players": {
+                        "Winner Guy": {"RECEIVING:YDS": 100.0},
+                        "Push Guy": {"RECEIVING:YDS": 50.0},
+                    },
+                }
+            ]
+        }
+    )
+    mixed = settle_predictions(
+        [snap("Winner Guy", 49.5), snap("Push Guy", 50.0)], events
+    )
+    b = list(mixed.by_model_p_bucket.values())[0]
+    assert b["wins"] == 1 and b["pushes"] == 1
+    assert b["predicted_hit_rate"] == 0.70
+    assert b["actual_hit_rate"] == 1.0
+
+    push_only = settle_predictions([snap("Push Guy", 50.0)], events)
+    pb = list(push_only.by_model_p_bucket.values())[0]
+    assert pb["pushes"] == 1 and pb["wins"] == 0 and pb["losses"] == 0
+    assert pb["predicted_hit_rate"] is None  # not 0.70 from push-only denom
+    assert pb["actual_hit_rate"] is None
+

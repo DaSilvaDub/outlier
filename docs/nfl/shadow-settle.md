@@ -42,7 +42,9 @@ Join strategy: **team pair + Eastern slate date + player name**.
 | `close_line` / `close_odds` / `close_implied` | Pregame / book close |
 | `close_source` | `book_close` \| `pregame_snapshot_best_odds` \| … |
 | `model_p` / `p_model` | Selected-side model probability (0–1 preferred) |
-| `model_p_source` | `empirical_hit_rate` \| `empirical_hit_rate_laplace` \| `empirical_hit_rate_beta` \| `projection_nflverse_rate` \| `external` \| … |
+| `model_p_source` | `empirical_hit_rate` \| `empirical_hit_rate_laplace` \| `empirical_hit_rate_beta` \| `empirical_hit_rate_market_prior` \| `projection_nflverse_rate` \| `external` \| … |
+| `sportsbook_best_odds` / `sportsbook_implied_probability` | Best American / implied % excluding PrizePicks (`best_odds` unchanged) |
+| `sportsbook_edge_pts` | `model_p − sportsbook_implied_01` (probability points on [0, 1]; ×100 = pct pts) |
 
 **Honesty:** `best_odds` is **not** book close. `--mode snapshot_best` labels
 `pregame_snapshot_best_odds`. `--mode book_close` requires `--close-feed` and
@@ -55,12 +57,16 @@ Join strategy: **team pair + Eastern slate date + player name**.
    ≥3 prior weeks exist; otherwise **v1** Laplace gamelog-rate. Requires
    `--nflverse-week-stats` + `--before-week` (slate week; no leakage). As of
    2026-09-26 only Weeks 1–2 are full (Week 3 thin/TNF) — v2 will not fire yet.
-2. **`empirical_hit_rate_laplace`** — Laplace/add-α shrink of Outlier
-   L10→L20→L5→season rates (default **α=2**, assumed n = 10/20/5/17).
-3. **`empirical_hit_rate`** — raw empirical rate (legacy; overconfident at p=1.0).
+2. **`empirical_hit_rate_market_prior`** — Beta shrink of Outlier L10→L20→L5→season
+   rates toward **sportsbook-only** implied prior (PrizePicks excluded from prior).
+   Default **κ=4** (`α=prior·κ`, `β=(1−prior)·κ`). Never a raw copy of implied.
+3. **`empirical_hit_rate_laplace`** — Laplace/add-α shrink toward 0.5
+   (**α=2**, assumed n = 10/20/5/17). Fallback when no sportsbook price exists.
+4. **`empirical_hit_rate`** — raw empirical rate (legacy; overconfident at p=1.0).
 
-`enrich_close --attach-model-p hierarchy` runs (1)→(2)→(3). Pipeline high-prob /
-calibrated emit defaults to Laplace α=2.
+`enrich_close --attach-model-p hierarchy` runs projection→Laplace→raw. Pipeline
+high-prob / matchup emit defaults to **`empirical_hit_rate_market_prior`**.
+Settle scorecards include **Calibration by model_p bucket** (predicted vs actual).
 
 ### Shrink discipline / α lock (multi-slate, 2026-09-26)
 

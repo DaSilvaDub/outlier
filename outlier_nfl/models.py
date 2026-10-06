@@ -91,6 +91,11 @@ class NflPlayerProp:
     close_odds: int | None = None
     close_implied: float | None = None  # percentage 0-100, same units as implied_probability
     close_source: str | None = None  # e.g. book_close | pregame_snapshot_best_odds
+    # Sportsbook-only price (PrizePicks excluded). best_odds still includes all books.
+    sportsbook_best_odds: int | None = None
+    sportsbook_implied_probability: float | None = None  # percentage 0-100
+    # model_p − sportsbook_implied_01; probability points on [0, 1] (×100 = pct pts).
+    sportsbook_edge_pts: float | None = None
     # Optional model / calibrated probability (0-1 preferred; settle also accepts 0-100).
     # Never copy book implied_probability into model_p.
     model_p: float | None = None

@@ -158,6 +158,66 @@ def american_to_implied_probability(odds: int | float | str | None) -> float | N
     return round(p, 3)
 
 
+# Compact book keys excluded from sportsbook_best_odds / sportsbook edge.
+# Compact = "".join(ch for ch in book.lower() if ch.isalnum()).
+# PrizePicks only for now (issue #217); widen later if needed.
+EXCLUDED_FROM_SPORTSBOOK_BEST: frozenset[str] = frozenset({"prizepicks"})
+
+
+def book_name_compact(book: str | None) -> str:
+    """Normalize a book display name to an alphanumeric compact key."""
+    if book is None:
+        return ""
+    return "".join(ch for ch in str(book).lower() if ch.isalnum())
+
+
+def is_excluded_from_sportsbook_best(book: str | None) -> bool:
+    """True when ``book`` must not drive sportsbook_best_odds / edge."""
+    return book_name_compact(book) in EXCLUDED_FROM_SPORTSBOOK_BEST
+
+
+def _book_odds_pair(entry: Any) -> tuple[str | None, int | None]:
+    """Extract (book, american odds) from a BookPrice, dict, or similar."""
+    if entry is None:
+        return None, None
+    if hasattr(entry, "book") and hasattr(entry, "odds"):
+        try:
+            return str(entry.book), int(entry.odds)
+        except (TypeError, ValueError):
+            return str(getattr(entry, "book", None) or "") or None, None
+    if isinstance(entry, dict):
+        book = entry.get("book") or entry.get("book_raw")
+        raw = entry.get("odds") if entry.get("odds") is not None else entry.get("odds_raw")
+        try:
+            return (str(book) if book else None), (int(raw) if raw is not None else None)
+        except (TypeError, ValueError):
+            return (str(book) if book else None), None
+    return None, None
+
+
+def sportsbook_best_american(books: Any) -> int | None:
+    """Best (highest / least-negative) American price excluding PrizePicks.
+
+    ``best_odds`` across the full ``books`` list is unchanged and may still be
+    PrizePicks flat -137. This helper is for sportsbook-only edge / priors.
+    """
+    if not books:
+        return None
+    best: int | None = None
+    for entry in books:
+        book, odds = _book_odds_pair(entry)
+        if odds is None or is_excluded_from_sportsbook_best(book):
+            continue
+        if best is None or odds > best:
+            best = odds
+    return best
+
+
+def sportsbook_implied_probability_pct(books: Any) -> float | None:
+    """Implied win probability percentage [0, 100] from sportsbook_best_american."""
+    return american_to_implied_probability(sportsbook_best_american(books))
+
+
 def resolve_outcome_team(
     market: dict[str, Any],
     outcome: dict[str, Any],

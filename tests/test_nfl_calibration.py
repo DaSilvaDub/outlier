@@ -16,14 +16,22 @@ import json
 from pathlib import Path
 
 from outlier_nfl.calibration import (
+    DEFAULT_MARKET_PRIOR_KAPPA,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
+    MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
     apply_game_script_calibration,
     attach_empirical_model_p,
     compute_empirical_model_p,
     compute_shrunk_empirical_model_p,
+    compute_sportsbook_edge_pts,
+    model_p_bucket_counts,
     shrink_hit_rate,
     extract_game_script_context,
+)
+from outlier_nfl.games import (
+    american_to_implied_probability,
+    sportsbook_best_american,
 )
 from outlier_nfl.consensus import (
     identify_consensus_lines_for_group,
@@ -405,11 +413,21 @@ def test_empirical_hit_rate_tiering():
 
     assert by_name["Sam LaPorta"].confidence_tier == "TIER_1_ANCHOR"
     assert "HIGH_HIT_RATE_ANCHOR" in by_name["Sam LaPorta"].calibration_tags
-    # Empirical model_p from Laplace(α=2) on L10 (never book implied_probability)
-    assert by_name["Sam LaPorta"].model_p == round(shrink_hit_rate(0.9, 10, alpha=2.0), 6)
-    assert by_name["Sam LaPorta"].model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+    # Default model_p is market-prior Beta on L10 (never a raw copy of implied)
+    prior = american_to_implied_probability(-110) / 100.0
+    expected, _ = compute_shrunk_empirical_model_p(
+        l5_hit_rate=1.0,
+        l10_hit_rate=0.9,
+        method="market_prior",
+        market_prior=prior,
+        kappa=DEFAULT_MARKET_PRIOR_KAPPA,
+    )
+    assert by_name["Sam LaPorta"].model_p == expected
+    assert by_name["Sam LaPorta"].model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
     assert by_name["Sam LaPorta"].implied_probability == 52.38
+    assert by_name["Sam LaPorta"].sportsbook_best_odds == -110
     assert by_name["Sam LaPorta"].model_p != 0.5238
+    assert by_name["Sam LaPorta"].model_p != prior
 
     assert by_name["Amon-Ra St. Brown"].confidence_tier == "TIER_2_STRONG"
     assert "CONSISTENT_HIT_RATE" in by_name["Amon-Ra St. Brown"].calibration_tags
@@ -480,6 +498,19 @@ def test_pipeline_calibrated_and_high_prob_artifacts(tmp_path):
     assert (normalized_dir / "nfl_calibrated_props_2026-09-13.json").exists()
     assert (normalized_dir / "nfl_high_prob_props_latest.json").exists()
     assert (normalized_dir / "nfl_high_prob_props_2026-09-13.json").exists()
+
+    high_prob = json.loads(
+        (normalized_dir / "nfl_high_prob_props_2026-09-13.json").read_text(encoding="utf-8")
+    )
+    assert high_prob["model_p_enrichment"]["mode"] == "empirical_hit_rate_market_prior"
+    assert "model_p_distribution" in high_prob
+    for row in high_prob.get("records") or []:
+        assert "sportsbook_best_odds" in row
+        assert row.get("model_p_source") in {
+            None,
+            MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
+            MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,  # fallback when no sportsbook price
+        }
 
     # The game script must land under the caller's reports directory -- generation
     # failures are swallowed by run(), so the file's absence is the only signal.
@@ -588,3 +619,173 @@ def test_laplace_shrink_empirical_model_p():
     )
     assert prop.model_p == round(12.0 / 14.0, 6)
     assert prop.model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+
+def test_sportsbook_best_excludes_prizepicks_keeps_best_odds():
+    """DK -250 + PP -137 → sportsbook_best=-250; best_odds may still be PP -137."""
+    books = (
+        BookPrice(book="DRAFTKINGS", odds=-250, odds_raw="-250", decimal=1.4),
+        BookPrice(book="PRIZEPICKS", odds=-137, odds_raw="-137", decimal=1.73),
+        BookPrice(book="FANATICS", odds=-300, odds_raw="-300", decimal=1.33),
+    )
+    prop = NflPlayerProp(
+        event_id="e1",
+        event_starts_at=None,
+        matchup="NYJ @ CHI",
+        team="NYJ",
+        opponent="CHI",
+        player_name="Isaiah Davis",
+        player_id="p1",
+        market="RUSH_ATT",
+        market_raw="RUSH_ATT",
+        position="UNDER",
+        line=4.5,
+        books=books,
+        best_odds=max(b.odds for b in books),  # -137 from PrizePicks
+        implied_probability=american_to_implied_probability(-137),
+        l5_hit_rate=1.0,
+        l10_hit_rate=0.9,
+    )
+    assert prop.best_odds == -137
+    assert sportsbook_best_american(prop.books) == -250
+
+    attached = attach_empirical_model_p(prop, method="market_prior", overwrite=True)
+    assert attached.best_odds == -137
+    assert attached.sportsbook_best_odds == -250
+    assert "PRIZEPICKS" in {b.book for b in attached.books}
+    sb_imp = american_to_implied_probability(-250) / 100.0
+    assert attached.sportsbook_implied_probability == american_to_implied_probability(-250)
+    assert attached.model_p_source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
+    assert attached.model_p != sb_imp  # never raw copy of implied
+    assert attached.sportsbook_edge_pts == compute_sportsbook_edge_pts(
+        attached.model_p, attached.sportsbook_implied_probability
+    )
+    # Edge must use sportsbook -250, not PrizePicks -137
+    pp_imp = american_to_implied_probability(-137) / 100.0
+    assert attached.sportsbook_edge_pts != round(attached.model_p - pp_imp, 6)
+
+
+def test_market_prior_distinct_model_p_for_different_priors():
+    """Same L10 hit rate + different sportsbook priors → distinct model_p."""
+    a = compute_shrunk_empirical_model_p(
+        l10_hit_rate=1.0, method="market_prior", market_prior=0.55, kappa=4.0
+    )
+    b = compute_shrunk_empirical_model_p(
+        l10_hit_rate=1.0, method="market_prior", market_prior=0.70, kappa=4.0
+    )
+    assert a is not None and b is not None
+    assert a[0] != b[0]
+    assert a[1] == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
+    assert b[1] == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
+    # Never equals the prior itself
+    assert abs(a[0] - 0.55) > 0.01
+    assert abs(b[0] - 0.70) > 0.01
+
+
+def test_market_prior_falls_back_to_laplace_without_prior():
+    out = compute_shrunk_empirical_model_p(
+        l10_hit_rate=1.0, method="market_prior", market_prior=None, kappa=4.0
+    )
+    assert out is not None
+    p, source = out
+    assert p == round(shrink_hit_rate(1.0, 10, alpha=2.0), 6)
+    assert source == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+
+
+def test_oct4_style_market_prior_spreads_model_p(tmp_path: Path):
+    """Replay-style: same L10=1.0 rows with varied sportsbook prices → >3 distinct model_p."""
+    from outlier_nfl.enrich_close import enrich_prediction_payload
+
+    records = []
+    # Varied sportsbook prices (and PrizePicks -137 on every row as decoy best_odds)
+    sb_prices = [-110, -115, -120, -130, -150, -200, +100, -105]
+    for i, sb in enumerate(sb_prices):
+        books = [
+            {"book": "DRAFTKINGS", "odds": sb, "odds_raw": str(sb)},
+            {"book": "PRIZEPICKS", "odds": -137, "odds_raw": "-137"},
+        ]
+        records.append(
+            {
+                "event_id": f"e{i}",
+                "matchup": "NE @ BUF",
+                "player_name": f"Player {i}",
+                "market": "REC",
+                "position": "OVER",
+                "line": 3.5,
+                "books": books,
+                "best_odds": -137,
+                "implied_probability": american_to_implied_probability(-137),
+                "l5_hit_rate": 1.0,
+                "l10_hit_rate": 1.0,
+            }
+        )
+    payload = {"date": "2026-10-04", "records": records}
+    enriched = enrich_prediction_payload(
+        payload,
+        mode="snapshot_best",
+        attach_model_p="empirical_hit_rate_market_prior",
+        overwrite_model_p=True,
+    )
+    dist = model_p_bucket_counts(enriched["records"])
+    assert dist["n_distinct_model_p"] > 3
+    for row in enriched["records"]:
+        assert row["best_odds"] == -137
+        assert row["sportsbook_best_odds"] != -137
+        assert row["model_p_source"] == MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
+        # Edge not based on PrizePicks alone
+        pp_edge = compute_sportsbook_edge_pts(
+            row["model_p"], american_to_implied_probability(-137)
+        )
+        assert row["sportsbook_edge_pts"] != pp_edge
+
+
+def test_compute_sportsbook_edge_normalizes_model_p_pct():
+    """model_p expressed as 0–100 must not produce a ~70pt bogus edge."""
+    edge = compute_sportsbook_edge_pts(71.4, 57.81)  # 71.4% vs ~57.81%
+    assert edge is not None
+    assert abs(edge - (0.714 - 0.5781)) < 1e-4
+    edge01 = compute_sportsbook_edge_pts(0.714, 57.81)
+    assert edge01 is not None
+    assert abs(edge - edge01) < 1e-6
+
+
+def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
+    """After projection overwrites model_p, sportsbook_edge_pts must track it."""
+    from outlier_nfl import enrich_close as ec
+    from outlier_nfl.projection import ProjectionResult, MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+
+    record = {
+        "player_name": "Test WR",
+        "market": "REC_YDS",
+        "position": "WR",
+        "line": 49.5,
+        "model_p": 0.80,
+        "model_p_source": "empirical_hit_rate_market_prior",
+        "books": [
+            {"book": "DRAFTKINGS", "odds": -110},
+            {"book": "PRIZEPICKS", "odds": -137},
+        ],
+        "best_odds": -137,
+    }
+    # Stamp edge from stale model_p first via sportsbook attach alone
+    from outlier_nfl.calibration import attach_sportsbook_fields_record, compute_sportsbook_edge_pts
+
+    attach_sportsbook_fields_record(record, model_p=0.80)
+    stale_edge = record["sportsbook_edge_pts"]
+
+    def _fake_attach(rec, **kwargs):
+        rec["model_p"] = 0.55
+        rec["model_p_source"] = MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+        return rec
+
+    monkeypatch.setattr(ec, "attach_projection_model_p_record", _fake_attach)
+    out = ec.attach_close_fields(
+        record,
+        attach_model_p="projection_nflverse_rate",
+        week_index={"test": []},
+        overwrite_model_p=True,
+    )
+    assert out["model_p"] == 0.55
+    expected = compute_sportsbook_edge_pts(0.55, out["sportsbook_implied_probability"])
+    assert out["sportsbook_edge_pts"] == expected
+    assert out["sportsbook_edge_pts"] != stale_edge
+

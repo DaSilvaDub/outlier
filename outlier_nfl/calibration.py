@@ -4,9 +4,11 @@ Implements calibration heuristics learned from empirical postgame reconciliation
 1. Deficit-Risk Haircut on Road Underdog RB Rushing Lines (-15% volume adjustment).
 2. Two-High Shell Target Divergence in Comeback Mode (+20% Slot/TE, -25% Deep Threat).
 3. Empirical Hit Rate Priority (Tier-1 Anchor classification for 100% L5 / 80%+ L10).
-4. Emit ``model_p`` from empirical hit rates (L10→L20→L5→season) — never from
-   book ``implied_probability``. Volume haircuts stay tags; they are not mapped
-   into probability without a distributional model.
+4. Emit ``model_p`` from empirical hit rates (L10→L20→L5→season) — never a raw
+   copy of book ``implied_probability``. Default shrink is market-prior Beta
+   (sportsbook implied as prior mean); Laplace toward 0.5 remains available.
+   Volume haircuts stay tags; they are not mapped into probability without a
+   distributional model.
 """
 
 from __future__ import annotations
@@ -16,6 +18,10 @@ import logging
 from typing import Any
 
 from outlier_nfl.config import is_team_total
+from outlier_nfl.games import (
+    sportsbook_best_american,
+    sportsbook_implied_probability_pct,
+)
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 
 logger = logging.getLogger("outlier_nfl.calibration")
@@ -69,6 +75,7 @@ KNOWN_VERTICAL_DEEP_THREATS: tuple[str, ...] = (
 MODEL_P_SOURCE_EMPIRICAL_HIT_RATE = "empirical_hit_rate"
 MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE = "empirical_hit_rate_laplace"
 MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA = "empirical_hit_rate_beta"
+MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR = "empirical_hit_rate_market_prior"
 
 # Assumed trial counts when Outlier only ships a rate (no explicit n).
 # L10 is the preferred window for Tier-1; season uses a full-season proxy.
@@ -84,6 +91,10 @@ HIT_RATE_WINDOW_N: dict[str, int] = {
 # locked without more Sundays. α=2 is pre-specified and still beats market.
 DEFAULT_LAPLACE_ALPHA = 2.0
 
+# Market-prior Beta strength. κ=4 matches Laplace α=2 toward 0.5 when prior=0.5
+# (α=β=2). Prior mean comes from sportsbook-only implied (PrizePicks excluded).
+DEFAULT_MARKET_PRIOR_KAPPA = 4.0
+
 
 def _normalize_hit_rate(value: Any) -> float | None:
     try:
@@ -97,6 +108,95 @@ def _normalize_hit_rate(value: Any) -> float | None:
     if 1.0 < p <= 100.0:
         return p / 100.0
     return None
+
+
+def probability_to_01(value: Any) -> float | None:
+    """Normalize a probability expressed as 0–1 or 0–100 into [0, 1]."""
+    try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (p == p) or p < 0:
+        return None
+    if 0.0 <= p <= 1.0:
+        return p
+    if 1.0 < p <= 100.0:
+        return p / 100.0
+    return None
+
+
+def compute_sportsbook_edge_pts(
+    model_p: float | None,
+    sportsbook_implied: float | None,
+) -> float | None:
+    """``model_p − sportsbook_implied_01`` in probability points on [0, 1].
+
+    Multiply by 100 for percentage points (e.g. 0.279 → +27.9 pts).
+    Both sides are normalized with :func:`probability_to_01` (0–1 or 0–100).
+    """
+    if model_p is None or sportsbook_implied is None:
+        return None
+    prior = probability_to_01(sportsbook_implied)
+    mp = probability_to_01(model_p)
+    if prior is None or mp is None:
+        return None
+    return round(mp - prior, 6)
+
+
+def fill_sportsbook_price_fields(
+    *,
+    books: Any,
+    model_p: float | None = None,
+) -> dict[str, Any]:
+    """Compute sportsbook-only odds / implied / optional edge from ``books``."""
+    sb_odds = sportsbook_best_american(books)
+    sb_implied = sportsbook_implied_probability_pct(books)
+    return {
+        "sportsbook_best_odds": sb_odds,
+        "sportsbook_implied_probability": sb_implied,
+        "sportsbook_edge_pts": compute_sportsbook_edge_pts(model_p, sb_implied),
+    }
+
+
+def attach_sportsbook_fields_record(
+    record: dict[str, Any],
+    *,
+    model_p: float | None = None,
+) -> dict[str, Any]:
+    """Mutate a prop dict with sportsbook_* fields from ``books``.
+
+    Does not modify ``best_odds`` / ``implied_probability`` (those may include
+    PrizePicks). Edge uses ``model_p`` when provided, else ``record["model_p"]``.
+    """
+    mp = model_p if model_p is not None else record.get("model_p")
+    filled = fill_sportsbook_price_fields(books=record.get("books") or (), model_p=mp)
+    record["sportsbook_best_odds"] = filled["sportsbook_best_odds"]
+    record["sportsbook_implied_probability"] = filled["sportsbook_implied_probability"]
+    record["sportsbook_edge_pts"] = filled["sportsbook_edge_pts"]
+    return record
+
+
+def model_p_bucket_counts(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pregame distribution of model_p values (no actuals — settle adds those)."""
+    counts: dict[str, int] = {}
+    for row in records:
+        mp = row.get("model_p")
+        if mp is None:
+            continue
+        try:
+            key = f"{round(float(mp), 6):.6f}"
+        except (TypeError, ValueError):
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    buckets = [
+        {"model_p": float(k), "n": counts[k]}
+        for k in sorted(counts.keys(), key=lambda x: -counts[x])
+    ]
+    return {
+        "n_with_model_p": sum(counts.values()),
+        "n_distinct_model_p": len(counts),
+        "buckets": buckets,
+    }
 
 
 def select_empirical_hit_rate(
@@ -177,13 +277,18 @@ def compute_shrunk_empirical_model_p(
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
     method: str = "laplace",
+    market_prior: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
 ) -> tuple[float, str] | None:
     """Shrunk empirical P(hit) and source stamp, or None if no usable rate.
 
     method:
-      - laplace: β=α (ignores ``beta`` arg except when method=beta)
-      - beta: uses provided β (default β=α when None)
-    Never uses book implied probability.
+      - laplace: β=α (symmetric shrink toward 0.5)
+      - beta: uses provided α/β (default β=α when None)
+      - market_prior: Beta centered on sportsbook implied prior mean
+        (α = prior·κ, β = (1−prior)·κ). If ``market_prior`` is missing, falls
+        back to Laplace(α=DEFAULT_LAPLACE_ALPHA). Never copies implied as
+        ``model_p``.
     """
     selected = select_empirical_hit_rate(
         l5_hit_rate=l5_hit_rate,
@@ -200,9 +305,37 @@ def compute_shrunk_empirical_model_p(
     elif method == "beta":
         shrunk = shrink_hit_rate(p, n, alpha=alpha, beta=beta)
         source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA
+    elif method == "market_prior":
+        prior = probability_to_01(market_prior)
+        if prior is None:
+            shrunk = shrink_hit_rate(p, n, alpha=DEFAULT_LAPLACE_ALPHA, beta=None)
+            source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
+        else:
+            if kappa < 0:
+                raise ValueError("kappa must be >= 0")
+            a = float(prior) * float(kappa)
+            b = (1.0 - float(prior)) * float(kappa)
+            shrunk = shrink_hit_rate(p, n, alpha=a, beta=b)
+            source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR
     else:
         raise ValueError(f"Unsupported shrink method: {method}")
     return (round(shrunk, 6), source)
+
+
+def _resolve_market_prior_01(
+    *,
+    market_prior: float | None,
+    books: Any,
+    sportsbook_implied: float | None = None,
+) -> float | None:
+    """Prefer explicit prior, then sportsbook_implied field, then books."""
+    prior = probability_to_01(market_prior)
+    if prior is not None:
+        return prior
+    prior = probability_to_01(sportsbook_implied)
+    if prior is not None:
+        return prior
+    return probability_to_01(sportsbook_implied_probability_pct(books))
 
 
 def attach_empirical_model_p(
@@ -212,14 +345,34 @@ def attach_empirical_model_p(
     method: str = "raw",
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    market_prior: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
+    attach_sportsbook: bool = True,
 ) -> NflPlayerProp:
     """Return prop with ``model_p`` from empirical hit rates when missing.
 
-    method: ``raw`` | ``laplace`` | ``beta``. Preserves an already-set
-    ``model_p`` unless ``overwrite`` is True. Never copies ``implied_probability``.
+    method: ``raw`` | ``laplace`` | ``beta`` | ``market_prior``. Preserves an
+    already-set ``model_p`` unless ``overwrite`` is True. Never copies
+    ``implied_probability`` into ``model_p``. When ``attach_sportsbook`` is
+    True, refreshes sportsbook_* fields (PrizePicks excluded from best).
     """
+    sb = fill_sportsbook_price_fields(books=prop.books, model_p=None) if attach_sportsbook else {
+        "sportsbook_best_odds": prop.sportsbook_best_odds,
+        "sportsbook_implied_probability": prop.sportsbook_implied_probability,
+        "sportsbook_edge_pts": prop.sportsbook_edge_pts,
+    }
+
     if prop.model_p is not None and not overwrite:
-        return prop
+        edge = compute_sportsbook_edge_pts(
+            prop.model_p, sb.get("sportsbook_implied_probability")
+        )
+        return replace(
+            prop,
+            sportsbook_best_odds=sb.get("sportsbook_best_odds"),
+            sportsbook_implied_probability=sb.get("sportsbook_implied_probability"),
+            sportsbook_edge_pts=edge,
+        )
+
     if method == "raw":
         model_p = compute_empirical_model_p(
             l5_hit_rate=prop.l5_hit_rate,
@@ -227,8 +380,15 @@ def attach_empirical_model_p(
             l20_hit_rate=prop.l20_hit_rate,
             season_hit_rate=prop.season_hit_rate,
         )
-        source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
+        source: str | None = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
     else:
+        prior = None
+        if method == "market_prior":
+            prior = _resolve_market_prior_01(
+                market_prior=market_prior,
+                books=prop.books,
+                sportsbook_implied=sb.get("sportsbook_implied_probability"),
+            )
         shrunk = compute_shrunk_empirical_model_p(
             l5_hit_rate=prop.l5_hit_rate,
             l10_hit_rate=prop.l10_hit_rate,
@@ -237,16 +397,38 @@ def attach_empirical_model_p(
             alpha=alpha,
             beta=beta,
             method=method,
+            market_prior=prior,
+            kappa=kappa,
         )
         if shrunk is None:
             model_p, source = None, None
         else:
             model_p, source = shrunk
+
+    edge = compute_sportsbook_edge_pts(model_p, sb.get("sportsbook_implied_probability"))
     if model_p is None:
-        if prop.model_p is None and prop.model_p_source is None:
+        if (
+            prop.model_p is None
+            and prop.model_p_source is None
+            and not attach_sportsbook
+        ):
             return prop
-        return replace(prop, model_p=None, model_p_source=None)
-    return replace(prop, model_p=model_p, model_p_source=source)
+        return replace(
+            prop,
+            model_p=None,
+            model_p_source=None,
+            sportsbook_best_odds=sb.get("sportsbook_best_odds"),
+            sportsbook_implied_probability=sb.get("sportsbook_implied_probability"),
+            sportsbook_edge_pts=None,
+        )
+    return replace(
+        prop,
+        model_p=model_p,
+        model_p_source=source,
+        sportsbook_best_odds=sb.get("sportsbook_best_odds"),
+        sportsbook_implied_probability=sb.get("sportsbook_implied_probability"),
+        sportsbook_edge_pts=edge,
+    )
 
 
 def attach_empirical_model_p_record(
@@ -256,17 +438,30 @@ def attach_empirical_model_p_record(
     method: str = "raw",
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    market_prior: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
+    attach_sportsbook: bool = True,
 ) -> dict[str, Any]:
     """Mutate/return a prop dict with empirical ``model_p`` when missing.
 
     Same contract as :func:`attach_empirical_model_p` for JSON artifacts
-    (historical packs / enrich_close). Never copies implied_probability.
+    (historical packs / enrich_close). Never copies implied_probability into
+    ``model_p``.
     """
     if record.get("model_p") is None and record.get("p_model") is not None:
         record["model_p"] = record.get("p_model")
+
+    if attach_sportsbook:
+        attach_sportsbook_fields_record(record, model_p=None)
+
     if record.get("model_p") is not None and not overwrite:
         record.setdefault("model_p_source", record.get("model_p_source"))
+        if attach_sportsbook:
+            record["sportsbook_edge_pts"] = compute_sportsbook_edge_pts(
+                record.get("model_p"), record.get("sportsbook_implied_probability")
+            )
         return record
+
     if method == "raw":
         model_p = compute_empirical_model_p(
             l5_hit_rate=record.get("l5_hit_rate"),
@@ -276,6 +471,13 @@ def attach_empirical_model_p_record(
         )
         source: str | None = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE
     else:
+        prior = None
+        if method == "market_prior":
+            prior = _resolve_market_prior_01(
+                market_prior=market_prior,
+                books=record.get("books") or (),
+                sportsbook_implied=record.get("sportsbook_implied_probability"),
+            )
         shrunk = compute_shrunk_empirical_model_p(
             l5_hit_rate=record.get("l5_hit_rate"),
             l10_hit_rate=record.get("l10_hit_rate"),
@@ -284,6 +486,8 @@ def attach_empirical_model_p_record(
             alpha=alpha,
             beta=beta,
             method=method,
+            market_prior=prior,
+            kappa=kappa,
         )
         if shrunk is None:
             model_p, source = None, None
@@ -292,9 +496,15 @@ def attach_empirical_model_p_record(
     if model_p is None:
         record.setdefault("model_p", None)
         record.setdefault("model_p_source", None)
+        if attach_sportsbook:
+            record["sportsbook_edge_pts"] = None
         return record
     record["model_p"] = model_p
     record["model_p_source"] = source
+    if attach_sportsbook:
+        record["sportsbook_edge_pts"] = compute_sportsbook_edge_pts(
+            model_p, record.get("sportsbook_implied_probability")
+        )
     return record
 
 
@@ -434,6 +644,6 @@ def apply_game_script_calibration(
             calibration_tags=tuple(tags),
             calibrated_volume_adjustment=round(vol_adj, 2) if vol_adj is not None else None,
         )
-        calibrated_props.append(attach_empirical_model_p(updated, method="laplace"))
+        calibrated_props.append(attach_empirical_model_p(updated, method="market_prior"))
 
     return calibrated_props
