@@ -1,3 +1,18 @@
+# HANDOFF — 2026-10-06 (Claude, Offline Pytest core CI regression from PR #211)
+
+**Branch**: `fix/pack-gate-ordering-ci-regression` · **PR**: [#215](https://github.com/DaSilvaDub/outlier/pull/215)
+
+## Accomplished
+- Root-caused the `core` job failures on master (since 2e11c4d) to ba317d4:
+  - `test_over_line_steam_keeps_stale_gate`: **code bug**. The new `low_quality_tier_disqualified` / `negative_learned_edge` gates blanked units early and starved the stale-line gate. I removed the redundant clears; the final `DISQUALIFYING_DQ_FLAGS` sweep still zeroes the stake.
+  - `test_wnba_playoff_role_player_...`: **stale fixture**. The warm row (O7.5 PTS, 85% recency) correctly trips `severe_line_discount_trap`. I lowered it to 62% recency.
+- Verified: test_pack + test_slate_quality + test_calibration_upgrades → 210 passed. Note: the sandbox needs `--basetemp` in a scratch dir (WinError 5 on the default pytest tmp root).
+
+## Next steps
+- Confirm CI `core` is green on PR #215, then merge.
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Refresh DAG Concurrency Fix & MLB/WNBA Pipeline Execution)
 
 **Branch**: `master` · **Last commit**: `4a7e06b` · **PR**: [#213](https://github.com/DaSilvaDub/outlier/pull/213)
