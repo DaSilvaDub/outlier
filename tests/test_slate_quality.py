@@ -597,3 +597,34 @@ def test_severe_line_discount_trap_detects_minute_injury_cap():
     }
     assert severe_line_discount_trap(normal_prop) is False
 
+
+def test_is_floor_ladder_opportunity_detects_dustin_may_profile():
+    from outlier_scrapers.slate_quality import is_floor_ladder_opportunity
+
+    # Dustin May style: line 2.5 vs open 3.5, mean 4.01, hit rate 76%, price -150
+    may_row = {
+        "market_type": "SO",
+        "selection": "Dustin May - Strikeouts OVER 2.5",
+        "line": 2.5,
+        "line_open": 3.5,
+        "price": -150,
+        "decimal_price": 1.6667,
+        "projection_mean": 4.0081,
+        "hit_rate_component": 76.1,
+        "independent_edge_pct": 2.29,
+        "data_quality_flags": "hit_rate_support",
+    }
+    assert is_floor_ladder_opportunity(may_row) is True
+
+    # Under is never a floor ladder
+    under_row = dict(may_row, selection="Dustin May - Strikeouts UNDER 2.5")
+    assert is_floor_ladder_opportunity(under_row) is False
+
+    # Projection side conflict disqualifies
+    conflict_row = dict(may_row, data_quality_flags="projection_side_conflict")
+    assert is_floor_ladder_opportunity(conflict_row) is False
+
+    # Extreme longshot odds (> 2.0) are not floor ladders
+    longshot_row = dict(may_row, price=150, decimal_price=2.50)
+    assert is_floor_ladder_opportunity(longshot_row) is False
+

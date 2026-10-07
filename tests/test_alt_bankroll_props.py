@@ -270,10 +270,13 @@ def test_write_pack_emits_player_and_league_bankroll_csvs(tmp_path):
         player_rows = list(csv.DictReader(handle))
     assert [row["event_id"] for row in bankroll_rows] == ["e1"]
     assert [row["player"] for row in player_rows] == ["Player One"]
-    for row in [*bankroll_rows, *player_rows]:
+    for row in bankroll_rows:
         assert row["model_prob"] == ""
         assert row["edge_pct"] == ""
         assert row["recommended_units"] == ""
+    for row in player_rows:
+        assert row["model_prob"] != ""
+        assert row["edge_pct"] != ""
     assert (out_dir / "mlb_alt_bankroll_parlays.csv").exists()
 
 
