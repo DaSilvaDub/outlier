@@ -1,3 +1,28 @@
+# HANDOFF — 2026-10-06 (Antigravity/Gemini, Floor Ladder Detection & Multi-Book Recovery)
+
+**Branch**: `feat/floor-ladder-calibration` (merged) · **Last commit**: `8c74d8b` · **PR**: [#237](https://github.com/DaSilvaDub/outlier/pull/237)
+
+## Accomplished
+1. **Floor-Ladder Opportunity Detection & Calibration (PR #237)**:
+   - Root-caused missing floor ladder opportunities (such as Dustin May OVER 2.5 Ks at -150 on Fanatics):
+     - `slate_quality.py`: added `is_floor_ladder_opportunity(row)` to recognize high-confidence discounted floor lines supported by projection cushion (`proj_mean >= line + 0.75`) or opening line discounts (`open >= line + 0.5`), favored odds (-350 to -110), and strong hit rate (>= 70%) or positive independent edge.
+     - `pack_selection.py`: flagged floor ladder opportunities in `signal_flags` with `floor_ladder_opportunity`.
+     - `alt_player_props.py`: widened `ALT_PLAYER_PROPS_ALLOWED_BOOKS` from only `hardrock` to all 5 regulated books (`{"hardrock", "fanatics", "midnite", "draftkings", "novig"}`).
+     - `alt_player_props.py`: implemented `_floor_ladder_score` to prioritize sweet-spot floor lines (-110 to -250) over extreme minus-money juice (-700), and implemented Empirical Bayes probability shrinkage to populate `model_prob`, `edge_pct`, and `recommended_units`.
+     - `pack_publish.py`: updated `ev_over_players` to qualify players with floor ladder opportunities, strong hit rates, or projection cushions, matching on both `player_id` and `player` name.
+2. **Verification & Tests**:
+   - `tests/test_alt_player_props.py` (9 passed).
+   - `tests/test_slate_quality.py` (32 passed).
+   - `tests/test_pack.py` (170 passed).
+   - `tests/test_alt_bankroll_props.py` (10 passed).
+   - `tests/test_ultimate_alt.py` (6 passed).
+   - `tests/test_game_totals.py` (57 passed).
+   - Total: 284 passed, 0 failed across all affected suites.
+3. **PR & Merge**:
+   - PR #237 merged into `master` at commit `8c74d8b`.
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Thursday Night Football TB @ DAL Game Script)
 
 **Branch**: `master` · **Last commit**: `b7638f7`
