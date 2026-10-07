@@ -614,6 +614,101 @@ sqlalchemy/google/anthropic/openai/dateutil imports.
 
 ---
 
+# HANDOFF — 2026-09-29 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-koysij` · **Base**: `eef5ba4` (master, incl. #193/#200)
+
+## Scope
+Daily debug review of the ~5.8k lines PR #193 (`feat/nfl-shadow-settle`) merged plus the
+nflverse tape / usage / weather / scorecard work from #198. Two real defects found and fixed;
+no other credible problems in the reviewed surface.
+
+## Finding 1 — HIGH: the v2 projection was discarded by its own hierarchy
+`outlier_nfl/projection.py:attach_model_p_hierarchy_record()` short-circuited only on
+`MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE`, but `attach_projection_model_p_record()` *prefers*
+v2 and stamps `..._GAUSSIAN` / `..._POISSON`. So whenever v2 fired (>= 3 prior weeks — i.e.
+from Week 4 on, every week of the rest of the season) the check missed, execution fell
+through to `attach_empirical_model_p_record(..., overwrite=True)`, and the stronger Gaussian /
+Poisson projection was overwritten by the weaker empirical Laplace shrink. The documented
+hierarchy ("projection v2 / v1 rate → Laplace → raw empirical") was inverted in practice, and
+the row was left with inconsistent provenance.
+
+Reproduced on `RUSH_YDS` OVER 49.5 with three prior weeks (40/60/55) and `l10_hit_rate=0.7`:
+
+| revision | `model_p` | `model_p_source` | `model_p_method` |
+|---|---|---|---|
+| `eef5ba4` (master) | 0.642857 | `empirical_hit_rate_laplace` | `gamelog_gaussian` |
+| this branch | 0.582451 | `projection_nflverse_gaussian` | `gamelog_gaussian` |
+
+Master's row claims a Laplace source while carrying the projection's method and
+`model_p_n_games=3` — so a consumer reading provenance could not tell which number it had.
+Impact: `enrich_close --attach-model-p hierarchy` is what stamps the `model_p` that
+`settle.py` scores Brier / logloss on, so the whole model-vs-market comparison was measuring
+the empirical shrink and labelling it a projection.
+
+Fix: added `PROJECTION_MODEL_P_SOURCES` (rate + gaussian + poisson) and matched against it.
+The fall-through now happens only when projection produced nothing, so no stale
+`model_p_method` / `model_p_n_games` can survive onto an empirical row. Also corrected the
+`hierarchy` provenance note in `enrich_close._model_p_note()`, which named only the v1 source.
+
+## Finding 2 — MEDIUM: January/February playoff slates read as an unplayed season
+`boxscore_nflverse.fetch_nflverse_boxscores_for_date()` derived
+`season_year = season or event_date.year`, and `settle._load_events_from_args()` passed
+`args.season or slate.year`. An NFL season is labelled by its September Week 1 and runs
+through the Super Bowl, so a `2027-01-10` wild-card slate asked nflverse for season **2027** —
+not yet played. The fetch returns no events and `settle_predictions` then reports
+`event_not_found` for every prediction instead of failing loudly: a silent "0 settled"
+scorecard for every playoff slate. This is the same class of defect `e7d9075` fixed in
+`pipeline.py`; these two call sites were missed.
+
+Fix: both sites now use the existing `utils.nfl_season_for_date()`, widened to accept a
+`date` (not just `datetime` / ISO string). An underivable date raises `BoxScoreError` rather
+than fetching the wrong year.
+
+## Files Touched
+- `outlier_nfl/projection.py` — `PROJECTION_MODEL_P_SOURCES`; hierarchy short-circuit.
+- `outlier_nfl/enrich_close.py` — corrected the `hierarchy` `model_p` note.
+- `outlier_nfl/boxscore_nflverse.py` — season from `nfl_season_for_date`; raise when None.
+- `outlier_nfl/settle.py` — same at the `--slate-date` CLI call site.
+- `outlier_nfl/utils.py` — `nfl_season_for_date` accepts `date`.
+- `tests/test_nfl_shadow_settle.py` — two regression tests, both confirmed failing on
+  `eef5ba4` (`assert [2027, 2027, ...] == [2026, 2026, ...]`) and passing here.
+
+## Verification
+- Offline suite: **1000 passed / 43 skipped** (was 998/43; +2 new tests). The 51 failures and
+  48 collection errors are byte-identical to the pre-change baseline — every one a
+  `ModuleNotFoundError` (`structlog` ×88, plus `google`, `sqlalchemy`, `anthropic`, `openai`,
+  `six`). Verified by diffing the sorted FAILED/ERROR lists.
+- `tests/test_nfl*.py` + `test_challenger_adversarial.py`: 465 passed / 2 skipped (was 463/2).
+- `ruff check` on all six touched files: clean.
+- `mypy outlier_nfl`: 8 errors, the **same 8** as on `eef5ba4` (confirmed by re-running
+  against a stash of the source changes); none in changed lines. Note `outlier_nfl` is *not*
+  in `make typecheck` scope (`outlier_scrapers` only), so CI does not gate these — they
+  arrived with the #193 merge.
+- `mypy outlier_scrapers` 4 errors / `pyright outlier_scrapers` 1 error: pre-existing, and
+  this branch does not touch `outlier_scrapers`.
+
+## Sandbox limitation (recurring, unchanged)
+pypi.org and files.pythonhosted.org return **403** from the egress proxy (direct and via
+`$HTTPS_PROXY`; pypi is in the proxy's `noProxy` list). `structlog`, `sqlalchemy`, `pandas`
+and the provider SDKs cannot be installed, so those 99 tests are unrunnable here. **Hosted CI
+is authoritative for them.**
+
+## Needs human attention
+- `outlier_nfl` is outside `make typecheck`, so the 8 pre-existing mypy `arg-type` errors in
+  `matchup.py` / `settle.py` / `enrich_close.py` / `fetch_odds_close.py` are ungated. Worth
+  either adding `outlier_nfl` to the typecheck target or fixing them; not done here (out of
+  this review's scope, and the `MutableMapping` vs `dict` ones want a signature decision).
+- `attach_model_p_hierarchy_record(overwrite=False)` still overwrites, because it passes
+  `overwrite=True` down to `attach_projection_model_p_record`. No caller uses `overwrite=False`
+  today, so this was left alone rather than guessing the intended semantics.
+- 25 repo-wide ruff `F401` unused imports remain (all in `tests/`, `scratch.py`, `script.py`,
+  `append_feedback.py`). Left as-is: unrelated cleanup.
+
+No reasoning models or paid desk calls were invoked (house rule respected).
+
+---
+
 # Handoff — 2026-09-28 (claude)
 
 **Branch**: `claude/nifty-einstein-gbtl85` · **PR**: https://github.com/DaSilvaDub/outlier/pull/198 (merged master incl. #192, #196)

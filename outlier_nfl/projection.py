@@ -35,6 +35,18 @@ MODEL_P_SOURCE_EXTERNAL = "external"
 
 MIN_PRIOR_WEEKS_V2 = 3  # Gaussian/Poisson requires ≥3 prior weeks; else v1 rate.
 
+# Every ``model_p_source`` this module can stamp. The hierarchy must treat all of
+# them as "projection already filled this row", or the v2 stamps (which
+# attach_projection_model_p_record prefers) fall through to empirical and the
+# stronger projection is overwritten by the weaker hit-rate shrink.
+PROJECTION_MODEL_P_SOURCES = frozenset(
+    {
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN,
+        MODEL_P_SOURCE_PROJECTION_NFLVERSE_POISSON,
+    }
+)
+
 POISSON_MARKETS = frozenset(
     {
         "PASS_TD",
@@ -375,8 +387,9 @@ def attach_model_p_hierarchy_record(
             alpha=alpha,
             min_games=min_games,
         )
-        if record.get("model_p") is not None and record.get("model_p_source") == (
-            MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+        if (
+            record.get("model_p") is not None
+            and record.get("model_p_source") in PROJECTION_MODEL_P_SOURCES
         ):
             return record
 
