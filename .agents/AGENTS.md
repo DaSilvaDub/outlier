@@ -83,5 +83,13 @@ Never use static, arbitrary thresholds (such as fixed 50 rush / 50 rec / 200 pas
 3. **Comparative Floor Selection:** If an elite player clearing a higher floor line (e.g., Joe Burrow OVER 224.5 or Derrick Henry OVER 64.5) demonstrates higher hit rate convergence (L5 100%, L10 80%–90%) and a larger cushion below their consensus median than a lower-volume player clearing a 199.5 or 49.5 line, the elite player must be selected and ranked higher.
 4. **Automated Exports:** The pipeline exports `data/NFL/exports/nfl_alt_floors_{date}.json`, `data/NFL/exports/nfl_alt_floors.csv`, and `reports/NFL/{date}_Alt_Floors.md`, featuring Top 3 in Passing, Top 3 in Rushing, Top 3 in Receiving, and an overall Master Confidence Rank 1–9.
 
+## Codebase Quirk: Refresh Task DAG Dependencies & Atomic JSON Writes
+In `outlier_scrapers/refresh_plan.py`, tasks running in the concurrent thread pool must declare ALL upstream input feeds in `depends_on`. For example, `cards` consumes `props`, `line_movement`, `insights`, and `games` (which generates `games_enrichment`). If a dependency is missing, concurrent tasks will read files while they are actively being written. Furthermore, all JSON exporters must use `outlier_scrapers.utils.safe_write_json()` rather than raw `open(path, "w")` to ensure atomic file replacement with fsync and lock retries on Windows.
+
+## Windows Pytest Execution Constraint (`--basetemp=.pytest_temp`)
+On Windows in this workspace, default `pytest` execution frequently crashes with `PermissionError: [WinError 5] Access is denied: 'C:\Users\dasil\AppData\Local\Temp\pytest-of-dasil'`. Always execute pytest with the local temp directory argument:
+`pytest --basetemp=.pytest_temp [target_tests]`
+
+
 
 

@@ -1,3 +1,22 @@
+# HANDOFF — 2026-10-06 (Antigravity/Gemini, Thursday Night Football TB @ DAL Game Script)
+
+**Branch**: `master` · **Last commit**: `b7638f7`
+
+## Accomplished
+1. **Executed Thursday Night Football (2026-10-08) TB @ DAL Matchup Pipeline**:
+   - Pulled live Weeks 1-4 tape and latest roster/injury data for Dallas Cowboys (DAL) and Tampa Bay Buccaneers (TB).
+   - Applied upgraded DIDF model:
+     - TB defense missing 2 starters (All-Pro S Antoine Winfield Jr. [rib], CB Benjamin Morrison [foot]) -> adds +3.5 pts to DAL.
+     - DAL defense missing 2 starters (LB DeMarvion Overshown [hamstring], CB Cobie Durant [hamstring]) -> adds +3.5 pts to TB.
+   - Applied Dome Pace calibration (`DAL in DOME_TEAMS`, AT&T Stadium indoor turf): flips total lean on 47.5 from outdoor grind UNDER to **OVER 47.5**.
+   - Baker Mayfield ruled OUT (dislocated thumb); rookie backup Jalon Daniels makes 2nd start. Dak Prescott in peak form (355 pass yds in W4 vs HOU, 1,065 yds, 8 TDs / 1 INT).
+   - Projected Score: **DAL 32, TB 22** (Combined: 54 points -> OVER 47.5, DAL -9.5).
+   - Exported comprehensive game script to `reports/NFL/2026-10-08_TB_DAL_Game_Script.md`.
+2. **Verified Test Suite**:
+   - `pytest --basetemp=.pytest_temp -k nfl`: 471 passed (100% passing).
+
+---
+
 # HANDOFF — 2026-10-06 (Claude, NFL matchup rework: DIDF on real inputs, milder dome lean)
 
 **Branch**: `claude/nfl-matchup-injuries-refactor-7ae225` (merged) · **Last commit**: `4e35275` · **PR**: [#212](https://github.com/DaSilvaDub/outlier/pull/212) (merge `081adfe`)
