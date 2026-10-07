@@ -284,20 +284,31 @@ class NflPipeline:
         sources: list[SourceRecord] = []
 
         # Every artifact is staged into runs/<run_id>/ and published at the end (F27).
-        window_slug = window.strip().lower() if window else ""
-        suffix = f"{target_date}_{window_slug}" if window else target_date
+        # One suffix names every published file: a window run writes only
+        # *_<date>_<window> names, never the slate-wide bare-date files (F11).
+        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
         run_id = f"{suffix}-{now_dt:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
         writer = RunWriter(self.nfl_dir, run_id)
         norm = self.normalized_dir
+        # A run made after the slate (or window) kicked off cannot replace the
+        # pregame originals: it is kept as an immutable bundle only (F11).
+        publish = ctx.mode != "retrospective"
+        publication_reason = (
+            None
+            if publish
+            else f"as_of {ctx.as_of_iso} is at/after first kickoff "
+            f"{ctx.first_kickoff_utc.isoformat() if ctx.first_kickoff_utc else '?'}"
+        )
+        if not publish:
+            logger.warning(
+                "Bundle-only run (%s); dated and latest files untouched", publication_reason
+            )
+        publish_latest = publish and write_latest
 
-        def stage(
-            stem: str, payload: Any, *, latest: bool = True, window_copy: bool = True
-        ) -> None:
-            dests = [norm / f"{stem}_{target_date}.json"]
-            if latest and write_latest:
+        def stage(stem: str, payload: Any, *, latest: bool = True) -> None:
+            dests = [norm / f"{stem}_{suffix}.json"] if publish else []
+            if latest and publish_latest:
                 dests.append(norm / f"{stem}_latest.json")
-            if window_copy and window:
-                dests.append(norm / f"{stem}_{target_date}_{window_slug}.json")
             writer.stage_json(f"{stem}.json", payload, publish=dests)
 
         writer.stage_json("raw/schedule.json", schedule_raw)
@@ -361,7 +372,7 @@ class NflPipeline:
             "count": len(external_metrics),
             "records": external_metrics,
         }
-        stage("nfl_external_metrics", external_metrics_payload, window_copy=False)
+        stage("nfl_external_metrics", external_metrics_payload)
 
         matchup_scripts = build_matchup_scripts(
             all_game_lines,
@@ -398,7 +409,7 @@ class NflPipeline:
                     "count": len(weathers),
                     "records": weather_records,
                 }
-                stage("nfl_weather", weather_payload, latest=False, window_copy=False)
+                stage("nfl_weather", weather_payload, latest=False)
                 logger.info(
                     "Weather: %d games forecast, %d with a pass haircut",
                     len(weathers),
@@ -436,7 +447,6 @@ class NflPipeline:
                         "signals": [asdict(sig) for sig in usage],
                     },
                     latest=False,
-                    window_copy=False,
                 )
                 logger.info("Usage: %d profiles, %d signals", len(profiles), len(usage))
                 sources.append(SourceRecord(
@@ -549,6 +559,7 @@ class NflPipeline:
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
+            "run_id": run_id,
             "count": len(matchup_scripts),
             "records": scripts_to_records(matchup_scripts),
         }
@@ -596,7 +607,9 @@ class NflPipeline:
             usage_players=usage_players,
             weather_records=weather_records,
             tape=tape,
-            write_latest=write_latest,
+            suffix=suffix,
+            publish=publish,
+            publish_latest=publish_latest,
             writer=writer,
         )
 
@@ -628,14 +641,15 @@ class NflPipeline:
                 props=all_player_props,
                 exports_dir=writer.stage_dir / "exports",
                 reports_dir=writer.stage_dir / "reports",
-                date_str=target_date,
+                date_str=suffix,
                 target_book=target_alt_book,
                 starting_qbs=starting_qbs_set,
                 weather_records=weather_records,
                 tapes=tapes,
-                write_latest=write_latest,
+                write_latest=publish_latest,
             )
-            writer.stage_tree("exports", self.data_dir / "NFL" / "exports")
+            if publish:
+                writer.stage_tree("exports", self.data_dir / "NFL" / "exports")
             logger.info(
                 "Alt floor props generated: %d ranked props for %s",
                 alt_floors_summary.get("count", 0),
@@ -651,6 +665,8 @@ class NflPipeline:
             "timestamp_utc": now_utc,
             "run_id": run_id,
             "run_dir": str(writer.run_dir),
+            "publication": "published" if publish else "bundle_only",
+            "publication_reason": publication_reason,
             "as_of_utc": ctx.as_of_iso,
             "run_mode": ctx.mode,
             "before_week": before_week,
@@ -686,7 +702,7 @@ class NflPipeline:
                 written: list[str] = []
                 for script in matchup_scripts:
                     slug = f"{script.away_team}_{script.home_team}".replace(" ", "_")
-                    report_file = writer.staged_path(f"reports/{target_date}_{slug}_Game_Script.md")
+                    report_file = writer.staged_path(f"reports/{suffix}_{slug}_Game_Script.md")
                     event_games = [g for g in games_dict if g.get("event_id") == script.event_id]
                     event_props = [p for p in props_dict if p.get("event_id") == script.event_id]
                     env = generator.extract_game_environment(
@@ -713,7 +729,8 @@ class NflPipeline:
 
         # Reports (alt floors, game scripts) publish under the reports root; summary
         # paths name the published copies, not the staging directory.
-        writer.stage_tree("reports", report_root)
+        if publish:
+            writer.stage_tree("reports", report_root)
         outputs = alt_floors_summary.get("outputs")
         if isinstance(outputs, dict):
             alt_floors_summary["outputs"] = {k: writer.resolve(v) for k, v in outputs.items()}
@@ -721,14 +738,16 @@ class NflPipeline:
             summary["game_script_files"] = [writer.resolve(f) for f in summary["game_script_files"]]
             summary["game_script_file"] = summary["game_script_files"][0]
         stage("summary", summary)
-        pointers = [norm / f"nfl_run_pointer_{suffix}.json"]
-        if write_latest:
+        pointers = [norm / f"nfl_run_pointer_{suffix}.json"] if publish else []
+        if publish_latest:
             pointers.append(norm / "nfl_run_pointer_latest.json")
         writer.commit(
             {
                 "created_utc": now_utc,
                 "context": ctx.to_dict(),
                 "sources": summary["sources"],
+                "publication": summary["publication"],
+                "publication_reason": publication_reason,
             },
             pointers=pointers,
         )
@@ -759,11 +778,12 @@ class NflPipeline:
         usage_players: list[dict[str, Any]],
         weather_records: list[dict[str, Any]],
         tape: TapeEnvelope,
-        write_latest: bool,
+        suffix: str,
+        publish: bool,
+        publish_latest: bool,
         writer: RunWriter,
     ) -> dict[str, Any]:
         """Snapshot this run's prices, then trace every candidate through all six pillars."""
-        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
         try:
             append_snapshot(self.nfl_dir, target_date, props_dict, now_utc, run_id=writer.run_id)
             # Only prices captured by the prediction time (a replay must not see later runs).
@@ -788,23 +808,26 @@ class NflPipeline:
         except Exception as exc:  # the slate's data outputs above are already written
             logger.error("Best-bets trace failed: %s", exc)
             # Never leave an older card behind for a reader to mistake for this run's.
-            stale_cards = [f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"]
+            # A bundle-only run publishes nothing, so it leaves published cards alone.
+            stale_cards = (
+                [f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"] if publish else []
+            )
             # This run would have overwritten _latest, so a surviving one is the
             # previous run's card under the name readers treat as current.
-            if write_latest:
+            if publish_latest:
                 stale_cards.append("nfl_best_bets_latest.json")
             for stale in stale_cards:
                 (self.normalized_dir / stale).unlink(missing_ok=True)
             return {"error": f"best-bets trace failed: {exc}"}
         payload.update({"date": target_date, "window": window, "updated_at": now_utc})
-        card_dests = [self.normalized_dir / f"nfl_best_bets_{suffix}.json"]
-        if write_latest:
+        card_dests = [self.normalized_dir / f"nfl_best_bets_{suffix}.json"] if publish else []
+        if publish_latest:
             card_dests.append(self.normalized_dir / "nfl_best_bets_latest.json")
         writer.stage_json("nfl_best_bets.json", payload, publish=card_dests)
         writer.stage_text(
             "nfl_best_bets.md",
             render_best_bets_markdown(payload, title=f"NFL Traced Best Bets - slate {suffix}"),
-            publish=[self.normalized_dir / f"nfl_best_bets_{suffix}.md"],
+            publish=[self.normalized_dir / f"nfl_best_bets_{suffix}.md"] if publish else [],
         )
         logger.info("Best bets: %s", payload.get("counts"))
         return payload

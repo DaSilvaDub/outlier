@@ -93,3 +93,95 @@ def test_run_writer_refuses_reuse(tmp_path):
         writer.commit({})
     with pytest.raises(FileExistsError):
         RunWriter(tmp_path, "r1")
+
+
+# ---------------------------------------------------------------------------
+# F11: one suffix per run; window and after-kickoff runs never replace originals
+# ---------------------------------------------------------------------------
+
+def _published(tmp_path: Path) -> dict[str, str]:
+    """sha256 of every published (non-bundle, non-snapshot) file under the data and reports dirs."""
+    out: dict[str, str] = {}
+    for root in (tmp_path / "NFL" / "normalized", tmp_path / "NFL" / "exports",
+                 tmp_path / "reports"):
+        if root.is_dir():
+            for p in sorted(root.rglob("*")):
+                if p.is_file():
+                    out[p.relative_to(tmp_path).as_posix()] = _sha(p)
+    return out
+
+
+def test_window_run_preserves_bare_date_bytes(tmp_path):
+    _run(tmp_path, generate_game_script=True)
+    before = _published(tmp_path)
+    scripts = tmp_path / "NFL" / "normalized" / f"nfl_matchup_scripts_{SLATE}.json"
+    assert json.loads(scripts.read_text())["count"] == 3
+    summary = _run(tmp_path, window="1pm", generate_game_script=True)
+    assert summary["publication"] == "published"
+    after = _published(tmp_path)
+    for name, digest in before.items():
+        assert after[name] == digest, f"window run rewrote {name}"
+    assert json.loads(scripts.read_text())["count"] == 3
+
+
+def test_window_run_writes_only_suffixed_files(tmp_path):
+    _run(tmp_path, generate_game_script=True)
+    before = _published(tmp_path)
+    _run(tmp_path, window="1pm", generate_game_script=True)
+    written = {n for n, d in _published(tmp_path).items() if before.get(n) != d}
+    assert written, "window run published nothing"
+    assert all(f"{SLATE}_1pm" in n for n in written), sorted(written)
+    assert f"NFL/normalized/nfl_run_pointer_{SLATE}_1pm.json" in written
+    assert f"NFL/normalized/nfl_best_bets_{SLATE}_1pm.json" in written
+
+
+def _week4(tmp_path: Path, as_of: str, **kw):
+    from scripts import nfl_snapshot_diff as snap
+
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    if not tape.exists():
+        tape.parent.mkdir(parents=True, exist_ok=True)
+        tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    return NflPipeline(client=snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path).run(
+        date="2026-10-04", as_of_utc=as_of, reports_dir=tmp_path / "reports", **kw
+    )
+
+
+def test_after_kickoff_run_is_bundle_only(tmp_path):
+    """KC@BAL kicks off 17:00Z; an 18:00Z full-slate rerun must not replace the pregame card."""
+    pregame = _week4(tmp_path, "2026-10-04T16:00:00+00:00")
+    assert pregame["publication"] == "published"
+    before = _published(tmp_path)
+    late = _week4(tmp_path, "2026-10-04T18:00:00+00:00")
+    assert late["publication"] == "bundle_only" and late["run_mode"] == "retrospective"
+    assert "first kickoff" in late["publication_reason"]
+    assert _published(tmp_path) == before  # dated, latest, exports and reports untouched
+    run_dir = Path(late["run_dir"])
+    assert (run_dir / "nfl_best_bets.json").exists() and (run_dir / "summary.json").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["publication"] == "bundle_only"
+    assert all(a["published_to"] == [] for a in manifest["artifacts"])
+    pointer = json.loads((tmp_path / "NFL" / "normalized" / "nfl_run_pointer_2026-10-04.json")
+                         .read_text())
+    assert pointer["run_id"] == pregame["run_id"]
+
+
+def test_weekly_merges_bundle_only_card(tmp_path):
+    from datetime import date
+
+    from outlier_nfl.weekly import run_week
+    from scripts import nfl_snapshot_diff as snap
+
+    client = snap.FrozenOutlierClient(FIXTURES_DIR)
+    pipeline = NflPipeline(client=client, data_dir=tmp_path)
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True, exist_ok=True)
+    tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    # No as_of: the weekly runner runs "now", i.e. after these replayed kickoffs.
+    out = run_week(pipeline, date(2026, 10, 4), events=client.fetch_schedule()["events"],
+                   reports_dir=tmp_path / "reports", run_stamp="0900")
+    assert out["dates"] == ["2026-10-04"]
+    assert not (tmp_path / "NFL" / "normalized" / "nfl_best_bets_2026-10-04.json").exists()
+    week_card = json.loads(next((tmp_path / "NFL" / "normalized")
+                                .glob("nfl_best_bets_week_*.json")).read_text())
+    assert week_card["counts"] == out["counts"] and sum(out["counts"].values()) > 0
