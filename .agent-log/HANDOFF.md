@@ -1,3 +1,35 @@
+# HANDOFF — 2026-10-07 (Claude, outcome of PR #209)
+
+**PR #209 was closed without merging on 2026-10-07**, per the owner: "Closing per the NFL
+forensic report repair plan (epic #222). The `reports_dir` forwarding from this PR already
+landed via #210. The remaining alt-floors window CSV clobber fix and its tests will be folded
+into phase 1 (#223), which reworks all window-run output writes." Verified against
+`origin/master` (`5d74df1`):
+
+- **Landed** via #210: `weekly.py:75` `reports_dir=reports_dir` forwarding, and the
+  `reports_dir` isolation at the NFL test call sites. Running the NFL tests from a clean
+  master worktree leaves `git status` clean — master no longer leaks reports.
+- **Not landed** (deferred to #223, as stated): the `export_alt_floors` `write_latest` gate on
+  the undated `nfl_alt_floors.csv` (`origin/master:outlier_nfl/alt_floors.py:516-517` still
+  writes it unconditionally). Whoever implements #223 can take the fix and its regression test
+  `test_windowed_run_does_not_clobber_the_undated_csv` from commit `cc13dc3` on branch
+  `claude/inspiring-fermat-uwwa7c`; the guard test
+  `test_pipeline_run_writes_no_reports_into_the_repository` is in `e310d90` on the same branch
+  and did not land via #210 either.
+
+## NEW finding in master — two empty test artifacts are committed under reports/NFL
+`521b420` committed the very files the leak produced:
+`reports/NFL/Alt_Floors_latest.md` and `reports/NFL/2026-09-13_Alt_Floors.md`. Both are empty
+fixture-mode reports (header plus an empty table — zero data rows) dated 2026-09-13. They now
+sit in master's curated reports directory next to real game scripts and scorecards, and
+`Alt_Floors_latest.md` is the file readers treat as the *current* Alt Floors report. The leak
+that produced them is fixed; the committed copies are not, and epic #222/#223 covers
+window-run output writes, not cleaning these up. **Not removed by me** — deleting tracked
+files from master is the owner's call. Recommended next step: `git rm` both, or regenerate
+them from a real slate run.
+
+---
+
 # HANDOFF — 2026-10-04 (Claude, daily automated debug review)
 
 **Branch**: `claude/inspiring-fermat-uwwa7c` · **Last commit**: `e310d90` · **PR**: https://github.com/DaSilvaDub/outlier/pull/209
