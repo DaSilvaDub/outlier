@@ -6,7 +6,7 @@ nflverse's public release assets instead of hand-entered numbers:
 
 - ``stats_team/stats_team_week_<season>.csv``: per-game team box stats
   (derived from official NFL play-by-play).
-- ``schedules/games.csv``: game dates and final scores.
+- ``nfldata/data/games.csv``: game dates and final scores.
 
 Each team row is the per-game average over every completed game before the
 cutoff date, so a slate never sees its own results. ``pass_yards`` is gross
@@ -53,7 +53,9 @@ logger = logging.getLogger(__name__)
 
 NFLVERSE_RELEASES = "https://github.com/nflverse/nflverse-data/releases/download"
 TEAM_WEEK_URL = NFLVERSE_RELEASES + "/stats_team/stats_team_week_{season}.csv"
-SCHEDULES_URL = NFLVERSE_RELEASES + "/schedules/games.csv"
+# The nflverse-data ``schedules/games.csv`` release asset 404s; nflverse serves
+# the same schedule file (same columns) from the nfldata repo.
+SCHEDULES_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 DEPTH_CHART_URL = NFLVERSE_RELEASES + "/depth_charts/depth_charts_{season}.csv"
 INJURIES_URL = NFLVERSE_RELEASES + "/injuries/injuries_{season}.csv"
 PFR_DEF_URL = NFLVERSE_RELEASES + "/pfr_advstats/advstats_week_def_{season}.csv"
