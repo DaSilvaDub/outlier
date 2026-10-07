@@ -10,10 +10,31 @@ offline-downloadable adapter boundary.
 Env / deps:
 - No Python package required (stdlib csv + urllib).
 - Optional cache dir: ``OUTLIER_NFLVERSE_CACHE`` (default ``~/.cache/outlier_nflverse``).
-- Network only needed on first fetch; subsequent runs use cache.
+- Cache freshness: ``OUTLIER_NFLVERSE_MAX_AGE_HOURS`` (default
+  ``DEFAULT_MAX_AGE_HOURS``). A cached file is reused only while its sidecar
+  ``<file>.meta.json`` says it was fetched and validated within that window;
+  ``refresh=True`` forces a re-download. Files without a sidecar (pre-F15
+  caches) are treated as unvalidated and refreshed.
+
+Cache integrity (F15):
+- Downloads are retried a bounded number of times on transient errors
+  (URL errors, timeouts, HTTP 429/5xx), never on other 4xx.
+- A download shorter than its ``Content-Length`` or a truncated gzip is rejected.
+- The decoded CSV must carry the required columns and at least one data row,
+  and must not have fewer rows than the currently cached valid copy.
+- New files are written to a temp path and swapped in with ``os.replace``;
+  a failed or invalid refresh never replaces a valid cached copy. If a
+  refresh fails and a previously validated copy exists, that copy is used and
+  a warning is logged (pass ``require_fresh=True`` to raise instead). A
+  pre-F15 file with no sidecar is used as that fallback only if it passes
+  schema validation, also with a warning.
+- A refresh with fewer rows is accepted only with ``allow_shrink=True`` or
+  ``OUTLIER_NFLVERSE_ALLOW_SHRINK=1`` (logged as ``shrunk``).
+- Every lookup is recorded; ``drain_cache_events()`` returns them so settle can
+  print fallbacks in its run output and JSON report.
 
 Failure modes:
-- HTTP / DNS failure → ``BoxScoreError`` with URL.
+- HTTP / DNS failure with no valid cached copy → ``BoxScoreError`` with URL.
 - Missing season/week in CSV → empty event list (caller decides).
 - Schedule row missing scores → event skipped.
 """
@@ -22,10 +43,17 @@ from __future__ import annotations
 
 import csv
 import gzip
+import hashlib
+import io
+import json
+import logging
 import os
-from datetime import date
+import time
+import zlib
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -48,41 +76,358 @@ def default_cache_dir() -> Path:
     return Path.home().resolve() / ".cache" / "outlier_nflverse"
 
 
-def _download(url: str, dest: Path, *, timeout: int = 60) -> Path:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists() and dest.stat().st_size > 0:
-        return dest
+logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_AGE_HOURS = 6.0
+DEFAULT_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
+_RETRYABLE_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+WEEK_STATS_REQUIRED_COLUMNS: tuple[str, ...] = ("game_id",)
+WEEK_STATS_NAME_COLUMNS: tuple[str, ...] = ("player_display_name", "player_name")
+GAMES_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "game_id",
+    "season",
+    "week",
+    "gameday",
+    "away_team",
+    "home_team",
+    "away_score",
+    "home_score",
+)
+
+# Per-process record of what each cache lookup did, so callers (settle) can
+# surface fallbacks in their run output instead of only in the log.
+_CACHE_EVENTS: list[dict[str, Any]] = []
+
+
+def _record(dest: Path, status: str, *, reason: str | None = None) -> None:
+    meta = read_cache_meta(dest)
+    _CACHE_EVENTS.append(
+        {
+            "file": dest.name,
+            "status": status,
+            "fetched_at": meta.fetched_at if meta else None,
+            "rows": meta.rows if meta else None,
+            "reason": reason,
+        }
+    )
+
+
+def drain_cache_events() -> list[dict[str, Any]]:
+    """Return and clear cache events: fresh | refreshed | unchanged | shrunk | fallback."""
+    out = list(_CACHE_EVENTS)
+    _CACHE_EVENTS.clear()
+    return out
+
+
+def allow_shrink_from_env() -> bool:
+    return os.environ.get("OUTLIER_NFLVERSE_ALLOW_SHRINK", "").strip().lower() in {"1", "true", "yes"}
+
+
+# Indirections so tests can stub the network and clock.
+_urlopen: Callable[..., Any] = urlopen
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class CacheMeta:
+    url: str
+    fetched_at: str
+    sha256: str
+    size: int
+    rows: int
+
+    def fetched_at_dt(self) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(self.fetched_at)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _meta_path(path: Path) -> Path:
+    return path.with_name(path.name + ".meta.json")
+
+
+def read_cache_meta(path: Path) -> CacheMeta | None:
+    """Return the validation sidecar for ``path``; ``None`` if missing or unreadable."""
+    meta_file = _meta_path(path)
+    try:
+        raw = json.loads(meta_file.read_text(encoding="utf-8"))
+        return CacheMeta(
+            url=str(raw["url"]),
+            fetched_at=str(raw["fetched_at"]),
+            sha256=str(raw["sha256"]),
+            size=int(raw["size"]),
+            rows=int(raw["rows"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _write_meta(path: Path, meta: CacheMeta) -> None:
+    payload = {
+        "url": meta.url,
+        "fetched_at": meta.fetched_at,
+        "sha256": meta.sha256,
+        "size": meta.size,
+        "rows": meta.rows,
+    }
+    _atomic_write_bytes(_meta_path(path), (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
+
+
+def max_age_from_env() -> timedelta:
+    raw = os.environ.get("OUTLIER_NFLVERSE_MAX_AGE_HOURS")
+    hours = DEFAULT_MAX_AGE_HOURS
+    if raw not in (None, ""):
+        try:
+            hours = float(str(raw))
+        except ValueError as exc:
+            raise BoxScoreError(f"Invalid OUTLIER_NFLVERSE_MAX_AGE_HOURS: {raw!r}") from exc
+    if hours < 0:
+        raise BoxScoreError(f"OUTLIER_NFLVERSE_MAX_AGE_HOURS must be >= 0: {raw!r}")
+    return timedelta(hours=hours)
+
+
+def _is_fresh(path: Path, *, max_age: timedelta, now: datetime) -> bool:
+    meta = read_cache_meta(path)
+    if meta is None or not path.exists():
+        return False
+    fetched = meta.fetched_at_dt()
+    if fetched is None:
+        return False
+    if path.stat().st_size != meta.size:
+        return False
+    return now - fetched <= max_age
+
+
+def _fetch_bytes(
+    url: str,
+    *,
+    timeout: int = 60,
+    retries: int = DEFAULT_RETRIES,
+    backoff: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+) -> bytes:
     if not url.startswith("https://"):
         raise BoxScoreError(f"Refusing non-https URL: {url}")
-    request = Request(url, headers={"Accept": "*/*", "User-Agent": USER_AGENT})  # noqa: S310  # nosec B310 - https only
+    attempts = max(1, int(retries))
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        request = Request(url, headers={"Accept": "*/*", "User-Agent": USER_AGENT})  # noqa: S310  # nosec B310 - https only
+        try:
+            with _urlopen(request, timeout=timeout) as response:  # noqa: S310  # nosec B310 - https only
+                data = response.read()
+                expected = response.headers.get("Content-Length") if response.headers else None
+            if expected not in (None, ""):
+                try:
+                    expected_len = int(str(expected))
+                except ValueError:
+                    expected_len = None
+                if expected_len is not None and len(data) != expected_len:
+                    raise BoxScoreError(
+                        f"nflverse download truncated ({len(data)} of {expected_len} bytes): {url}"
+                    )
+            return data
+        except HTTPError as exc:
+            last_exc = exc
+            if exc.code not in _RETRYABLE_HTTP or attempt == attempts:
+                raise BoxScoreError(f"nflverse download failed ({exc.code}): {url}") from exc
+        except BoxScoreError as exc:
+            last_exc = exc
+            if attempt == attempts:
+                raise
+        except (URLError, TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt == attempts:
+                raise BoxScoreError(f"nflverse download failed: {url}: {exc}") from exc
+        _sleep(backoff * attempt)
+    raise BoxScoreError(f"nflverse download failed: {url}: {last_exc}")  # pragma: no cover
+
+
+def _validate_csv_bytes(
+    data: bytes,
+    *,
+    label: str,
+    required: Sequence[str],
+    any_of: Sequence[str] = (),
+) -> int:
+    """Return the data-row count; raise ``BoxScoreError`` on schema/empty failure."""
     try:
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310  # nosec B310 - https only
-            data = response.read()
-    except HTTPError as exc:
-        raise BoxScoreError(f"nflverse download failed ({exc.code}): {url}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise BoxScoreError(f"nflverse download failed: {url}: {exc}") from exc
-    dest.write_bytes(data)
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BoxScoreError(f"{label}: not valid UTF-8 CSV") from exc
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    header = set(reader.fieldnames or ())
+    missing = [col for col in required if col not in header]
+    if missing:
+        raise BoxScoreError(f"{label}: missing required columns {missing}")
+    if any_of and not any(col in header for col in any_of):
+        raise BoxScoreError(f"{label}: needs one of columns {list(any_of)}")
+    rows = 0
+    for row in reader:
+        # Extra fields land under the ``None`` key; short rows get ``None`` values.
+        if None in row or any(value is None for value in row.values()):
+            raise BoxScoreError(f"{label}: malformed row {rows + 2} (truncated file?)")
+        rows += 1
+    if rows == 0:
+        raise BoxScoreError(f"{label}: no data rows")
+    return rows
+
+
+def _refresh_csv(
+    *,
+    url: str,
+    dest: Path,
+    label: str,
+    required: Sequence[str],
+    any_of: Sequence[str] = (),
+    gzipped: bool = False,
+    refresh: bool = False,
+    require_fresh: bool = False,
+    max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
+) -> Path:
+    """Return a validated cached CSV at ``dest``, re-downloading when stale.
+
+    A refresh with fewer rows than the cached copy is rejected unless
+    ``allow_shrink`` (or ``OUTLIER_NFLVERSE_ALLOW_SHRINK=1``) is set, for the
+    rare upstream correction that legitimately removes rows.
+    """
+    now = _utcnow()
+    age = max_age if max_age is not None else max_age_from_env()
+    shrink_ok = allow_shrink if allow_shrink is not None else allow_shrink_from_env()
+    if not refresh and _is_fresh(dest, max_age=age, now=now):
+        _record(dest, "fresh")
+        return dest
+
+    previous = read_cache_meta(dest) if dest.exists() else None
+    try:
+        payload = _fetch_bytes(url)
+        if gzipped:
+            try:
+                data = gzip.decompress(payload)
+            except (OSError, EOFError, zlib.error) as exc:
+                raise BoxScoreError(f"{label}: corrupt or truncated gzip from {url}") from exc
+        else:
+            data = payload
+        rows = _validate_csv_bytes(data, label=label, required=required, any_of=any_of)
+        shrunk = previous is not None and rows < previous.rows
+        if shrunk and previous is not None and not shrink_ok:
+            raise BoxScoreError(
+                f"{label}: refreshed file has {rows} rows, fewer than cached {previous.rows}; "
+                "keeping cached copy (set OUTLIER_NFLVERSE_ALLOW_SHRINK=1 to accept)"
+            )
+    except BoxScoreError as exc:
+        fallback = _usable_existing(dest, label=label, required=required, any_of=any_of)
+        if fallback is None or require_fresh:
+            raise
+        logger.warning("%s refresh failed (%s); using cached copy %s", label, exc, dest)
+        _record(dest, "fallback", reason=str(exc))
+        return fallback
+
+    digest = hashlib.sha256(data).hexdigest()
+    if previous is not None and previous.sha256 == digest and dest.exists():
+        _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
+        _record(dest, "unchanged")
+        return dest
+    _atomic_write_bytes(dest, data)
+    _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
+    if shrunk and previous is not None:
+        reason = f"accepted {rows} rows, fewer than previous {previous.rows}"
+        logger.warning("%s: %s (allow_shrink)", label, reason)
+        _record(dest, "shrunk", reason=reason)
+    else:
+        _record(dest, "refreshed")
     return dest
 
 
-def ensure_week_stats_csv(season: int, *, cache_dir: Path | None = None) -> Path:
-    """Return path to decompressed week-stats CSV for a season (cached)."""
-    cache = cache_dir or default_cache_dir()
-    gz_path = cache / f"stats_player_week_{season}.csv.gz"
-    csv_path = cache / f"stats_player_week_{season}.csv"
-    if csv_path.exists() and csv_path.stat().st_size > 0:
-        return csv_path
-    _download(NFLVERSE_STATS_WEEK_URL.format(season=season), gz_path)
-    with gzip.open(gz_path, "rb") as src:
-        csv_path.write_bytes(src.read())
-    return csv_path
+def _usable_existing(
+    dest: Path, *, label: str, required: Sequence[str], any_of: Sequence[str]
+) -> Path | None:
+    """A cached copy is a fallback only if it still validates.
+
+    With a sidecar, the bytes must match its hash. A pre-F15 file with no
+    sidecar is accepted only if it passes schema validation now (logged).
+    """
+    if not dest.exists():
+        return None
+    meta = read_cache_meta(dest)
+    try:
+        data = dest.read_bytes()
+    except OSError:
+        return None
+    if meta is not None and hashlib.sha256(data).hexdigest() != meta.sha256:
+        return None
+    try:
+        _validate_csv_bytes(data, label=label, required=required, any_of=any_of)
+    except BoxScoreError:
+        return None
+    if meta is None:
+        logger.warning("%s: cached copy %s has no fetch metadata (pre-F15 cache)", label, dest)
+    return dest
 
 
-def ensure_games_csv(*, cache_dir: Path | None = None) -> Path:
+def ensure_week_stats_csv(
+    season: int,
+    *,
+    cache_dir: Path | None = None,
+    refresh: bool = False,
+    require_fresh: bool = False,
+    max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
+) -> Path:
+    """Return path to a validated, decompressed week-stats CSV for a season."""
     cache = cache_dir or default_cache_dir()
-    path = cache / "games.csv"
-    return _download(NFLVERSE_GAMES_URL, path)
+    return _refresh_csv(
+        url=NFLVERSE_STATS_WEEK_URL.format(season=season),
+        dest=cache / f"stats_player_week_{season}.csv",
+        label=f"nflverse stats_player_week_{season}",
+        required=WEEK_STATS_REQUIRED_COLUMNS,
+        any_of=WEEK_STATS_NAME_COLUMNS,
+        gzipped=True,
+        refresh=refresh,
+        require_fresh=require_fresh,
+        max_age=max_age,
+        allow_shrink=allow_shrink,
+    )
+
+
+def ensure_games_csv(
+    *,
+    cache_dir: Path | None = None,
+    refresh: bool = False,
+    require_fresh: bool = False,
+    max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
+) -> Path:
+    """Return path to a validated nflverse ``games.csv`` schedule/results file."""
+    cache = cache_dir or default_cache_dir()
+    return _refresh_csv(
+        url=NFLVERSE_GAMES_URL,
+        dest=cache / "games.csv",
+        label="nflverse games.csv",
+        required=GAMES_REQUIRED_COLUMNS,
+        refresh=refresh,
+        require_fresh=require_fresh,
+        max_age=max_age,
+        allow_shrink=allow_shrink,
+    )
 
 
 def _f(row: Mapping[str, Any], *keys: str) -> float | None:
@@ -169,11 +514,23 @@ def load_nflverse_events(
     cache_dir: Path | None = None,
     stats_csv: Path | str | None = None,
     games_csv: Path | str | None = None,
+    refresh: bool = False,
+    allow_shrink: bool | None = None,
 ) -> list[NflBoxScoreEvent]:
     """Build simplified box-score events for a season week and/or slate date."""
     cache = cache_dir or default_cache_dir()
-    stats_path = Path(stats_csv) if stats_csv else ensure_week_stats_csv(season, cache_dir=cache)
-    games_path = Path(games_csv) if games_csv else ensure_games_csv(cache_dir=cache)
+    stats_path = (
+        Path(stats_csv)
+        if stats_csv
+        else ensure_week_stats_csv(
+            season, cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink
+        )
+    )
+    games_path = (
+        Path(games_csv)
+        if games_csv
+        else ensure_games_csv(cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink)
+    )
 
     games_by_id: dict[str, dict[str, str]] = {}
     with games_path.open(newline="", encoding="utf-8") as handle:
@@ -270,6 +627,8 @@ def fetch_nflverse_boxscores_for_date(
     *,
     season: int | None = None,
     cache_dir: Path | None = None,
+    refresh: bool = False,
+    allow_shrink: bool | None = None,
 ) -> list[NflBoxScoreEvent]:
     """Convenience: load all completed games on an Eastern slate date."""
     # A season is labelled by the calendar year of its September Week 1 and runs
@@ -283,14 +642,22 @@ def fetch_nflverse_boxscores_for_date(
         season=season_year,
         event_date=event_date,
         cache_dir=cache_dir,
+        refresh=refresh,
+        allow_shrink=allow_shrink,
     )
 
 
 __all__ = [
+    "DEFAULT_MAX_AGE_HOURS",
+    "CacheMeta",
+    "allow_shrink_from_env",
     "default_cache_dir",
+    "drain_cache_events",
     "ensure_games_csv",
     "ensure_week_stats_csv",
     "events_to_simplified_payload",
     "fetch_nflverse_boxscores_for_date",
     "load_nflverse_events",
+    "max_age_from_env",
+    "read_cache_meta",
 ]

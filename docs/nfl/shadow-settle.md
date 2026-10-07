@@ -87,6 +87,14 @@ slates but do not agree across ≥2 Sundays.
 
 ## Box providers / CLI
 
+nflverse cache (`OUTLIER_NFLVERSE_CACHE`, default `~/.cache/outlier_nflverse`):
+each cached CSV has a `<file>.meta.json` sidecar (URL, UTC fetch time, sha256,
+size, row count). A file is reused only while that sidecar is younger than
+`OUTLIER_NFLVERSE_MAX_AGE_HOURS` (default 6). Otherwise it is re-downloaded with
+bounded retries, checked for truncation, schema and row count, and swapped in
+atomically. A failed or shrinking refresh keeps the last validated copy and logs
+a warning. Pre-sidecar caches are refreshed on first use.
+
 ```bash
 # Settle vs nflverse (or cached box JSON)
 python -m outlier_nfl.settle \
