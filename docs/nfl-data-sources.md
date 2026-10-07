@@ -12,7 +12,7 @@ All verified downloadable from the sandbox for 2026 on 2026-09-28 unless noted.
 | Priority | Tag / file | 2026 freshness | What it gives | Pipeline use |
 |---|---|---|---|---|
 | **Used** | `stats_team/stats_team_week_2026.csv` | through Wk 3 | 138 team box cols per game | Matchup tape (`outlier_nfl/tape_nflverse.py`) |
-| **Used** | `schedules/games.csv` | full season | scores, **closing spread/total/ML + odds**, roof, surface, **temp, wind**, rest days, referee, starting QB names, coaches | Tape scores; also weather pillar, CLV backtests, rest edges |
+| **Used** | `schedules/games.csv` (release asset 404s; fetched from `raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv`) | full season | scores, **closing spread/total/ML + odds**, roof, surface, **temp, wind**, rest days, referee, starting QB names, coaches | Tape scores; also weather pillar, CLV backtests, rest edges |
 | High | `injuries/injuries_2026.csv` | Wk 3 (Nacua Doubtful, C. Williams Out, Darnold Full) | report + practice status per player | Auto inactive list for `build_matchup_script(injuries=...)`; replaces hand-kept QB/injury notes |
 | High | `depth_charts/depth_charts_2026.csv` | same-day (dt 2026-09-27 12:56Z) | pos_rank per team/position | Auto role fields (qb/rb1/te/wr) for the tape; fixes stale `roster.py` depth charts (e.g. LAR TE1 is Colby Parkinson, not Higbee) |
 | High | `pfr_advstats/advstats_week_def_2026.csv` (+ `_pass`, `_rush`, `_rec`) | Wk 3 | **pressures**, hurries, QB hits, blitzes, missed tackles, coverage allowed; QB pressure/drops; RB YBC/YAC, broken tackles | Pass-rush grade from pressures instead of sacks (sacks decided tonight's Stafford signal by 0.5) |

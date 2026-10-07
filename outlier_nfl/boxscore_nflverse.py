@@ -1,8 +1,8 @@
 """nflverse (GitHub releases CSV) box-score provider for shadow settle.
 
 Downloads (or reads cached) ``stats_player_week_{season}.csv`` + ``games.csv``
-from the nflverse-data GitHub releases and maps rows into the simplified
-``NflBoxScoreEvent`` schema used by ``outlier_nfl.settle``.
+from nflverse (player stats from the nflverse-data releases, the schedule from
+the nfldata repo) and maps rows into the simplified ``NflBoxScoreEvent`` schema used by ``outlier_nfl.settle``.
 
 ESPN live summary often 403s from sandboxed egress; this path is the reliable
 offline-downloadable adapter boundary.
@@ -30,15 +30,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from outlier_nfl.boxscore import BoxScoreError, NflBoxScoreEvent, _number, _token
+from outlier_nfl.tape_nflverse import SCHEDULES_URL
 from outlier_nfl.utils import nfl_season_for_date
 
 NFLVERSE_STATS_WEEK_URL = (
     "https://github.com/nflverse/nflverse-data/releases/download/"
     "stats_player/stats_player_week_{season}.csv.gz"
 )
-NFLVERSE_GAMES_URL = (
-    "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
-)
+NFLVERSE_GAMES_URL = SCHEDULES_URL
 USER_AGENT = "outlier-nfl-shadow-settle-nflverse/0.1"
 
 

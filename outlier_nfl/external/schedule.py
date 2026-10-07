@@ -11,10 +11,11 @@ from __future__ import annotations
 from typing import Any
 
 from outlier_nfl.config import normalize_team
+from outlier_nfl.tape_nflverse import SCHEDULES_URL
 
-from .common import NFLVERSE_RELEASES, Client, num
+from .common import Client, num
 
-SCHEDULE_URL = NFLVERSE_RELEASES + "/schedules/games.csv"
+SCHEDULE_URL = SCHEDULES_URL
 
 NUMERIC_FIELDS = (
     "home_score", "away_score", "spread_line", "total_line", "home_moneyline",
