@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -320,3 +321,61 @@ def test_settle_cli_surfaces_cache_fallback(tmp_path, net, clock, capsys):
     assert "WARNING: nflverse `games.csv` refresh failed" in capsys.readouterr().out
     statuses = {e["file"]: e["status"] for e in json.loads(out_json.read_text())["nflverse_cache"]}
     assert statuses["games.csv"] == "fallback"
+
+
+
+class _CrashAfterFirstWrite:
+    """Let one cache write land, then crash, whichever file the code writes first."""
+
+    def __init__(self, real: Any) -> None:
+        self.real = real
+        self.writes = 0
+
+    def __call__(self, path: Path, data: bytes) -> None:
+        self.writes += 1
+        if self.writes > 1:
+            raise KeyboardInterrupt("simulated crash between cache writes")
+        self.real(path, data)
+
+
+def _crash_mid_refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, net: FakeNet, body: bytes) -> None:
+    real = nv._atomic_write_bytes
+    monkeypatch.setattr(nv, "_atomic_write_bytes", _CrashAfterFirstWrite(real))
+    net.serve(GAMES_URL, body)
+    with pytest.raises(KeyboardInterrupt):
+        nv.ensure_games_csv(cache_dir=tmp_path, refresh=True)
+    monkeypatch.setattr(nv, "_atomic_write_bytes", real)
+
+
+def test_crash_between_csv_and_sidecar_writes_still_falls_back_offline(tmp_path, net, clock, monkeypatch):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    nv.drain_cache_events()
+    _crash_mid_refresh(tmp_path, monkeypatch, net, _games(WEEK1_GAME, WEEK2_GAME))
+
+    net.calls.clear()
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    path = nv.ensure_games_csv(cache_dir=tmp_path)
+    assert net.calls, "a copy the sidecar does not describe must not count as fresh"
+    assert path.read_bytes() == _games(WEEK1_GAME)
+    assert [e["status"] for e in nv.drain_cache_events()] == ["fallback"]
+
+
+def test_crash_between_writes_heals_on_next_online_refresh(tmp_path, net, clock, monkeypatch):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    _crash_mid_refresh(tmp_path, monkeypatch, net, _games(WEEK1_GAME, WEEK2_GAME))
+
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME))
+    path = nv.ensure_games_csv(cache_dir=tmp_path)
+    meta = nv.read_cache_meta(path)
+    assert path.read_bytes() == _games(WEEK1_GAME, WEEK2_GAME)
+    assert meta is not None and meta.rows == 2
+    assert meta.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_crash_replacing_legacy_cache_keeps_it_as_fallback(tmp_path, net, clock, monkeypatch):
+    (tmp_path / "games.csv").write_bytes(_games(WEEK1_GAME))
+    _crash_mid_refresh(tmp_path, monkeypatch, net, _games(WEEK1_GAME, WEEK2_GAME))
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    assert nv.ensure_games_csv(cache_dir=tmp_path).read_bytes() == _games(WEEK1_GAME)
