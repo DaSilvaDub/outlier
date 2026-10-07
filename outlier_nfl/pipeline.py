@@ -28,7 +28,6 @@ from outlier_nfl.constants import (
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.tape_nflverse import (
-    load_tape_defensive_out,
     load_tape_inactives,
     refresh_prior_week_tape,
 )
@@ -38,7 +37,8 @@ from outlier_nfl.matchup import (
     _event_team_codes,
     apply_matchup_signals,
     build_matchup_scripts,
-    load_prior_week_tape,
+    TapeEnvelope,
+    load_tape_envelope,
     render_matchup_markdown,
     scripts_to_records,
 )
@@ -280,7 +280,13 @@ class NflPipeline:
         # =====================================================================
         # 1.5 Per-matchup tape analysis, then consensus + calibration
         # =====================================================================
-        tapes = load_prior_week_tape(self.nfl_dir)
+        # One validated, point-in-time tape read feeds scripts, inactives and the
+        # injury pillar; a refused tape disables all of them together (F02).
+        tape = load_tape_envelope(self.nfl_dir, ctx)
+        sources.append(tape.source)
+        if not tape.admitted:
+            logger.warning("Matchup tape %s: %s", tape.source.status, tape.source.reason)
+        tapes = tape.teams
         # Load external advanced metrics for the season
         # Offline fixture replays never touch the network.
         external_metrics: list[dict[str, Any]] = []
@@ -336,10 +342,10 @@ class NflPipeline:
             all_game_lines,
             tapes,
             injuries_by_event=injuries_by_event(
-                load_tape_inactives(self.nfl_dir), all_game_lines, slate_events
+                tape.team_lists("inactive"), all_game_lines, slate_events
             ),
             slate_events=slate_events,
-            defensive_out_by_team=load_tape_defensive_out(self.nfl_dir),
+            defensive_out_by_team=tape.team_lists("defensive_starters_out"),
         )
         if matchup_scripts:
             logger.info(
@@ -390,7 +396,7 @@ class NflPipeline:
                 for script in matchup_scripts:
                     event_by_team[script.home_team] = script.event_id
                     event_by_team[script.away_team] = script.event_id
-                usage = usage_signals(profiles, load_tape_inactives(self.nfl_dir), event_by_team)
+                usage = usage_signals(profiles, tape.team_lists("inactive"), event_by_team)
                 matchup_scripts = append_signals(matchup_scripts, usage)
                 usage_players = [
                     p.to_dict() for p in profiles.values() if p.team in event_by_team
@@ -619,7 +625,7 @@ class NflPipeline:
             external_metrics=external_metrics,
             usage_players=usage_players,
             weather_records=weather_records,
-            tapes=tapes,
+            tape=tape,
             write_latest=write_latest,
         )
 
@@ -765,7 +771,7 @@ class NflPipeline:
         external_metrics: list[dict[str, Any]],
         usage_players: list[dict[str, Any]],
         weather_records: list[dict[str, Any]],
-        tapes: dict[str, dict[str, Any]],
+        tape: TapeEnvelope,
         write_latest: bool,
     ) -> dict[str, Any]:
         """Snapshot this run's prices, then trace every candidate through all six pillars."""
@@ -784,8 +790,8 @@ class NflPipeline:
                     external_metrics=external_metrics,
                     usage_players=usage_players,
                     weather=weather_records,
-                    inactive_by_team=load_injury_report(self.nfl_dir),
-                    tapes=tapes,
+                    inactive_by_team=tape.injury_report(),
+                    tapes=tape.teams,
                     movement=movement,
                     as_of_utc=as_of_utc.isoformat(),
                     before_week=before_week,
@@ -820,6 +826,8 @@ def load_injury_report(nfl_dir: Path | str) -> dict[str, list[str]] | None:
     Distinguishes "report loaded, nobody out" ({}) from "no report / fetch failed"
     (None) so the best-bets trace never treats a missing report as a clean one.
     Tapes written before the ``injury_report_loaded`` marker existed read as None.
+    Unvalidated; pipeline runs use ``TapeEnvelope.injury_report`` from the
+    admitted tape instead.
     """
     raw = safe_read_json(Path(nfl_dir) / "tape" / "prior_week.json", default=None)
     if not isinstance(raw, dict) or raw.get("injury_report_loaded") is not True:
@@ -851,13 +859,23 @@ def injuries_by_event(
     }
 
 
-def _refresh_tape(nfl_dir: Path, target_date: str | None, last_n: int | None) -> None:
-    """Rebuild the matchup tape from games before the slate; keep the old tape on failure."""
+def _refresh_tape(
+    nfl_dir: Path,
+    target_date: str | None,
+    last_n: int | None,
+    as_of_utc: datetime | str | None = None,
+) -> None:
+    """Rebuild the matchup tape from games before the slate; keep the old tape on failure.
+
+    The tape is built as of ``as_of_utc`` (default now) and records it, so a run
+    can verify the tape was knowable at its own cutoff.
+    """
     raw = target_date or to_eastern_date(datetime.now(timezone.utc))
     try:
         slate = date.fromisoformat(str(raw))
         season = slate.year if slate.month >= 3 else slate.year - 1
-        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n)
+        as_of = parse_utc(as_of_utc) if as_of_utc is not None else datetime.now(timezone.utc)
+        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of)
     except Exception as exc:  # network/API failure must not block the slate run
         logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
 
@@ -935,7 +953,7 @@ def main() -> int:
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     if args.refresh_tape:
-        _refresh_tape(args.data_dir / "NFL", args.date, args.tape_last_n)
+        _refresh_tape(args.data_dir / "NFL", args.date, args.tape_last_n, args.as_of)
 
     try:
         pipeline = NflPipeline(data_dir=args.data_dir)

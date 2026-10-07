@@ -42,10 +42,11 @@ import logging
 import os
 import re
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from outlier_nfl.config import normalize_team
 
@@ -276,20 +277,59 @@ def inactive_players(
     return dict(out)
 
 
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def snapshot_time(dt: Any) -> datetime | None:
+    """Aware UTC time of a depth-chart ``dt`` stamp.
+
+    A date-only stamp reads as 00:00 Eastern that day; a naive timestamp is UTC.
+    """
+    text = str(dt or "").strip()
+    if not text:
+        return None
+    try:
+        if len(text) == 10:
+            return datetime.combine(date.fromisoformat(text), time(0), _EASTERN).astimezone(UTC)
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+def _after_as_of(dt: str, as_of: date | datetime | None) -> bool:
+    """True when snapshot ``dt`` is not knowable at ``as_of``.
+
+    An aware ``datetime`` compares full timestamps (a 23:00 snapshot is after a
+    10:00 run on the same day); a plain ``date`` keeps the whole day.
+    """
+    if as_of is None:
+        return False
+    if isinstance(as_of, datetime):
+        stamp = snapshot_time(dt)
+        return stamp is None or stamp > as_of
+    return dt[:10] > as_of.isoformat()
+
+
+def _as_of_day(as_of: date | datetime) -> date:
+    return as_of.astimezone(_EASTERN).date() if isinstance(as_of, datetime) else as_of
+
+
 def depth_chart_roles(
     depth_rows: Iterable[Mapping[str, str]],
     inactive: Mapping[str, list[dict[str, str]]] | None = None,
-    as_of: date | None = None,
+    as_of: date | datetime | None = None,
 ) -> dict[str, dict[str, str]]:
     """Top healthy QB/RB/TE plus outside and slot WR from the latest snapshot per team.
 
-    ``as_of`` keeps only snapshots dated on or before that day (slate mornings count).
+    ``as_of`` keeps only snapshots knowable then: an aware datetime is compared to
+    the full snapshot timestamp, a date keeps snapshots dated on or before that day.
     """
     latest: dict[str, str] = {}
     by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
     for r in depth_rows:
         dt = str(r.get("dt") or "")
-        if not dt or (as_of is not None and dt[:10] > as_of.isoformat()):
+        if not dt or _after_as_of(dt, as_of):
             continue
         team = _team(r.get("team"))
         if dt > latest.get(team, ""):
@@ -339,19 +379,22 @@ def depth_chart_roles(
 def defensive_starters_out(
     depth_rows: Iterable[Mapping[str, str]],
     inactive: Mapping[str, list[dict[str, str]]],
-    as_of: date | None = None,
+    as_of: date | datetime | None = None,
 ) -> dict[str, list[str]]:
     """Inactive players who held a rank-1 defensive spot on a recent depth chart.
 
     Snapshots after ``as_of`` or more than ``DEF_STARTER_LOOKBACK_DAYS`` before it
     are ignored. Players are matched by gsis id, then by name.
     """
-    earliest = (as_of - timedelta(days=DEF_STARTER_LOOKBACK_DAYS)).isoformat() if as_of else ""
+    earliest = (
+        (_as_of_day(as_of) - timedelta(days=DEF_STARTER_LOOKBACK_DAYS)).isoformat() if as_of else ""
+    )
     starter_ids: dict[str, set[str]] = defaultdict(set)
     starter_names: dict[str, set[str]] = defaultdict(set)
     for r in depth_rows:
-        day = str(r.get("dt") or "")[:10]
-        if not day or day < earliest or (as_of is not None and day > as_of.isoformat()):
+        dt = str(r.get("dt") or "")
+        day = dt[:10]
+        if not day or day < earliest or _after_as_of(dt, as_of):
             continue
         if not str(r.get("pos_grp") or "").endswith(DEFENSIVE_POS_GRP_SUFFIX):
             continue
@@ -491,7 +534,10 @@ def _advanced_grades(
 
 
 def _auto_roles(
-    season: int, before: date | None, game_rows: list[dict[str, str]]
+    season: int,
+    before: date | None,
+    game_rows: list[dict[str, str]],
+    as_of_utc: datetime | None = None,
 ) -> tuple[
     dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]]
 ]:
@@ -499,7 +545,8 @@ def _auto_roles(
 
     Inactives are None when the injury report could not be fetched, so callers
     never mistake a failed fetch for a report with nobody out. Roles and
-    defensive starters out are empty on any depth-chart failure.
+    defensive starters out are empty on any depth-chart failure. Depth snapshots
+    are cut at ``as_of_utc`` (full timestamp) when given, else at ``before``.
     """
     try:
         injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
@@ -510,8 +557,9 @@ def _auto_roles(
         injuries = None
     try:
         depth_rows = fetch_csv(DEPTH_CHART_URL.format(season=season))
-        roles = depth_chart_roles(depth_rows, injuries or {}, as_of=before)
-        defensive_out = defensive_starters_out(depth_rows, injuries or {}, as_of=before)
+        cutoff: date | datetime | None = as_of_utc or before
+        roles = depth_chart_roles(depth_rows, injuries or {}, as_of=cutoff)
+        defensive_out = defensive_starters_out(depth_rows, injuries or {}, as_of=cutoff)
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
         roles, defensive_out = {}, {}
@@ -531,6 +579,7 @@ def build_tape_payload(
     advanced: bool = True,
     grades: Mapping[str, Mapping[str, float]] | None = None,
     defensive_out: Mapping[str, list[str]] | None = None,
+    as_of_utc: datetime | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
@@ -538,14 +587,16 @@ def build_tape_payload(
     ``depth_roles``/``inactive`` are supplied; depth-chart roles override
     ``roles`` field by field, and the same fetch supplies ``defensive_out``.
     With ``advanced`` the pass-rush and QB grades are fetched unless
-    ``grades`` is supplied.
+    ``grades`` is supplied. ``as_of_utc`` (aware) is the point in time the tape
+    claims to represent; depth snapshots after it are ignored and it is recorded
+    in the envelope.
     """
     if team_rows is None:
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
     if auto_roles and depth_roles is None and inactive is None:
-        depth_roles, inactive, defensive_out = _auto_roles(season, before, game_rows)
+        depth_roles, inactive, defensive_out = _auto_roles(season, before, game_rows, as_of_utc)
     # Only an injury report that was actually fetched (or supplied) counts as loaded.
     injury_report_loaded = inactive is not None
     merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
@@ -564,6 +615,7 @@ def build_tape_payload(
         "season": season,
         "week": f"{weeks[0]}-{weeks[-1]}" if weeks else None,
         "before": before.isoformat() if before else None,
+        "as_of_utc": as_of_utc.astimezone(UTC).isoformat() if as_of_utc else None,
         "last_n": last_n,
         "source": (
             "nflverse-data stats_team_week + schedules; per-game averages; "
@@ -580,16 +632,21 @@ def build_tape_payload(
     }
 
 
+def tape_team_lists(raw: Any, key: str) -> dict[str, list[str]]:
+    """``{team: [names]}`` block ``key`` of a parsed tape payload (empty when absent)."""
+    block = raw.get(key) if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return {}
+    return {_team(t): [str(n) for n in names] for t, names in block.items() if isinstance(names, list)}
+
+
 def _load_tape_team_lists(nfl_dir: Path | str, key: str) -> dict[str, list[str]]:
     """``{team: [names]}`` block ``key`` of ``<nfl_dir>/tape/prior_week.json`` (empty when absent)."""
     try:
         raw = json.loads((Path(nfl_dir) / "tape" / "prior_week.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    block = raw.get(key) if isinstance(raw, dict) else None
-    if not isinstance(block, dict):
-        return {}
-    return {_team(t): [str(n) for n in names] for t, names in block.items() if isinstance(names, list)}
+    return tape_team_lists(raw, key)
 
 
 def load_tape_inactives(nfl_dir: Path | str) -> dict[str, list[str]]:
@@ -620,12 +677,18 @@ def refresh_prior_week_tape(
     season: int,
     before: date | None = None,
     last_n: int | None = None,
+    as_of_utc: datetime | None = None,
 ) -> Path:
-    """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path."""
+    """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
+
+    The envelope records ``as_of_utc`` (the point in time the tape represents)
+    and ``fetched_at_utc`` so a run can check the tape was knowable at its cutoff.
+    """
     path = Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
-        season, before=before, last_n=last_n, roles=load_existing_roles(path)
+        season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc
     )
+    payload["fetched_at_utc"] = datetime.now(UTC).isoformat()
     if not payload["teams"]:
         raise ValueError(f"nflverse returned no completed {season} games before {before}")
     write_tape(path, payload)

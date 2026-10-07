@@ -52,6 +52,7 @@ class SourceRecord:
     rows_in: int | None = None
     rows_admitted: int | None = None
     max_week_admitted: int | None = None
+    sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

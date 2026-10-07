@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 import json
 from pathlib import Path
 
@@ -359,3 +359,130 @@ def test_pipeline_refresh_failure_keeps_existing_tape(
 def test_fetch_csv_rejects_non_https(url: str) -> None:
     with pytest.raises(ValueError):
         tape.fetch_csv(url)
+
+
+# ---------------------------------------------------------------------------
+# F02: the tape is point-in-time and validated against the run context
+# ---------------------------------------------------------------------------
+
+def _ctx(slate: str = "2026-10-04", mode: str = "live", as_of: str = "2026-10-04T16:00:00+00:00"):
+    from outlier_nfl.run_context import RunContext, parse_utc
+
+    return RunContext(slate_date=slate, window=None, season=2026, as_of_utc=parse_utc(as_of),
+                      mode=mode, first_kickoff_utc=parse_utc("2026-10-04T17:00:00+00:00"))  # type: ignore[arg-type]
+
+
+def _write_tape(tmp_path: Path, **envelope: object) -> Path:
+    path = tmp_path / "tape" / "prior_week.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"season": 2026, "before": "2026-10-04", "injury_report_loaded": True,
+               "inactive": {"KC": ["Travis Kelce"]}, "defensive_starters_out": {"BAL": ["X"]},
+               "teams": {"KC": {"rush_yards": 120.0}, "BAL": {"rush_yards": 150.0}}}
+    payload.update(envelope)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_depth_snapshot_later_same_day_rejected() -> None:
+    """A 23:00 UTC snapshot on slate day is not knowable by a 10:00 ET (14:00Z) run."""
+    later = [*DEPTH, _depth("2026-09-27T23:00:00Z", "LA", "QB", "9", 1, "Evening QB")]
+    morning = datetime(2026, 9, 27, 14, tzinfo=UTC)
+    assert tape.depth_chart_roles(later, {}, morning)["LAR"]["qb"] == "Matthew Stafford"
+    assert tape.depth_chart_roles(later, {}, date(2026, 9, 27))["LAR"]["qb"] == "Evening QB"
+    early = datetime(2026, 9, 27, 12, tzinfo=UTC)  # before the 12:56:55Z snapshot
+    assert tape.depth_chart_roles(DEPTH, {}, early)["LAR"].get("te") == "Tyler Higbee"
+    assert tape.snapshot_time("2026-09-27") == datetime(2026, 9, 27, 4, tzinfo=UTC)  # 00:00 ET
+
+
+def test_defensive_starters_cut_at_full_timestamp() -> None:
+    depth = [{"dt": "2026-09-27T23:00:00Z", "team": "NO", "pos_grp": "Base 4-3 D",
+              "pos_rank": "1", "player_name": "Carl Granderson", "gsis_id": "00-CG"}]
+    inactive = {"NO": [{"name": "Carl Granderson", "gsis_id": "00-CG"}]}
+    assert tape.defensive_starters_out(depth, inactive, datetime(2026, 9, 27, 14, tzinfo=UTC)) == {}
+    assert tape.defensive_starters_out(depth, inactive, date(2026, 9, 27)) == {
+        "NO": ["Carl Granderson"]}
+
+
+def test_bundled_tape_refused_outside_fixture_mode(tmp_path: Path) -> None:
+    from outlier_nfl.matchup import load_tape_envelope
+
+    live = load_tape_envelope(tmp_path, _ctx())
+    assert live.teams == {} and live.source.status == "REFUSED"
+    assert "fixture-only" in (live.source.reason or "")
+    assert live.injury_report() is None and live.team_lists("inactive") == {}
+    fixture = load_tape_envelope(tmp_path, _ctx(slate="2026-09-13", mode="fixture"))
+    assert fixture.admitted and len(fixture.teams) == 32
+
+
+@pytest.mark.parametrize(
+    ("envelope", "why"),
+    [
+        ({"season": 2025}, "season 2025"),
+        ({"season": None}, "no season"),
+        ({"before": None}, "no 'before'"),
+        ({"before": "2026-10-11"}, "after slate"),
+    ],
+)
+def test_wrong_season_or_future_before_tape_refused(tmp_path: Path, envelope: dict, why: str) -> None:
+    from outlier_nfl.matchup import load_tape_envelope
+
+    _write_tape(tmp_path, **envelope)
+    env = load_tape_envelope(tmp_path, _ctx())
+    assert env.source.status == "REFUSED" and why in (env.source.reason or "")
+    assert env.teams == {}
+
+
+def test_retrospective_run_refuses_tape_written_after_as_of(tmp_path: Path) -> None:
+    from outlier_nfl.matchup import load_tape_envelope
+
+    retro = _ctx(mode="retrospective", as_of="2026-10-04T18:00:00+00:00")
+    _write_tape(tmp_path, fetched_at_utc="2026-10-05T09:00:00+00:00")
+    assert "after as_of" in (load_tape_envelope(tmp_path, retro).source.reason or "")
+    _write_tape(tmp_path, as_of_utc="2026-10-04T14:00:00+00:00",
+                fetched_at_utc="2026-10-05T09:00:00+00:00")  # rebuilt later, as of the morning
+    ok = load_tape_envelope(tmp_path, retro)
+    assert ok.admitted and ok.source.sha256 and set(ok.teams) == {"KC", "BAL"}
+    assert ok.team_lists("defensive_starters_out") == {"BAL": ["X"]}
+
+
+def test_inadmissible_tape_disables_injury_pillar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from outlier_nfl.external import ExternalLoad
+    from scripts import nfl_snapshot_diff as snap
+
+    _write_tape(tmp_path / "NFL", season=2025)  # injury_report_loaded True, but wrong season
+    seen: list[object] = []
+    real = nfl_pipeline.build_best_bets
+
+    def spy(inputs):  # type: ignore[no-untyped-def]
+        seen.append(inputs)
+        return real(inputs)
+
+    monkeypatch.setattr(nfl_pipeline, "build_best_bets", spy)
+    monkeypatch.setattr(nfl_pipeline, "load_external_metrics", lambda *a, **k: ExternalLoad())
+    fixtures = Path(__file__).parent / "fixtures" / "nfl"
+    summary = nfl_pipeline.NflPipeline(
+        client=snap.FrozenOutlierClient(fixtures), data_dir=tmp_path
+    ).run(date="2026-10-04", as_of_utc="2026-10-04T16:00:00+00:00", reports_dir=tmp_path / "r")
+    tape_src = next(s for s in summary["sources"] if s["name"] == "tape")
+    assert tape_src["status"] == "REFUSED"
+    assert seen and seen[0].inactive_by_team is None and seen[0].tapes == {}  # type: ignore[attr-defined]
+    assert nfl_pipeline.load_injury_report(tmp_path / "NFL") == {"KC": ["Travis Kelce"]}  # legacy read
+
+
+def test_refresh_records_as_of_and_fetch_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_fetch(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
+        if "stats_team_week_2026" in url:
+            return TEAM_ROWS
+        if "depth_charts_2026" in url:
+            return [*DEPTH, _depth("2026-09-27T23:00:00Z", "LA", "QB", "9", 1, "Evening QB")]
+        if "injuries_2026" in url:
+            return INJURIES
+        return GAMES
+
+    monkeypatch.setattr(tape, "fetch_csv", fake_fetch)
+    as_of = datetime(2026, 9, 27, 14, tzinfo=UTC)
+    out = tape.refresh_prior_week_tape(tmp_path, 2026, before=date(2026, 9, 27), as_of_utc=as_of)
+    written = json.loads(out.read_text())
+    assert written["as_of_utc"] == "2026-09-27T14:00:00+00:00"
+    assert written["fetched_at_utc"]
+    assert written["teams"]["LAR"]["qb"] == "Matthew Stafford"  # evening snapshot excluded
