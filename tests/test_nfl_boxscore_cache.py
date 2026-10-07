@@ -1,0 +1,266 @@
+"""F15: nflverse box-score cache must refresh, validate and never regress."""
+
+from __future__ import annotations
+
+import gzip
+import json
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Self
+from urllib.error import HTTPError, URLError
+
+import pytest
+
+from outlier_nfl import boxscore_nflverse as nv
+from outlier_nfl.boxscore import BoxScoreError
+
+GAMES_HEADER = "game_id,season,week,gameday,away_team,home_team,away_score,home_score\n"
+STATS_HEADER = "game_id,player_display_name,passing_yards,rushing_yards\n"
+
+
+def _games(*rows: str) -> bytes:
+    return (GAMES_HEADER + "".join(r + "\n" for r in rows)).encode()
+
+
+def _stats(*rows: str) -> bytes:
+    return (STATS_HEADER + "".join(r + "\n" for r in rows)).encode()
+
+
+WEEK1_GAME = "2026_01_CLE_TB,2026,1,2026-09-13,CLE,TB,23,19"
+WEEK2_GAME = "2026_02_KC_BUF,2026,2,2026-09-20,KC,BUF,27,24"
+WEEK1_STAT = "2026_01_CLE_TB,Deshaun Watson,250,20"
+WEEK1_STAT_CORRECTED = "2026_01_CLE_TB,Deshaun Watson,262,20"
+WEEK2_STAT = "2026_02_KC_BUF,Patrick Mahomes,301,12"
+
+
+class _Resp:
+    def __init__(self, body: bytes, content_length: int | None = None) -> None:
+        self._body = body
+        self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class FakeNet:
+    """Serve queued responses per URL; an Exception entry is raised instead."""
+
+    def __init__(self) -> None:
+        self.queue: dict[str, list[Any]] = {}
+        self.calls: list[str] = []
+
+    def serve(self, url: str, *items: Any) -> None:
+        self.queue.setdefault(url, []).extend(items)
+
+    def __call__(self, request: Any, timeout: int = 60) -> _Resp:
+        url = request.full_url
+        self.calls.append(url)
+        if not self.queue.get(url):
+            raise URLError(f"no fake response queued for {url}")
+        item = self.queue[url].pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        if isinstance(item, _Resp):
+            return item
+        return _Resp(item)
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+STATS_URL = nv.NFLVERSE_STATS_WEEK_URL.format(season=2026)
+GAMES_URL = nv.NFLVERSE_GAMES_URL
+
+
+@pytest.fixture
+def net(monkeypatch: pytest.MonkeyPatch) -> FakeNet:
+    fake = FakeNet()
+    monkeypatch.setattr(nv, "_urlopen", fake)
+    monkeypatch.setattr(nv, "_sleep", lambda _s: None)
+    monkeypatch.delenv("OUTLIER_NFLVERSE_MAX_AGE_HOURS", raising=False)
+    return fake
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    c = Clock()
+    monkeypatch.setattr(nv, "_utcnow", c)
+    return c
+
+
+def _load_week(tmp_path: Path, **kw: Any) -> list[Any]:
+    return nv.load_nflverse_events(season=2026, cache_dir=tmp_path, **kw)
+
+
+def test_early_season_cache_picks_up_later_week_after_ttl(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)))
+    assert [e.provider_event_id for e in _load_week(tmp_path)] == ["2026_01_CLE_TB"]
+
+    clock.now += timedelta(days=7)
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT, WEEK2_STAT)))
+    events = nv.load_nflverse_events(season=2026, event_date=date(2026, 9, 20), cache_dir=tmp_path)
+    assert [e.provider_event_id for e in events] == ["2026_02_KC_BUF"]
+    assert events[0].players["PATRICKMAHOMES"]["PASSING:YDS"] == 301.0
+
+
+def test_fresh_cache_is_reused_without_network(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)))
+    _load_week(tmp_path)
+    calls = len(net.calls)
+    clock.now += timedelta(hours=1)
+    _load_week(tmp_path)
+    assert len(net.calls) == calls
+
+
+def test_stat_correction_arrives_on_explicit_refresh(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME), _games(WEEK1_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)), gzip.compress(_stats(WEEK1_STAT_CORRECTED)))
+    assert _load_week(tmp_path)[0].players["DESHAUNWATSON"]["PASSING:YDS"] == 250.0
+    events = _load_week(tmp_path, refresh=True)
+    assert events[0].players["DESHAUNWATSON"]["PASSING:YDS"] == 262.0
+
+
+def test_truncated_gzip_never_replaces_valid_cache(tmp_path, net, clock):
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)))
+    nv.ensure_week_stats_csv(2026, cache_dir=tmp_path)
+    good = (tmp_path / "stats_player_week_2026.csv").read_bytes()
+    full = gzip.compress(_stats(WEEK1_STAT, WEEK2_STAT))
+    net.serve(STATS_URL, full[: len(full) // 2])
+    path = nv.ensure_week_stats_csv(2026, cache_dir=tmp_path, refresh=True)
+    assert path.read_bytes() == good
+
+
+def test_truncated_gzip_with_no_cache_raises(tmp_path, net, clock):
+    full = gzip.compress(_stats(WEEK1_STAT))
+    net.serve(STATS_URL, full[:-8])
+    with pytest.raises(BoxScoreError, match="gzip"):
+        nv.ensure_week_stats_csv(2026, cache_dir=tmp_path)
+    assert not (tmp_path / "stats_player_week_2026.csv").exists()
+
+
+def test_short_body_vs_content_length_is_rejected(tmp_path, net, clock):
+    body = _games(WEEK1_GAME, WEEK2_GAME)
+    net.serve(GAMES_URL, *[_Resp(body[:-20], content_length=len(body))] * nv.DEFAULT_RETRIES)
+    with pytest.raises(BoxScoreError, match="truncated"):
+        nv.ensure_games_csv(cache_dir=tmp_path)
+    assert not (tmp_path / "games.csv").exists()
+
+
+def test_truncated_plain_csv_row_is_rejected(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME, "2026_02_KC_BUF,2026,2"))
+    with pytest.raises(BoxScoreError, match="malformed row"):
+        nv.ensure_games_csv(cache_dir=tmp_path)
+
+
+def test_refresh_with_fewer_rows_keeps_cached_copy(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME), _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    path = nv.ensure_games_csv(cache_dir=tmp_path, refresh=True)
+    assert path.read_bytes() == _games(WEEK1_GAME, WEEK2_GAME)
+    with pytest.raises(BoxScoreError, match="fewer than cached"):
+        net.serve(GAMES_URL, _games(WEEK1_GAME))
+        nv.ensure_games_csv(cache_dir=tmp_path, refresh=True, require_fresh=True)
+
+
+def test_schema_change_is_rejected(tmp_path, net, clock):
+    net.serve(GAMES_URL, b"game_id,season\n2026_01_CLE_TB,2026\n")
+    with pytest.raises(BoxScoreError, match="missing required columns"):
+        nv.ensure_games_csv(cache_dir=tmp_path)
+
+
+def test_refresh_failure_falls_back_to_validated_copy(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    clock.now += timedelta(days=2)
+    net.serve(GAMES_URL, *[HTTPError(GAMES_URL, 503, "busy", {}, None)] * nv.DEFAULT_RETRIES)  # type: ignore[arg-type]
+    path = nv.ensure_games_csv(cache_dir=tmp_path)
+    assert path.read_bytes() == _games(WEEK1_GAME)
+    net.serve(GAMES_URL, *[HTTPError(GAMES_URL, 503, "busy", {}, None)] * nv.DEFAULT_RETRIES)  # type: ignore[arg-type]
+    with pytest.raises(BoxScoreError, match="503"):
+        nv.ensure_games_csv(cache_dir=tmp_path, require_fresh=True)
+
+
+def test_tampered_cache_is_not_a_fallback(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    path = nv.ensure_games_csv(cache_dir=tmp_path)
+    path.write_bytes(_games(WEEK1_GAME, WEEK2_GAME))
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    with pytest.raises(BoxScoreError):
+        nv.ensure_games_csv(cache_dir=tmp_path)
+
+
+def test_retry_is_bounded_and_skips_non_retryable(tmp_path, net, clock):
+    net.serve(GAMES_URL, HTTPError(GAMES_URL, 503, "busy", {}, None), _games(WEEK1_GAME))  # type: ignore[arg-type]
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    assert net.calls.count(GAMES_URL) == 2
+
+    net.calls.clear()
+    net.serve(STATS_URL, HTTPError(STATS_URL, 404, "gone", {}, None), gzip.compress(_stats(WEEK1_STAT)))  # type: ignore[arg-type]
+    with pytest.raises(BoxScoreError, match="404"):
+        nv.ensure_week_stats_csv(2026, cache_dir=tmp_path)
+    assert net.calls == [STATS_URL]
+
+    net.calls.clear()
+    net.queue.clear()
+    net.serve(STATS_URL, *[URLError("down")] * (nv.DEFAULT_RETRIES + 2))
+    with pytest.raises(BoxScoreError):
+        nv.ensure_week_stats_csv(2026, cache_dir=tmp_path, refresh=True)
+    assert len(net.calls) == nv.DEFAULT_RETRIES
+
+
+def test_repeat_refresh_is_idempotent(tmp_path, net, clock):
+    net.serve(GAMES_URL, _games(WEEK1_GAME), _games(WEEK1_GAME))
+    path = nv.ensure_games_csv(cache_dir=tmp_path)
+    first_meta = nv.read_cache_meta(path)
+    clock.now += timedelta(hours=1)
+    nv.ensure_games_csv(cache_dir=tmp_path, refresh=True)
+    second_meta = nv.read_cache_meta(path)
+    assert first_meta is not None and second_meta is not None
+    assert second_meta.sha256 == first_meta.sha256
+    assert second_meta.rows == first_meta.rows == 1
+    assert second_meta.fetched_at > first_meta.fetched_at
+    assert path.read_bytes() == _games(WEEK1_GAME)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["games.csv", "games.csv.meta.json"]
+
+
+def test_legacy_cache_without_sidecar_is_refreshed(tmp_path, net, clock):
+    legacy = tmp_path / "games.csv"
+    legacy.write_bytes(_games(WEEK1_GAME))
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME))
+    assert nv.ensure_games_csv(cache_dir=tmp_path).read_bytes() == _games(WEEK1_GAME, WEEK2_GAME)
+    meta = json.loads((tmp_path / "games.csv.meta.json").read_text())
+    assert meta["rows"] == 2
+
+
+def test_legacy_cache_used_offline_only_if_schema_valid(tmp_path, net, clock):
+    legacy = tmp_path / "games.csv"
+    legacy.write_bytes(_games(WEEK1_GAME))
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    assert nv.ensure_games_csv(cache_dir=tmp_path) == legacy
+
+    legacy.write_bytes(b"game_id\n")
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    with pytest.raises(BoxScoreError):
+        nv.ensure_games_csv(cache_dir=tmp_path)
+
+
+def test_max_age_env(monkeypatch):
+    monkeypatch.setenv("OUTLIER_NFLVERSE_MAX_AGE_HOURS", "0.5")
+    assert nv.max_age_from_env() == timedelta(minutes=30)
+    monkeypatch.setenv("OUTLIER_NFLVERSE_MAX_AGE_HOURS", "soon")
+    with pytest.raises(BoxScoreError):
+        nv.max_age_from_env()
