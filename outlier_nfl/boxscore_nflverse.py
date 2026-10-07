@@ -141,6 +141,10 @@ class CacheMeta:
     sha256: str
     size: int
     rows: int
+    # Hash of the validated copy this fetch replaces. The sidecar is written
+    # before the CSV, so a crash between the two leaves that previous copy on
+    # disk, and it is still a verified fallback.
+    previous_sha256: str | None = None
 
     def fetched_at_dt(self) -> datetime | None:
         try:
@@ -165,6 +169,7 @@ def read_cache_meta(path: Path) -> CacheMeta | None:
             sha256=str(raw["sha256"]),
             size=int(raw["size"]),
             rows=int(raw["rows"]),
+            previous_sha256=str(raw["previous_sha256"]) if raw.get("previous_sha256") else None,
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -189,6 +194,8 @@ def _write_meta(path: Path, meta: CacheMeta) -> None:
         "size": meta.size,
         "rows": meta.rows,
     }
+    if meta.previous_sha256:
+        payload["previous_sha256"] = meta.previous_sha256
     _atomic_write_bytes(_meta_path(path), (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
 
 
@@ -214,7 +221,18 @@ def _is_fresh(path: Path, *, max_age: timedelta, now: datetime) -> bool:
         return False
     if path.stat().st_size != meta.size:
         return False
-    return now - fetched <= max_age
+    if now - fetched > max_age:
+        return False
+    # A crash between the sidecar and CSV writes leaves a sidecar that does not
+    # describe the bytes on disk; that copy is never fresh.
+    return _sha256_file(path) == meta.sha256
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _fetch_bytes(
@@ -342,12 +360,24 @@ def _refresh_csv(
         return fallback
 
     digest = hashlib.sha256(data).hexdigest()
-    if previous is not None and previous.sha256 == digest and dest.exists():
+    on_disk = _sha256_file(dest) if dest.exists() else None
+    if on_disk == digest:
         _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
         _record(dest, "unchanged")
         return dest
+    # Sidecar first, naming the copy it replaces, so a crash before the CSV
+    # lands leaves a previous copy that _usable_existing can still verify.
+    verified = {previous.sha256, previous.previous_sha256} if previous is not None else set()
+    replaced = on_disk if on_disk is not None and on_disk in verified else None
+    if replaced is None and previous is None and on_disk is not None:
+        # A pre-F15 copy is a fallback only if it validates, so record it only then.
+        try:
+            _validate_csv_bytes(dest.read_bytes(), label=label, required=required, any_of=any_of)
+            replaced = on_disk
+        except (BoxScoreError, OSError):
+            pass
+    _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows, replaced))
     _atomic_write_bytes(dest, data)
-    _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
     if shrunk and previous is not None:
         reason = f"accepted {rows} rows, fewer than previous {previous.rows}"
         logger.warning("%s: %s (allow_shrink)", label, reason)
@@ -362,7 +392,8 @@ def _usable_existing(
 ) -> Path | None:
     """A cached copy is a fallback only if it still validates.
 
-    With a sidecar, the bytes must match its hash. A pre-F15 file with no
+    With a sidecar, the bytes must match its hash, or the hash of the copy it
+    was replacing when a write was interrupted (logged). A pre-F15 file with no
     sidecar is accepted only if it passes schema validation now (logged).
     """
     if not dest.exists():
@@ -372,7 +403,9 @@ def _usable_existing(
         data = dest.read_bytes()
     except OSError:
         return None
-    if meta is not None and hashlib.sha256(data).hexdigest() != meta.sha256:
+    digest = hashlib.sha256(data).hexdigest()
+    interrupted = meta is not None and digest != meta.sha256 and digest == meta.previous_sha256
+    if meta is not None and digest != meta.sha256 and not interrupted:
         return None
     try:
         _validate_csv_bytes(data, label=label, required=required, any_of=any_of)
@@ -380,6 +413,8 @@ def _usable_existing(
         return None
     if meta is None:
         logger.warning("%s: cached copy %s has no fetch metadata (pre-F15 cache)", label, dest)
+    if interrupted:
+        logger.warning("%s: last write to %s was interrupted; using the previous validated copy", label, dest)
     return dest
 
 
