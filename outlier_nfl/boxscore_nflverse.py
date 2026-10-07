@@ -28,6 +28,10 @@ Cache integrity (F15):
   a warning is logged (pass ``require_fresh=True`` to raise instead). A
   pre-F15 file with no sidecar is used as that fallback only if it passes
   schema validation, also with a warning.
+- A refresh with fewer rows is accepted only with ``allow_shrink=True`` or
+  ``OUTLIER_NFLVERSE_ALLOW_SHRINK=1`` (logged as ``shrunk``).
+- Every lookup is recorded; ``drain_cache_events()`` returns them so settle can
+  print fallbacks in its run output and JSON report.
 
 Failure modes:
 - HTTP / DNS failure with no valid cached copy → ``BoxScoreError`` with URL.
@@ -91,6 +95,35 @@ GAMES_REQUIRED_COLUMNS: tuple[str, ...] = (
     "away_score",
     "home_score",
 )
+
+# Per-process record of what each cache lookup did, so callers (settle) can
+# surface fallbacks in their run output instead of only in the log.
+_CACHE_EVENTS: list[dict[str, Any]] = []
+
+
+def _record(dest: Path, status: str, *, reason: str | None = None) -> None:
+    meta = read_cache_meta(dest)
+    _CACHE_EVENTS.append(
+        {
+            "file": dest.name,
+            "status": status,
+            "fetched_at": meta.fetched_at if meta else None,
+            "rows": meta.rows if meta else None,
+            "reason": reason,
+        }
+    )
+
+
+def drain_cache_events() -> list[dict[str, Any]]:
+    """Return and clear cache events: fresh | refreshed | unchanged | shrunk | fallback."""
+    out = list(_CACHE_EVENTS)
+    _CACHE_EVENTS.clear()
+    return out
+
+
+def allow_shrink_from_env() -> bool:
+    return os.environ.get("OUTLIER_NFLVERSE_ALLOW_SHRINK", "").strip().lower() in {"1", "true", "yes"}
+
 
 # Indirections so tests can stub the network and clock.
 _urlopen: Callable[..., Any] = urlopen
@@ -268,11 +301,19 @@ def _refresh_csv(
     refresh: bool = False,
     require_fresh: bool = False,
     max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
 ) -> Path:
-    """Return a validated cached CSV at ``dest``, re-downloading when stale."""
+    """Return a validated cached CSV at ``dest``, re-downloading when stale.
+
+    A refresh with fewer rows than the cached copy is rejected unless
+    ``allow_shrink`` (or ``OUTLIER_NFLVERSE_ALLOW_SHRINK=1``) is set, for the
+    rare upstream correction that legitimately removes rows.
+    """
     now = _utcnow()
     age = max_age if max_age is not None else max_age_from_env()
+    shrink_ok = allow_shrink if allow_shrink is not None else allow_shrink_from_env()
     if not refresh and _is_fresh(dest, max_age=age, now=now):
+        _record(dest, "fresh")
         return dest
 
     previous = read_cache_meta(dest) if dest.exists() else None
@@ -286,24 +327,33 @@ def _refresh_csv(
         else:
             data = payload
         rows = _validate_csv_bytes(data, label=label, required=required, any_of=any_of)
-        if previous is not None and rows < previous.rows:
+        shrunk = previous is not None and rows < previous.rows
+        if shrunk and previous is not None and not shrink_ok:
             raise BoxScoreError(
                 f"{label}: refreshed file has {rows} rows, fewer than cached {previous.rows}; "
-                "keeping cached copy"
+                "keeping cached copy (set OUTLIER_NFLVERSE_ALLOW_SHRINK=1 to accept)"
             )
     except BoxScoreError as exc:
         fallback = _usable_existing(dest, label=label, required=required, any_of=any_of)
         if fallback is None or require_fresh:
             raise
         logger.warning("%s refresh failed (%s); using cached copy %s", label, exc, dest)
+        _record(dest, "fallback", reason=str(exc))
         return fallback
 
     digest = hashlib.sha256(data).hexdigest()
     if previous is not None and previous.sha256 == digest and dest.exists():
         _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
+        _record(dest, "unchanged")
         return dest
     _atomic_write_bytes(dest, data)
     _write_meta(dest, CacheMeta(url, now.isoformat(), digest, len(data), rows))
+    if shrunk and previous is not None:
+        reason = f"accepted {rows} rows, fewer than previous {previous.rows}"
+        logger.warning("%s: %s (allow_shrink)", label, reason)
+        _record(dest, "shrunk", reason=reason)
+    else:
+        _record(dest, "refreshed")
     return dest
 
 
@@ -340,6 +390,7 @@ def ensure_week_stats_csv(
     refresh: bool = False,
     require_fresh: bool = False,
     max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
 ) -> Path:
     """Return path to a validated, decompressed week-stats CSV for a season."""
     cache = cache_dir or default_cache_dir()
@@ -353,6 +404,7 @@ def ensure_week_stats_csv(
         refresh=refresh,
         require_fresh=require_fresh,
         max_age=max_age,
+        allow_shrink=allow_shrink,
     )
 
 
@@ -362,6 +414,7 @@ def ensure_games_csv(
     refresh: bool = False,
     require_fresh: bool = False,
     max_age: timedelta | None = None,
+    allow_shrink: bool | None = None,
 ) -> Path:
     """Return path to a validated nflverse ``games.csv`` schedule/results file."""
     cache = cache_dir or default_cache_dir()
@@ -373,6 +426,7 @@ def ensure_games_csv(
         refresh=refresh,
         require_fresh=require_fresh,
         max_age=max_age,
+        allow_shrink=allow_shrink,
     )
 
 
@@ -461,16 +515,21 @@ def load_nflverse_events(
     stats_csv: Path | str | None = None,
     games_csv: Path | str | None = None,
     refresh: bool = False,
+    allow_shrink: bool | None = None,
 ) -> list[NflBoxScoreEvent]:
     """Build simplified box-score events for a season week and/or slate date."""
     cache = cache_dir or default_cache_dir()
     stats_path = (
         Path(stats_csv)
         if stats_csv
-        else ensure_week_stats_csv(season, cache_dir=cache, refresh=refresh)
+        else ensure_week_stats_csv(
+            season, cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink
+        )
     )
     games_path = (
-        Path(games_csv) if games_csv else ensure_games_csv(cache_dir=cache, refresh=refresh)
+        Path(games_csv)
+        if games_csv
+        else ensure_games_csv(cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink)
     )
 
     games_by_id: dict[str, dict[str, str]] = {}
@@ -569,6 +628,7 @@ def fetch_nflverse_boxscores_for_date(
     season: int | None = None,
     cache_dir: Path | None = None,
     refresh: bool = False,
+    allow_shrink: bool | None = None,
 ) -> list[NflBoxScoreEvent]:
     """Convenience: load all completed games on an Eastern slate date."""
     # A season is labelled by the calendar year of its September Week 1 and runs
@@ -583,13 +643,16 @@ def fetch_nflverse_boxscores_for_date(
         event_date=event_date,
         cache_dir=cache_dir,
         refresh=refresh,
+        allow_shrink=allow_shrink,
     )
 
 
 __all__ = [
     "DEFAULT_MAX_AGE_HOURS",
     "CacheMeta",
+    "allow_shrink_from_env",
     "default_cache_dir",
+    "drain_cache_events",
     "ensure_games_csv",
     "ensure_week_stats_csv",
     "events_to_simplified_payload",

@@ -264,3 +264,59 @@ def test_max_age_env(monkeypatch):
     monkeypatch.setenv("OUTLIER_NFLVERSE_MAX_AGE_HOURS", "soon")
     with pytest.raises(BoxScoreError):
         nv.max_age_from_env()
+
+
+def test_shrink_override_accepts_upstream_row_removal(tmp_path, net, clock, monkeypatch):
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME), _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path)
+    nv.drain_cache_events()
+    path = nv.ensure_games_csv(cache_dir=tmp_path, refresh=True, allow_shrink=True)
+    assert path.read_bytes() == _games(WEEK1_GAME)
+    [event] = nv.drain_cache_events()
+    assert event["status"] == "shrunk" and "fewer than previous 2" in event["reason"]
+
+    net.serve(GAMES_URL, _games(WEEK1_GAME, WEEK2_GAME), _games(WEEK1_GAME))
+    nv.ensure_games_csv(cache_dir=tmp_path, refresh=True)
+    monkeypatch.setenv("OUTLIER_NFLVERSE_ALLOW_SHRINK", "1")
+    nv.ensure_games_csv(cache_dir=tmp_path, refresh=True)
+    assert path.read_bytes() == _games(WEEK1_GAME)
+
+
+def test_row_count_guard_is_per_season_file(tmp_path, net, clock):
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT, WEEK2_STAT)))
+    nv.ensure_week_stats_csv(2026, cache_dir=tmp_path)
+    url_2027 = nv.NFLVERSE_STATS_WEEK_URL.format(season=2027)
+    net.serve(url_2027, gzip.compress(_stats("2027_01_CLE_TB,Deshaun Watson,100,0")))
+    path = nv.ensure_week_stats_csv(2027, cache_dir=tmp_path)
+    meta = nv.read_cache_meta(path)
+    assert path.name == "stats_player_week_2027.csv" and meta is not None and meta.rows == 1
+
+
+def test_settle_cli_surfaces_cache_fallback(tmp_path, net, clock, capsys):
+    from outlier_nfl import settle
+
+    preds = Path(__file__).parent / "fixtures" / "nfl" / "settle" / "predictions_tier1.json"
+    cache = tmp_path / "cache"
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)))
+    nv.ensure_games_csv(cache_dir=cache)
+    nv.ensure_week_stats_csv(2026, cache_dir=cache)
+    nv.drain_cache_events()
+    net.queue.clear()
+    net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
+    out_json = tmp_path / "settle.json"
+    rc = settle.main(
+        [
+            "--predictions", str(preds),
+            "--provider", "nflverse",
+            "--season", "2026",
+            "--week", "1",
+            "--nflverse-cache", str(cache),
+            "--nflverse-refresh",
+            "--out-json", str(out_json),
+        ]
+    )
+    assert rc == 0
+    assert "WARNING: nflverse `games.csv` refresh failed" in capsys.readouterr().out
+    statuses = {e["file"]: e["status"] for e in json.loads(out_json.read_text())["nflverse_cache"]}
+    assert statuses["games.csv"] == "fallback"

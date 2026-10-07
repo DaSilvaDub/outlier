@@ -695,6 +695,8 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
                 slate,
                 season=args.season or nfl_season_for_date(slate),
                 cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
+                refresh=args.nflverse_refresh,
+                allow_shrink=True if args.nflverse_allow_shrink else None,
             )
         if args.season is None or args.week is None:
             raise SystemExit("nflverse provider requires --slate-date or --season and --week")
@@ -702,6 +704,8 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
             season=args.season,
             week=args.week,
             cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
+            refresh=args.nflverse_refresh,
+            allow_shrink=True if args.nflverse_allow_shrink else None,
         )
     raise SystemExit("Provide --boxscores and/or --provider nflverse")
 
@@ -735,6 +739,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Cache directory for nflverse CSV downloads (default ~/.cache/outlier_nflverse).",
     )
     parser.add_argument(
+        "--nflverse-refresh",
+        action="store_true",
+        help="Re-download nflverse CSVs even if the cache is within its max age.",
+    )
+    parser.add_argument(
+        "--nflverse-allow-shrink",
+        action="store_true",
+        help="Accept an nflverse refresh with fewer rows than the cached copy (upstream removal).",
+    )
+    parser.add_argument(
         "--source",
         choices=PREDICTION_SOURCES,
         default="auto",
@@ -760,6 +774,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         require_tier1_or_matchup=not args.all_calibrated,
     )
     events = _load_events_from_args(args)
+    cache_events: list[dict[str, Any]] = []
+    if args.provider == "nflverse" and not args.boxscores:
+        from outlier_nfl.boxscore_nflverse import drain_cache_events
+
+        cache_events = drain_cache_events()
     if args.write_boxscores and args.provider == "nflverse":
         from outlier_nfl.boxscore_nflverse import events_to_simplified_payload
 
@@ -776,15 +795,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload["slate_date"] = args.slate_date
     payload["season"] = args.season
     payload["week"] = args.week
+    if cache_events:
+        payload["nflverse_cache"] = cache_events
 
+    markdown = _cache_warning_lines(cache_events) + render_markdown(report)
     if args.out_json:
         safe_write_json(args.out_json, payload)
     if args.out_md:
         args.out_md.parent.mkdir(parents=True, exist_ok=True)
-        args.out_md.write_text(render_markdown(report), encoding="utf-8")
+        args.out_md.write_text(markdown, encoding="utf-8")
 
-    print(render_markdown(report))
+    print(markdown)
     return 0
+
+
+def _cache_warning_lines(cache_events: Sequence[Mapping[str, Any]]) -> str:
+    """Markdown warnings for nflverse cache fallbacks / accepted shrinkage."""
+    lines = []
+    for event in cache_events:
+        status = event.get("status")
+        if status == "fallback":
+            lines.append(
+                f"> WARNING: nflverse `{event.get('file')}` refresh failed; settled against cached "
+                f"copy fetched {event.get('fetched_at') or 'at unknown time'} ({event.get('reason')})"
+            )
+        elif status == "shrunk":
+            lines.append(f"> WARNING: nflverse `{event.get('file')}`: {event.get('reason')}")
+    return ("\n".join(lines) + "\n\n") if lines else ""
 
 
 if __name__ == "__main__":
