@@ -73,6 +73,18 @@ class RunContext:
     def as_of_iso(self) -> str:
         return self.as_of_utc.isoformat()
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "slate_date": self.slate_date,
+            "window": self.window,
+            "season": self.season,
+            "as_of_utc": self.as_of_iso,
+            "mode": self.mode,
+            "first_kickoff_utc": (
+                self.first_kickoff_utc.isoformat() if self.first_kickoff_utc else None
+            ),
+        }
+
 
 def event_kickoff_utc(event: Mapping[str, Any]) -> datetime | None:
     return try_parse_utc(event.get("scheduledTime") or event.get("startTime"))

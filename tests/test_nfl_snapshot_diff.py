@@ -119,3 +119,16 @@ def test_every_nflverse_url_the_pipeline_requests_has_a_frozen_table():
     urls += [ngs.NGS_URL.format(kind=k) for k in ("passing", "rushing", "receiving")]
     for url in urls:
         assert snap._rows_for(url, tables, ()), url
+
+
+def test_bundle_manifest_hashes_and_sizes_are_scrubbed():
+    manifest = {"run_id": "RUN-X", "artifacts": [
+        {"name": "summary.json", "sha256": "ab" * 32, "bytes": 2822, "published_to": []},
+    ]}
+    out = json.loads(snap._scrub_bundle_hashes("data/NFL/runs/RUN-X/manifest.json",
+                                               json.dumps(manifest)))
+    assert out["artifacts"][0]["sha256"] == "<SHA256>"
+    assert out["artifacts"][0]["bytes"] == "<BYTES>"
+    # Other files keep their own "bytes" fields untouched.
+    other = json.dumps({"bytes": 5})
+    assert snap._scrub_bundle_hashes("data/NFL/normalized/x.json", other) == other

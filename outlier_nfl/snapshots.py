@@ -80,8 +80,12 @@ def append_snapshot(
     slate_date: str,
     props: Iterable[Mapping[str, Any]],
     taken_at: str,
+    run_id: str | None = None,
 ) -> Path:
-    """Append one run's consensus full-game props; returns the JSONL path."""
+    """Append one run's consensus full-game props; returns the JSONL path.
+
+    ``run_id`` ties each row to the run bundle that captured it.
+    """
     path = snapshot_path(nfl_dir, slate_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
@@ -93,6 +97,8 @@ def append_snapshot(
         row = {k: rec.get(k) for k in SNAPSHOT_FIELDS}
         row["slate_date"] = slate_date
         row["taken_at"] = taken_at
+        if run_id is not None:
+            row["run_id"] = run_id
         row["books"] = _books(rec)
         lines.append(json.dumps(row, sort_keys=True))
     if lines:

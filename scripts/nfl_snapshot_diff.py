@@ -457,6 +457,38 @@ def _normalize_text(text: str, work: Path, run_ids: dict[str, str]) -> str:
     return text
 
 
+_HASH_KEYS = frozenset({"sha256", "manifest_sha256"})
+
+
+def _scrub_bundle_hashes(rel: str, text: str) -> str:
+    """Blank hashes and sizes a run bundle takes over raw bytes (they embed work paths
+    and run IDs).
+
+    The inventory already compares every artifact's normalized content, so the
+    manifest's and pointers' own hashes and byte counts add nothing but
+    machine-specific noise (a longer work dir changes every size).
+    """
+    name = rel.rsplit("/", 1)[-1]
+    if not (name == "manifest.json" or name.startswith("nfl_run_pointer_")):
+        return text
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    def scrub(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                k: "<SHA256>" if k in _HASH_KEYS else "<BYTES>" if k == "bytes" else scrub(v)
+                for k, v in node.items()
+            }
+        if isinstance(node, list):
+            return [scrub(v) for v in node]
+        return node
+
+    return json.dumps(scrub(payload), indent=2, ensure_ascii=False)
+
+
 def _normalize_rel(rel: str, run_ids: dict[str, str]) -> str:
     for rid, token in sorted(run_ids.items(), key=lambda kv: -len(kv[0])):
         rel = rel.replace(rid, token)
@@ -484,7 +516,7 @@ def _capture_step(work: Path, dest: Path, previous: dict[str, str], run_ids: dic
         rel = _normalize_rel(rel_raw, run_ids)
         raw = path.read_bytes()
         try:
-            text = _normalize_text(raw.decode("utf-8"), work, run_ids)
+            text = _scrub_bundle_hashes(rel, _normalize_text(raw.decode("utf-8"), work, run_ids))
             data = text.encode("utf-8")
         except UnicodeDecodeError:
             text, data = None, raw
