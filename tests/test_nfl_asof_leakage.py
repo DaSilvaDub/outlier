@@ -98,6 +98,25 @@ def test_cutoff_also_excludes_earlier_weeks_not_finished_by_as_of():
     assert before_week_from_schedule([], "2026-10-04", tuesday) is None
 
 
+
+def test_missing_gametime_counts_as_not_started():
+    """A game with no listed time is assumed to start as late as it could that day.
+
+    Monday 6pm ET: the Week 3 Monday game has no ``gametime``. Reading it as 00:00
+    ET would count Week 3 as complete and admit its data and final score.
+    """
+    rows = [*SCHEDULE[:2],
+            _game(3, "2026-09-27"),
+            _game(3, "2026-09-28", gametime=""),
+            *SCHEDULE[3:]]
+    monday_evening = datetime(2026, 9, 28, 22, tzinfo=UTC)
+    assert before_week_from_schedule(rows, "2026-10-04", monday_evening) == 3
+    client = _Client({"games.csv": rows})
+    recs = schedule.fetch(client, 2026, as_of_utc=monday_evening)["records"]  # type: ignore[arg-type]
+    monday = next(r for r in recs if r["gameday"] == "2026-09-28")
+    assert monday["home_score"] is None and monday["total_line"] is None
+    assert monday["kickoff_utc"] == "2026-09-29T03:59:00+00:00"  # 23:59 ET
+
 def test_schedule_blanks_postgame_fields_for_games_at_or_after_the_cutoff():
     client = _Client({"games.csv": SCHEDULE})
     recs = schedule.fetch(client, 2026, as_of_utc=AS_OF)["records"]  # type: ignore[arg-type]

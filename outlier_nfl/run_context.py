@@ -121,16 +121,25 @@ def make_run_context(
 def schedule_kickoff_utc(gameday: Any, gametime: Any) -> datetime | None:
     """nflverse ``gameday``/``gametime`` (US Eastern local) as an aware UTC datetime.
 
-    A missing ``gametime`` reads as 00:00 Eastern, i.e. as early as the game
-    could possibly be, so cutoffs err toward treating the game as started.
+    A missing or unparseable ``gametime`` reads as 23:59 Eastern on ``gameday``,
+    the latest the game could start. Every caller uses the kickoff as an
+    admissibility bound ("has this game started / finished by as_of?"), so an
+    unknown time must never make a game count as started early and let its
+    week's data or postgame fields in.
     """
     if not gameday:
         return None
-    clock = str(gametime or "00:00").strip() or "00:00"
+    day = str(gameday).strip()[:10]
+    clock = str(gametime or "").strip()[:5]
     try:
-        local = datetime.fromisoformat(f"{str(gameday).strip()[:10]}T{clock[:5]}")
+        local = datetime.fromisoformat(f"{day}T{clock}") if clock else None
     except ValueError:
-        return None
+        local = None
+    if local is None:
+        try:
+            local = datetime.fromisoformat(f"{day}T23:59")
+        except ValueError:
+            return None
     return local.replace(tzinfo=EASTERN).astimezone(UTC)
 
 
