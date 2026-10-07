@@ -409,8 +409,9 @@ def _model_p_note(
         )
     if model_mode == "hierarchy":
         return (
-            "hierarchy: projection_nflverse_rate → empirical_hit_rate_laplace → "
-            "empirical_hit_rate; never copies implied_probability."
+            "hierarchy: nflverse projection (gaussian/poisson at >=3 prior weeks, "
+            "else gamelog rate) → empirical_hit_rate_laplace → empirical_hit_rate; "
+            "never copies implied_probability."
         )
     return "pass-through only; model_p not derived from hit rates."
 

@@ -29,7 +29,12 @@ from outlier_nfl.boxscore import (
     player_actual,
     resolve_player_stats,
 )
-from outlier_nfl.utils import safe_read_json, safe_write_json, to_eastern_date
+from outlier_nfl.utils import (
+    nfl_season_for_date,
+    safe_read_json,
+    safe_write_json,
+    to_eastern_date,
+)
 
 PREDICTION_SOURCES = (
     "tier1",
@@ -688,7 +693,7 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
             slate = date.fromisoformat(args.slate_date)
             return fetch_nflverse_boxscores_for_date(
                 slate,
-                season=args.season or slate.year,
+                season=args.season or nfl_season_for_date(slate),
                 cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
             )
         if args.season is None or args.week is None:
