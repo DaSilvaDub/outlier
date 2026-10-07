@@ -8,6 +8,7 @@ and persists normalized datasets to disk atomically.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date, datetime, timezone
 import logging
@@ -89,8 +90,11 @@ class NflPipeline:
         self,
         client: OutlierNflApiClient | None = None,
         data_dir: Path | str = "data",
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.client: OutlierNflApiClient | None = client
+        # Wall clock (injectable for tests and replays); decides publication with as_of.
+        self.clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
         self.data_dir: Path = Path(data_dir).resolve()
         self.nfl_dir: Path = self.data_dir / "NFL"
         self.normalized_dir: Path = self.nfl_dir / "normalized"
@@ -127,12 +131,15 @@ class NflPipeline:
                 slate date does not overwrite another's ``latest``.
             as_of_utc: Prediction-time cutoff (timezone-aware). Sources are limited to
                 what was knowable at this instant. Defaults to the run start; a naive
-                value raises ``ValueError``.
+                value raises ``ValueError``. Publication is decided from both this and
+                the wall clock (``clock``): a run started at/after the slate's first
+                kickoff, or one whose as_of is materially in the past (a replay),
+                writes only its bundle (see :class:`RunContext`).
 
         Returns:
             NflExtractionSummary dictionary.
         """
-        now_dt = datetime.now(timezone.utc)
+        now_dt = parse_utc(self.clock())
         now_utc = now_dt.isoformat()
         target_date = date or to_eastern_date(now_dt) or "2026-09-13"
         as_of_dt = parse_utc(as_of_utc) if as_of_utc is not None else now_dt
@@ -280,6 +287,7 @@ class NflPipeline:
             as_of_utc=as_of_dt,
             fixture=offline_fixtures_dir is not None,
             slate_events=slate_events,
+            run_started_utc=now_dt,
         )
         sources: list[SourceRecord] = []
 
@@ -290,15 +298,11 @@ class NflPipeline:
         run_id = f"{suffix}-{now_dt:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
         writer = RunWriter(self.nfl_dir, run_id)
         norm = self.normalized_dir
-        # A run made after the slate (or window) kicked off cannot replace the
-        # pregame originals: it is kept as an immutable bundle only (F11).
-        publish = ctx.mode != "retrospective"
-        publication_reason = (
-            None
-            if publish
-            else f"as_of {ctx.as_of_iso} is at/after first kickoff "
-            f"{ctx.first_kickoff_utc.isoformat() if ctx.first_kickoff_utc else '?'}"
-        )
+        # A run made after the slate (or window) kicked off, by its wall clock or its
+        # as_of, or a replay with as_of in the past, cannot replace the pregame
+        # originals: it is kept as an immutable bundle only (F11).
+        publish = ctx.publishes
+        publication_reason = ctx.publication_reason
         if not publish:
             logger.warning(
                 "Bundle-only run (%s); dated and latest files untouched", publication_reason
@@ -669,6 +673,7 @@ class NflPipeline:
             "publication_reason": publication_reason,
             "as_of_utc": ctx.as_of_iso,
             "run_mode": ctx.mode,
+            "replay": ctx.replay,
             "before_week": before_week,
             "sources": [src.to_dict() for src in sources],
             "events_count": len(slate_events),
@@ -947,7 +952,9 @@ def main() -> int:
         type=str,
         default=None,
         help="Prediction-time cutoff, timezone-aware ISO (e.g. 2026-10-04T16:00:00Z). "
-        "Default: now. Sources are limited to what was knowable then.",
+        "Default: now. Sources are limited to what was knowable then. An --as-of "
+        "more than 15 minutes before now is a recorded replay and, like any run "
+        "started after the slate's first kickoff, writes only its runs/<run_id>/ bundle.",
     )
     parser.add_argument(
         "--target-alt-book",

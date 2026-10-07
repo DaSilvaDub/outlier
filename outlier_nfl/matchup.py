@@ -184,7 +184,7 @@ def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext
         return f"unparseable 'before' {before!r}"
     if before_day > date.fromisoformat(ctx.slate_date):
         return f"built from games before {before_day}, after slate {ctx.slate_date}"
-    if ctx.mode == "retrospective":
+    if ctx.historical:  # retrospective or replay: the tape must predate as_of
         written = _tape_written_at(raw, path)
         if written > ctx.as_of_utc:
             return f"tape written {written.isoformat()} after as_of {ctx.as_of_iso}"
@@ -196,7 +196,7 @@ def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext) -> TapeEnvelope:
 
     Local ``tape/prior_week.json`` then ``tape/latest.json`` must match the slate
     season, carry a ``before`` date on or before the slate and, for a
-    retrospective run, have been knowable at ``as_of``. The packaged Week-1 tapes
+    retrospective or replay run, have been knowable at ``as_of``. The packaged Week-1 tapes
     are used only in fixture mode; elsewhere a missing or refused tape yields no
     teams (REFUSED/UNAVAILABLE) rather than silently stale data.
     """

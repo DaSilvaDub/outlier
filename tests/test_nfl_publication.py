@@ -159,16 +159,20 @@ def test_window_run_writes_only_suffixed_files(tmp_path):
     assert f"NFL/normalized/nfl_best_bets_{SLATE}_1pm.json" in written
 
 
-def _week4(tmp_path: Path, as_of: str, **kw):
+def _week4(tmp_path: Path, as_of: str, *, clock: str | None = None, **kw):
+    """Week-4 replay slate (KC@BAL 17:00Z) run at wall clock ``clock`` (default: as_of)."""
+    from outlier_nfl.run_context import parse_utc
     from scripts import nfl_snapshot_diff as snap
 
     tape = tmp_path / "NFL" / "tape" / "prior_week.json"
     if not tape.exists():
         tape.parent.mkdir(parents=True, exist_ok=True)
         tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
-    return NflPipeline(client=snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path).run(
-        date="2026-10-04", as_of_utc=as_of, reports_dir=tmp_path / "reports", **kw
-    )
+    now = parse_utc(clock or as_of)
+    pipeline = NflPipeline(client=snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path,
+                           clock=lambda: now)
+    return pipeline.run(date="2026-10-04", as_of_utc=as_of, reports_dir=tmp_path / "reports",
+                        **kw)
 
 
 def test_after_kickoff_run_is_bundle_only(tmp_path):
@@ -189,6 +193,70 @@ def test_after_kickoff_run_is_bundle_only(tmp_path):
                          .read_text())
     assert pointer["run_id"] == pregame["run_id"]
 
+
+def _assert_bundle_only(tmp_path: Path, run: dict, before: dict[str, str], pregame_id: str):
+    assert run["publication"] == "bundle_only"
+    assert _published(tmp_path) == before  # pregame originals untouched
+    manifest = json.loads((Path(run["run_dir"]) / "manifest.json").read_text())
+    assert manifest["publication"] == "bundle_only"
+    assert all(a["published_to"] == [] for a in manifest["artifacts"])
+    pointer = json.loads((tmp_path / "NFL" / "normalized" / "nfl_run_pointer_2026-10-04.json")
+                         .read_text())
+    assert pointer["run_id"] == pregame_id
+    return manifest
+
+
+def test_rerun_after_kickoff_with_pregame_as_of_is_bundle_only(tmp_path):
+    """Monday rerun of Sunday's slate with --as-of Sunday 12:00Z: it *runs* after the
+    17:00Z kickoff, so it is retrospective whatever --as-of says, and its live-fetched
+    odds/props postdate the claimed cutoff."""
+    pregame = _week4(tmp_path, "2026-10-04T16:00:00+00:00")
+    assert pregame["publication"] == "published" and pregame["run_mode"] == "live"
+    before = _published(tmp_path)
+    monday = _week4(tmp_path, "2026-10-04T12:00:00+00:00", clock="2026-10-05T14:00:00+00:00")
+    assert monday["run_mode"] == "retrospective" and monday["replay"] is True
+    assert "run started 2026-10-05T14:00:00+00:00" in monday["publication_reason"]
+    assert "postdate as_of" in monday["publication_reason"]
+    manifest = _assert_bundle_only(tmp_path, monday, before, pregame["run_id"])
+    ctx = manifest["context"]
+    assert ctx["as_of_utc"] == "2026-10-04T12:00:00+00:00"
+    assert ctx["run_started_utc"] == "2026-10-05T14:00:00+00:00"
+    assert ctx["mode"] == "retrospective" and ctx["replay"] is True
+    assert ctx["live_inputs_postdate_as_of"] is True
+
+
+def test_past_as_of_replay_before_kickoff_is_recorded_and_bundle_only(tmp_path):
+    """Before kickoff, but --as-of hours behind the wall clock: a recorded replay."""
+    pregame = _week4(tmp_path, "2026-10-04T15:00:00+00:00")
+    before = _published(tmp_path)
+    replay = _week4(tmp_path, "2026-10-04T12:00:00+00:00", clock="2026-10-04T16:30:00+00:00")
+    assert replay["run_mode"] == "replay" and replay["replay"] is True
+    assert replay["publication_reason"].startswith("replay: as_of 2026-10-04T12:00:00+00:00")
+    manifest = _assert_bundle_only(tmp_path, replay, before, pregame["run_id"])
+    assert manifest["context"]["run_started_utc"] == "2026-10-04T16:30:00+00:00"
+    assert manifest["context"]["live_inputs_postdate_as_of"] is True
+
+
+@pytest.mark.parametrize(
+    ("as_of", "clock", "fixture", "mode", "replay"),
+    [
+        ("2026-10-04T16:00:00+00:00", "2026-10-04T16:10:00+00:00", False, "live", False),
+        ("2026-10-04T16:00:00+00:00", "2026-10-04T16:30:00+00:00", False, "replay", True),
+        ("2026-10-04T12:00:00+00:00", "2026-10-05T14:00:00+00:00", False, "retrospective", True),
+        ("2026-10-04T18:00:00+00:00", "2026-10-04T18:00:00+00:00", False, "retrospective", False),
+        ("2026-10-04T12:00:00+00:00", "2026-10-05T14:00:00+00:00", True, "fixture", False),
+    ],
+)
+def test_run_mode_uses_wall_clock_and_as_of(as_of, clock, fixture, mode, replay):
+    from outlier_nfl.run_context import make_run_context, parse_utc
+
+    ctx = make_run_context(
+        slate_date="2026-10-04", window=None, as_of_utc=parse_utc(as_of), fixture=fixture,
+        slate_events=[{"scheduledTime": "2026-10-04T17:00:00Z"}],
+        run_started_utc=parse_utc(clock),
+    )
+    assert (ctx.mode, ctx.replay) == (mode, replay)
+    assert ctx.publishes is (mode in ("live", "fixture"))
 
 def test_weekly_merges_bundle_only_card(tmp_path):
     from datetime import date

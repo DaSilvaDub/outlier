@@ -57,6 +57,9 @@ SEASON = 2026
 # Slate definitions
 # ---------------------------------------------------------------------------
 
+# Each step's "clock" is both its frozen wall clock (injected as NflPipeline's
+# clock) and its as_of: every step is a run made at that instant. Only B4's
+# clock is after the 17:00Z KC@BAL kickoff.
 STEPS: dict[str, list[dict[str, Any]]] = {
     "A": [
         {"name": "A1_full", "clock": "2026-09-13T15:00:00+00:00", "window": None},
@@ -382,6 +385,7 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
         append_snapshot(nfl_dir, SLATE_DATE["B"], [seed], SEEDED_SNAPSHOT_TAKEN_AT)
 
     run_params = inspect.signature(pipeline_mod.NflPipeline.run).parameters
+    init_params = inspect.signature(pipeline_mod.NflPipeline.__init__).parameters
     previous: dict[str, str] = {}
     run_ids: dict[str, str] = {}
     for step in STEPS[slate]:
@@ -410,11 +414,17 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
         kwargs: dict[str, Any] = {"date": SLATE_DATE[slate], "reports_dir": work / "reports"}
         if step.get("window"):
             kwargs["window"] = step["window"]
+        init: dict[str, Any] = {"data_dir": work / "data"}
+        if "clock" in init_params:
+            # The run's wall clock is the step's clock, which is also its as_of: each
+            # step is a run made at that instant. B4 is after kickoff by its clock.
+            step_now = _REAL_DATETIME.fromisoformat(step["clock"])
+            init["clock"] = lambda _now=step_now: _now
         if slate == "A":
             kwargs["offline_fixtures_dir"] = fixtures
-            pipeline = pipeline_mod.NflPipeline(data_dir=work / "data")
+            pipeline = pipeline_mod.NflPipeline(**init)
         else:
-            pipeline = pipeline_mod.NflPipeline(client=FrozenOutlierClient(fixtures), data_dir=work / "data")
+            pipeline = pipeline_mod.NflPipeline(client=FrozenOutlierClient(fixtures), **init)
         if "as_of_utc" in run_params:
             kwargs["as_of_utc"] = step["clock"]
         try:

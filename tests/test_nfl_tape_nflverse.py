@@ -445,6 +445,17 @@ def test_retrospective_run_refuses_tape_written_after_as_of(tmp_path: Path) -> N
     assert ok.team_lists("defensive_starters_out") == {"BAL": ["X"]}
 
 
+
+def test_replay_run_refuses_tape_written_after_as_of(tmp_path: Path) -> None:
+    """A pre-kickoff replay (as_of hours behind the clock) is held to the same rule."""
+    from outlier_nfl.matchup import load_tape_envelope
+
+    replay = _ctx(mode="replay", as_of="2026-10-04T12:00:00+00:00")
+    _write_tape(tmp_path, fetched_at_utc="2026-10-04T14:00:00+00:00")
+    assert "after as_of" in (load_tape_envelope(tmp_path, replay).source.reason or "")
+    live = _ctx(mode="live", as_of="2026-10-04T12:00:00+00:00")
+    assert load_tape_envelope(tmp_path, live).admitted
+
 def test_inadmissible_tape_disables_injury_pillar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from outlier_nfl.external import ExternalLoad
     from scripts import nfl_snapshot_diff as snap
