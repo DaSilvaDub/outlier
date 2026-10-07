@@ -202,6 +202,25 @@ class TraceInputs:
     inactive_by_team: dict[str, list[str]] | None = None  # None: injury report not loaded
     tapes: dict[str, dict[str, Any]] = field(default_factory=dict)
     movement: dict[tuple[str, ...], dict[str, Any]] = field(default_factory=dict)
+    # Prediction-time boundary (F01). With ``as_of_utc`` set, week-bound external
+    # records (NGS, PBP) at or after ``before_week`` are dropped here too, and a
+    # missing ``before_week`` drops them all rather than admitting every week.
+    as_of_utc: str | None = None
+    before_week: int | None = None
+
+
+WEEK_BOUND_SOURCES = ("ngs", "pbp")
+
+
+def _after_cutoff(rec: Mapping[str, Any], inputs: TraceInputs) -> bool:
+    if inputs.as_of_utc is None or str(rec.get("source") or "") not in WEEK_BOUND_SOURCES:
+        return False
+    if inputs.before_week is None:
+        return True
+    try:
+        return int(rec.get("week") or 0) >= inputs.before_week
+    except (TypeError, ValueError):
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +239,11 @@ class _Sources:
         self.ngs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         defense: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.loaded: dict[str, int] = defaultdict(int)
+        self.dropped_after_cutoff = 0
         for rec in inputs.external_metrics:
+            if _after_cutoff(rec, inputs):
+                self.dropped_after_cutoff += 1
+                continue
             source = str(rec.get("source") or "")
             self.loaded[source] += 1
             if source == "ngs":
@@ -857,6 +880,11 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
             "orphaned": orphan_signals,
         },
         "snapshots": {"props_with_history": len(src.used.get("snapshots", ()))},
+        "cutoff": {
+            "as_of_utc": inputs.as_of_utc,
+            "before_week": inputs.before_week,
+            "external_dropped_after_cutoff": src.dropped_after_cutoff,
+        },
         "injury_report_loaded": inputs.inactive_by_team is not None,
         "candidates_without_ngs": no_ngs,
         "candidate_players": len(candidate_players),

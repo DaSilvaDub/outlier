@@ -23,8 +23,10 @@ def _shadow_portfolio_policy(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_live_nfl_external_metrics(monkeypatch):
     """Keep NFL pipeline tests offline: no nflverse downloads, no weather forecasts."""
+    from outlier_nfl.external import ExternalLoad
+
     monkeypatch.setattr(
-        "outlier_nfl.pipeline.load_external_metrics", lambda *args, **kwargs: []
+        "outlier_nfl.pipeline.load_external_metrics", lambda *args, **kwargs: ExternalLoad()
     )
     monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", lambda *args, **kwargs: {})
     monkeypatch.setattr("outlier_nfl.pipeline.load_usage", lambda *args, **kwargs: {})

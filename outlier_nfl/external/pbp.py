@@ -56,8 +56,8 @@ class _Acc:
         }
 
 
-def aggregate(rows: list[dict[str, str]], season: int, through_week: int = 22) -> list[dict[str, Any]]:
-    """Offense/defense team-week EPA records from raw nflverse PBP rows."""
+def aggregate(rows: list[dict[str, str]], season: int, before_week: int) -> list[dict[str, Any]]:
+    """Offense/defense team-week EPA records from raw nflverse PBP rows, weeks < ``before_week``."""
     acc: dict[tuple[str, str, int], _Acc] = defaultdict(_Acc)
     for row in rows:
         if str(row.get("season")) != str(season) or row.get("season_type") != "REG":
@@ -66,7 +66,7 @@ def aggregate(rows: list[dict[str, str]], season: int, through_week: int = 22) -
             continue
         epa = num(row.get("epa"))
         week = int(num(row.get("week")) or 0)
-        if epa is None or week < 1 or week > through_week:
+        if epa is None or week < 1 or week >= before_week:
             continue
         offense = str(row.get("posteam") or "")
         defense = str(row.get("defteam") or "")
@@ -89,6 +89,7 @@ def aggregate(rows: list[dict[str, str]], season: int, through_week: int = 22) -
     return records
 
 
-def fetch(client: Client, season: int, through_week: int = 22) -> dict[str, Any]:
-    """Team-week offense and defense EPA records for ``season``."""
-    return {"records": aggregate(client.fetch_csv(PBP_URL.format(season=season)), season, through_week)}
+def fetch(client: Client, season: int, before_week: int) -> dict[str, Any]:
+    """Team-week offense and defense EPA records for ``season``, weeks < ``before_week``."""
+    rows = client.fetch_csv(PBP_URL.format(season=season))
+    return {"records": aggregate(rows, season, before_week)}

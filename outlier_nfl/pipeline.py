@@ -58,6 +58,7 @@ from outlier_nfl.schema import (
 )
 from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
+from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.calibration import (
@@ -71,7 +72,6 @@ from outlier_nfl.high_prob_rank import (
 )
 from outlier_nfl.utils import (
     matches_kickoff_window,
-    nfl_season_for_date,
     normalize_kickoff_window,
     safe_read_json,
     safe_write_json,
@@ -110,6 +110,7 @@ class NflPipeline:
         reports_dir: Path | str | None = None,
         write_latest: bool | None = None,
         target_alt_book: str = "HARDROCK",
+        as_of_utc: datetime | str | None = None,
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -123,12 +124,17 @@ class NflPipeline:
             write_latest: Override whether ``*_latest.json`` files are written. Defaults to
                 True only for an unwindowed run; the weekly runner passes False so one
                 slate date does not overwrite another's ``latest``.
+            as_of_utc: Prediction-time cutoff (timezone-aware). Sources are limited to
+                what was knowable at this instant. Defaults to the run start; a naive
+                value raises ``ValueError``.
 
         Returns:
             NflExtractionSummary dictionary.
         """
-        now_utc = datetime.now(timezone.utc).isoformat()
-        target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
+        now_dt = datetime.now(timezone.utc)
+        now_utc = now_dt.isoformat()
+        target_date = date or to_eastern_date(now_dt) or "2026-09-13"
+        as_of_dt = parse_utc(as_of_utc) if as_of_utc is not None else now_dt
 
         window = normalize_kickoff_window(window)
         if write_latest is None:
@@ -262,6 +268,15 @@ class NflPipeline:
             else:
                 all_player_props = []
 
+        ctx = make_run_context(
+            slate_date=target_date,
+            window=window,
+            as_of_utc=as_of_dt,
+            fixture=offline_fixtures_dir is not None,
+            slate_events=slate_events,
+        )
+        sources: list[SourceRecord] = []
+
         # =====================================================================
         # 1.5 Per-matchup tape analysis, then consensus + calibration
         # =====================================================================
@@ -269,30 +284,47 @@ class NflPipeline:
         # Load external advanced metrics for the season
         # Offline fixture replays never touch the network.
         external_metrics: list[dict[str, Any]] = []
+        # First week whose data is not admissible at ctx.as_of_utc (None: no verified cutoff).
+        before_week: int | None = None
         if offline_fixtures_dir is None:
             try:
                 # January/February playoff slates belong to the previous season.
-                season_year = nfl_season_for_date(target_date)
+                season_year = ctx.season
                 if season_year is None:
                     logger.warning(
                         "Could not derive an NFL season from target date %r; "
                         "skipping external metrics",
                         target_date,
                     )
+                    sources.append(
+                        SourceRecord("external", "UNAVAILABLE", "no NFL season for slate date")
+                    )
                 else:
-                    external_metrics = load_external_metrics(
+                    loaded = load_external_metrics(
                         season_year,
-                        through_week=22,
+                        slate_date=target_date,
+                        as_of_utc=ctx.as_of_utc,
                         client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
                     )
-                    logger.info("Loaded %d external metric records", len(external_metrics))
+                    external_metrics = loaded.records
+                    before_week = loaded.before_week
+                    sources.extend(loaded.sources)
+                    logger.info(
+                        "Loaded %d external metric records (weeks < %s admitted at %s)",
+                        len(external_metrics), before_week, ctx.as_of_iso,
+                    )
             except Exception as exc:
                 logger.warning("Failed loading external metrics: %s", exc)
+                sources.append(SourceRecord("external", "UNAVAILABLE", f"load failed: {exc}"))
+        else:
+            sources.append(SourceRecord("external", "UNAVAILABLE", "offline fixture replay"))
         # Persist external metrics to JSON for downstream use and analysis
         external_metrics_payload = {
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
+            "as_of_utc": ctx.as_of_iso,
+            "before_week": before_week,
             "count": len(external_metrics),
             "records": external_metrics,
         }
@@ -345,15 +377,15 @@ class NflPipeline:
                 logger.warning("Weather calibration skipped: %s", exc)
 
         # Player usage: vacated volume and efficiency regression re-base stale hit rates.
-        if offline_fixtures_dir is None and matchup_scripts:
+        if offline_fixtures_dir is None and matchup_scripts and (
+            before_week is None or ctx.season is None
+        ):
+            # No verified cutoff: usage would otherwise read every week of the
+            # season, including games played after this slate (F01).
+            sources.append(SourceRecord("usage", "UNAVAILABLE", "missing verified cutoff"))
+        elif offline_fixtures_dir is None and matchup_scripts and ctx.season is not None:
             try:
-                season = int(target_date[:4]) if int(target_date[5:7]) >= 3 else int(target_date[:4]) - 1
-                upcoming = [
-                    int(r["week"])
-                    for r in external_metrics
-                    if r.get("source") == "schedule" and str(r.get("gameday") or "") >= target_date
-                ]
-                profiles = load_usage(season, min(upcoming) if upcoming else None)
+                profiles = load_usage(ctx.season, before_week)
                 event_by_team: dict[str, str] = {}
                 for script in matchup_scripts:
                     event_by_team[script.home_team] = script.event_id
@@ -374,8 +406,12 @@ class NflPipeline:
                     },
                 )
                 logger.info("Usage: %d profiles, %d signals", len(profiles), len(usage))
+                sources.append(SourceRecord(
+                    "usage", "AVAILABLE", rows_admitted=len(profiles),
+                    max_week_admitted=(before_week - 1) if before_week else None))
             except Exception as exc:
                 logger.warning("Usage signals skipped: %s", exc)
+                sources.append(SourceRecord("usage", "UNAVAILABLE", f"load failed: {exc}"))
 
         if all_player_props:
             consensus_props = select_consensus_player_props(all_player_props)
@@ -576,6 +612,8 @@ class NflPipeline:
             target_date=target_date,
             window=window,
             now_utc=now_utc,
+            as_of_utc=ctx.as_of_utc,
+            before_week=before_week,
             props_dict=props_dict,
             scripts_records=scripts_to_records(matchup_scripts),
             external_metrics=external_metrics,
@@ -633,6 +671,10 @@ class NflPipeline:
             "date": target_date,
             "window": window,
             "timestamp_utc": now_utc,
+            "as_of_utc": ctx.as_of_iso,
+            "run_mode": ctx.mode,
+            "before_week": before_week,
+            "sources": [src.to_dict() for src in sources],
             "events_count": len(slate_events),
             "game_lines_count": len(all_game_lines),
             "spreads_count": spreads_count,
@@ -716,6 +758,8 @@ class NflPipeline:
         target_date: str,
         window: str | None,
         now_utc: str,
+        as_of_utc: datetime,
+        before_week: int | None,
         props_dict: list[dict[str, Any]],
         scripts_records: list[dict[str, Any]],
         external_metrics: list[dict[str, Any]],
@@ -728,7 +772,10 @@ class NflPipeline:
         suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
         try:
             append_snapshot(self.nfl_dir, target_date, props_dict, now_utc)
-            movement = movement_index(load_snapshots(snapshot_path(self.nfl_dir, target_date)))
+            # Only prices captured by the prediction time (a replay must not see later runs).
+            movement = movement_index(
+                load_snapshots(snapshot_path(self.nfl_dir, target_date), as_of_utc=as_of_utc)
+            )
             payload = build_best_bets(
                 TraceInputs(
                     props=props_dict,
@@ -740,6 +787,8 @@ class NflPipeline:
                     inactive_by_team=load_injury_report(self.nfl_dir),
                     tapes=tapes,
                     movement=movement,
+                    as_of_utc=as_of_utc.isoformat(),
+                    before_week=before_week,
                 )
             )
         except Exception as exc:  # the slate's data outputs above are already written
@@ -863,6 +912,13 @@ def main() -> int:
         help="With --refresh-tape, average only each team's last N games. Default: all.",
     )
     parser.add_argument(
+        "--as-of",
+        type=str,
+        default=None,
+        help="Prediction-time cutoff, timezone-aware ISO (e.g. 2026-10-04T16:00:00Z). "
+        "Default: now. Sources are limited to what was knowable then.",
+    )
+    parser.add_argument(
         "--target-alt-book",
         type=str,
         default="HARDROCK",
@@ -890,6 +946,7 @@ def main() -> int:
                 offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
                 generate_game_script=args.generate_game_script,
                 target_alt_book=args.target_alt_book,
+                as_of_utc=args.as_of,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)

@@ -12,13 +12,14 @@ movement record, and the best-bets trace reports market movement as MISSING.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from outlier_nfl.run_context import try_parse_utc
 from outlier_nfl.tape_nflverse import _name_key
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,13 @@ def append_snapshot(
     return path
 
 
-def load_snapshots(path: Path | str) -> list[dict[str, Any]]:
-    """All snapshot rows; a torn trailing line from a crashed run is skipped."""
+def load_snapshots(path: Path | str, as_of_utc: datetime | None = None) -> list[dict[str, Any]]:
+    """Snapshot rows; a torn trailing line from a crashed run is skipped.
+
+    With ``as_of_utc`` only rows whose parsed ``taken_at`` is at or before the
+    cutoff are returned (rows without a readable aware timestamp are dropped),
+    so a replay never sees prices captured after its prediction time (F01).
+    """
     rows: list[dict[str, Any]] = []
     try:
         text = Path(path).read_text(encoding="utf-8")
@@ -118,8 +124,13 @@ def load_snapshots(path: Path | str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             logger.warning("Skipping unreadable snapshot line in %s", path)
             continue
-        if isinstance(row, dict):
-            rows.append(row)
+        if not isinstance(row, dict):
+            continue
+        if as_of_utc is not None:
+            taken = try_parse_utc(row.get("taken_at"))
+            if taken is None or taken > as_of_utc:
+                continue
+        rows.append(row)
     return rows
 
 

@@ -6,6 +6,7 @@ import gzip
 import os
 from pathlib import Path
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -42,19 +43,19 @@ def test_ngs_filters_season_type_and_week0_aggregates() -> None:
     rows = [
         _ngs("1", "Matthew Stafford", avg_time_to_throw="2.86", attempts="25", aggressiveness="NA"),
         _ngs("0", "Matthew Stafford", avg_time_to_throw="2.7"),  # season aggregate row
-        _ngs("4", "Matthew Stafford", avg_time_to_throw="3.0"),  # beyond through_week
+        _ngs("4", "Matthew Stafford", avg_time_to_throw="3.0"),  # at/after before_week
         {**_ngs("1", "Old"), "season": "2025"},
         {**_ngs("1", "Post"), "season_type": "POST"},
     ]
     client = FakeClient({"ngs_passing": rows})
-    out = ngs.fetch(client, 2026, "passing", through_week=3)["records"]  # type: ignore[arg-type]
+    out = ngs.fetch(client, 2026, "passing", before_week=4)["records"]  # type: ignore[arg-type]
     assert len(out) == 1
     rec = out[0]
     assert rec["team"] == "LAR" and rec["week"] == 1 and rec["kind"] == "passing"
     assert rec["avg_time_to_throw"] == 2.86 and rec["attempts"] == 25.0
     assert rec["aggressiveness"] is None  # NA -> None
     with pytest.raises(ValueError):
-        ngs.fetch(client, 2026, "kicking")  # type: ignore[arg-type]
+        ngs.fetch(client, 2026, "kicking", before_week=4)  # type: ignore[arg-type]
 
 
 def _play(week: str, off: str, deff: str, ptype: str, epa: str, success: str, poe: str = "",
@@ -74,7 +75,7 @@ def test_pbp_team_epa_offense_and_defense() -> None:
         _play("1", "LA", "SF", "punt", "0.9", "0"),  # not a scrimmage pass/run
         _play("1", "SF", "LA", "run", "-1.0", "0"),
     ]
-    recs = pbp.aggregate(rows, 2026)
+    recs = pbp.aggregate(rows, 2026, before_week=18)
     lar_off = next(r for r in recs if r["kind"] == "team_offense" and r["team"] == "LAR")
     assert lar_off["plays"] == 3
     assert lar_off["epa_per_play"] == round(0.7 / 3, 4)
@@ -86,12 +87,13 @@ def test_pbp_team_epa_offense_and_defense() -> None:
     assert sf_def["epa_per_play"] == lar_off["epa_per_play"]  # same plays, defensive view
     lar_def = next(r for r in recs if r["kind"] == "team_defense" and r["team"] == "LAR")
     assert lar_def["plays"] == 1 and lar_def["pass_epa_per_play"] is None
-    assert pbp.aggregate(rows, 2026, through_week=0) == []
+    assert pbp.aggregate(rows, 2026, before_week=1) == []
 
 
 def test_schedule_records_environment_and_lines() -> None:
     rows = [
         {"season": "2026", "game_type": "REG", "week": "3", "game_id": "2026_03_LA_DEN",
+         "gameday": "2026-09-27", "gametime": "16:05",
          "home_team": "DEN", "away_team": "LA", "spread_line": "1.5", "total_line": "43.5",
          "home_moneyline": "-125", "away_moneyline": "105", "roof": "outdoors", "temp": "NA",
          "wind": "", "home_score": "", "away_score": "", "div_game": "0",
@@ -99,7 +101,9 @@ def test_schedule_records_environment_and_lines() -> None:
         {"season": "2026", "game_type": "POST", "week": "19", "game_id": "p"},
         {"season": "2025", "game_type": "REG", "week": "3", "game_id": "old"},
     ]
-    out = schedule.fetch(FakeClient({"games.csv": rows}), 2026)["records"]  # type: ignore[arg-type]
+    out = schedule.fetch(  # type: ignore[arg-type]
+        FakeClient({"games.csv": rows}), 2026, as_of_utc=datetime(2026, 9, 28, tzinfo=timezone.utc)
+    )["records"]
     assert len(out) == 1
     g = out[0]
     assert g["away_team"] == "LAR" and g["home_team"] == "DEN" and g["div_game"] is False
@@ -108,18 +112,54 @@ def test_schedule_records_environment_and_lines() -> None:
     assert g["referee"] is None and g["away_qb_name"] == "Matthew Stafford"
 
 
+def _games(*weeks_days: tuple[str, str]) -> list[dict[str, str]]:
+    return [{"season": "2026", "game_type": "REG", "week": w, "gameday": d, "gametime": "13:00",
+             "home_team": "LA", "away_team": "SF"} for w, d in weeks_days]
+
+
+AS_OF = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
+
+
 def test_load_external_metrics_isolates_failing_sources() -> None:
     client = FakeClient({
         "ngs_passing": [_ngs("1", "Matthew Stafford")],
         "ngs_rushing": OSError("blocked"),
         "ngs_receiving": [],
         "play_by_play": [_play("1", "LA", "SF", "run", "0.1", "1")],
+        "games.csv": _games(("1", "2026-09-13"), ("2", "2026-09-20"), ("3", "2026-09-27")),
+    })
+    loaded = external.load_external_metrics(  # type: ignore[arg-type]
+        2026, slate_date="2026-09-27", as_of_utc=AS_OF, client=client
+    )
+    kinds = sorted(r["kind"] for r in loaded.records if r["source"] != "schedule")
+    assert kinds == ["passing", "team_defense", "team_offense"]
+    assert loaded.before_week == 3
+    status = {s.name: s.status for s in loaded.sources}
+    assert status["external:ngs:rushing"] == "UNAVAILABLE"
+    assert status["external:ngs:passing"] == "AVAILABLE"
+    assert len(client.urls) == 5
+
+
+def test_load_external_metrics_without_schedule_has_no_cutoff_and_loads_no_weeks() -> None:
+    """F01: an unavailable schedule means no verified cutoff, not "every week"."""
+    client = FakeClient({
+        "ngs_passing": [_ngs("1", "Matthew Stafford"), _ngs("9", "Matthew Stafford")],
+        "ngs_rushing": [], "ngs_receiving": [],
+        "play_by_play": [_play("9", "LA", "SF", "run", "0.1", "1")],
         "games.csv": OSError("blocked"),
     })
-    metrics = external.load_external_metrics(2026, client=client)  # type: ignore[arg-type]
-    kinds = sorted(r["kind"] for r in metrics)
-    assert kinds == ["passing", "team_defense", "team_offense"]
-    assert len(client.urls) == 5
+    loaded = external.load_external_metrics(  # type: ignore[arg-type]
+        2026, slate_date="2026-09-27", as_of_utc=AS_OF, client=client
+    )
+    assert loaded.records == [] and loaded.before_week is None
+    assert {s.name: s.status for s in loaded.sources} == {
+        "external:schedule": "UNAVAILABLE",
+        "external:ngs:passing": "UNAVAILABLE",
+        "external:ngs:rushing": "UNAVAILABLE",
+        "external:ngs:receiving": "UNAVAILABLE",
+        "external:pbp": "UNAVAILABLE",
+    }
+    assert client.urls == [u for u in client.urls if "games.csv" in u]  # nothing week-bound fetched
 
 
 def test_client_cache_reuses_fresh_and_refetches_stale(
