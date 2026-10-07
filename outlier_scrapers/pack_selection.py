@@ -176,6 +176,10 @@ DISQUALIFYING_DQ_FLAGS = {
     "star_scorer_usage_up_under",
     "team_total_scoring_conflict",
     "opponent_high_k_lineup",
+    "wnba_playoff_role_player_risk",
+    "severe_line_discount_trap",
+    "low_quality_tier_disqualified",
+    "negative_learned_edge",
 }
 CROSS_SPORT_DQ_PREFIX = "cross_sport_market:"
 
@@ -886,12 +890,50 @@ def _apply_quality_and_signal_flags(
             else (row.get("l10_pct") if row.get("l10_pct") is not None else row.get("hit_l10"))
         )
     )
+    # ``low_volume_3pt_shooter`` and ``wnba_playoff_role_player_over_risk`` read
+    # hit_rate_component / historical_edge_pct off the row, so both have to be
+    # stamped before those gates run. They used to be written further down with
+    # the rest of the signal block, which left every gate reading the base row's
+    # "" placeholder and made the hit-rate paths unreachable.
+    signal = side_view.get("signal") or {}
+    row["hit_rate_component"] = _blank_neutral_component(signal.get("hit_component"))
+    # Descriptive-only: edge implied by the raw recency hit rate. Reads
+    # signal["hit_pct"] (None when Outlier had no recency data), NOT
+    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
+    hit_rate_pct = _to_float(signal.get("hit_pct"))
+    hist_edge = compute_historical_edge(
+        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
+        decimal_price=_to_float(row.get("decimal_price")),
+        push_prob=_to_float(row.get("push_prob")),
+    )
+    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     if slate_quality.low_volume_3pt_shooter(row, dq_flags, l5_pct=l5_rate, l10_pct=l10_rate):
         dq_flags.append("low_volume_3pt_shooter")
     if slate_quality.team_total_scoring_conflict(row):
         dq_flags.append("team_total_scoring_conflict")
     if slate_quality.opponent_high_k_rate_conflict(row):
         dq_flags.append("opponent_high_k_lineup")
+    if slate_quality.wnba_playoff_role_player_over_risk(row):
+        dq_flags.append("wnba_playoff_role_player_risk")
+    if slate_quality.severe_line_discount_trap(row):
+        dq_flags.append("severe_line_discount_trap")
+
+    learned_cons_p = _to_float(row.get("learned_conservative_probability"))
+    implied_p = _to_float(row.get("implied_prob"))
+    if (
+        learned_cons_p is not None
+        and implied_p is not None
+        and learned_cons_p < implied_p
+    ):
+        dq_flags.append("negative_learned_edge")
+        row["recommended_units_pre_news"] = ""
+
+    if (
+        row.get("data_quality_tier") == "LOW"
+        and str(card.get("board") or row.get("board") or "").upper() == "A"
+    ):
+        dq_flags.append("low_quality_tier_disqualified")
+        row["recommended_units_pre_news"] = ""
     returning_from_il = slate_quality.pitcher_returning_from_il(
         row, injury_flags=str(row.get("injury_flags") or "")
     )
@@ -902,16 +944,20 @@ def _apply_quality_and_signal_flags(
     line_with_side = slate_quality.signed_line_moved_with_side(row)
     if line_with_side:
         dq_flags = [flag for flag in dq_flags if flag != "reverse_line_movement"]
+    # Flag even when units were already cleared by an earlier gate (e.g.
+    # low_quality_tier_disqualified after movement_line_mismatch). The desk
+    # still needs the stale-line diagnosis; withholding stake is idempotent.
     if (
-        row.get("recommended_units_pre_news") not in ("", None)
-        and "reverse_line_movement" in dq_flags
+        "reverse_line_movement" in dq_flags
         and "thin_liquidity" in dq_flags
         and not line_with_side
     ):
-        dq_flags.append("edge_suspect_stale_line")
+        if "edge_suspect_stale_line" not in dq_flags:
+            dq_flags.append("edge_suspect_stale_line")
         row["recommended_units_pre_news"] = ""
     slate_quality.apply_local_devig_unit_cap(row)
     slate_quality.apply_wnba_heavy_dog_spread_cap(row, injury_view)
+    slate_quality.apply_wnba_playoff_total_cap(row)
     edge_pct_val = _to_float(row.get("edge_pct"))
     if edge_pct_val is not None and edge_pct_val <= 0.035 and "thin_liquidity" in dq_flags:
         dq_flags.append("edge_suspect_thin_liquidity")
@@ -937,10 +983,18 @@ def _apply_quality_and_signal_flags(
     if row.get("recommended_units_pre_news") not in ("", None) and disqualifying:
         row["recommended_units_pre_news"] = ""
     row["data_quality_flags"] = ";".join(dict.fromkeys(dq_flags))
+    # Re-derive the tier from the final flags. The earlier pass above is still
+    # needed -- apply_learned_probability_blend segments on the tier -- but every
+    # gate between it and here can append a flag, so a row disqualified by one of
+    # them was exported HIGH while data_quality_tier(disqualifying=True) is
+    # defined to return LOW. Calibration and segmentation then read that tier.
+    row["data_quality_tier"] = probability_blend.data_quality_tier(
+        row["data_quality_flags"],
+        row.get("projection_quality_flags"),
+        disqualifying=disqualifying,
+    )
 
-    signal = side_view.get("signal") or {}
     movement_corroboration = _to_float(signal.get("movement_corroboration"))
-    row["hit_rate_component"] = _blank_neutral_component(signal.get("hit_component"))
     row["insight_component"] = _blank_neutral_component(signal.get("insight_component"))
     if movement_corroboration is None:
         row["movement_component"] = ""
@@ -953,16 +1007,6 @@ def _apply_quality_and_signal_flags(
     row["public_money_component"] = pm_component if pm_component is not None else ""
     pm_div = signal.get("public_money_divergence_pct", "")
     row["public_money_divergence_pct"] = pm_div if pm_div is not None else ""
-    # Descriptive-only: edge implied by the raw recency hit rate. Reads
-    # signal["hit_pct"] (None when Outlier had no recency data), NOT
-    # hit_rate_component, whose 50.0 no-data default would fabricate an edge.
-    hit_rate_pct = _to_float(signal.get("hit_pct"))
-    hist_edge = compute_historical_edge(
-        hit_rate_prob=hit_rate_pct / 100.0 if hit_rate_pct is not None else None,
-        decimal_price=_to_float(row.get("decimal_price")),
-        push_prob=_to_float(row.get("push_prob")),
-    )
-    row["historical_edge_pct"] = round(hist_edge, 4) if hist_edge is not None else ""
     signal_flags: list[str] = []
     for value, flag in (
         (_to_float(row.get("hit_rate_component")), "hit_rate_support"),

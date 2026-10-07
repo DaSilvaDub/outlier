@@ -4210,6 +4210,85 @@ def test_low_volume_3pt_shooter_disqualifies_actionable_board_a():
     assert row["board"] == "A_FLAGGED"
 
 
+def test_wnba_playoff_role_player_over_risk_disqualifies_from_recency_signal(monkeypatch):
+    """The playoff role-player gate must see the recency fields build_row derives.
+
+    ``wnba_playoff_role_player_over_risk`` reads ``hit_rate_component`` and
+    ``historical_edge_pct`` off the row. Both are derived inside build_row from
+    ``signal``, so a regression that stamps them after the quality gates run
+    leaves this gate reading the base row's "" placeholder and never firing.
+    """
+    # build_row's projection fallback calls get_wnba_player_features, which hits
+    # ESPN with a 30s timeout on a cache miss. Stub it: a None feature snapshot is
+    # what a failed fetch already yields, so the row is unchanged -- just offline.
+    from outlier_scrapers import projections as projections_mod
+
+    monkeypatch.setattr(
+        projections_mod, "get_wnba_player_features", lambda *a, **kw: None
+    )
+
+    def _card(hit_component, hit_pct):
+        return _ctx_card(
+            "SEA",
+            "LVA",
+            "SEA @ LVA",
+            headline_side="OVER",
+            player="Role Player",
+            market="PTS",
+            market_raw="Points",
+            market_label="Role Player - Points",
+            sides={
+                "OVER": {
+                    "outcome_id": "o1",
+                    "line": 12.5,
+                    "best_odds": 110,
+                    "ev": {
+                        "is_alt_line_fallback": False,
+                        "devig_decimal": 1.95,
+                        "best_ev_pct": 0.05,
+                        "kelly_pct": 0.02,
+                        "ev_source": "LOCAL",
+                    },
+                    "signal": {
+                        "insight_support": True,
+                        "movement_corroboration": 1.0,
+                        "hit_component": hit_component,
+                        "hit_pct": hit_pct,
+                    },
+                }
+            },
+        )
+
+    ev = [
+        {
+            "market_id": "c1",
+            "outcome_id": "o1",
+            "book": "FD",
+            "book_odds": 110,
+            "book_decimal_odds": 2.10,
+        }
+    ]
+    # Late-September / October slate date puts the row inside the WNBA postseason.
+    # Line is above the severe_line_discount_trap PTS<=9.5 cutoff so the warm
+    # control stays about the role-player gate only.
+    starts = {"ev1": "2026-10-05T19:00:00Z"}
+
+    cold = make_row(_card(41.0, 32.0), ev, sport="WNBA", event_starts=starts)
+    assert cold is not None
+    assert float(cold["hit_rate_component"]) == 41.0
+    assert float(cold["historical_edge_pct"]) < -0.10
+    assert "wnba_playoff_role_player_risk" in cold["data_quality_flags"]
+    assert cold["actionable"] == "false"
+    # The gate runs after the first data_quality_tier pass, so the tier has to be
+    # re-derived from the final flags or a disqualified row exports as HIGH.
+    assert cold["data_quality_tier"] == "LOW"
+
+    warm = make_row(_card(72.0, 85.0), ev, sport="WNBA", event_starts=starts)
+    assert warm is not None
+    assert "wnba_playoff_role_player_risk" not in warm["data_quality_flags"]
+    assert warm["data_quality_tier"] == "HIGH"
+
+
 def test_opponent_high_k_disqualifies_so_under():
     card = _ctx_card(
         "TB",

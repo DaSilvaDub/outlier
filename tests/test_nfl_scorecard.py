@@ -132,7 +132,7 @@ def test_alternate_lines_are_never_used_for_grading() -> None:
     assert sc.consensus_lines(alt_only) == {}
     two = [{"team": "LAR", "player_name": "Davante Adams", "market": "REC_YDS", "position": "OVER",
             "line": v, "is_consensus_line": True} for v in (79.5, 84.5)]
-    assert sc.consensus_lines(two)[("LAR", "davante adams", "REC_YDS")] == 82.0
+    assert sc.consensus_lines(two)[("", "LAR", "davante adams", "REC_YDS")] == 82.0
 
 
 def test_slate_records_and_report_paths(tmp_path) -> None:
@@ -148,3 +148,92 @@ def test_slate_records_and_report_paths(tmp_path) -> None:
         load_slate_records(tmp_path, "../x", slate)
     out = write_report(tmp_path / "reports", slate, "# ok")
     assert out.name == "2026-09-27_Signal_Scorecard.md" and out.read_text() == "# ok"
+
+
+def test_blank_or_null_scope_counts_as_full_game() -> None:
+    """``scope`` present but None/"" is a full-game line, as everywhere else.
+
+    ``calibration.py``, ``pipeline.py``, ``snapshots.py`` and ``best_bets.py``
+    all read a missing/None/empty scope as full game; a strict ``!= "full_game"``
+    here dropped those props and left ``hit_vs_line`` blank.
+    """
+    for scope in (None, ""):
+        props = [{"team": "LAR", "player_name": "Davante Adams", "market": "REC_YDS",
+                  "position": "OVER", "line": 79.5, "is_consensus_line": True, "scope": scope}]
+        assert sc.consensus_lines(props) == {("", "LAR", "davante adams", "REC_YDS"): 79.5}
+    alt_scope = [{"team": "LAR", "player_name": "Davante Adams", "market": "REC_YDS",
+                  "position": "OVER", "line": 20.5, "is_consensus_line": True,
+                  "scope": "first_quarter"}]
+    assert sc.consensus_lines(alt_scope) == {}  # period markets still excluded
+
+
+def test_consensus_line_matches_a_prop_whose_team_is_blank() -> None:
+    """A prop with no resolved team still supplies its line.
+
+    ``props.extract_player_props`` leaves ``team`` empty when the feed's team id
+    resolves through neither the alias table nor the event's home/away map, so
+    an exact-team key silently lost those lines.
+    """
+    lines = sc.consensus_lines(
+        [{"event_id": "e1", "team": None, "player_name": "Kyren Williams",
+          "market": "RUSH_YDS", "position": "OVER", "line": 64.5, "is_consensus_line": True}]
+    )
+    assert lines == {("e1", "", "kyren williams", "RUSH_YDS"): 64.5}
+    assert sc.lookup_consensus_line(lines, "e1", "LAR", "kyren williams", "RUSH_YDS") == 64.5
+
+    graded, _ = sc.grade_signals("2026-09-27", 3, SCRIPTS, ROWS, [
+        {"event_id": "e1", "team": None, "player_name": "Kyren Williams",
+         "market": "RUSH_YDS", "position": "OVER", "line": 64.5, "is_consensus_line": True},
+    ])
+    mismatch = {(g.tag, g.market): g for g in graded}[("MATCHUP_RUSH_MISMATCH", "RUSH_YDS")]
+    assert mismatch.line == 64.5 and mismatch.hit_vs_line is True
+
+
+def test_exact_team_wins_and_same_name_collision_stays_unmatched() -> None:
+    lines = {
+        ("e1", "LAR", "kyren williams", "RUSH_YDS"): 64.5,
+        ("e1", "", "kyren williams", "RUSH_YDS"): 29.5,
+    }
+    # An exact team match is never overridden by the blank-team fallback.
+    assert sc.lookup_consensus_line(lines, "e1", "LAR", "kyren williams", "RUSH_YDS") == 64.5
+    # Two teams carry the same player name in one game and the signal's team is
+    # unknown: either line could be the wrong player, so neither is used.
+    collision = {
+        ("e1", "LAR", "mike williams", "REC_YDS"): 49.5,
+        ("e1", "NYJ", "mike williams", "REC_YDS"): 34.5,
+    }
+    assert sc.lookup_consensus_line(collision, "e1", "", "mike williams", "REC_YDS") is None
+    assert sc.lookup_consensus_line(collision, "e1", "LAR", "mike williams", "REC_YDS") == 49.5
+    assert sc.lookup_consensus_line(collision, "e1", "DEN", "mike williams", "REC_YDS") is None
+
+
+def test_blank_team_fallback_never_crosses_games() -> None:
+    """A blank-team prop only supplies a line inside its own game.
+
+    ``best_bets._matching_signals`` selects signals by ``prop.event_id`` and
+    ``matchup.apply_matchup_signals`` works within one game script, so both
+    reach ``_names_match``'s blank-team check already scoped to a single game.
+    An unscoped fallback would hand one game's unresolved-team "Mike Williams"
+    line to another game's same-named player.
+    """
+    # NYJ's Mike Williams has a prop whose team never resolved; DEN's Mike
+    # Williams is a different player in a different game with no prop at all.
+    lines = sc.consensus_lines(
+        [{"event_id": "nyj-game", "team": None, "player_name": "Mike Williams",
+          "market": "REC_YDS", "position": "OVER", "line": 44.5,
+          "is_consensus_line": True}]
+    )
+    assert sc.lookup_consensus_line(lines, "den-game", "DEN", "mike williams", "REC_YDS") is None
+    # Same game: the blank team still falls back.
+    assert sc.lookup_consensus_line(lines, "nyj-game", "NYJ", "mike williams", "REC_YDS") == 44.5
+
+
+def test_grade_signals_does_not_borrow_a_line_from_another_game() -> None:
+    other_game_prop = [{
+        "event_id": "e2", "team": None, "player_name": "Kyren Williams",
+        "market": "RUSH_YDS", "position": "OVER", "line": 20.5, "is_consensus_line": True,
+    }]
+    graded, _ = sc.grade_signals("2026-09-27", 3, SCRIPTS, ROWS, other_game_prop)
+    mismatch = {(g.tag, g.market): g for g in graded}[("MATCHUP_RUSH_MISMATCH", "RUSH_YDS")]
+    # SCRIPTS' signals are all event "e1"; the e2 prop must not grade them.
+    assert mismatch.line is None and mismatch.hit_vs_line is None

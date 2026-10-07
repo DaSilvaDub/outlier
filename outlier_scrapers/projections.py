@@ -1342,6 +1342,19 @@ def _wnba_market_code(row: Mapping[str, object]) -> str | None:
     return None
 
 
+def _is_wnba_playoff_row(row: Mapping[str, object]) -> bool:
+    for key in ("_event_starts_at", "event_starts_at", "as_of", "game_date", "date"):
+        val = str(row.get(key) or "").strip()
+        if len(val) >= 10 and val[:4].isdigit():
+            try:
+                d = date.fromisoformat(val[:10])
+                if (d.month == 9 and d.day >= 18) or (d.month == 10):
+                    return True
+            except ValueError:
+                pass
+    return False
+
+
 def wnba_projection_record(
     row: Mapping[str, object],
     *,
@@ -1367,6 +1380,13 @@ def wnba_projection_record(
     ]
     if minutes is None or minutes <= 0 or any(rate is None or rate < 0 for rate in component_rates):
         return None
+    # Calibrate minutes for postseason playoff rotations (shortened 7-8 player benches)
+    is_playoffs = bool(features.get("is_playoffs")) or _is_wnba_playoff_row(row)
+    if is_playoffs:
+        if minutes >= 28.0:
+            minutes = min(38.0, round(minutes * 1.10, 1))
+        elif minutes < 20.0:
+            minutes = max(0.0, round(minutes * 0.85, 1))
     line = row.get("line")
     side = str(row.get("headline_side") or row.get("position") or "").upper()
     if "OVER" in str(row.get("selection") or "").upper():

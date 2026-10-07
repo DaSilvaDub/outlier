@@ -20,6 +20,7 @@ from outlier_scrapers.projections import (
     parse_args,
     project_rows,
     standardized_edge,
+    wnba_projection_record,
 )
 
 
@@ -793,3 +794,35 @@ def test_export_projections_still_errors_when_the_props_feed_is_stale(tmp_path, 
 
     assert status["status"] == "error"
     assert status["record_count"] == 0
+
+
+def test_wnba_playoff_minutes_expansion_in_projections():
+    regular_row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "line": 19.5,
+        "selection": "Paige Bueckers - Points OVER 19.5",
+        "_event_starts_at": "2026-07-15T19:00:00Z",
+    }
+    playoff_row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "line": 19.5,
+        "selection": "Paige Bueckers - Points OVER 19.5",
+        "_event_starts_at": "2026-09-27T20:00:00Z",
+    }
+    features = {
+        "projected_minutes": 32.0,
+        "points_per_minute": 0.65,
+    }
+    reg_rec = wnba_projection_record(regular_row, features=features)
+    playoff_rec = wnba_projection_record(playoff_row, features=features)
+
+    assert reg_rec is not None
+    assert playoff_rec is not None
+    # Regular season: 32.0 min * 0.65 ppm = 20.8 mean
+    assert reg_rec["distribution"]["mean"] == pytest.approx(32.0 * 0.65, abs=0.1)
+    # Postseason expansion (+10% on minutes -> 35.2 min): 35.2 * 0.65 = 22.88 mean
+    assert playoff_rec["distribution"]["mean"] > reg_rec["distribution"]["mean"]
+    assert playoff_rec["distribution"]["mean"] == pytest.approx(35.2 * 0.65, abs=0.1)
+

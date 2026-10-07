@@ -473,6 +473,15 @@ def is_3pt_market(
     return False
 
 
+def is_wnba_playoffs(row: Mapping[str, Any] | None = None, slate_date: date | None = None) -> bool:
+    """True when slate date corresponds to the WNBA postseason (late September through October)."""
+    if slate_date is None and row is not None:
+        slate_date = _row_slate_date(row)
+    if slate_date is None:
+        return False
+    return (slate_date.month == 9 and slate_date.day >= 18) or (slate_date.month == 10)
+
+
 def low_volume_3pt_shooter(
     row: dict[str, Any],
     dq_flags: Sequence[str] | None = None,
@@ -508,7 +517,23 @@ def low_volume_3pt_shooter(
         )
     )
     l5 = _to_float(l5_val)
-    return l5 is not None and 0.0 <= l5 <= 20.0
+    if l5 is not None and 0.0 <= l5 <= 20.0:
+        return True
+
+    hr_comp = _to_float(row.get("hit_rate_component"))
+    hist_edge = _to_float(row.get("historical_edge_pct"))
+    if l5 is None and hr_comp is not None and hr_comp <= 45.0 and hist_edge is not None and hist_edge <= -0.15:
+        return True
+
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    if sport == "WNBA" and is_wnba_playoffs(row):
+        pos = str(row.get("player_position") or row.get("player_role") or "").strip().upper()
+        if pos in {"C", "CENTER", "C-F", "F-C"}:
+            return True
+        if hr_comp is not None and hr_comp < 50.0 and hist_edge is not None and hist_edge < 0:
+            return True
+
+    return False
 
 
 def team_total_scoring_conflict(
@@ -739,6 +764,86 @@ def apply_wnba_heavy_dog_spread_cap(
         if units > target_cap:
             row["recommended_units_pre_news"] = target_cap
             _append_sizing_flag(row, "wnba_heavy_dog_deficit_cap")
+
+
+def wnba_playoff_role_player_over_risk(row: dict[str, Any]) -> bool:
+    """True when an OVER prop in WNBA playoffs targets a non-starter / role-player with high rotation risk."""
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    if sport != "WNBA":
+        return False
+    if not is_wnba_playoffs(row):
+        return False
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+
+    hr_comp = _to_float(row.get("hit_rate_component"))
+    hist_edge = _to_float(row.get("historical_edge_pct"))
+    if hr_comp is not None and hr_comp < 50.0 and hist_edge is not None and hist_edge < -0.10:
+        return True
+    return False
+
+
+def apply_wnba_playoff_total_cap(row: dict[str, Any]) -> None:
+    """Cap or flag WNBA Game Total OVERS during playoffs due to slower pace and half-court defense."""
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    if sport != "WNBA":
+        return
+    if not is_wnba_playoffs(row):
+        return
+    market = str(row.get("market_type") or row.get("market") or "").upper()
+    label = str(row.get("market_label") or row.get("selection") or "").upper()
+    if market != "GAMELINE" and not ("TOTAL" in label and ("OVER" in label or "O/U" in label)):
+        return
+    if _selection_side(row) != "OVER":
+        return
+    _append_sizing_flag(row, "wnba_playoff_half_court_pace")
+    units = _to_float(row.get("recommended_units_pre_news"))
+    if units is not None and units > 0.5:
+        row["recommended_units_pre_news"] = 0.5
+
+
+def severe_line_discount_trap(row: dict[str, Any]) -> bool:
+    """True when a player prop OVER is set dramatically below normal scoring baselines.
+
+    Sportsbooks slash lines by >40% only for impending minute restrictions,
+    injury limitations, or bench demotions. Naive models mistake this for EV.
+    """
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+
+    line = _to_float(row.get("line"))
+    if line is None or line <= 0:
+        return False
+
+    proj_mean = _to_float(row.get("projection_mean"))
+    if proj_mean is not None and proj_mean > 0:
+        if (line / proj_mean) <= 0.60:
+            return True
+
+    sport = str(row.get("sport") or row.get("league") or "").upper()
+    market = str(row.get("market") or row.get("market_type") or "").upper()
+    if sport in {"WNBA", "NBA", "BASKETBALL"}:
+        hist_edge = _to_float(row.get("historical_edge_pct"))
+        if (
+            market in {"PTS", "POINTS"}
+            and line <= 9.5
+            and hist_edge is not None
+            and hist_edge >= 0.35
+        ):
+            return True
+        if (
+            market in {"3PTS", "3PT", "THREES"}
+            and line <= 1.5
+            and hist_edge is not None
+            and hist_edge >= 0.60
+        ):
+            return True
+
+    return False
 
 
 def _signal_flag_set(row: dict[str, Any]) -> set[str]:

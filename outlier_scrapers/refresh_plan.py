@@ -72,7 +72,11 @@ REFRESH_TASKS: tuple[RefreshTask, ...] = (
         flag="--game-line-movement",
         depends_on=("games",),
     ),
-    RefreshTask(name="cards", flag="--cards", depends_on=("props", "line_movement")),
+    RefreshTask(
+        name="cards",
+        flag="--cards",
+        depends_on=("props", "line_movement", "insights", "games"),
+    ),
     RefreshTask(
         name="game_cards",
         flag="--game-cards",

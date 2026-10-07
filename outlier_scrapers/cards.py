@@ -30,6 +30,7 @@ import logging
 import re
 from collections import defaultdict
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -39,16 +40,11 @@ from .normalizer import _to_float, _to_int, implied_probability, percent_number
 from .paths import league_paths
 from .form_source import _token, canon_team
 from .registry import get_sport_config, normalize_market, supported_leagues
-from .utils import _summary_stat_for_team
+from .utils import _summary_stat_for_team, safe_write_json
 
 logger = logging.getLogger(__name__)
 
-
-def write_json(path, payload: dict[str, Any]) -> None:
-    """Write ``payload`` as pretty JSON (local copy; mirrors props.write_json)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+write_json = safe_write_json
 
 
 # --------------------------------------------------------------------------- #
@@ -124,7 +120,13 @@ def load_latest(league: str, stem: str) -> dict[str, Any] | None:
     path = _normalized_latest_path(league, stem)
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    for attempt in range(5):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
 
 def _records(payload: dict[str, Any] | None, key: str = "records") -> list[dict[str, Any]]:
@@ -1348,6 +1350,11 @@ def _board_a_flags(side: str, view: dict[str, Any], card: dict[str, Any] | None 
         l5 = _to_float(hit_rates.get("l5_pct") if hit_rates.get("l5_pct") is not None else card_dict.get("l5_pct"))
         if l5 is not None and 0.0 <= l5 <= 20.0:
             flags.append("low_volume_3pt_shooter")
+        else:
+            from outlier_scrapers import slate_quality
+            merged = {**view, **card_dict}
+            if slate_quality.low_volume_3pt_shooter(merged, l5_pct=l5):
+                flags.append("low_volume_3pt_shooter")
     return flags
 
 

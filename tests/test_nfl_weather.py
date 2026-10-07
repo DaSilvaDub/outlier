@@ -9,6 +9,7 @@ import pytest
 
 from outlier_nfl import pipeline as nfl_pipeline
 from outlier_nfl import weather as wx
+from outlier_nfl.config import PROP_LONG_PASS
 from outlier_nfl.matchup import MatchupScript, apply_matchup_signals
 from outlier_nfl.models import BookPrice, NflPlayerProp
 
@@ -143,6 +144,24 @@ def test_weather_flows_through_apply_matchup_signals() -> None:
     assert other.calibration_tags == ()  # not a tape role -> untouched
 
 
+def test_qb_longest_completion_signal_uses_the_canonical_market_code() -> None:
+    """The longest-completion haircut must join props, which carry ``LONG_PASS``.
+
+    ``apply_matchup_signals`` matches ``signal.market == prop.market`` exactly, so a
+    signal emitted under a non-canonical market code is silently dropped.
+    """
+    high = wx.GameWeather("e1", "DEN", "LAR", None, "outdoor", wind_mph=17,
+                          tags=("WEATHER_WIND_HIGH",), pass_adjustment=-0.1)
+    markets = {s.market for s in wx.weather_signals(high, TAPES)}
+    assert PROP_LONG_PASS in markets and "LONGEST_PASSING_COMPLETION" not in markets
+
+    scripts = wx.apply_weather([_script()], {"e1": high}, TAPES)
+    prop = _prop("Bo Nix", "DEN", PROP_LONG_PASS, "OVER")
+    (updated,) = apply_matchup_signals([prop], scripts)
+    assert "WEATHER_WIND_HIGH" in updated.calibration_tags
+    assert updated.calibrated_volume_adjustment == -0.1
+
+
 def test_load_slate_weather_matches_schedule_by_eastern_date_and_survives_errors() -> None:
     schedule = [{"home_team": "DEN", "away_team": "LAR", "gameday": "2026-09-27", "roof": "outdoors"},
                 {"home_team": "DEN", "away_team": "LAR", "gameday": "2025-11-02", "roof": "closed"}]
@@ -164,6 +183,8 @@ def test_pipeline_fixture_mode_never_forecasts(tmp_path: Any, monkeypatch: pytes
 
     fixtures = Path(__file__).parent / "fixtures" / "nfl"
     summary = nfl_pipeline.NflPipeline(data_dir=tmp_path).run(
-        date="2026-09-13", offline_fixtures_dir=fixtures
+        date="2026-09-13",
+        offline_fixtures_dir=fixtures,
+        reports_dir=tmp_path / "reports" / "NFL",
     )
     assert summary["status"] == "OK"

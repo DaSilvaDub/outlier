@@ -16,12 +16,9 @@ from .api import OutlierApiClient, AuthRequiredError
 from .normalizer import normalize_games
 from .paths import league_paths
 from .registry import get_sport_config, supported_leagues, GAME_MARKET_TYPES
+from .utils import safe_write_json
 
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+write_json = safe_write_json
 
 
 def _should_preserve_previous_latest(latest_path: Path, normalized: dict[str, Any]) -> bool:

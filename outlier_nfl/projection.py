@@ -23,7 +23,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 from outlier_nfl.boxscore import _token
 from outlier_nfl.calibration import DEFAULT_LAPLACE_ALPHA, shrink_hit_rate
@@ -307,13 +307,13 @@ def project_hit_probability_v2(
 
 
 def attach_projection_model_p_record(
-    record: dict[str, Any],
+    record: MutableMapping[str, Any],
     *,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]],
     overwrite: bool = False,
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     min_games: int = 1,
-) -> dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """Fill ``model_p`` from nflverse gamelog rate when missing / overwrite.
 
     Does nothing (leaves existing) when projection is unavailable — callers
@@ -359,13 +359,13 @@ def attach_projection_model_p_record(
 
 
 def attach_model_p_hierarchy_record(
-    record: dict[str, Any],
+    record: MutableMapping[str, Any],
     *,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     overwrite: bool = True,
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     min_games: int = 1,
-) -> dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """projection v2 (gaussian/poisson if ≥3 wks) / v1 rate → Laplace → raw empirical.
 
     ``overwrite=True`` by default so hierarchy replaces a stale raw empirical

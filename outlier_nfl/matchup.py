@@ -39,6 +39,23 @@ HIGH_RUSH_ADJ = 0.20
 # unaffected (r ~ 0), so the old PASS_YDS UNDER target was retired.
 PASS_RUSH_SACK_ADJ = 0.08
 REC_ADJ = 0.15
+# Projected-score boosts (not yet backtested): an offense facing a defense missing
+# first-string starters (tape ``defensive_starters_out``), and a run game that
+# overpowers the opposing front.
+DIDF_SCORE_BOOST = 3.5
+# One missing starter is routine (16 of 27 injury-listed teams in 2026 week 4);
+# the boost needs at least this many starters out on the same defense.
+DIDF_MIN_STARTERS = 2
+TRENCH_SCORE_BOOST = 3.5
+# Indoor and retractable-roof home venues. In a competitive dome game with a
+# trench or defensive-injury edge, totals above DOME_GRIND_TOTAL (up to
+# GRIND_TOTAL) lean OVER instead of UNDER.
+DOME_TEAMS: frozenset[str] = frozenset(
+    {"ARI", "ATL", "DAL", "DET", "HOU", "IND", "LAC", "LAR", "LV", "MIN", "NO"}
+)
+DOME_GRIND_TOTAL = 43.5
+# A favorite laying this many points or fewer keeps the lean when it owns the run game.
+TRENCH_PROTECT_SPREAD = 2.5
 
 
 @dataclass(frozen=True)
@@ -149,22 +166,43 @@ def _depth(team: str) -> dict[str, Any]:
         return dict(NFL_2026_FULL_DEPTH_CHARTS.get(team.upper(), {}))
 
 
-def _role_player(tape: Mapping[str, Any], team: str, role: str) -> str | None:
+def _role_player(
+    tape: Mapping[str, Any], team: str, role: str, inactive: Iterable[str] = ()
+) -> str | None:
+    """Tape role, else the depth chart's first player for it who is not ``inactive``.
+
+    When every candidate is inactive the depth-chart default comes back and the
+    caller's eligibility check drops it.
+    """
+    out = set(inactive)
+
+    def active(name: str | None) -> bool:
+        return bool(name) and str(name).strip().lower() not in out
+
     named = _text(tape, role)
-    if named:
+    if active(named):
         return named
     chart = _depth(team)
     if role == "qb":
-        return chart.get("starting_qb")
+        qb = chart.get("starting_qb")
+        return qb if active(qb) else None
     if role == "rb1":
         rbs = chart.get("rbs") or []
-        return rbs[0] if rbs else None
+        return next((r for r in rbs if active(r)), rbs[0] if rbs else None)
     if role == "te":
-        return chart.get("te")
+        te = chart.get("te")
+        return te if active(te) else None
     wrs = list(chart.get("wrs") or [])
+    active_wrs = [w for w in wrs if active(w)]
     if role == "wr_slot":
+        if len(active_wrs) > 1:
+            return active_wrs[1]
+        if active_wrs:
+            return active_wrs[0]
         return wrs[1] if len(wrs) > 1 else (wrs[0] if wrs else None)
     if role == "wr_deep":
+        if active_wrs:
+            return active_wrs[0]
         return wrs[0] if wrs else None
     return None
 
@@ -267,14 +305,16 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
     home_tts = [g for g in team_totals if g.team == home]
     away_tts = [g for g in team_totals if g.team == away]
 
-    if home_tts and max(home_tts, key=lambda x: len(x.books or ())).line is not None:
-        home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line)
+    home_best = max(home_tts, key=lambda x: len(x.books or ())) if home_tts else None
+    away_best = max(away_tts, key=lambda x: len(x.books or ())) if away_tts else None
+    if home_best is not None and home_best.line is not None:
+        home_tt = float(home_best.line)
         home_tt_source = "market"
     else:
         home_tt = 24.0
         home_tt_source = "default"
-    if away_tts and max(away_tts, key=lambda x: len(x.books or ())).line is not None:
-        away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line)
+    if away_best is not None and away_best.line is not None:
+        away_tt = float(away_best.line)
         away_tt_source = "market"
     else:
         away_tt = 21.0
@@ -370,8 +410,14 @@ def build_matchup_script(
     game_lines: list[NflGameLine],
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries: Iterable[str] | None = None,
+    defensive_out: Mapping[str, Sequence[str]] | None = None,
 ) -> MatchupScript:
-    """Build the highest-probability script and mismatch card for one game."""
+    """Build the highest-probability script and mismatch card for one game.
+
+    ``injuries`` is the flat inactive list used to drop players from signals;
+    ``defensive_out`` maps team -> first-string defenders ruled out and drives
+    the defensive-injury score boost.
+    """
     home = home_team.strip().upper()
     away = away_team.strip().upper()
     tape_map = {str(k).upper(): dict(v) for k, v in (tapes or {}).items()}
@@ -385,6 +431,24 @@ def build_matchup_script(
     signals: list[PropSignal] = []
     mismatches: list[str] = []
     notes: list[str] = []
+    score_boost: dict[str, float] = {home: 0.0, away: 0.0}
+
+    # Points only: degrading the defense's unit grades as well would re-trigger the
+    # trench mismatch below and count the same injuries twice.
+    out_by_team = {
+        str(t).strip().upper(): [n for n in names if n] for t, names in (defensive_out or {}).items()
+    }
+    for defend_team, attack_team in ((home, away), (away, home)):
+        out = out_by_team.get(defend_team) or []
+        if len(out) < DIDF_MIN_STARTERS:
+            continue
+        score_boost[attack_team] += DIDF_SCORE_BOOST
+        names = ", ".join(out[:3])
+        mismatches.append(f"{attack_team} offense vs depleted {defend_team} defense ({names})")
+        notes.append(
+            f"DIDF: {defend_team} missing defensive starters ({names}); "
+            f"+{DIDF_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
 
     def _eligible(name: str | None) -> str | None:
         if not name:
@@ -402,7 +466,12 @@ def build_matchup_script(
             (_is_strong_rush(attack_unit) and _is_leaky_run_d(defend_unit)) or gap >= RUSH_GRADE_GAP
         ):
             return
-        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1"))
+        score_boost[attack_team] += TRENCH_SCORE_BOOST
+        notes.append(
+            f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; "
+            f"+{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}."
+        )
+        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive))
         if not rb1:
             return
         mismatches.append(f"{rb1} rush vs {defend_team} run D")
@@ -439,7 +508,7 @@ def build_matchup_script(
         # The pass rush drives sacks; a weak-QB gate added nothing in the backtest.
         if not _is_strong_pass_rush(rush_unit):
             return
-        qb = _eligible(_role_player(qb_tape, qb_team, "qb"))
+        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive))
         if not qb:
             return
         grade = rush_unit.get("pass_rush")
@@ -464,8 +533,8 @@ def build_matchup_script(
         if not _is_leaky_pass_d(defend_unit):
             return
         pass_tape = home_tape if pass_team == home else away_tape
-        te = _eligible(_role_player(pass_tape, pass_team, "te"))
-        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot"))
+        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive))
+        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive))
         mismatches.append(f"{pass_team} underneath vs {defend_team} secondary")
         if te:
             signals.append(
@@ -541,10 +610,31 @@ def build_matchup_script(
         spread_lean = (
             "HOME" if (favorite_is_home is True) else ("AWAY" if (favorite_is_home is False) else "NEUTRAL")
         )
-        total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
+        dome_edge = (
+            home in DOME_TEAMS
+            and DOME_GRIND_TOTAL < total <= GRIND_TOTAL
+            and any(score_boost.values())
+        )
+        if dome_edge:
+            total_lean = "OVER"
+            notes.append(
+                f"Dome pace ({home}): indoor venue plus a trench/injury edge; "
+                f"OVER {total:.1f} instead of the outdoor grind UNDER."
+            )
+        else:
+            total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
 
-    home_score = round(ctx["home_tt"])
-    away_score = round(ctx["away_tt"])
+    # Every script branch already leans the favorite; this pins that lean for short
+    # favorites that own the run game so a future branch cannot flip it to the dog.
+    if favorite and abs_spread <= TRENCH_PROTECT_SPREAD and has_fav_rush:
+        spread_lean = "HOME" if favorite_is_home else "AWAY"
+        notes.append(
+            f"Trench protection: {favorite} owns the run game at {abs_spread:.1f}; "
+            "lean stays on the favorite."
+        )
+
+    home_score = round(ctx["home_tt"] + score_boost[home])
+    away_score = round(ctx["away_tt"] + score_boost[away])
     if home_score == away_score and abs_spread > 0 and favorite:
         fav_pts = round((total + abs_spread) / 2.0)
         dog_pts = round((total - abs_spread) / 2.0)
@@ -609,8 +699,12 @@ def build_matchup_scripts(
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries_by_event: Mapping[str, Iterable[str]] | None = None,
     slate_events: Iterable[Mapping[str, Any]] | None = None,
+    defensive_out_by_team: Mapping[str, Sequence[str]] | None = None,
 ) -> list[MatchupScript]:
-    """Build one script per unique event_id on the slate, including games with no lines yet."""
+    """Build one script per unique event_id on the slate, including games with no lines yet.
+
+    ``defensive_out_by_team`` is the tape's ``defensive_starters_out`` block.
+    """
     by_event: dict[str, list[NflGameLine]] = {}
     meta: dict[str, tuple[str, str]] = {}
     order: list[str] = []
@@ -644,6 +738,7 @@ def build_matchup_scripts(
                 game_lines=by_event.get(event_id, []),
                 tapes=tapes,
                 injuries=injured,
+                defensive_out=defensive_out_by_team,
             )
         )
     return scripts
@@ -805,7 +900,12 @@ def render_matchup_markdown(
             f"**Projected:** {home} {script.home_score:.0f}, {away} {script.away_score:.0f}"
             f"{src_note}"
         )
-        lines.append(f"- **Spread lean:** {script.spread_lean} ({script.home_spread:+.1f} {home})")
+        # Name the backed side with its own line: "AWAY (ATL -1.5)", not "AWAY (+1.5 NO)".
+        if script.spread_lean == "AWAY":
+            backed = f"{away} {-script.home_spread:+.1f}"
+        else:
+            backed = f"{home} {script.home_spread:+.1f}"
+        lines.append(f"- **Spread lean:** {script.spread_lean} ({backed})")
         total_tag = " (placeholder)" if script.total_source == "default" else ""
         lines.append(
             f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"

@@ -17,8 +17,9 @@ from typing import Any
 from outlier_nfl.external import Client as ExternalClient, load_external_metrics
 
 # Ensure Windows stdout handles UTF-8 gracefully
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None) if sys.stdout else None
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
 
 from outlier_nfl.api import OutlierNflApiClient
 from outlier_nfl.constants import (
@@ -26,7 +27,11 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import NflGameLine, NflPlayerProp
-from outlier_nfl.tape_nflverse import load_tape_inactives, refresh_prior_week_tape
+from outlier_nfl.tape_nflverse import (
+    load_tape_defensive_out,
+    load_tape_inactives,
+    refresh_prior_week_tape,
+)
 from outlier_nfl.usage import append_signals, load_usage, usage_signals
 from outlier_nfl.weather import apply_weather, load_slate_weather
 from outlier_nfl.matchup import (
@@ -52,7 +57,18 @@ from outlier_nfl.schema import (
     validate_schedule_payload,
 )
 from outlier_nfl.roster import build_team_roster_index
+from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
+from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
 from outlier_nfl.enrich_close import attach_close_fields
+from outlier_nfl.calibration import (
+    DEFAULT_MARKET_PRIOR_KAPPA,
+    model_p_bucket_counts,
+)
+from outlier_nfl.high_prob_rank import (
+    actionable_high_prob_records,
+    apply_same_player_correlation_guard,
+    correlation_guard_summary,
+)
 from outlier_nfl.utils import (
     matches_kickoff_window,
     nfl_season_for_date,
@@ -92,6 +108,8 @@ class NflPipeline:
         offline_fixtures_dir: Path | str | None = None,
         generate_game_script: bool = False,
         reports_dir: Path | str | None = None,
+        write_latest: bool | None = None,
+        target_alt_book: str = "HARDROCK",
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -102,6 +120,9 @@ class NflPipeline:
             generate_game_script: If True, automatically synthesize game script report.
             reports_dir: Directory the game script markdown is written to. Defaults to
                 ./reports/NFL relative to the working directory.
+            write_latest: Override whether ``*_latest.json`` files are written. Defaults to
+                True only for an unwindowed run; the weekly runner passes False so one
+                slate date does not overwrite another's ``latest``.
 
         Returns:
             NflExtractionSummary dictionary.
@@ -110,7 +131,8 @@ class NflPipeline:
         target_date = date or to_eastern_date(datetime.now(timezone.utc)) or "2026-09-13"
 
         window = normalize_kickoff_window(window)
-        write_latest = window is None
+        if write_latest is None:
+            write_latest = window is None
         window_label = f" (window: {window})" if window else ""
         logger.info("Starting Outlier NFL Pipeline run for date: %s%s", target_date, window_label)
         self.normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -285,6 +307,7 @@ class NflPipeline:
                 load_tape_inactives(self.nfl_dir), all_game_lines, slate_events
             ),
             slate_events=slate_events,
+            defensive_out_by_team=load_tape_defensive_out(self.nfl_dir),
         )
         if matchup_scripts:
             logger.info(
@@ -292,6 +315,9 @@ class NflPipeline:
                 len(matchup_scripts),
                 len(tapes),
             )
+
+        weather_records: list[dict[str, Any]] = []
+        usage_players: list[dict[str, Any]] = []
 
         # Game-day weather: open-air forecasts add pass-volume haircut signals.
         if offline_fixtures_dir is None and matchup_scripts:
@@ -301,12 +327,13 @@ class NflPipeline:
                     [r for r in external_metrics if r.get("source") == "schedule"],
                 )
                 matchup_scripts = apply_weather(matchup_scripts, weathers, tapes)
+                weather_records = [w.to_dict() for w in weathers.values()]
                 weather_payload = {
                     "date": target_date,
                     "window": window,
                     "updated_at": now_utc,
                     "count": len(weathers),
-                    "records": [w.to_dict() for w in weathers.values()],
+                    "records": weather_records,
                 }
                 safe_write_json(self.normalized_dir / f"nfl_weather_{target_date}.json", weather_payload)
                 logger.info(
@@ -333,15 +360,16 @@ class NflPipeline:
                     event_by_team[script.away_team] = script.event_id
                 usage = usage_signals(profiles, load_tape_inactives(self.nfl_dir), event_by_team)
                 matchup_scripts = append_signals(matchup_scripts, usage)
+                usage_players = [
+                    p.to_dict() for p in profiles.values() if p.team in event_by_team
+                ]
                 safe_write_json(
                     self.normalized_dir / f"nfl_player_usage_{target_date}.json",
                     {
                         "date": target_date,
                         "window": window,
                         "updated_at": now_utc,
-                        "players": [
-                            p.to_dict() for p in profiles.values() if p.team in event_by_team
-                        ],
+                        "players": usage_players,
                         "signals": [asdict(sig) for sig in usage],
                     },
                 )
@@ -415,26 +443,35 @@ class NflPipeline:
         ]
         # Persist emit-time odds as close_* with honest source label (not book close).
         for row in anchors:
-            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_market_prior", overwrite_model_p=True)
+        # Same-player correlation guard: tag PRIMARY vs CORRELATED_SAME_PLAYER;
+        # full Tier-1 dump kept in records; actionable_records is the action set.
+        anchors = apply_same_player_correlation_guard(anchors)
+        actionable_anchors = actionable_high_prob_records(anchors)
         anchors_payload = {
             "date": target_date,
             "window": window,
             "updated_at": now_utc,
             "count": len(anchors),
+            "actionable_count": len(actionable_anchors),
             "records": anchors,
+            "actionable_records": actionable_anchors,
             "close_enrichment": {
                 "mode": "snapshot_best",
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
             },
             "model_p_enrichment": {
-                "mode": "empirical_hit_rate_laplace",
-                "alpha": 2.0,
+                "mode": "empirical_hit_rate_market_prior",
+                "kappa": DEFAULT_MARKET_PRIOR_KAPPA,
                 "note": (
-                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
-                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
-                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                    "model_p = Beta shrink of L10/L20/L5/season hit rates toward "
+                    "sportsbook-only implied prior (source=empirical_hit_rate_market_prior); "
+                    "PrizePicks excluded from prior/edge; never a raw copy of implied_probability. "
+                    "Laplace still available via enrich_close --attach-model-p empirical_hit_rate_laplace."
                 ),
             },
+            "model_p_distribution": model_p_bucket_counts(anchors),
+            "correlation_guard": correlation_guard_summary(anchors),
         }
         if write_latest:
             safe_write_json(self.normalized_dir / "nfl_high_prob_props_latest.json", anchors_payload)
@@ -475,7 +512,7 @@ class NflPipeline:
             if any(str(tag).startswith("MATCHUP_") for tag in p.calibration_tags)
         ]
         for row in matchup_prop_records:
-            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_laplace", overwrite_model_p=True)
+            attach_close_fields(row, mode="snapshot_best", attach_model_p="empirical_hit_rate_market_prior", overwrite_model_p=True)
         matchup_props_payload = {
             "date": target_date,
             "window": window,
@@ -487,12 +524,13 @@ class NflPipeline:
                 "note": "close_* copied from line/best_odds/implied at emit; not true book close.",
             },
             "model_p_enrichment": {
-                "mode": "empirical_hit_rate_laplace",
-                "alpha": 2.0,
+                "mode": "empirical_hit_rate_market_prior",
+                "kappa": DEFAULT_MARKET_PRIOR_KAPPA,
                 "note": (
-                    "model_p = Laplace(α=2) shrink of L10/L20/L5/season hit rates "
-                    "(source=empirical_hit_rate_laplace); never copied from implied_probability. "
-                    "Raw empirical still available via enrich_close --attach-model-p empirical_hit_rate."
+                    "model_p = Beta shrink of L10/L20/L5/season hit rates toward "
+                    "sportsbook-only implied prior (source=empirical_hit_rate_market_prior); "
+                    "PrizePicks excluded from prior/edge; never a raw copy of implied_probability. "
+                    "Laplace still available via enrich_close --attach-model-p empirical_hit_rate_laplace."
                 ),
             },
         }
@@ -505,8 +543,8 @@ class NflPipeline:
             matchup_props_payload,
         )
 
+        window_slug = window.strip().lower() if window else ""
         if window:
-            window_slug = window.strip().lower()
             safe_write_json(
                 self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload
             )
@@ -534,18 +572,61 @@ class NflPipeline:
                 matchup_props_payload,
             )
 
+        best_bets = self._trace_best_bets(
+            target_date=target_date,
+            window=window,
+            now_utc=now_utc,
+            props_dict=props_dict,
+            scripts_records=scripts_to_records(matchup_scripts),
+            external_metrics=external_metrics,
+            usage_players=usage_players,
+            weather_records=weather_records,
+            tapes=tapes,
+            write_latest=write_latest,
+        )
+
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
         totals_count = sum(1 for g in all_game_lines if g.market == "TOTAL")
         team_totals_count = sum(1 for g in all_game_lines if g.market_type == "TEAM_PROP")
         consensus_props_count = sum(1 for p in calibrated_props if p.is_consensus_line)
         tier_1_anchors_count = len(anchors)
+        tier_1_actionable_count = len(actionable_anchors)
 
         prop_breakdown: dict[str, int] = {}
         for p in all_player_props:
             prop_breakdown[p.market] = prop_breakdown.get(p.market, 0) + 1
 
         starting_qbs = {t: r["starting_qb"] for t, r in rosters.items() if r.get("starting_qb")}
+
+        # =====================================================================
+        # Sportsbook Alternate Floor Props (e.g. Hard Rock Bet)
+        # =====================================================================
+        alt_floors_summary: dict[str, Any] = {}
+        try:
+            from outlier_nfl.alt_floors import generate_alt_floors_pipeline
+
+            starting_qbs_set = {
+                r["starting_qb"] for r in rosters.values() if r.get("starting_qb")
+            }
+            alt_floors_summary = generate_alt_floors_pipeline(
+                props=all_player_props,
+                exports_dir=self.data_dir / "NFL" / "exports",
+                reports_dir=Path(reports_dir) if reports_dir is not None else Path("reports/NFL"),
+                date_str=target_date,
+                target_book=target_alt_book,
+                starting_qbs=starting_qbs_set,
+                weather_records=weather_records,
+                tapes=tapes,
+                write_latest=write_latest,
+            )
+            logger.info(
+                "Alt floor props generated: %d ranked props for %s",
+                alt_floors_summary.get("count", 0),
+                target_alt_book,
+            )
+        except Exception as exc:
+            logger.warning("Failed generating alt floor props: %s", exc)
 
         summary: dict[str, Any] = {
             "status": "OK",
@@ -561,11 +642,16 @@ class NflPipeline:
             "props_count": len(all_player_props),
             "consensus_props_count": consensus_props_count,
             "tier_1_anchors_count": tier_1_anchors_count,
+            "tier_1_actionable_count": tier_1_actionable_count,
             "player_props_breakdown": prop_breakdown,
             "starting_qbs": starting_qbs,
             "matchup_scripts_count": len(matchup_scripts),
             "matchup_tagged_props_count": len(matchup_prop_records),
-            "errors": errors,
+            "best_bets_counts": best_bets.get("counts", {}),
+            "best_bets_error": best_bets.get("error"),
+            "alt_floors": alt_floors_summary,
+            "alt_floors_count": alt_floors_summary.get("count", 0),
+            "errors": errors + ([best_bets["error"]] if best_bets.get("error") else []),
         }
 
         # Optional Game Script Generation — one markdown file per matchup
@@ -623,6 +709,75 @@ class NflPipeline:
             tier_1_anchors_count,
         )
         return summary
+
+    def _trace_best_bets(
+        self,
+        *,
+        target_date: str,
+        window: str | None,
+        now_utc: str,
+        props_dict: list[dict[str, Any]],
+        scripts_records: list[dict[str, Any]],
+        external_metrics: list[dict[str, Any]],
+        usage_players: list[dict[str, Any]],
+        weather_records: list[dict[str, Any]],
+        tapes: dict[str, dict[str, Any]],
+        write_latest: bool,
+    ) -> dict[str, Any]:
+        """Snapshot this run's prices, then trace every candidate through all six pillars."""
+        suffix = f"{target_date}_{window.strip().lower()}" if window else target_date
+        try:
+            append_snapshot(self.nfl_dir, target_date, props_dict, now_utc)
+            movement = movement_index(load_snapshots(snapshot_path(self.nfl_dir, target_date)))
+            payload = build_best_bets(
+                TraceInputs(
+                    props=props_dict,
+                    run_date=to_eastern_date(now_utc) or target_date,
+                    scripts=scripts_records,
+                    external_metrics=external_metrics,
+                    usage_players=usage_players,
+                    weather=weather_records,
+                    inactive_by_team=load_injury_report(self.nfl_dir),
+                    tapes=tapes,
+                    movement=movement,
+                )
+            )
+        except Exception as exc:  # the slate's data outputs above are already written
+            logger.error("Best-bets trace failed: %s", exc)
+            # Never leave an older card behind for a reader to mistake for this run's.
+            stale_cards = [f"nfl_best_bets_{suffix}.json", f"nfl_best_bets_{suffix}.md"]
+            # This run would have overwritten _latest, so a surviving one is the
+            # previous run's card under the name readers treat as current.
+            if write_latest:
+                stale_cards.append("nfl_best_bets_latest.json")
+            for stale in stale_cards:
+                (self.normalized_dir / stale).unlink(missing_ok=True)
+            return {"error": f"best-bets trace failed: {exc}"}
+        payload.update({"date": target_date, "window": window, "updated_at": now_utc})
+        if write_latest:
+            safe_write_json(self.normalized_dir / "nfl_best_bets_latest.json", payload)
+        safe_write_json(self.normalized_dir / f"nfl_best_bets_{suffix}.json", payload)
+        (self.normalized_dir / f"nfl_best_bets_{suffix}.md").write_text(
+            render_best_bets_markdown(payload, title=f"NFL Traced Best Bets - slate {suffix}"),
+            encoding="utf-8",
+        )
+        logger.info("Best bets: %s", payload.get("counts"))
+        return payload
+
+
+def load_injury_report(nfl_dir: Path | str) -> dict[str, list[str]] | None:
+    """Injury-report inactives, or None unless the tape confirms the report was fetched.
+
+    Distinguishes "report loaded, nobody out" ({}) from "no report / fetch failed"
+    (None) so the best-bets trace never treats a missing report as a clean one.
+    Tapes written before the ``injury_report_loaded`` marker existed read as None.
+    """
+    raw = safe_read_json(Path(nfl_dir) / "tape" / "prior_week.json", default=None)
+    if not isinstance(raw, dict) or raw.get("injury_report_loaded") is not True:
+        return None
+    if not isinstance(raw.get("inactive"), dict):
+        return None
+    return load_tape_inactives(nfl_dir)
 
 
 def injuries_by_event(
@@ -708,6 +863,12 @@ def main() -> int:
         help="With --refresh-tape, average only each team's last N games. Default: all.",
     )
     parser.add_argument(
+        "--target-alt-book",
+        type=str,
+        default="HARDROCK",
+        help="Target sportsbook for alternate floor props (default: HARDROCK).",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable detailed logging.",
@@ -728,6 +889,7 @@ def main() -> int:
                 window=args.window,
                 offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
                 generate_game_script=args.generate_game_script,
+                target_alt_book=args.target_alt_book,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -746,6 +908,7 @@ def main() -> int:
         print(f"Player Props Count:     {summary.get('player_props_count')}")
         print(f"Consensus Props Count:  {summary.get('consensus_props_count')}")
         print(f"Tier-1 Anchors Count:   {summary.get('tier_1_anchors_count')}")
+        print(f"Tier-1 Actionable:      {summary.get('tier_1_actionable_count')}")
         print(f"Matchup Scripts:        {summary.get('matchup_scripts_count')}")
         print(f"Matchup-Tagged Props:   {summary.get('matchup_tagged_props_count')}")
         if summary.get("game_script_file"):
@@ -755,6 +918,38 @@ def main() -> int:
             print("VERIFIED ACTIVE STARTING QUARTERBACKS (FROM FEED):")
             for t, qb in sorted(summary["starting_qbs"].items()):
                 print(f"  {t:4s}: {qb}")
+        alt_data = summary.get("alt_floors") or {}
+        if alt_data.get("count"):
+            print("-" * 60)
+            print(f"SPORTSBOOK ALTERNATE FLOOR PROPS ({args.target_alt_book.upper()}):")
+            top3_cat = alt_data.get("top3_by_category") or {}
+            for mkt, title in [
+                ("PASS_YDS", "PASSING YARDS"),
+                ("RUSH_YDS", "RUSHING YARDS"),
+                ("REC_YDS", "RECEIVING YARDS"),
+            ]:
+                mkt_props = top3_cat.get(mkt, [])
+                if mkt_props:
+                    print(f"  {title} (TOP {len(mkt_props)}):")
+                    for p in mkt_props:
+                        odds_s = (
+                            f"{p.get('target_odds'):+d}"
+                            if isinstance(p.get("target_odds"), int)
+                            else f"{p.get('target_odds')}"
+                        )
+                        print(
+                            f"    #{p.get('category_rank')} {p.get('player_name'):<20} ({p.get('team')}): "
+                            f"OVER {p.get('line'):<5} | Odds: {odds_s:<6} | Cons: {p.get('consensus_line'):<5} "
+                            f"(Cush: +{p.get('cushion')} yds) | Score: {p.get('confidence_score'):.3f}"
+                        )
+            master_list = alt_data.get("master_pool") or []
+            if master_list:
+                top1 = master_list[0]
+                print(
+                    f"  TOP OVERALL CONFIDENCE PLAY: #{top1.get('master_rank')} {top1.get('player_name')} "
+                    f"({top1.get('team')}) - OVER {top1.get('line')} {top1.get('market_display')} "
+                    f"(Score: {top1.get('confidence_score'):.3f})"
+                )
         print("=" * 60)
         return 0
     except Exception as exc:

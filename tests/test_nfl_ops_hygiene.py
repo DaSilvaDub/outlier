@@ -63,6 +63,7 @@ def test_pipeline_window_skips_latest_writes(tmp_path: Path, mock_api_client):
         date="2026-09-13",
         window="1pm",
         offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports" / "NFL",
     )
     assert summary["status"] == "OK"
     assert summary.get("window") == "1pm"

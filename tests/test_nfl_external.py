@@ -155,6 +155,8 @@ def test_pipeline_fixture_mode_never_loads_external_metrics(
     monkeypatch.setattr(nfl_pipeline, "load_external_metrics", forbidden)
     fixtures = Path(__file__).parent / "fixtures" / "nfl"
     summary = nfl_pipeline.NflPipeline(data_dir=tmp_path).run(
-        date="2026-09-13", offline_fixtures_dir=fixtures
+        date="2026-09-13",
+        offline_fixtures_dir=fixtures,
+        reports_dir=tmp_path / "reports" / "NFL",
     )
     assert summary["status"] == "OK"

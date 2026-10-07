@@ -62,6 +62,14 @@ from outlier_nfl.normalizer import (
     normalize_game_markets,
     normalize_player_props,
 )
+from outlier_nfl.alt_floors import (
+    AltFloorProp,
+    discover_alt_floor_candidates,
+    export_alt_floors,
+    generate_alt_floors_pipeline,
+    rank_alt_floors,
+    render_alt_floors_markdown,
+)
 from outlier_nfl.pipeline import NflPipeline
 from outlier_nfl.utils import (
     format_signed_line,
@@ -125,6 +133,13 @@ __all__: list[str] = [
     "build_team_index",
     "normalize_game_markets",
     "normalize_player_props",
+    # Alt Floors
+    "AltFloorProp",
+    "discover_alt_floor_candidates",
+    "rank_alt_floors",
+    "render_alt_floors_markdown",
+    "export_alt_floors",
+    "generate_alt_floors_pipeline",
     # Utilities
     "safe_write_json",
     "safe_read_json",

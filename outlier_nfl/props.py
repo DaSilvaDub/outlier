@@ -14,7 +14,12 @@ from outlier_nfl.config import (
     normalize_market,
     normalize_team,
 )
-from outlier_nfl.games import american_to_implied_probability, extract_book_prices
+from outlier_nfl.games import (
+    american_to_implied_probability,
+    extract_book_prices,
+    sportsbook_best_american,
+    sportsbook_implied_probability_pct,
+)
 from outlier_nfl.models import NflPlayerProp
 from outlier_nfl.utils import coerce_float, coerce_odds
 
@@ -108,6 +113,8 @@ def extract_player_props(
         if best_odds is None:
             best_odds = coerce_odds(outcome.get("bestOdds"))
         implied_prob = american_to_implied_probability(best_odds)
+        sb_best = sportsbook_best_american(books)
+        sb_implied = sportsbook_implied_probability_pct(books)
 
         # Hit rate statistics
         raw_stats = item.get("stats")
@@ -138,6 +145,8 @@ def extract_player_props(
                 books=books,
                 best_odds=best_odds,
                 implied_probability=implied_prob,
+                sportsbook_best_odds=sb_best,
+                sportsbook_implied_probability=sb_implied,
                 l5_hit_rate=l5,
                 l10_hit_rate=l10,
                 l20_hit_rate=l20,

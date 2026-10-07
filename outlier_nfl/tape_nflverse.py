@@ -15,7 +15,9 @@ Role fields (``qb``, ``rb1``, ``te``, ``wr_slot``, ``wr_deep``) come from the
 latest nflverse depth chart on or before the slate date, skipping players
 listed Out/Doubtful on that week's injury report; roles already in the tape
 only fill gaps. The inactive list is stored under ``inactive`` so the pipeline
-can keep those players out of matchup signals.
+can keep those players out of matchup signals. Inactives who held a first-string
+defensive spot on a recent depth chart are stored per team under
+``defensive_starters_out`` for the matchup engine's defensive-injury boost.
 
 Two league-relative grades are added:
 
@@ -40,7 +42,7 @@ import logging
 import os
 import re
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.request import Request, urlopen
@@ -65,6 +67,11 @@ INACTIVE_STATUSES: tuple[str, ...] = ("Out", "Doubtful")
 # nflverse depth-chart pos_slot values for wide receivers: 1/2 outside (X/Z), 8 slot.
 OUTSIDE_WR_SLOTS = {"1", "2"}
 SLOT_WR_SLOTS = {"8"}
+# nflverse (ESPN) defensive depth-chart groups are "Base 4-3 D" / "Base 3-4 D".
+DEFENSIVE_POS_GRP_SUFFIX = " D"
+# A ruled-out starter is often demoted on the next chart, so look back this far
+# for the rank-1 spot; older starts no longer describe the current lineup.
+DEF_STARTER_LOOKBACK_DAYS = 14
 _SUFFIX_RE = re.compile(r"\b(jr|sr|ii|iii|iv|v)\b")
 
 TAPE_NUMERIC_FIELDS: tuple[str, ...] = (
@@ -327,6 +334,46 @@ def depth_chart_roles(
     return roles
 
 
+def defensive_starters_out(
+    depth_rows: Iterable[Mapping[str, str]],
+    inactive: Mapping[str, list[dict[str, str]]],
+    as_of: date | None = None,
+) -> dict[str, list[str]]:
+    """Inactive players who held a rank-1 defensive spot on a recent depth chart.
+
+    Snapshots after ``as_of`` or more than ``DEF_STARTER_LOOKBACK_DAYS`` before it
+    are ignored. Players are matched by gsis id, then by name.
+    """
+    earliest = (as_of - timedelta(days=DEF_STARTER_LOOKBACK_DAYS)).isoformat() if as_of else ""
+    starter_ids: dict[str, set[str]] = defaultdict(set)
+    starter_names: dict[str, set[str]] = defaultdict(set)
+    for r in depth_rows:
+        day = str(r.get("dt") or "")[:10]
+        if not day or day < earliest or (as_of is not None and day > as_of.isoformat()):
+            continue
+        if not str(r.get("pos_grp") or "").endswith(DEFENSIVE_POS_GRP_SUFFIX):
+            continue
+        if _num(r.get("pos_rank")) != 1:
+            continue
+        team = _team(r.get("team"))
+        if r.get("gsis_id"):
+            starter_ids[team].add(str(r["gsis_id"]))
+        starter_names[team].add(_name_key(r.get("player_name")))
+
+    out: dict[str, list[str]] = {}
+    for raw_team, players in inactive.items():
+        team = _team(raw_team)
+        names = [
+            p["name"]
+            for p in players
+            if (p.get("gsis_id") and p["gsis_id"] in starter_ids[team])
+            or _name_key(p["name"]) in starter_names[team]
+        ]
+        if names:
+            out[team] = sorted(names)
+    return out
+
+
 def _clamp_grade(value: float) -> float:
     return round(max(20.0, min(99.0, value)), 1)
 
@@ -443,19 +490,30 @@ def _advanced_grades(
 
 def _auto_roles(
     season: int, before: date | None, game_rows: list[dict[str, str]]
-) -> tuple[dict[str, dict[str, str]], dict[str, list[dict[str, str]]]]:
-    """Depth-chart roles and inactives; empty on any fetch/parse failure."""
+) -> tuple[
+    dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]]
+]:
+    """Depth-chart roles, inactives and defensive starters out.
+
+    Inactives are None when the injury report could not be fetched, so callers
+    never mistake a failed fetch for a report with nobody out. Roles and
+    defensive starters out are empty on any depth-chart failure.
+    """
     try:
-        injuries = inactive_players(
+        injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
             fetch_csv(INJURIES_URL.format(season=season)), slate_week(game_rows, season, before)
         )
-        roles = depth_chart_roles(
-            fetch_csv(DEPTH_CHART_URL.format(season=season)), injuries, as_of=before
-        )
-        return roles, injuries
+    except Exception as exc:  # the trace reports the injury pillar as MISSING
+        logger.warning("Injury report unavailable: %s", exc)
+        injuries = None
+    try:
+        depth_rows = fetch_csv(DEPTH_CHART_URL.format(season=season))
+        roles = depth_chart_roles(depth_rows, injuries or {}, as_of=before)
+        defensive_out = defensive_starters_out(depth_rows, injuries or {}, as_of=before)
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
-        return {}, {}
+        roles, defensive_out = {}, {}
+    return roles, injuries, defensive_out
 
 
 def build_tape_payload(
@@ -470,20 +528,24 @@ def build_tape_payload(
     inactive: Mapping[str, list[dict[str, str]]] | None = None,
     advanced: bool = True,
     grades: Mapping[str, Mapping[str, float]] | None = None,
+    defensive_out: Mapping[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
     With ``auto_roles`` the depth chart + injury report are fetched unless
     ``depth_roles``/``inactive`` are supplied; depth-chart roles override
-    ``roles`` field by field. With ``advanced`` the pass-rush and QB grades
-    are fetched unless ``grades`` is supplied.
+    ``roles`` field by field, and the same fetch supplies ``defensive_out``.
+    With ``advanced`` the pass-rush and QB grades are fetched unless
+    ``grades`` is supplied.
     """
     if team_rows is None:
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
     if auto_roles and depth_roles is None and inactive is None:
-        depth_roles, inactive = _auto_roles(season, before, game_rows)
+        depth_roles, inactive, defensive_out = _auto_roles(season, before, game_rows)
+    # Only an injury report that was actually fetched (or supplied) counts as loaded.
+    injury_report_loaded = inactive is not None
     merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
     for team, team_roles in (depth_roles or {}).items():
         merged.setdefault(team, {}).update(team_roles)
@@ -508,20 +570,34 @@ def build_tape_payload(
         "roles_source": "nflverse depth_charts + injuries" if depth_roles else "existing tape",
         "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
+        "injury_report_loaded": injury_report_loaded,
+        "defensive_starters_out": {
+            t: list(names) for t, names in sorted((defensive_out or {}).items())
+        },
         "teams": teams,
     }
 
 
-def load_tape_inactives(nfl_dir: Path | str) -> dict[str, list[str]]:
-    """``inactive`` block of ``<nfl_dir>/tape/prior_week.json`` (empty when absent)."""
+def _load_tape_team_lists(nfl_dir: Path | str, key: str) -> dict[str, list[str]]:
+    """``{team: [names]}`` block ``key`` of ``<nfl_dir>/tape/prior_week.json`` (empty when absent)."""
     try:
         raw = json.loads((Path(nfl_dir) / "tape" / "prior_week.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    block = raw.get("inactive") if isinstance(raw, dict) else None
+    block = raw.get(key) if isinstance(raw, dict) else None
     if not isinstance(block, dict):
         return {}
     return {_team(t): [str(n) for n in names] for t, names in block.items() if isinstance(names, list)}
+
+
+def load_tape_inactives(nfl_dir: Path | str) -> dict[str, list[str]]:
+    """``inactive`` block of ``<nfl_dir>/tape/prior_week.json`` (empty when absent)."""
+    return _load_tape_team_lists(nfl_dir, "inactive")
+
+
+def load_tape_defensive_out(nfl_dir: Path | str) -> dict[str, list[str]]:
+    """``defensive_starters_out`` block of the tape (empty for tapes written before it existed)."""
+    return _load_tape_team_lists(nfl_dir, "defensive_starters_out")
 
 
 def write_tape(path: Path, payload: Mapping[str, Any]) -> Path | None:

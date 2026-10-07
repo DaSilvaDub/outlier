@@ -11,7 +11,8 @@ Honest contract:
   ``close_source="book_close"``. Refuses to copy snapshot odds as book close.
 - ``model_p`` / ``p_model`` are never copied from ``implied_probability``.
   Attach modes: pass | empirical_hit_rate | empirical_hit_rate_laplace |
-  empirical_hit_rate_beta | projection_nflverse_rate | hierarchy.
+  empirical_hit_rate_beta | empirical_hit_rate_market_prior |
+  projection_nflverse_rate | hierarchy.
 """
 
 from __future__ import annotations
@@ -22,10 +23,13 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 from outlier_nfl.calibration import (
     DEFAULT_LAPLACE_ALPHA,
+    DEFAULT_MARKET_PRIOR_KAPPA,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA,
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
+    MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
     attach_empirical_model_p_record,
+    attach_sportsbook_fields_record,
 )
 from outlier_nfl.projection import (
     MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
@@ -43,6 +47,7 @@ ATTACH_MODEL_P_MODES = (
     "empirical_hit_rate",
     "empirical_hit_rate_laplace",
     "empirical_hit_rate_beta",
+    "empirical_hit_rate_market_prior",
     "projection_nflverse_rate",
     "hierarchy",
 )
@@ -89,11 +94,58 @@ def _row_match_key_short(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def row_identity(row: Mapping[str, Any]) -> tuple[str, str]:
+    """``(player_id, team)`` as far as the row knows them; ``""`` means unknown.
+
+    Neither join key carries either field — Odds-API close rows have no team and
+    no player id, so putting them in a key would break the join the short key
+    exists for. They are used only to tell two players apart under one key.
+    """
+    return (
+        str(row.get("player_id") or "").strip().upper(),
+        str(row.get("team") or "").strip().upper(),
+    )
+
+
+def identities_conflict(left: tuple[str, str], right: tuple[str, str]) -> bool:
+    """Whether two rows under one key are *known* to be different players.
+
+    A blank side is unknown rather than a mismatch, the same tolerance
+    ``matchup._names_match`` and ``scorecard.lookup_consensus_line`` apply.
+    """
+    return any(a and b and a != b for a, b in zip(left, right))
+
+
+def merge_identities(left: tuple[str, str], right: tuple[str, str]) -> tuple[str, str]:
+    """Everything two non-conflicting rows together know about one player.
+
+    Accumulating is what makes the ambiguity check order-independent. Replacing
+    the stored identity instead lets a blank-identity row in the middle erase
+    what the key already knew, so a later conflicting row is compared against
+    blank and the collision is missed -- with rows ordered LAR, blank, NYJ, the
+    LAR prediction came back with the NYJ player's close.
+    """
+    return tuple(a or b for a, b in zip(left, right))  # type: ignore[return-value]
+
+
 def index_book_close_records(
     records: Sequence[Mapping[str, Any]],
 ) -> dict[tuple[Any, ...], dict[str, Any]]:
-    """Index close-feed rows under full and short join keys."""
+    """Index close-feed rows under full and short join keys.
+
+    Neither key identifies a player. The short key drops matchup/event_id, so
+    two games' rows for same-named players with the same market/line/side land on
+    it; the full key carries the game but no team or player id, so two
+    same-named players on opposing teams in one game land on *that*. Serving
+    either would attach another player's close, so a key two conflicting
+    identities claim is dropped, leaving the row without a close (which
+    ``attach_close_fields`` already reports honestly) rather than someone
+    else's.
+    """
     index: dict[tuple[Any, ...], dict[str, Any]] = {}
+    short_owner: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+    owner_identity: dict[tuple[Any, ...], tuple[str, str]] = {}
+    ambiguous: set[tuple[Any, ...]] = set()
     for raw in records:
         if not isinstance(raw, Mapping):
             continue
@@ -110,8 +162,37 @@ def index_book_close_records(
             "close_implied": close_implied,
             "close_source": CLOSE_SOURCE_BOOK,
         }
-        index[_row_match_key(raw)] = payload
-        index[_row_match_key_short(raw)] = payload
+        identity = row_identity(raw)
+        full_key = _row_match_key(raw)
+        short_key = _row_match_key_short(raw)
+
+        if full_key not in ambiguous:
+            prior = owner_identity.get(full_key)
+            if prior is not None and identities_conflict(prior, identity):
+                # Same name, market, line, side and game, different players.
+                ambiguous.add(full_key)
+            else:
+                owner_identity[full_key] = (
+                    merge_identities(prior, identity) if prior is not None else identity
+                )
+                index[full_key] = payload
+
+        if short_key not in ambiguous:
+            prior = owner_identity.get(short_key)
+            claimed = short_owner.get(short_key)
+            if (prior is not None and identities_conflict(prior, identity)) or (
+                claimed is not None and claimed != full_key
+            ):
+                ambiguous.add(short_key)
+            else:
+                short_owner[short_key] = full_key
+                owner_identity[short_key] = (
+                    merge_identities(prior, identity) if prior is not None else identity
+                )
+                index[short_key] = payload
+
+    for key in ambiguous:
+        index.pop(key, None)
     return index
 
 
@@ -157,6 +238,7 @@ def attach_close_fields(
     attach_model_p: str | None = None,
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     overwrite_model_p: bool = False,
@@ -218,9 +300,13 @@ def attach_close_fields(
                 # Preserve pre-existing non-book closes only if already stamped.
                 pass
 
+    # Always refresh sportsbook_* (does not redefine best_odds).
+    attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
+
     if model_mode == "pass":
         record.setdefault("model_p", record.get("model_p"))
         record.setdefault("model_p_source", record.get("model_p_source"))
+        attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
     elif model_mode == "empirical_hit_rate":
         attach_empirical_model_p_record(
             record, overwrite=overwrite_model_p, method="raw"  # type: ignore[arg-type]
@@ -241,6 +327,13 @@ def attach_close_fields(
             alpha=alpha,
             beta=beta,
         )
+    elif model_mode == "empirical_hit_rate_market_prior":
+        attach_empirical_model_p_record(
+            record,
+            overwrite=overwrite_model_p,
+            method="market_prior",
+            kappa=kappa,
+        )
     elif model_mode == "projection_nflverse_rate":
         if week_index is None:
             raise ValueError(
@@ -253,6 +346,7 @@ def attach_close_fields(
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE,
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE,
             MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA,
+            MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
         }:
             record.pop("model_p", None)
             record.pop("model_p_source", None)
@@ -272,10 +366,19 @@ def attach_close_fields(
             alpha=alpha,
         )
 
+    # Projection/hierarchy (and any mode) may overwrite model_p after the
+    # initial sportsbook_* stamp — refresh edge against the final model_p.
+    attach_sportsbook_fields_record(record, model_p=record.get("model_p"))
+
     return dict(record)
 
 
-def _model_p_note(model_mode: str, alpha: float, beta: float | None) -> str:
+def _model_p_note(
+    model_mode: str,
+    alpha: float,
+    beta: float | None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
+) -> str:
     if model_mode == "empirical_hit_rate":
         return (
             f"model_p from L10/L20/L5/season hit rates "
@@ -291,6 +394,12 @@ def _model_p_note(model_mode: str, alpha: float, beta: float | None) -> str:
         return (
             f"Beta(α,β) shrink of empirical hit rates (α={alpha}, β={beta}, "
             f"source={MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_BETA}); never market."
+        )
+    if model_mode == "empirical_hit_rate_market_prior":
+        return (
+            f"Beta shrink of empirical hit rates toward sportsbook-only implied "
+            f"prior (κ={kappa}, source={MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR}); "
+            "PrizePicks excluded from prior; never a raw copy of implied_probability."
         )
     if model_mode == "projection_nflverse_rate":
         return (
@@ -311,9 +420,10 @@ def enrich_prediction_payload(
     payload: Mapping[str, Any],
     *,
     mode: str = "snapshot_best",
-    attach_model_p: str | None = "empirical_hit_rate_laplace",
+    attach_model_p: str | None = "empirical_hit_rate_market_prior",
     alpha: float = DEFAULT_LAPLACE_ALPHA,
     beta: float | None = None,
+    kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     overwrite_model_p: bool = False,
@@ -342,6 +452,7 @@ def enrich_prediction_payload(
             attach_model_p=model_mode,
             alpha=alpha,
             beta=beta,
+            kappa=kappa,
             week_index=week_index,
             book_close_index=book_close_index,
             overwrite_model_p=overwrite_model_p,
@@ -376,9 +487,10 @@ def enrich_prediction_payload(
         "mode": model_mode,
         "alpha": alpha,
         "beta": beta,
+        "kappa": kappa,
         "n_with_model_p": n_model,
         "by_source": sources,
-        "note": _model_p_note(model_mode, alpha, beta),
+        "note": _model_p_note(model_mode, alpha, beta, kappa),
     }
     return out
 
@@ -408,11 +520,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--attach-model-p",
         choices=ATTACH_MODEL_P_MODES,
-        default="empirical_hit_rate_laplace",
+        default="empirical_hit_rate_market_prior",
         help=(
-            "empirical_hit_rate_laplace (default α=2) shrinks L10/L20/L5/season; "
+            "empirical_hit_rate_market_prior (default) shrinks L10/L20/L5/season "
+            "toward sportsbook-only implied (κ); laplace shrinks toward 0.5; "
             "hierarchy prefers nflverse projection then Laplace then raw; "
-            "never from implied_probability."
+            "never a raw copy of implied_probability."
         ),
     )
     parser.add_argument(
@@ -426,6 +539,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=None,
         help="Beta prior β (defaults to α when omitted; only used for beta mode).",
+    )
+    parser.add_argument(
+        "--kappa",
+        type=float,
+        default=DEFAULT_MARKET_PRIOR_KAPPA,
+        help=(
+            f"Market-prior Beta strength κ (default {DEFAULT_MARKET_PRIOR_KAPPA}); "
+            "α=prior·κ, β=(1−prior)·κ."
+        ),
     )
     parser.add_argument(
         "--nflverse-week-stats",
@@ -488,6 +610,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         attach_model_p=args.attach_model_p,
         alpha=args.alpha,
         beta=args.beta,
+        kappa=args.kappa,
         week_index=week_index,
         book_close_index=book_index,
         overwrite_model_p=args.overwrite_model_p
@@ -495,6 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         in {
             "empirical_hit_rate_laplace",
             "empirical_hit_rate_beta",
+            "empirical_hit_rate_market_prior",
             "projection_nflverse_rate",
             "hierarchy",
         },
