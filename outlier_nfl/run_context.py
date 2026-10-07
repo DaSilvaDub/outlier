@@ -12,13 +12,17 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from outlier_nfl.utils import nfl_season_for_date
 
 EASTERN = ZoneInfo("America/New_York")
+# How long after kickoff a game is assumed to still be in progress. Regulation
+# runs about 3h15m; 4h covers overtime and delays, so a week's data and a game's
+# postgame fields are admitted only once its last game has surely ended.
+GAME_END_BUFFER = timedelta(hours=4)
 
 RunMode = Literal["live", "fixture", "retrospective"]
 SourceStatus = Literal["AVAILABLE", "UNAVAILABLE", "REFUSED"]
@@ -143,6 +147,11 @@ def schedule_kickoff_utc(gameday: Any, gametime: Any) -> datetime | None:
     return local.replace(tzinfo=EASTERN).astimezone(UTC)
 
 
+def game_finished_by(kickoff: datetime | None, as_of_utc: datetime) -> bool:
+    """True once a game kicking off at ``kickoff`` has surely ended by ``as_of_utc``."""
+    return kickoff is not None and kickoff + GAME_END_BUFFER <= as_of_utc
+
+
 def before_week_from_schedule(
     schedule_records: Iterable[Mapping[str, Any]],
     slate_date: str,
@@ -151,8 +160,8 @@ def before_week_from_schedule(
     """First regular-season week whose data is NOT admissible for this run.
 
     Week-bound sources (NGS, PBP, player weeks) may use weeks strictly below the
-    returned value: weeks before the slate's week whose games had all kicked off
-    by ``as_of_utc``. Same-week games that finished earlier (e.g. Thursday for a
+    returned value: weeks before the slate's week whose games had all finished
+    (kickoff + ``GAME_END_BUFFER``) by ``as_of_utc``. Same-week games that finished earlier (e.g. Thursday for a
     Sunday slate) are deliberately excluded. Returns None when the schedule has
     no usable rows, so callers report the source UNAVAILABLE.
     """
@@ -176,12 +185,12 @@ def before_week_from_schedule(
         default=after_last,
     )
 
-    def started(g: Mapping[str, Any]) -> bool:
+    def finished(g: Mapping[str, Any]) -> bool:
         kick = try_parse_utc(g.get("kickoff_utc")) or schedule_kickoff_utc(
             g.get("gameday"), g.get("gametime")
         )
-        return kick is not None and kick < as_of_utc
+        return game_finished_by(kick, as_of_utc)
 
-    pending = min((w for w, games in by_week.items() if not all(started(g) for g in games)),
+    pending = min((w for w, games in by_week.items() if not all(finished(g) for g in games)),
                   default=after_last)
     return min(slate_week, pending)

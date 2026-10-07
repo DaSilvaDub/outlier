@@ -6,9 +6,10 @@ and starting QBs. ``spread_line`` is nflverse's convention: positive means the
 home team is favored.
 
 Upcoming games stay in the output (venue and kickoff are pregame facts), but
-for every game kicking off at or after the run's ``as_of_utc`` the postgame
-fields (``POSTGAME_FIELDS``: score, closing prices, observed weather) are
-blanked, so a replay cannot read results or closes it would not have had (F01).
+for every game not surely over by the run's ``as_of_utc`` (kickoff +
+``GAME_END_BUFFER``) the postgame fields (``POSTGAME_FIELDS``: score, closing
+prices, observed weather) are blanked, so a replay cannot read results or
+closes it would not have had (F01). A game in progress at ``as_of`` is not over.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from outlier_nfl.config import normalize_team
-from outlier_nfl.run_context import schedule_kickoff_utc
+from outlier_nfl.run_context import game_finished_by, schedule_kickoff_utc
 from outlier_nfl.tape_nflverse import SCHEDULES_URL
 
 from .common import Client, num
@@ -29,7 +30,7 @@ NUMERIC_FIELDS = (
     "away_moneyline", "home_spread_odds", "away_spread_odds", "over_odds", "under_odds",
     "temp", "wind", "home_rest", "away_rest",
 )
-# Known only once the game is played (or at close): blanked for games at/after the cutoff.
+# Known only once the game is played (or at close): blanked unless the game is over by as_of.
 POSTGAME_FIELDS = (
     "home_score", "away_score", "spread_line", "total_line", "home_moneyline",
     "away_moneyline", "home_spread_odds", "away_spread_odds", "over_odds", "under_odds",
@@ -66,7 +67,7 @@ def fetch(client: Client, season: int, as_of_utc: datetime) -> dict[str, Any]:
             record[field] = num(row.get(field))
         kickoff = schedule_kickoff_utc(row.get("gameday"), row.get("gametime"))
         record["kickoff_utc"] = kickoff.isoformat() if kickoff else None
-        if kickoff is None or kickoff >= as_of_utc:
+        if not game_finished_by(kickoff, as_of_utc):
             for field in POSTGAME_FIELDS:
                 record[field] = None
         records.append(record)

@@ -102,7 +102,7 @@ def test_schedule_records_environment_and_lines() -> None:
         {"season": "2025", "game_type": "REG", "week": "3", "game_id": "old"},
     ]
     out = schedule.fetch(  # type: ignore[arg-type]
-        FakeClient({"games.csv": rows}), 2026, as_of_utc=datetime(2026, 9, 28, tzinfo=timezone.utc)
+        FakeClient({"games.csv": rows}), 2026, as_of_utc=datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
     )["records"]
     assert len(out) == 1
     g = out[0]
