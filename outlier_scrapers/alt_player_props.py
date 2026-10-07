@@ -34,7 +34,9 @@ MIN_L10_HIT_PCT = 75.0
 # "Hardrock R" is deliberately NOT an alias here: it's a distinctly-named
 # book in the raw feed, not a formatting variant of "Hard Rock" -- treating
 # similarly-named books as identical would risk misattributing a price.
-ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset({"hardrock"})
+ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset(
+    {"hardrock", "fanatics", "midnite", "draftkings", "novig"}
+)
 
 ALT_PLAYER_PROPS_HEADER = [
     "league",
@@ -130,6 +132,56 @@ def _event_started(rec: dict[str, Any], now: datetime) -> bool:
     return not kept
 
 
+def _calculate_alt_player_prop_probability(
+    l10_pct: float | None,
+    season_pct: float | None,
+    l5_pct: float | None,
+    implied_p: float,
+) -> float:
+    """Empirical Bayes shrink hit rate toward market-implied probability."""
+    l10 = (l10_pct / 100.0) if l10_pct is not None else None
+    szn = (season_pct / 100.0) if season_pct is not None else None
+    l5 = (l5_pct / 100.0) if l5_pct is not None else None
+
+    if l10 is not None and szn is not None:
+        raw = 0.55 * l10 + 0.30 * szn + 0.15 * (l5 if l5 is not None else l10)
+    elif l10 is not None:
+        raw = 0.70 * l10 + 0.30 * (l5 if l5 is not None else l10)
+    elif szn is not None:
+        raw = szn
+    else:
+        raw = implied_p
+
+    prior_weight = 15.0
+    sample_weight = 10.0
+    shrunk = (raw * sample_weight + implied_p * prior_weight) / (sample_weight + prior_weight)
+    return round(shrunk, 4)
+
+
+def _floor_ladder_score(row: dict[str, Any]) -> float:
+    """Score a floor line balancing hit rate stability with playable odds."""
+    l5 = float(row.get("l5_pct") or 0.0)
+    l10 = float(row.get("l10_pct") or 0.0)
+    szn = float(row.get("season_pct") or 0.0)
+    odds = float(row.get("best_odds") or -110)
+
+    # Hit rate baseline
+    hit_base = (l10 * 0.40) + (l5 * 0.35) + (szn * 0.25)
+
+    # Odds efficiency factor: prioritize sweet-spot floor odds (-110 to -250)
+    # over severe minus-money juice (< -400, e.g. -700).
+    if -250 <= odds <= -110:
+        odds_factor = 1.15
+    elif -350 <= odds < -250:
+        odds_factor = 1.05
+    elif -500 <= odds < -350:
+        odds_factor = 0.90
+    else:
+        odds_factor = 0.75
+
+    return hit_base * odds_factor
+
+
 def _is_allowed_side(league: str, market: str, position: str) -> bool:
     if league == "WNBA":
         return market in WNBA_TARGET_MARKETS and position == "OVER"
@@ -185,14 +237,26 @@ def build_alt_player_props_board(
         if not player:
             continue
         player_id = str(rec.get("player_id") or "").strip()
-        
+        player_clean = player.casefold()
+
         # Enforce that this player is one of the EV OVER candidates
-        if ev_over_players is not None and player_id not in ev_over_players:
+        if (
+            ev_over_players is not None
+            and player_id not in ev_over_players
+            and player_clean not in ev_over_players
+        ):
             continue
-            
+
         outcome_id = str(rec.get("outcome_id") or context.get("outcome_id") or "").strip()
         if not outcome_id:
             continue
+
+        decimal_price = _american_to_decimal(best_odds)
+        implied_p = (1.0 / decimal_price) if decimal_price and decimal_price > 0 else 0.5
+        season_val = percent_number(rec.get("season_pct")) or 0.0
+        model_p = _calculate_alt_player_prop_probability(l10, season_val, l5, implied_p)
+        edge = round((model_p - implied_p) * 100.0, 2)
+        units = 0.5 if edge > 0 else ""
 
         eligible.append(
             {
@@ -202,7 +266,7 @@ def build_alt_player_props_board(
                 "matchup": rec.get("matchup") or rec.get("matchup_raw") or "",
                 "player": player,
                 "player_id": player_id,
-                "_player_key": player_id or player.casefold(),
+                "_player_key": player_id or player_clean,
                 "team": rec.get("team") or rec.get("team_raw") or "",
                 "market": market,
                 "position": position,
@@ -211,14 +275,22 @@ def build_alt_player_props_board(
                 "best_odds": best_odds,
                 "l5_pct": l5,
                 "l10_pct": l10,
-                "season_pct": percent_number(rec.get("season_pct")) or 0.0,
+                "season_pct": season_val,
                 "market_id": rec.get("market_id") or "",
                 "outcome_id": outcome_id,
+                "model_prob": model_p,
+                "edge_pct": edge,
+                "recommended_units": units,
             }
         )
 
     eligible.sort(
-        key=lambda row: (row["l10_pct"], row["season_pct"], -float(row["best_odds"])),
+        key=lambda row: (
+            _floor_ladder_score(row),
+            row["l10_pct"],
+            row["season_pct"],
+            -float(row["best_odds"]),
+        ),
         reverse=True,
     )
     by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)

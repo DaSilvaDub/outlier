@@ -1037,6 +1037,8 @@ def _apply_quality_and_signal_flags(
         signal_flags.append("september_pitcher_so_under")
     if slate_quality.guard_rebound_over_signal(row, l5_pct=l5_rate, l10_pct=l10_rate):
         signal_flags.append("guard_rebound_over_support")
+    if slate_quality.is_floor_ladder_opportunity(row):
+        signal_flags.append("floor_ladder_opportunity")
     # Public-money flags live only on signal_flags — never card.flags /
     # data_quality_flags (those feed actionable=false via not dq_flags).
     from outlier_scrapers.cards import public_money_signal_flags

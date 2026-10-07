@@ -582,6 +582,50 @@ def opponent_high_k_rate_conflict(row: dict[str, Any]) -> bool:
     return (line - proj_mean) < 1.5
 
 
+def is_floor_ladder_opportunity(row: dict[str, Any]) -> bool:
+    """True for discounted floor lines backed by projection cushion and hit rates."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+
+    dq_flags = str(row.get("data_quality_flags") or "")
+    if "projection_side_conflict" in dq_flags:
+        return False
+
+    line = _to_float(row.get("line"))
+    if line is None:
+        return False
+
+    proj_mean = _to_float(row.get("projection_mean"))
+    line_open = _to_float(row.get("line_open"))
+
+    # Must have a projection cushion (mean >= line + 0.75) or a line discount below open (open >= line + 0.5)
+    has_proj_cushion = proj_mean is not None and proj_mean >= line + 0.75
+    has_line_discount = line_open is not None and line_open >= line + 0.5
+    if not (has_proj_cushion or has_line_discount):
+        return False
+
+    # Price must be in favored/floor territory (e.g. -350 to -110, or decimal 1.20 to 1.95)
+    dec_price = _to_float(row.get("decimal_price"))
+    if dec_price is not None:
+        if not (1.20 <= dec_price <= 1.95):
+            return False
+    else:
+        price = _to_float(row.get("price"))
+        if price is not None:
+            if not (-350 <= price <= -110):
+                return False
+
+    # Hit rate or independent edge support
+    hit_comp = _to_float(row.get("hit_rate_component"))
+    ind_edge = _to_float(row.get("independent_edge_pct"))
+    has_hit_support = hit_comp is not None and hit_comp >= 70.0
+    has_ind_edge = ind_edge is not None and ind_edge >= 0.0
+
+    return has_hit_support or has_ind_edge
+
+
 def september_pitcher_so_under_signal(row: dict[str, Any]) -> bool:
     """True for late-season MLB Pitcher SO Unders benefiting from shortened hooks/caps."""
     if not _is_mlb_so_row(row):

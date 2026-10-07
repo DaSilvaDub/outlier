@@ -377,9 +377,33 @@ def write_pack(
 
     ev_over_players: set[str] = set()
     for row in rows:
+        if " OVER " not in str(row.get("selection") or "").upper():
+            continue
         edge = _to_float(row.get("edge_pct"))
-        if " OVER " in str(row.get("selection") or "").upper() and edge is not None and edge > 0:
-            ev_over_players.add(str(row.get("player_id") or "").strip())
+        ind_edge = _to_float(row.get("independent_edge_pct"))
+        proj_mean = _to_float(row.get("projection_mean"))
+        line = _to_float(row.get("line"))
+        hit_comp = _to_float(row.get("hit_rate_component"))
+        dq_flags = str(row.get("data_quality_flags") or "")
+        sig_flags = str(row.get("signal_flags") or "")
+
+        # Explicit conflict means player is disqualified for OVER
+        if "projection_side_conflict" in dq_flags:
+            continue
+
+        has_market_edge = edge is not None and edge > 0
+        has_model_edge = ind_edge is not None and ind_edge > 0
+        has_floor_cushion = proj_mean is not None and line is not None and proj_mean >= line + 0.5
+        has_hit_support = hit_comp is not None and hit_comp >= 70.0
+        is_floor_opportunity = "floor_ladder_opportunity" in sig_flags
+
+        if has_market_edge or has_model_edge or has_floor_cushion or has_hit_support or is_floor_opportunity:
+            pid = str(row.get("player_id") or "").strip()
+            if pid:
+                ev_over_players.add(pid)
+            pname = str(row.get("player") or "").strip().casefold()
+            if pname:
+                ev_over_players.add(pname)
     ev_over_players.discard("")
 
     alt_player_rows: list[dict[str, Any]] = []
