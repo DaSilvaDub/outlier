@@ -95,6 +95,30 @@ def test_run_writer_refuses_reuse(tmp_path):
         RunWriter(tmp_path, "r1")
 
 
+
+def test_bundle_rename_retries_a_transient_windows_lock(tmp_path, monkeypatch):
+    """The staging→runs/<id> folder rename survives a briefly locked file (Windows)."""
+    import outlier_nfl.utils as nfl_utils
+
+    monkeypatch.setattr(nfl_utils.time, "sleep", lambda _s: None)
+    writer = RunWriter(tmp_path, "r-lock")
+    writer.stage_json("a.json", {"x": 1}, publish=[tmp_path / "out" / "a.json"])
+    real_replace = Path.replace
+    calls: list[Path] = []
+
+    def flaky_replace(self: Path, target):  # first folder rename hits a sharing violation
+        if self == writer.stage_dir and not calls:
+            calls.append(self)
+            raise PermissionError(13, "The process cannot access the file", str(self))
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    writer.commit({}, pointers=[tmp_path / "out" / "ptr.json"])
+    assert calls == [writer.stage_dir]
+    assert (writer.run_dir / "manifest.json").is_file()
+    assert not writer.stage_dir.exists()
+    assert json.loads((tmp_path / "out" / "a.json").read_text()) == {"x": 1}
+
 # ---------------------------------------------------------------------------
 # F11: one suffix per run; window and after-kickoff runs never replace originals
 # ---------------------------------------------------------------------------

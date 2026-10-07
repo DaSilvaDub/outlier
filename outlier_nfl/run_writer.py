@@ -124,7 +124,9 @@ class RunWriter:
         body = {**dict(manifest), "run_id": self.run_id, "artifacts": artifacts}
         manifest_bytes = json.dumps(body, indent=2, default=str, ensure_ascii=False).encode("utf-8")
         (self.stage_dir / MANIFEST_NAME).write_bytes(manifest_bytes)
-        os.replace(self.stage_dir, self.run_dir)
+        # Same transient-lock retry as the published copies: on Windows an indexer or
+        # antivirus scan briefly holding a staged file makes the folder rename fail.
+        _replace_with_retry(self.stage_dir, self.run_dir)
         self.committed = True
 
         for name, dests in self._publish.items():
