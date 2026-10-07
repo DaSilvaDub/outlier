@@ -417,3 +417,76 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
 
     # Brian Thomas Jr. (WR1) should have higher confidence score than Parker Washington (WR3)
     assert rec_cands["Brian Thomas Jr."].confidence_score > rec_cands["Parker Washington"].confidence_score
+
+
+def test_windowed_run_does_not_clobber_the_undated_csv():
+    """A write_latest=False run must leave the slate-wide artifacts alone.
+
+    ``nfl_alt_floors.csv`` is the undated "current slate" export, the same role
+    ``nfl_alt_floors_latest.json`` plays. A windowed run (``--window late``
+    sets ``write_latest=False``) only carries part of the slate, so rewriting it
+    would leave the current CSV disagreeing with the current JSON.
+    """
+    def _prop(name: str, rank: int) -> AltFloorProp:
+        return AltFloorProp(
+            player_name=name,
+            team="CIN",
+            opponent="JAX",
+            matchup="CIN vs JAX",
+            market="PASS_YDS",
+            market_display="Passing Yards",
+            position="OVER",
+            line=224.5,
+            consensus_line=274.5,
+            cushion=50.0,
+            cushion_pct=18.2,
+            target_book="HARDROCK",
+            target_odds=-400,
+            implied_probability=0.8,
+            l5_hit_rate=0.8,
+            l10_hit_rate=0.8,
+            season_hit_rate=0.8,
+            confidence_score=0.8,
+            category_rank=rank,
+            master_rank=rank,
+            rationale="r",
+        )
+
+    with tempfile.TemporaryDirectory() as tmp_dir_str:
+        tmp_path = Path(tmp_dir_str)
+        exports_dir = tmp_path / "exports"
+        reports_dir = tmp_path / "reports"
+
+        full = [_prop("QB1", 1), _prop("QB2", 2), _prop("QB3", 3)]
+        export_alt_floors(
+            {"PASS_YDS": full},
+            full,
+            exports_dir=exports_dir,
+            reports_dir=reports_dir,
+            date_str="2026-10-04",
+            write_latest=True,
+        )
+        csv_main = exports_dir / "nfl_alt_floors.csv"
+        with open(csv_main, "r", encoding="utf-8") as f:
+            assert len(list(csv.DictReader(f))) == 3
+
+        partial = [_prop("QB1", 1)]
+        outputs = export_alt_floors(
+            {"PASS_YDS": partial},
+            partial,
+            exports_dir=exports_dir,
+            reports_dir=reports_dir,
+            date_str="2026-10-04",
+            write_latest=False,
+        )
+
+        # Full-slate current artifacts survive the windowed run.
+        with open(csv_main, "r", encoding="utf-8") as f:
+            assert len(list(csv.DictReader(f))) == 3
+        with open(exports_dir / "nfl_alt_floors_latest.json", "r", encoding="utf-8") as f:
+            assert json.load(f)["count"] == 3
+
+        # The reported CSV path is the dated one that this run actually wrote.
+        assert Path(outputs["csv"]).name == "nfl_alt_floors_2026-10-04.csv"
+        with open(outputs["csv"], "r", encoding="utf-8") as f:
+            assert len(list(csv.DictReader(f))) == 1
