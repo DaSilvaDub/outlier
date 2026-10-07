@@ -231,6 +231,8 @@ def load_prediction_snapshot(
         if inferred == "tier1" and not is_tier1 and require_tier1_or_matchup:
             pass
         line = raw.get("line")
+        if line is None:
+            continue
         try:
             line_f = float(line)
         except (TypeError, ValueError):

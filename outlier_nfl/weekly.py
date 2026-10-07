@@ -58,7 +58,7 @@ def run_week(
     if events is None:
         schedule = pipeline._get_client().fetch_schedule()
         events = schedule.get("events", []) if isinstance(schedule, dict) else []
-    dates = remaining_week_dates(events, today)
+    dates = remaining_week_dates(events or [], today)
     logger.info("Week of %s: slate dates %s", week_start(today), dates or "none")
 
     payloads: list[dict[str, Any]] = []

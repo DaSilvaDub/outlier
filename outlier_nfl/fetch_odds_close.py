@@ -351,6 +351,8 @@ def map_event_odds_to_close_records(
                 point_raw = outcome.get("point")
                 if point_raw is None and outlier_mkt == "ANYTIME_TD":
                     point_raw = 0.5
+                if point_raw is None:
+                    continue
                 try:
                     line = float(point_raw)
                 except (TypeError, ValueError):

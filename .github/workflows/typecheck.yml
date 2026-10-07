@@ -27,8 +27,8 @@ jobs:
 
     - name: Run MyPy
       run: |
-        python -m mypy outlier_scrapers
+        python -m mypy outlier_scrapers outlier_nfl
 
     - name: Run Pyright
       run: |
-        pyright outlier_scrapers
+        pyright outlier_scrapers outlier_nfl
