@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import logging
+from collections.abc import MutableMapping
 from typing import Any
 
 from outlier_nfl.config import is_team_total
@@ -159,10 +160,10 @@ def fill_sportsbook_price_fields(
 
 
 def attach_sportsbook_fields_record(
-    record: dict[str, Any],
+    record: MutableMapping[str, Any],
     *,
     model_p: float | None = None,
-) -> dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """Mutate a prop dict with sportsbook_* fields from ``books``.
 
     Does not modify ``best_odds`` / ``implied_probability`` (those may include
@@ -356,7 +357,7 @@ def attach_empirical_model_p(
     ``implied_probability`` into ``model_p``. When ``attach_sportsbook`` is
     True, refreshes sportsbook_* fields (PrizePicks excluded from best).
     """
-    sb = fill_sportsbook_price_fields(books=prop.books, model_p=None) if attach_sportsbook else {
+    sb: dict[str, Any] = fill_sportsbook_price_fields(books=prop.books, model_p=None) if attach_sportsbook else {
         "sportsbook_best_odds": prop.sportsbook_best_odds,
         "sportsbook_implied_probability": prop.sportsbook_implied_probability,
         "sportsbook_edge_pts": prop.sportsbook_edge_pts,
@@ -432,7 +433,7 @@ def attach_empirical_model_p(
 
 
 def attach_empirical_model_p_record(
-    record: dict[str, Any],
+    record: MutableMapping[str, Any],
     *,
     overwrite: bool = False,
     method: str = "raw",
@@ -441,7 +442,7 @@ def attach_empirical_model_p_record(
     market_prior: float | None = None,
     kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     attach_sportsbook: bool = True,
-) -> dict[str, Any]:
+) -> MutableMapping[str, Any]:
     """Mutate/return a prop dict with empirical ``model_p`` when missing.
 
     Same contract as :func:`attach_empirical_model_p` for JSON artifacts

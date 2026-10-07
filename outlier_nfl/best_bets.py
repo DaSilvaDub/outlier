@@ -843,7 +843,7 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
     # Players whose market's NGS kind (receiving/rushing/passing) found no rows.
     no_ngs = sorted(src.ngs_misses)
     events = {str(p.get("event_id")) for p in picks}
-    opponents = {p.get("opponent") for p in picks if p.get("opponent")}
+    opponents = {opp for p in picks if (opp := p.get("opponent"))}
     return {
         "external_sources": {
             source: {"loaded": src.loaded.get(source, 0), "consumed_keys": len(src.used.get(source, ()))}

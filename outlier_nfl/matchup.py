@@ -305,14 +305,16 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
     home_tts = [g for g in team_totals if g.team == home]
     away_tts = [g for g in team_totals if g.team == away]
 
-    if home_tts and max(home_tts, key=lambda x: len(x.books or ())).line is not None:
-        home_tt = float(max(home_tts, key=lambda x: len(x.books or ())).line)
+    home_best = max(home_tts, key=lambda x: len(x.books or ())) if home_tts else None
+    away_best = max(away_tts, key=lambda x: len(x.books or ())) if away_tts else None
+    if home_best is not None and home_best.line is not None:
+        home_tt = float(home_best.line)
         home_tt_source = "market"
     else:
         home_tt = 24.0
         home_tt_source = "default"
-    if away_tts and max(away_tts, key=lambda x: len(x.books or ())).line is not None:
-        away_tt = float(max(away_tts, key=lambda x: len(x.books or ())).line)
+    if away_best is not None and away_best.line is not None:
+        away_tt = float(away_best.line)
         away_tt_source = "market"
     else:
         away_tt = 21.0

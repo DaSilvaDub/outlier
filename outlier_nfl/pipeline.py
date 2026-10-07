@@ -17,8 +17,9 @@ from typing import Any
 from outlier_nfl.external import Client as ExternalClient, load_external_metrics
 
 # Ensure Windows stdout handles UTF-8 gracefully
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None) if sys.stdout else None
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(encoding="utf-8", errors="replace")
 
 from outlier_nfl.api import OutlierNflApiClient
 from outlier_nfl.constants import (
@@ -542,8 +543,8 @@ class NflPipeline:
             matchup_props_payload,
         )
 
+        window_slug = window.strip().lower() if window else ""
         if window:
-            window_slug = window.strip().lower()
             safe_write_json(
                 self.normalized_dir / f"nfl_games_{target_date}_{window_slug}.json", games_payload
             )
