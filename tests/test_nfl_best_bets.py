@@ -466,3 +466,20 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="trace exploded"):
         run_week(pipeline, date(2026, 9, 13), events=events, offline_fixtures_dir=FIXTURES_DIR,
                  reports_dir=tmp_path / "reports")
+
+
+def test_run_week_null_schedule_events_fails_instead_of_empty_card(tmp_path):
+    """``"events": null`` from the schedule must not become an empty weekly card."""
+    from outlier_nfl.weekly import run_week
+
+    class _Client:
+        def fetch_schedule(self):
+            return {"events": None}
+
+    class _Pipeline:
+        def _get_client(self):
+            return _Client()
+
+    with pytest.raises(TypeError):
+        run_week(_Pipeline(), date(2026, 10, 6), reports_dir=tmp_path)  # type: ignore[arg-type]
+    assert not any(tmp_path.iterdir())

@@ -55,10 +55,15 @@ def run_week(
     run_stamp: str | None = None,
 ) -> dict[str, Any]:
     """Run each remaining slate date and write the merged weekly card."""
+    # A schedule payload with ``"events": null`` must fail loudly here rather
+    # than publish an empty weekly card; do not coerce it to ``[]``.
+    week_events: Iterable[Mapping[str, Any]]
     if events is None:
         schedule = pipeline._get_client().fetch_schedule()
-        events = schedule.get("events", []) if isinstance(schedule, dict) else []
-    dates = remaining_week_dates(events or [], today)
+        week_events = schedule.get("events", []) if isinstance(schedule, dict) else []
+    else:
+        week_events = events
+    dates = remaining_week_dates(week_events, today)
     logger.info("Week of %s: slate dates %s", week_start(today), dates or "none")
 
     payloads: list[dict[str, Any]] = []
