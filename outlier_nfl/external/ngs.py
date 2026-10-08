@@ -1,7 +1,8 @@
 """NFL Next Gen Stats adapter (nflverse ``nextgen_stats`` release).
 
-Returns one record per player-week of the regular season, weeks 1..``through_week``
-(week 0 rows are nflverse season aggregates and are skipped).
+Returns one record per player-week of the regular season for weeks strictly
+before ``before_week`` (the run's as-of cutoff, F01); week 0 rows are nflverse
+season aggregates and are skipped.
 """
 
 from __future__ import annotations
@@ -34,8 +35,11 @@ NGS_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def fetch(client: Client, season: int, kind: str, through_week: int = 22) -> dict[str, Any]:
-    """Player-week NGS records for ``kind`` in ("passing", "rushing", "receiving")."""
+def fetch(client: Client, season: int, kind: str, before_week: int) -> dict[str, Any]:
+    """Player-week NGS records for ``kind`` ("passing", "rushing", "receiving").
+
+    Only weeks strictly before ``before_week`` are kept (the run's as-of cutoff).
+    """
     if kind not in NGS_FIELDS:
         raise ValueError(f"Unknown NGS kind: {kind!r}")
     records: list[dict[str, Any]] = []
@@ -43,7 +47,7 @@ def fetch(client: Client, season: int, kind: str, through_week: int = 22) -> dic
         if str(row.get("season")) != str(season) or row.get("season_type") != "REG":
             continue
         week = int(num(row.get("week")) or 0)
-        if week < 1 or week > through_week:
+        if week < 1 or week >= before_week:
             continue
         team = str(row.get("team_abbr") or "")
         record: dict[str, Any] = {

@@ -237,3 +237,22 @@ def test_grade_signals_does_not_borrow_a_line_from_another_game() -> None:
     mismatch = {(g.tag, g.market): g for g in graded}[("MATCHUP_RUSH_MISMATCH", "RUSH_YDS")]
     # SCRIPTS' signals are all event "e1"; the e2 prop must not grade them.
     assert mismatch.line is None and mismatch.hit_vs_line is None
+
+
+def _signal(event_id: str, player: str) -> sc.GradedSignal:
+    return sc.GradedSignal("2026-10-04", 4, event_id, "EFFICIENCY_HOT", player, "LAR", "REC_YDS",
+                           "UNDER", 50.0, 20.0, True, None, None)
+
+
+def test_partial_replay_keeps_unrelated_ledger_rows(tmp_path: Path) -> None:
+    """F11: a replay that grades one event must not delete the date's other events."""
+    ledger = tmp_path / "scorecard" / "ledger.jsonl"
+    sc.update_ledger(ledger, [_signal(f"e{i}", f"P{i}") for i in range(6)], "2026-10-04")
+    replay = [sc.GradedSignal(**{**_signal("e0", "P0-regraded").__dict__, "run_id": "R2"})]
+    rows = sc.update_ledger(ledger, replay, "2026-10-04")
+    assert sorted(r["event_id"] for r in rows) == ["e0", "e1", "e2", "e3", "e4", "e5"]
+    e0 = next(r for r in rows if r["event_id"] == "e0")
+    assert e0["player"] == "P0-regraded" and e0["run_id"] == "R2"
+    # An event in scope with no signals any more is cleared; others still survive.
+    rows = sc.update_ledger(ledger, [], "2026-10-04", event_ids={"e1"})
+    assert sorted(r["event_id"] for r in rows) == ["e0", "e2", "e3", "e4", "e5"]

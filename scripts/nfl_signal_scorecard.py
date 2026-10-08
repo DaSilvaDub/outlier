@@ -10,7 +10,9 @@ nfl_calibrated_props_<date>.json for consensus lines), downloads the season's
 nflverse player-week stats, then:
 
 - writes reports/NFL/<date>_Signal_Scorecard.md,
-- replaces this date's rows in data/NFL/scorecard/ledger.jsonl (cumulative),
+- replaces this date's rows for the graded events in data/NFL/scorecard/ledger.jsonl
+  (cumulative; rows for other events on the same date are kept), stamping each
+  row with the pipeline run_id and the sha256 of the scripts file it graded,
 - prints the slate and cumulative per-signal hit rates.
 
 Run it after the slate's games are final and nflverse has posted them
@@ -20,7 +22,10 @@ Run it after the slate's games are final and nflverse has posted them
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import date as date_cls
+import hashlib
+import json
 from pathlib import Path
 import sys
 
@@ -80,7 +85,13 @@ def main() -> int:
         return 1
 
     graded, skipped = grade_signals(slate_iso, week, scripts, player_rows, props)
-    ledger = update_ledger(LEDGER_PATH, graded, slate_iso)
+    scripts_file = NORMALIZED_DIR / f"nfl_matchup_scripts_{slate_iso}.json"
+    source_bytes = scripts_file.read_bytes()
+    run_id = json.loads(source_bytes.decode("utf-8")).get("run_id")
+    source_sha = hashlib.sha256(source_bytes).hexdigest()
+    graded = [replace(g, run_id=run_id, source_sha256=source_sha) for g in graded]
+    event_ids = {str(r.get("event_id")) for r in scripts if r.get("event_id")}
+    ledger = update_ledger(LEDGER_PATH, graded, slate_iso, event_ids=event_ids)
     slate_summary = summarize([g.__dict__ for g in graded])
     cumulative = summarize(ledger)
     baselines = direction_baselines(week, player_rows, {g.market for g in graded})

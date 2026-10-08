@@ -8,7 +8,9 @@ and applies those signals onto consensus player props.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, date, datetime
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -18,6 +20,8 @@ from outlier_nfl.config import PROP_TIMES_SACKED, is_team_total, normalize_team
 from outlier_nfl.calibration import attach_empirical_model_p
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
+from outlier_nfl.run_context import RunContext, SourceRecord, try_parse_utc
+from outlier_nfl.tape_nflverse import tape_team_lists
 
 logger = logging.getLogger("outlier_nfl.matchup")
 
@@ -104,14 +108,146 @@ class MatchupScript:
         return payload
 
 
+# Hand-built Week-1 tapes shipped with the package/tests: fixture replays only (F02).
+PACKAGED_TAPE_PATHS = (
+    Path(__file__).resolve().parent / "tape" / "prior_week_tape.json",
+    Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "nfl" / "prior_week_tape.json",
+)
+
+
+def _tape_teams(raw: Any) -> dict[str, dict[str, Any]]:
+    teams = raw.get("teams", raw) if isinstance(raw, dict) else {}
+    if not isinstance(teams, dict):
+        return {}
+    loaded = {}
+    for code, row in teams.items():
+        if not isinstance(row, dict):
+            continue
+        canonical = normalize_team(str(code)) or str(code).strip().upper()
+        loaded[canonical] = dict(row)
+    return loaded
+
+
+@dataclass
+class TapeEnvelope:
+    """The one validated tape read of a run: team rows plus the raw envelope.
+
+    Inactives, defensive starters out and the injury report all come from here,
+    so a refused tape disables every tape-derived input at once.
+    """
+
+    teams: dict[str, dict[str, Any]] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
+    source: SourceRecord = field(
+        default_factory=lambda: SourceRecord("tape", "UNAVAILABLE", "no tape found")
+    )
+
+    @property
+    def admitted(self) -> bool:
+        return self.source.status == "AVAILABLE"
+
+    def team_lists(self, key: str) -> dict[str, list[str]]:
+        """``{team: [names]}`` block ``key`` of the admitted tape (empty otherwise)."""
+        return tape_team_lists(self.payload, key) if self.admitted else {}
+
+    def injury_report(self) -> dict[str, list[str]] | None:
+        """Inactives, or None unless an admitted tape confirms the report was fetched."""
+        if not self.admitted or self.payload.get("injury_report_loaded") is not True:
+            return None
+        if not isinstance(self.payload.get("inactive"), dict):
+            return None
+        return self.team_lists("inactive")
+
+
+def _tape_written_at(raw: Mapping[str, Any], path: Path) -> datetime:
+    """When the tape became knowable: its own as-of claim, else fetch time, else mtime."""
+    for key in ("as_of_utc", "fetched_at_utc"):
+        stamp = try_parse_utc(raw.get(key))
+        if stamp is not None:
+            return stamp
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+
+
+def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext) -> str | None:
+    """Why a local tape cannot be used at ``ctx`` (None when it is admissible)."""
+    season = raw.get("season")
+    if season is None:
+        return "envelope has no season"
+    if ctx.season is None or str(season) != str(ctx.season):
+        return f"tape season {season} != slate season {ctx.season}"
+    before = str(raw.get("before") or "")
+    if not before:
+        return "envelope has no 'before' date"
+    try:
+        before_day = date.fromisoformat(before[:10])
+    except ValueError:
+        return f"unparseable 'before' {before!r}"
+    if before_day > date.fromisoformat(ctx.slate_date):
+        return f"built from games before {before_day}, after slate {ctx.slate_date}"
+    if ctx.historical:  # retrospective or replay: the tape must predate as_of
+        written = _tape_written_at(raw, path)
+        if written > ctx.as_of_utc:
+            return f"tape written {written.isoformat()} after as_of {ctx.as_of_iso}"
+    return None
+
+
+def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext) -> TapeEnvelope:
+    """Read and admit the run's tape (F02: point-in-time tape only).
+
+    Local ``tape/prior_week.json`` then ``tape/latest.json`` must match the slate
+    season, carry a ``before`` date on or before the slate and, for a
+    retrospective or replay run, have been knowable at ``as_of``. The packaged Week-1 tapes
+    are used only in fixture mode; elsewhere a missing or refused tape yields no
+    teams (REFUSED/UNAVAILABLE) rather than silently stale data.
+    """
+    root = Path(nfl_dir)
+    candidates = [
+        (root / "tape" / "prior_week.json", False),
+        (root / "tape" / "latest.json", False),
+    ]
+    if ctx.mode == "fixture":
+        candidates += [(p, True) for p in PACKAGED_TAPE_PATHS]
+    refusals: list[str] = []
+    for path, packaged in candidates:
+        if not path.exists():
+            continue
+        try:
+            data = path.read_bytes()
+            raw = json.loads(data.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            refusals.append(f"{path.name}: unreadable ({exc})")
+            continue
+        teams = _tape_teams(raw)
+        if not teams:
+            refusals.append(f"{path.name}: no teams")
+            continue
+        reason = None if packaged else tape_inadmissible_reason(raw, path, ctx)
+        if reason:
+            refusals.append(f"{path.name}: {reason}")
+            continue
+        return TapeEnvelope(
+            teams=teams,
+            payload=raw if isinstance(raw, dict) else {},
+            source=SourceRecord(
+                "tape", "AVAILABLE", "packaged fixture tape" if packaged else None,
+                rows_admitted=len(teams), sha256=hashlib.sha256(data).hexdigest(),
+            ),
+        )
+    if refusals:
+        return TapeEnvelope(source=SourceRecord("tape", "REFUSED", "; ".join(refusals)))
+    if any(p.exists() for p in PACKAGED_TAPE_PATHS):
+        reason = "no local tape; packaged tape is fixture-only (run with --refresh-tape)"
+        return TapeEnvelope(source=SourceRecord("tape", "REFUSED", reason))
+    return TapeEnvelope()
+
+
 def load_prior_week_tape(nfl_dir: Path | str) -> dict[str, dict[str, Any]]:
-    """Load prior-week unit tape from data/NFL/tape/prior_week.json or latest.json."""
+    """Unvalidated tape teams for tests and research (pipeline runs use load_tape_envelope)."""
     root = Path(nfl_dir)
     search_paths = [
         root / "tape" / "prior_week.json",
         root / "tape" / "latest.json",
-        Path(__file__).resolve().parent / "tape" / "prior_week_tape.json",
-        Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "nfl" / "prior_week_tape.json",
+        *PACKAGED_TAPE_PATHS,
     ]
     for path in search_paths:
         if not path.exists():
@@ -121,15 +257,7 @@ def load_prior_week_tape(nfl_dir: Path | str) -> dict[str, dict[str, Any]]:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("Failed reading matchup tape %s: %s", path, exc)
             continue
-        teams = raw.get("teams", raw) if isinstance(raw, dict) else {}
-        if not isinstance(teams, dict):
-            continue
-        loaded = {}
-        for code, row in teams.items():
-            if not isinstance(row, dict):
-                continue
-            canonical = normalize_team(str(code)) or str(code).strip().upper()
-            loaded[canonical] = dict(row)
+        loaded = _tape_teams(raw)
         if loaded:
             return loaded
     return {}
