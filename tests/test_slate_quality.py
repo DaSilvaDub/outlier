@@ -628,3 +628,14 @@ def test_is_floor_ladder_opportunity_detects_dustin_may_profile():
     longshot_row = dict(may_row, price=150, decimal_price=2.50)
     assert is_floor_ladder_opportunity(longshot_row) is False
 
+    # AST and REB lines below 3.5 are rejected
+    ast_low_row = dict(may_row, market_type="AST", selection="Player - Assists OVER 2.5", line=2.5)
+    assert is_floor_ladder_opportunity(ast_low_row) is False
+    ast_valid_row = dict(may_row, market_type="AST", selection="Player - Assists OVER 3.5", line=3.5, projection_mean=5.0)
+    assert is_floor_ladder_opportunity(ast_valid_row) is True
+
+    reb_low_row = dict(may_row, market_type="REB", selection="Player - Rebounds OVER 2.5", line=2.5)
+    assert is_floor_ladder_opportunity(reb_low_row) is False
+    reb_valid_row = dict(may_row, market_type="REB", selection="Player - Rebounds OVER 3.5", line=3.5, projection_mean=5.0)
+    assert is_floor_ladder_opportunity(reb_valid_row) is True
+
