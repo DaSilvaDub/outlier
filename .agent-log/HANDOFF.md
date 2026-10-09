@@ -1,3 +1,53 @@
+# HANDOFF — 2026-10-09 (Antigravity/Gemini, Postgame Audit & Pipeline Enhancements: Alt-Floor Juice Cap & Clock-Bleed)
+
+**Branch**: `feat/nfl-alt-juice-cap-and-clock-bleed` · **Last commit**: `ff9df61`
+
+## Accomplished
+1. **Postgame Verification & Forensic Audit for 2026-10-08 Slate (TB 24 @ DAL 16, Total 40)**:
+   - Researched and verified official NFL box scores and game realities (TB 24, DAL 16; total 40 points, sailing under 48.5; DAL -7.5 failed).
+   - Produced comprehensive 8-phase audit report: [`reports/NFL/2026-10-08_TB_DAL_Postgame_Audit.md`](reports/NFL/2026-10-08_TB_DAL_Postgame_Audit.md).
+   - Dissected why the pre-game model missed:
+     - Underdog ground dominance (Bucky Irving 165 total yards) compressed game tempo down to 9 possessions per team, bleeding clock on 6-to-8 minute drives.
+     - Dome pace heuristic overrode the baseline without checking whether the underdog possessed the run game advantage.
+     - Severe downside asymmetry on extreme alternate prop juice (-325 to -700): CeeDee Lamb suffered a Q1 quad injury (-600), creating catastrophic straight wager loss (-1.0u) despite high historical hit rates.
+2. **Alt-Floor Juice Cap & Parlay Classification (`outlier_nfl/alt_floors.py`)**:
+   - Implemented `MAX_STRAIGHT_ODDS: int = -250`, `PLAY_TYPE_STRAIGHT = "STRAIGHT"`, and `PLAY_TYPE_PARLAY = "PARLAY_ONLY"`.
+   - Updated `AltFloorProp` dataclass with `play_type: str = "STRAIGHT"`.
+   - In `discover_alt_floor_candidates()`: props priced worse than -250 (e.g. -325, -600, -700) are classified as `PARLAY_ONLY`. Props with odds >= -250 are `STRAIGHT`.
+   - Updated `rank_alt_floors()` and `render_alt_floors_markdown()` to display `Play Type` column badges, juice policy warnings, and parlay leg allocation guidelines.
+   - Updated CSV export `fieldnames` to include `play_type`.
+3. **Underdog Ground Dominance Clock Bleed & Heavy Favorite Cover Dampening (`outlier_nfl/matchup.py`)**:
+   - Added constants `GROUND_DOMINANCE_CLOCK_BLEED: float = 3.0` and `HEAVY_FAVORITE_SPREAD: float = 7.0`.
+   - In `build_matchup_script()`:
+     - Tracks `has_dog_rush` (`MATCHUP_RUSH_MISMATCH` on the underdog).
+     - When `has_dog_rush` is present, blocks `dome_edge` from flipping the total to OVER (ball-control rushing drives bleed clock regardless of turf venue), enforces `total_lean = "UNDER"`, and applies a -3.0 pt deduction to projected total points.
+     - When `abs_spread >= HEAVY_FAVORITE_SPREAD` (e.g. 7.5) and `has_dog_rush` is present, recognizes possession compression suppresses blowout cover margins and flips `spread_lean` to the underdog with the points.
+4. **Unit Tests Verified**:
+   - `tests/test_nfl_alt_floors.py`: added `test_alt_floors_juice_cap_and_play_type()`.
+   - `tests/test_nfl_matchup.py`: added `test_underdog_rush_mismatch_triggers_clock_bleed_and_blocks_dome_over()`.
+   - Ran `pytest --basetemp=.pytest_temp tests/test_nfl_alt_floors.py tests/test_nfl_matchup.py`: all 36 tests passed in 1.44s.
+
+---
+
+# HANDOFF — 2026-10-08 (Antigravity/Gemini, Today's Live Pipeline Run for TNF & MLB Postseason)
+
+**Branch**: `master` · **Last commit**: `37c8e46`
+
+## Accomplished
+1. **Live Multi-Sport Pipeline Execution for 2026-10-08 Slate**:
+   - Refreshed session token via `otp_status.json` / `storage_state.json` (authenticated 2026-10-08 18:58 ET) and verified HTTP 200 live Outlier API connectivity.
+   - **NFL Pipeline (`outlier_nfl.pipeline --date 2026-10-08 --generate-game-script`)**:
+     - Extracted 1,676 live game lines and 4,768 player props (1,132 consensus, 102 Tier-1 anchors).
+     - Generated game script report: [`reports/NFL/2026-10-08_TB_DAL_Game_Script.md`](reports/NFL/2026-10-08_TB_DAL_Game_Script.md)
+     - Generated Hard Rock Bet Alt Floors: [`data/NFL/runs/2026-10-08-20261008T230016Z-b828f937/reports/2026-10-08_Alt_Floors.md`](data/NFL/runs/2026-10-08-20261008T230016Z-b828f937/reports/2026-10-08_Alt_Floors.md)
+     - Live Consensus: DAL -7.5, Total 48.5 | Model Projection: DAL 30, TB 20 (OVER 48.5, DAL -7.5).
+     - Top Alt Floor: Bucky Irving OVER 39.5 Rushing Yards (-325, score 0.822, 100% L5, 90% L10).
+   - **MLB Pack Pipeline (`outlier_scrapers.daily_job --date 2026-10-08`)**:
+     - Produced ALDS Game 4 pack in `packs/2026-10-08/` with candidates, decisions, game totals, and briefing markdown.
+     - Generated Master Prompts in `Desktop/today/prompts` and `Google Drive/today/prompts`.
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Floor Ladder Detection & Multi-Book Recovery)
 
 **Branch**: `feat/floor-ladder-calibration` (merged) · **Last commit**: `8c74d8b` · **PR**: [#237](https://github.com/DaSilvaDub/outlier/pull/237)

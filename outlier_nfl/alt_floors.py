@@ -26,6 +26,13 @@ logger = logging.getLogger("outlier_nfl.alt_floors")
 DEFAULT_TARGET_BOOK = "HARDROCK"
 TARGET_BOOK_ALIASES = {"HARDROCK", "HARDROCK_R"}
 
+# Juice cap for standalone straight bets. Lines worse than -250 (e.g. -325, -600, -700)
+# carry extreme negative asymmetry against in-game injuries and must be restricted to
+# parlay legs / SGPs only.
+MAX_STRAIGHT_ODDS: int = -250
+PLAY_TYPE_STRAIGHT = "STRAIGHT"
+PLAY_TYPE_PARLAY = "PARLAY_ONLY"
+
 DEFAULT_MIN_LINES: dict[str, float] = {
     "PASS_YDS": 149.5,
     "RUSH_YDS": 34.5,
@@ -62,6 +69,7 @@ class AltFloorProp:
     category_rank: int
     master_rank: int
     rationale: str
+    play_type: str = PLAY_TYPE_STRAIGHT
     event_id: str = ""
     event_starts_at: str = ""
     scope: str = "full_game"
@@ -193,6 +201,11 @@ def discover_alt_floor_candidates(
         l10 = float(row.get("l10_hit_rate") or 0.0)
         season = float(row.get("season_hit_rate") or 0.0)
         implied_p = american_to_implied(b_odds)
+        play_type = (
+            PLAY_TYPE_PARLAY
+            if (b_odds is not None and b_odds < MAX_STRAIGHT_ODDS)
+            else PLAY_TYPE_STRAIGHT
+        )
 
         # Context adjustments
         situational_adj = 0.0
@@ -274,6 +287,7 @@ def discover_alt_floor_candidates(
                 "target_book": b_name,
                 "target_odds": b_odds,
                 "implied_probability": round(implied_p, 4),
+                "play_type": play_type,
                 "l5_hit_rate": round(l5, 2),
                 "l10_hit_rate": round(l10, 2),
                 "season_hit_rate": round(season, 2),
@@ -324,6 +338,7 @@ def discover_alt_floor_candidates(
             category_rank=0,
             master_rank=0,
             rationale="",
+            play_type=best.get("play_type", PLAY_TYPE_STRAIGHT),
             event_id=best["event_id"],
             event_starts_at=best["event_starts_at"],
             scope="full_game",
@@ -350,8 +365,9 @@ def rank_alt_floors(
             prop.category_rank = rank_idx
             # Generate analytical rationale
             odds_str = f"{prop.target_odds:+d}" if isinstance(prop.target_odds, int) else f"{prop.target_odds}"
+            play_tag = f" [{prop.play_type}]" if prop.play_type == PLAY_TYPE_PARLAY else ""
             prop.rationale = (
-                f"{prop.player_name} ({prop.team}): OVER {prop.line} {prop.market_display} ({prop.target_book} {odds_str}) "
+                f"{prop.player_name} ({prop.team}): OVER {prop.line} {prop.market_display} ({prop.target_book} {odds_str}){play_tag} "
                 f"provides a +{prop.cushion:.1f} yd ({prop.cushion_pct:.1f}%) cushion below consensus ({prop.consensus_line}). "
                 f"Historical convergence: L5 {int(prop.l5_hit_rate * 100)}% ({int(round(prop.l5_hit_rate * 5))}/5), "
                 f"L10 {int(prop.l10_hit_rate * 100)}% ({int(round(prop.l10_hit_rate * 10))}/10)."
@@ -380,14 +396,15 @@ def render_alt_floors_markdown(
         "",
         f"**Target Book**: `{target_book}` (Dynamic floor ladders with retail consensus fallback)  ",
         "**Methodology**: Replaces static, arbitrary thresholds (fixed 50 rush / 200 pass) with player-specific floor lines. "
-        "Evaluates true hit rate convergence (L5/L10/Season), safety cushion below consensus line, and environmental factors.",
+        "Evaluates true hit rate convergence (L5/L10/Season), safety cushion below consensus line, and environmental factors.  ",
+        "**Juice Cap Policy**: Standalone straight wagers require odds >= -250. Odds worse than -250 (e.g. -325 to -700) are flagged `PARLAY ONLY` due to extreme downside injury asymmetry.",
         "",
         "---",
         "",
         "## Master Confidence Ranking (Top 1–9 Overall)",
         "",
-        "| Rank | Player | Team | Market | Alt Line | Consensus | Cushion | Odds | L5 Hit | L10 Hit | Confidence |",
-        "|:---:|:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+        "| Rank | Player | Team | Market | Alt Line | Consensus | Cushion | Odds | Play Type | L5 Hit | L10 Hit | Confidence |",
+        "|:---:|:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
     ]
 
     for p in master_pool:
@@ -395,7 +412,7 @@ def render_alt_floors_markdown(
         lines.append(
             f"| **#{p.master_rank}** | **{p.player_name}** | {p.team} | {p.market_display} | "
             f"**OVER {p.line}** | {p.consensus_line} | +{p.cushion} ({p.cushion_pct}%) | "
-            f"`{p.target_book} {odds_str}` | {int(p.l5_hit_rate * 100)}% | {int(p.l10_hit_rate * 100)}% | **{p.confidence_score:.3f}** |"
+            f"`{p.target_book} {odds_str}` | `{p.play_type}` | {int(p.l5_hit_rate * 100)}% | {int(p.l10_hit_rate * 100)}% | **{p.confidence_score:.3f}** |"
         )
 
     lines.extend([
@@ -420,7 +437,7 @@ def render_alt_floors_markdown(
                 f"- **#{p.category_rank} {p.player_name} ({p.team} vs {p.opponent}) — OVER {p.line} {p.market_display}**"
             )
             lines.append(
-                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {p.implied_probability * 100:.1f}%)"
+                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {p.implied_probability * 100:.1f}%) | **Play Type**: `{p.play_type}`"
             )
             lines.append(
                 f"  - **Safety Cushion**: +{p.cushion:.1f} yards below consensus line of {p.consensus_line} ({p.cushion_pct:.1f}% discount)"
@@ -441,6 +458,7 @@ def render_alt_floors_markdown(
         "1. **Low-Floor Same-Game Parlay (SGP)**: Anchor correlating positive script legs in dome/neutral matchups (e.g. Starting QB Passing Floor + Workhorse RB Rushing Floor).",
         "2. **Cross-Game High-Confidence Parlay**: Select the top 1 play from each category (Pass #1 + Rush #1 + Rec #1) to capture cross-game diversification with massive statistical floors.",
         "3. **Alt Floor Side Restriction**: Per pipeline invariants, alternate player props must be parlayed across different games when combining alt lines.",
+        "4. **Juice Cap Enforcement**: Props with odds worse than -250 must NEVER be wagered as straight bets; allocate them exclusively as SGP or cross-game parlay anchors.",
         "",
     ])
 
@@ -500,6 +518,7 @@ def export_alt_floors(
         "target_book",
         "target_odds",
         "implied_probability",
+        "play_type",
         "l5_hit_rate",
         "l10_hit_rate",
         "season_hit_rate",

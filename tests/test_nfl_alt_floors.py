@@ -490,3 +490,116 @@ def test_windowed_run_does_not_clobber_the_undated_csv():
         assert Path(outputs["csv"]).name == "nfl_alt_floors_2026-10-04.csv"
         with open(outputs["csv"], "r", encoding="utf-8") as f:
             assert len(list(csv.DictReader(f))) == 1
+
+
+def test_alt_floors_juice_cap_and_play_type():
+    """Verify that odds worse than -250 are restricted to PARLAY_ONLY while >= -250 are STRAIGHT."""
+    from outlier_nfl.alt_floors import MAX_STRAIGHT_ODDS, PLAY_TYPE_PARLAY, PLAY_TYPE_STRAIGHT
+
+    props = [
+        # Bucky Irving: Hard Rock -325 (worse than -250 -> PARLAY_ONLY)
+        {
+            "player_name": "Bucky Irving",
+            "team": "TB",
+            "opponent": "DAL",
+            "matchup": "TB @ DAL",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 39.5,
+            "is_consensus_line": False,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -325}],
+            "l5_hit_rate": 1.0,
+            "l10_hit_rate": 0.8,
+            "season_hit_rate": 0.8,
+        },
+        {
+            "player_name": "Bucky Irving",
+            "team": "TB",
+            "opponent": "DAL",
+            "matchup": "TB @ DAL",
+            "market": "RUSH_YDS",
+            "position": "OVER",
+            "line": 49.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+        # CeeDee Lamb: Hard Rock -600 (worse than -250 -> PARLAY_ONLY)
+        {
+            "player_name": "CeeDee Lamb",
+            "team": "DAL",
+            "opponent": "TB",
+            "matchup": "TB @ DAL",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 49.5,
+            "is_consensus_line": False,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -600}],
+            "l5_hit_rate": 0.8,
+            "l10_hit_rate": 0.8,
+            "season_hit_rate": 0.8,
+        },
+        {
+            "player_name": "CeeDee Lamb",
+            "team": "DAL",
+            "opponent": "TB",
+            "matchup": "TB @ DAL",
+            "market": "REC_YDS",
+            "position": "OVER",
+            "line": 89.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+        # Safe Straight Player: Hard Rock -200 (>= -250 -> STRAIGHT)
+        {
+            "player_name": "Dak Prescott",
+            "team": "DAL",
+            "opponent": "TB",
+            "matchup": "TB @ DAL",
+            "market": "PASS_YDS",
+            "position": "OVER",
+            "line": 214.5,
+            "is_consensus_line": False,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -200}],
+            "l5_hit_rate": 0.8,
+            "l10_hit_rate": 0.8,
+            "season_hit_rate": 0.8,
+        },
+        {
+            "player_name": "Dak Prescott",
+            "team": "DAL",
+            "opponent": "TB",
+            "matchup": "TB @ DAL",
+            "market": "PASS_YDS",
+            "position": "OVER",
+            "line": 249.5,
+            "is_consensus_line": True,
+            "scope": "full_game",
+            "books": [{"book": "HARDROCK", "odds": -110}],
+        },
+    ]
+
+    candidates = discover_alt_floor_candidates(props)
+    rush = candidates["RUSH_YDS"][0]
+    rec = candidates["REC_YDS"][0]
+    pass_prop = candidates["PASS_YDS"][0]
+
+    assert rush.target_odds == -325
+    assert rush.play_type == PLAY_TYPE_PARLAY
+
+    assert rec.target_odds == -600
+    assert rec.play_type == PLAY_TYPE_PARLAY
+
+    assert pass_prop.target_odds == -200
+    assert pass_prop.play_type == PLAY_TYPE_STRAIGHT
+
+    # Verify Markdown rendering incorporates play_type badges
+    top3, master = rank_alt_floors(candidates)
+    md = render_alt_floors_markdown(top3, master, date_str="2026-10-08")
+    assert "| `PARLAY_ONLY` |" in md
+    assert "| `STRAIGHT` |" in md
+    assert "Juice Cap Policy" in md

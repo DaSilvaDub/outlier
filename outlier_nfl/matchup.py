@@ -60,6 +60,13 @@ DOME_TEAMS: frozenset[str] = frozenset(
 DOME_GRIND_TOTAL = 43.5
 # A favorite laying this many points or fewer keeps the lean when it owns the run game.
 TRENCH_PROTECT_SPREAD = 2.5
+# Clock-bleed pace deduction when an underdog owns a rushing mismatch against a leaky front.
+# Long, grinding drives compress total game possessions (down from 11-12 to 8-9), suppressing
+# total points even in indoor/dome venues.
+GROUND_DOMINANCE_CLOCK_BLEED = 3.0
+# Heavy favorites laying this many points or more suffer severe possession compression when
+# the underdog controls the ground game, dampening cover probability.
+HEAVY_FAVORITE_SPREAD = 7.0
 
 
 @dataclass(frozen=True)
@@ -721,6 +728,16 @@ def build_matchup_script(
         if favorite
         else False
     )
+    has_dog_rush = (
+        any(
+            s.tag == "MATCHUP_RUSH_MISMATCH" and s.team != favorite and s.market == "RUSH_YDS"
+            for s in signals
+        )
+        if favorite
+        else False
+    )
+    underdog = (away if favorite_is_home else home) if favorite else None
+
     if favorite and abs_spread >= FAVORITE_SPREAD and total <= GRIND_TOTAL and (has_fav_rush or not tape_map):
         script_type = "FRONT_RUNNER_GRIND"
         spread_lean = "HOME" if favorite_is_home else "AWAY"
@@ -742,6 +759,7 @@ def build_matchup_script(
             home in DOME_TEAMS
             and DOME_GRIND_TOTAL < total <= GRIND_TOTAL
             and any(score_boost.values())
+            and not has_dog_rush
         )
         if dome_edge:
             total_lean = "OVER"
@@ -749,23 +767,36 @@ def build_matchup_script(
                 f"Dome pace ({home}): indoor venue plus a trench/injury edge; "
                 f"OVER {total:.1f} instead of the outdoor grind UNDER."
             )
+        elif has_dog_rush and underdog:
+            total_lean = "UNDER"
+            notes.append(
+                f"Ground dominance clock bleed: underdog ({underdog}) rush mismatch burns clock "
+                f"(-{GROUND_DOMINANCE_CLOCK_BLEED:.1f} pts total adjustment); lean UNDER {total:.1f}."
+            )
         else:
             total_lean = "UNDER" if total <= GRIND_TOTAL else "OVER"
 
-    # Every script branch already leans the favorite; this pins that lean for short
-    # favorites that own the run game so a future branch cannot flip it to the dog.
-    if favorite and abs_spread <= TRENCH_PROTECT_SPREAD and has_fav_rush:
+    # Underdog ground control on heavy spreads: possession compression suppresses blowout margins
+    if favorite and abs_spread >= HEAVY_FAVORITE_SPREAD and has_dog_rush and underdog:
+        spread_lean = "AWAY" if favorite_is_home else "HOME"
+        notes.append(
+            f"Underdog ground control ({underdog}): heavy favorite laying {abs_spread:.1f} "
+            "suffers possession compression; lean dog to cover."
+        )
+    elif favorite and abs_spread <= TRENCH_PROTECT_SPREAD and has_fav_rush:
         spread_lean = "HOME" if favorite_is_home else "AWAY"
         notes.append(
             f"Trench protection: {favorite} owns the run game at {abs_spread:.1f}; "
             "lean stays on the favorite."
         )
 
-    home_score = round(ctx["home_tt"] + score_boost[home])
-    away_score = round(ctx["away_tt"] + score_boost[away])
+    clock_bleed_haircut = (GROUND_DOMINANCE_CLOCK_BLEED / 2.0) if has_dog_rush else 0.0
+    home_score = max(0.0, round(ctx["home_tt"] + score_boost[home] - clock_bleed_haircut))
+    away_score = max(0.0, round(ctx["away_tt"] + score_boost[away] - clock_bleed_haircut))
     if home_score == away_score and abs_spread > 0 and favorite:
-        fav_pts = round((total + abs_spread) / 2.0)
-        dog_pts = round((total - abs_spread) / 2.0)
+        eff_total = (total - GROUND_DOMINANCE_CLOCK_BLEED) if has_dog_rush else total
+        fav_pts = round((eff_total + abs_spread) / 2.0)
+        dog_pts = round((eff_total - abs_spread) / 2.0)
         if favorite_is_home:
             home_score, away_score = fav_pts, dog_pts
         else:
