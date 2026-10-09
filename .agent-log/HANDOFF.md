@@ -1,3 +1,23 @@
+# HANDOFF — 2026-10-09 (Antigravity/Gemini, WNBA Floor Ladder Min Line Calibration: AST & REB >= 3.5)
+
+**Branch**: `feat/wnba-ast-reb-min-line` · **Last commit**: `d86727c`
+
+## Accomplished
+1. **Floor Prop Gating for Low-Count Markets (`AST` & `REB` >= 3.5)**:
+   - Configured `WNBA_MIN_PROP_LINES = {"AST": 3.5, "REB": 3.5}` in `outlier_scrapers/alt_player_props.py`.
+   - In `build_alt_player_props_board()`: filter out any WNBA Assist or Rebound prop with `line < 3.5`.
+   - In `outlier_scrapers/slate_quality.py`: updated `is_floor_ladder_opportunity()` to strictly require `line >= 3.5` for markets in `{"AST", "ASSISTS", "REB", "REBOUNDS"}`.
+   - Prevents volatile 1.5 and 2.5 props with low event counts and negative skew from being selected as floor ladder plays.
+2. **Unit Tests Added & Passing**:
+   - `tests/test_alt_player_props.py`: `test_wnba_ast_reb_min_line_3_5()` verifies 1.5 and 2.5 lines are dropped while 3.5 lines and scoring props are retained.
+   - `tests/test_slate_quality.py`: verified in `test_is_floor_ladder_opportunity_detects_dustin_may_profile()`.
+   - Ran `pytest --basetemp=.pytest_temp tests/test_alt_player_props.py tests/test_slate_quality.py`: all 42 tests passing.
+3. **Slate Pack & Mirrors Updated**:
+   - Re-synced `packs/2026-10-09/alt_player_props.csv` and exported to Desktop (`C:\Users\dasil\OneDrive\Desktop\today`) and Drive (`G:\My Drive\today`) via `organize_today_run2.py`.
+   - All sub-3.5 assist/rebound props eliminated from the active board.
+
+---
+
 # HANDOFF — 2026-10-09 (Antigravity/Gemini, Postgame Audit & Pipeline Enhancements: Alt-Floor Juice Cap & Clock-Bleed)
 
 **Branch**: `feat/nfl-alt-juice-cap-and-clock-bleed` · **Last commit**: `ff9df61`
