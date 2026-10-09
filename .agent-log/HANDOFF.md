@@ -26,6 +26,11 @@
    - `tests/test_nfl_alt_floors.py`: added `test_alt_floors_juice_cap_and_play_type()`.
    - `tests/test_nfl_matchup.py`: added `test_underdog_rush_mismatch_triggers_clock_bleed_and_blocks_dome_over()`.
    - Ran `pytest --basetemp=.pytest_temp tests/test_nfl_alt_floors.py tests/test_nfl_matchup.py`: all 36 tests passed in 1.44s.
+5. **Sunday Slate Live Pipeline Execution (2026-10-11)**:
+   - Ingested and processed 13 scheduled NFL matchups for Week 5 Sunday slate.
+   - Extracted 19,156 game lines and 33,520 player props (9,939 consensus, 368 Tier-1 anchors, 98 Tier-1 actionable).
+   - Generated 13 complete matchup game scripts in [`reports/NFL/2026-10-11_*_Game_Script.md`](reports/NFL/).
+   - Generated Hard Rock alternate floors in [`reports/NFL/2026-10-11_Alt_Floors.md`](reports/NFL/2026-10-11_Alt_Floors.md), featuring D'Andre Swift OVER 39.5 Rushing (-137) as top straight-eligible play, and restricting extreme minus juice (-450 to -850) to parlay-only legs.
 
 ---
 
