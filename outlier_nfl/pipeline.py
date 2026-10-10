@@ -998,8 +998,11 @@ def _refresh_tape(
     try:
         slate = date.fromisoformat(str(raw))
         season = slate.year if slate.month >= 3 else slate.year - 1
-        as_of = parse_utc(as_of_utc) if as_of_utc is not None else datetime.now(timezone.utc)
-        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of)
+        now = datetime.now(timezone.utc)
+        as_of = parse_utc(as_of_utc) if as_of_utc is not None else now
+        refresh_prior_week_tape(
+            nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of, run_started_utc=now
+        )
     except Exception as exc:  # network/API failure must not block the slate run
         logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
 

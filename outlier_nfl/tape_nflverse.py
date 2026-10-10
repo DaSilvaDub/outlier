@@ -251,17 +251,22 @@ def injury_report_status(
     season: int | None,
     week: int | None,
     as_of_utc: datetime | None,
+    run_mode: str | None = None,
 ) -> str:
     """Point-in-time status of the injury report for ``season``/``week`` (F02).
 
-    ``no_cutoff`` without ``as_of_utc`` (offline/fixture builds). Otherwise every
-    row of that report must carry a ``date_modified`` at or before ``as_of_utc``:
-    nflverse keeps only each row's latest version, so a row revised later
-    (``revised_after_as_of``) or with no stamp (``unstamped``) means the report as
-    it stood at ``as_of`` cannot be reconstructed.
+    ``no_cutoff`` without ``as_of_utc`` (offline/fixture builds). Otherwise a
+    row revised after ``as_of_utc`` is ``revised_after_as_of``: nflverse keeps
+    only each row's latest version, so the report as it stood cannot be rebuilt.
+    Rows without a ``date_modified`` (the 2025/2026 files have no such column)
+    are ``live_unstamped`` only when ``run_mode == "live"`` (the file is the
+    current report); any other mode, including an unspecified one, fails closed
+    as ``unstamped``. The decision uses the run mode, never how close as_of is
+    to now.
     """
     if as_of_utc is None:
         return "no_cutoff"
+    unstamped = False
     for r in injury_rows:  # naive stamps read as UTC, like depth-chart ``dt``
         if r.get("season_type", "REG") != "REG":
             continue
@@ -271,13 +276,15 @@ def injury_report_status(
             continue
         stamp = snapshot_time(r.get("date_modified"))
         if stamp is None:
-            return "unstamped"
-        if stamp > as_of_utc:
+            unstamped = True
+        elif stamp > as_of_utc:
             return "revised_after_as_of"
+    if unstamped:
+        return "live_unstamped" if run_mode == "live" else "unstamped"
     return "point_in_time"
 
 
-ADMISSIBLE_INJURY_STATUSES = ("point_in_time", "no_cutoff")
+ADMISSIBLE_INJURY_STATUSES = ("point_in_time", "no_cutoff", "live_unstamped")
 
 
 def inactive_players(
@@ -578,6 +585,7 @@ def _auto_roles(
     before: date | None,
     game_rows: list[dict[str, str]],
     as_of_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> tuple[
     dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]],
     str | None,
@@ -596,7 +604,7 @@ def _auto_roles(
         injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
             injury_rows, week, season=season
         )
-        status = injury_report_status(injury_rows, season, week, as_of_utc)
+        status = injury_report_status(injury_rows, season, week, as_of_utc, run_mode)
         if status not in ADMISSIBLE_INJURY_STATUSES:
             # Not the report as it stood at as_of: treat as not loaded (F02).
             logger.warning("Injury report not point-in-time (%s); not used", status)
@@ -615,6 +623,39 @@ def _auto_roles(
     return roles, injuries, defensive_out, status
 
 
+def _tape_run_mode(
+    game_rows: Iterable[Mapping[str, str]],
+    before: date | None,
+    as_of_utc: datetime | None,
+    run_started_utc: datetime | None,
+) -> str | None:
+    """RunContext mode of the run this tape is built for.
+
+    None without ``as_of_utc`` or without the run's wall clock
+    (``run_started_utc``): a caller that cannot say when it runs cannot claim
+    to be live, so unstamped injury reports fail closed for it.
+
+    Same rules as the pipeline: retrospective at/after the slate's first
+    kickoff (from the nflverse schedule), replay when as_of trails the run's
+    wall clock by more than the tolerance, else live.
+    """
+    if as_of_utc is None or before is None or run_started_utc is None:
+        return None
+    from outlier_nfl.run_context import make_run_context, schedule_kickoff_utc
+
+    kickoffs = [
+        k for k in (schedule_kickoff_utc(g.get("gameday"), g.get("gametime"))
+                    for g in game_rows if str(g.get("gameday")) == before.isoformat())
+        if k is not None
+    ]
+    ctx = make_run_context(
+        slate_date=before.isoformat(), window=None, as_of_utc=as_of_utc, fixture=False,
+        slate_events=[{"scheduledTime": k.isoformat()} for k in kickoffs],
+        run_started_utc=run_started_utc,
+    )
+    return ctx.mode
+
+
 def build_tape_payload(
     season: int,
     before: date | None = None,
@@ -629,6 +670,7 @@ def build_tape_payload(
     grades: Mapping[str, Mapping[str, float]] | None = None,
     defensive_out: Mapping[str, list[str]] | None = None,
     as_of_utc: datetime | None = None,
+    run_started_utc: datetime | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
@@ -645,9 +687,10 @@ def build_tape_payload(
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
     injury_status: str | None = None
+    run_mode = _tape_run_mode(game_rows, before, as_of_utc, run_started_utc)
     if auto_roles and depth_roles is None and inactive is None:
         depth_roles, inactive, defensive_out, injury_status = _auto_roles(
-            season, before, game_rows, as_of_utc
+            season, before, game_rows, as_of_utc, run_mode
         )
     # Only an injury report that was actually fetched (or supplied) counts as loaded.
     injury_report_loaded = inactive is not None
@@ -678,6 +721,7 @@ def build_tape_payload(
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
         "injury_report_loaded": injury_report_loaded,
         "injury_report_status": injury_status,
+        "run_mode": run_mode,
         "defensive_starters_out": {
             t: list(names) for t, names in sorted((defensive_out or {}).items())
         },
@@ -731,6 +775,7 @@ def refresh_prior_week_tape(
     before: date | None = None,
     last_n: int | None = None,
     as_of_utc: datetime | None = None,
+    run_started_utc: datetime | None = None,
 ) -> Path:
     """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
 
@@ -739,7 +784,8 @@ def refresh_prior_week_tape(
     """
     path = Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
-        season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc
+        season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc,
+        run_started_utc=run_started_utc,
     )
     payload["fetched_at_utc"] = datetime.now(UTC).isoformat()
     if not payload["teams"]:

@@ -36,7 +36,7 @@ def _inj(name: str, modified: str | None, season: str = "2026", week: str = "4")
     ([_inj("A", "2026-10-02 20:00:00")], AS_OF, "point_in_time"),  # naive reads as UTC
     ([_inj("A", "2026-10-02T20:00:00Z"), _inj("B", "2026-10-04T18:00:00Z")], AS_OF,
      "revised_after_as_of"),
-    ([_inj("A", None)], AS_OF, "unstamped"),
+    ([_inj("A", None)], AS_OF, "unstamped"),  # no run mode: fails closed
     ([_inj("A", "2026-10-09T20:00:00Z", week="5")], AS_OF, "point_in_time"),  # other week
     ([_inj("A", "2026-10-09T20:00:00Z", season="2025")], AS_OF, "point_in_time"),
     ([_inj("A", None)], None, "no_cutoff"),
@@ -99,3 +99,63 @@ def test_pipeline_tape_refresh_always_passes_a_full_timestamp(
     assert len(seen) == 2
     assert all(isinstance(t, datetime) and t.tzinfo is not None for t in seen)
     assert seen[1] == AS_OF
+
+
+# Real nflverse injuries_2026.csv header (checked against the release file on
+# 2026-10-10): no date_modified column; only the 2024 file has one.
+INJURIES_2026_COLUMNS = (
+    "season", "season_type", "game_type", "team", "week", "gsis_id", "position", "full_name",
+    "first_name", "last_name", "report_primary_injury", "report_secondary_injury",
+    "report_status", "practice_primary_injury", "practice_secondary_injury", "practice_status",
+)
+KICKOFF_GAMES = [{"season": "2026", "game_type": "REG", "week": "4", "gameday": "2026-10-04",
+                  "gametime": "13:00"}]  # 17:00Z
+
+
+def _row_2026(name: str) -> dict[str, str]:
+    r = dict.fromkeys(INJURIES_2026_COLUMNS, "")
+    r.update({"season": "2026", "season_type": "REG", "game_type": "REG", "team": "KC",
+              "week": "4", "position": "TE", "full_name": name, "report_status": "Out"})
+    return r
+
+
+def _build_2026(monkeypatch: pytest.MonkeyPatch, as_of: datetime, started: datetime | None
+                ) -> dict[str, Any]:
+    rows = [_row_2026("Travis Kelce")]
+    assert "date_modified" not in rows[0]
+    monkeypatch.setattr(tn, "fetch_csv", lambda url, timeout=60.0: rows if "injuries" in url else [])
+    return tn.build_tape_payload(2026, before=date(2026, 10, 4), team_rows=[],
+                                 game_rows=KICKOFF_GAMES, advanced=False, as_of_utc=as_of,
+                                 run_started_utc=started)
+
+
+def test_live_run_admits_the_unstamped_2026_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _build_2026(monkeypatch, AS_OF, AS_OF)  # 14:00Z, before the 17:00Z kickoff
+    assert payload["run_mode"] == "live"
+    assert payload["injury_report_status"] == "live_unstamped"
+    assert payload["injury_report_loaded"] is True
+    assert payload["inactive"] == {"KC": ["Travis Kelce"]}
+
+
+@pytest.mark.parametrize(("as_of", "started", "mode"), [
+    # Replay with a recent --as-of: 20 minutes behind the wall clock is past the
+    # 15-minute tolerance, so it is a replay even though as_of is close to now.
+    (datetime(2026, 10, 4, 13, 40, tzinfo=UTC), AS_OF, "replay"),
+    (datetime(2026, 9, 27, 14, 0, tzinfo=UTC), AS_OF, "replay"),
+    (datetime(2026, 10, 4, 17, 30, tzinfo=UTC), datetime(2026, 10, 4, 17, 30, tzinfo=UTC),
+     "retrospective"),
+    (AS_OF, None, None),  # no wall clock: cannot claim live
+])
+def test_non_live_runs_refuse_the_unstamped_2026_report(
+    monkeypatch: pytest.MonkeyPatch, as_of: datetime, started: datetime | None, mode: str | None
+) -> None:
+    payload = _build_2026(monkeypatch, as_of, started)
+    assert payload["run_mode"] == mode
+    assert payload["injury_report_status"] == "unstamped"
+    assert payload["injury_report_loaded"] is False
+    assert payload["inactive"] == {}
+
+
+def test_live_mode_still_refuses_a_row_revised_after_as_of() -> None:
+    rows = [_inj("A", "2026-10-04T18:00:00Z"), _row_2026("B")]
+    assert tn.injury_report_status(rows, 2026, 4, AS_OF, "live") == "revised_after_as_of"
