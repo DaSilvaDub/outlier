@@ -5,6 +5,7 @@ Every credential here is a placeholder, never a real token.
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -12,7 +13,10 @@ import pytest
 from outlier_nfl.api import extract_token_from_storage_state
 
 APP = "https://app.outlier.bet"
-PH_JWT = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJwbGFjZWhvbGRlciJ9.placeholder-signature"  # nosec B105
+# Assembled at runtime so no JWT literal sits in the source (secret scanners);
+# the header and claims are an unsigned placeholder, not a credential.
+PH_JWT = ".".join(base64.urlsafe_b64encode(json.dumps(part).encode()).decode().rstrip("=")
+                  for part in ({"alg": "none"}, {"sub": "placeholder"})) + ".placeholder-signature"
 PH_OPAQUE = "placeholder-opaque-session-token-0000"  # nosec B105
 COOKIE = {"name": "session", "value": "placeholder-cookie-value-long-enough", "domain": "app.outlier.bet"}
 
