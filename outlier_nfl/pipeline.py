@@ -23,7 +23,7 @@ _stdout_reconfigure = getattr(sys.stdout, "reconfigure", None) if sys.stdout els
 if callable(_stdout_reconfigure):
     _stdout_reconfigure(encoding="utf-8", errors="replace")
 
-from outlier_nfl.api import OutlierNflApiClient
+from outlier_nfl.api import IncompletePaginationError, OutlierNflApiClient
 from outlier_nfl.constants import (
     MARKET_TYPE_GAMELINE,
     MARKET_TYPE_TEAM_PROP,
@@ -62,6 +62,14 @@ from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
 from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.run_writer import RunWriter
+from outlier_nfl.stage_receipts import (
+    StageReceipt,
+    failing,
+    gate_reason,
+    receipt,
+    run_status,
+    validation_receipt,
+)
 from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.calibration import (
@@ -81,6 +89,12 @@ from outlier_nfl.utils import (
 )
 
 logger = logging.getLogger("outlier_nfl.pipeline")
+
+
+def _schedule_events(schedule_raw: Any) -> list[dict[str, Any]]:
+    """The schedule's event objects; anything malformed is already an INVALID receipt."""
+    events = schedule_raw.get("events") if isinstance(schedule_raw, dict) else None
+    return [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
 
 
 class NflPipeline:
@@ -158,6 +172,8 @@ class NflPipeline:
         all_game_lines: list[NflGameLine] = []
         all_player_props: list[NflPlayerProp] = []
         errors: list[str] = []
+        # Required-stage receipts; any one not OK/EMPTY blocks publication (F03).
+        receipts: list[StageReceipt] = []
 
         # =====================================================================
         # 1. Ingestion Phase
@@ -175,12 +191,14 @@ class NflPipeline:
             sched_errs = validate_schedule_payload(schedule_raw)
             if sched_errs:
                 errors.extend(sched_errs)
-                logger.warning("Schedule schema validation warnings: %s", sched_errs)
+                logger.error("Schedule schema validation failed: %s", sched_errs)
+            receipts.append(validation_receipt("schedule", sched_errs))
 
             team_index = build_team_index(schedule_raw)
             schedule_index = build_schedule_index(schedule_raw)
 
-            events = schedule_raw.get("events", [])
+            # An invalid schedule yields an explicit FAILED run, not a crash (F03).
+            events = _schedule_events(schedule_raw)
             slate_events = [
                 e
                 for e in events
@@ -195,6 +213,13 @@ class NflPipeline:
             for event in slate_events:
                 lines = normalize_game_markets(event, event_markets_raw, team_index)
                 all_game_lines.extend(lines)
+            mkt_errs = validate_event_markets_payload(event_markets_raw) if slate_events else []
+            receipts.append(
+                validation_receipt("event_markets", mkt_errs, count=len(slate_events),
+                                   empty=not slate_events)
+            )
+            prop_payload_errs = validate_player_props_payload(player_props_raw)
+            receipts.append(validation_receipt("player_props", prop_payload_errs))
 
             props = normalize_player_props(player_props_raw, schedule_index)
             slate_event_ids = {str(e.get("eventId") or e.get("id")) for e in slate_events}
@@ -215,9 +240,10 @@ class NflPipeline:
             sched_errs = validate_schedule_payload(schedule_raw)
             if sched_errs:
                 errors.extend(sched_errs)
-                logger.warning("Schedule payload validation warnings: %s", sched_errs)
+                logger.error("Schedule payload validation failed: %s", sched_errs)
+            receipts.append(validation_receipt("schedule", sched_errs))
 
-            events = schedule_raw.get("events", []) if isinstance(schedule_raw, dict) else []
+            events = _schedule_events(schedule_raw)
             team_index = build_team_index(schedule_raw)
             schedule_index = build_schedule_index(schedule_raw)
 
@@ -235,32 +261,60 @@ class NflPipeline:
             )
 
             # Extract markets per slate event
+            market_failures: list[str] = []
+            market_invalid: list[str] = []
+            market_requests = 0
             for event in slate_events:
                 event_id = str(event.get("eventId") or event.get("id") or "")
                 if not event_id:
+                    market_invalid.append("slate event without an event id")
                     continue
 
                 event_markets: list[dict[str, Any]] = []
                 for m_type in (MARKET_TYPE_GAMELINE, MARKET_TYPE_TEAM_PROP):
+                    market_requests += 1
                     try:
                         mkt_payload = client.fetch_event_markets(event_id, market_type=m_type)
-                        val_errs = validate_event_markets_payload(mkt_payload)
-                        if val_errs:
-                            logger.warning(
-                                "Market payload errors for %s (%s): %s", event_id, m_type, val_errs
-                            )
-                        if isinstance(mkt_payload, dict) and isinstance(
-                            mkt_payload.get("markets"), list
-                        ):
-                            event_markets.extend(mkt_payload["markets"])
                     except Exception as exc:
-                        logger.warning(
+                        logger.error(
                             "Failed fetching %s markets for event %s: %s", m_type, event_id, exc
                         )
+                        market_failures.append(f"{event_id} {m_type}: {exc}")
+                        continue
+                    val_errs = validate_event_markets_payload(mkt_payload)
+                    if val_errs:
+                        logger.error(
+                            "Market payload errors for %s (%s): %s", event_id, m_type, val_errs
+                        )
+                        market_invalid.extend(f"{event_id} {m_type}: {e}" for e in val_errs)
+                    if isinstance(mkt_payload, dict) and isinstance(
+                        mkt_payload.get("markets"), list
+                    ):
+                        event_markets.extend(mkt_payload["markets"])
 
                 raw_markets[event_id] = event_markets
                 lines = normalize_game_markets(event, {"markets": event_markets}, team_index)
                 all_game_lines.extend(lines)
+
+            if not slate_events:
+                receipts.append(receipt("event_markets", "EMPTY", expected=0, received=0))
+            elif market_invalid:
+                receipts.append(receipt(
+                    "event_markets", "INVALID", reason=f"{len(market_invalid)} validation error(s)",
+                    expected=market_requests, received=market_requests - len(market_failures),
+                    errors=market_invalid + market_failures,
+                ))
+            elif market_failures:
+                every = len(market_failures) >= market_requests
+                receipts.append(receipt(
+                    "event_markets", "FAILED" if every else "INCOMPLETE",
+                    reason=f"{len(market_failures)} of {market_requests} market requests failed",
+                    expected=market_requests, received=market_requests - len(market_failures),
+                    errors=market_failures,
+                ))
+            else:
+                receipts.append(receipt("event_markets", "OK", expected=market_requests,
+                                        received=market_requests))
 
             # Ingest bulk player props if slate has events
             if slate_events:
@@ -269,9 +323,19 @@ class NflPipeline:
                     player_props_raw = client.fetch_player_props()
                     val_errs = validate_player_props_payload(player_props_raw)
                     if val_errs:
-                        logger.warning("Player props payload warnings: %s", val_errs)
+                        logger.error("Player props payload failed validation: %s", val_errs)
+                    receipts.append(validation_receipt("player_props", val_errs))
+                except IncompletePaginationError as exc:
+                    # Never publish the pages that did arrive as the slate (F04).
+                    logger.error("Player props feed incomplete: %s", exc)
+                    receipts.append(receipt(
+                        "player_props", "INCOMPLETE", reason=f"{exc.reason}: {exc}",
+                        expected=exc.pages_expected, received=exc.pages_fetched,
+                    ))
+                    player_props_raw = {"props": []}
                 except Exception as exc:
-                    logger.warning("Failed fetching player props: %s", exc)
+                    logger.error("Failed fetching player props: %s", exc)
+                    receipts.append(receipt("player_props", "FAILED", reason=str(exc)))
                     player_props_raw = {"props": []}
                 raw_props = player_props_raw
 
@@ -280,6 +344,7 @@ class NflPipeline:
                 all_player_props = [p for p in props if p.event_id in slate_event_ids]
             else:
                 all_player_props = []
+                receipts.append(receipt("player_props", "EMPTY", received=0))
 
         ctx = make_run_context(
             slate_date=target_date,
@@ -303,6 +368,11 @@ class NflPipeline:
         # originals: it is kept as an immutable bundle only (F11).
         publish = ctx.publishes
         publication_reason = ctx.publication_reason
+        # A required stage that is not OK keeps the run out of every dated and
+        # latest file and pointer, whatever its mode (F03).
+        gate = gate_reason(receipts)
+        if gate and publish:
+            publish, publication_reason = False, gate
         if not publish:
             logger.warning(
                 "Bundle-only run (%s); dated and latest files untouched", publication_reason
@@ -488,6 +558,15 @@ class NflPipeline:
             logger.error(
                 "Validation failed on %d player prop records: %s", len(prop_errs), prop_errs[:5]
             )
+        receipts.append(validation_receipt(
+            "normalized_validation", game_errs + prop_errs, count=len(games_dict) + len(props_dict)
+        ))
+        if failing(receipts[-1:]) and publish:
+            # Withdraw what was already staged for publication (metrics, weather).
+            writer.withhold_publication()
+            publish, publish_latest = False, False
+            publication_reason = gate_reason(receipts)
+            logger.warning("Bundle-only run (%s)", publication_reason)
 
         # =====================================================================
         # 3. Persistence Phase
@@ -662,8 +741,9 @@ class NflPipeline:
         except Exception as exc:
             logger.warning("Failed generating alt floor props: %s", exc)
 
+        status = run_status(receipts)
         summary: dict[str, Any] = {
-            "status": "OK",
+            "status": status,
             "date": target_date,
             "window": window,
             "timestamp_utc": now_utc,
@@ -676,6 +756,7 @@ class NflPipeline:
             "replay": ctx.replay,
             "before_week": before_week,
             "sources": [src.to_dict() for src in sources],
+            "stage_receipts": [r.to_dict() for r in receipts],
             "events_count": len(slate_events),
             "game_lines_count": len(all_game_lines),
             "spreads_count": spreads_count,
@@ -750,6 +831,8 @@ class NflPipeline:
             {
                 "created_utc": now_utc,
                 "context": ctx.to_dict(),
+                "status": status,
+                "stage_receipts": summary["stage_receipts"],
                 "sources": summary["sources"],
                 "publication": summary["publication"],
                 "publication_reason": publication_reason,
@@ -757,8 +840,13 @@ class NflPipeline:
             pointers=pointers,
         )
 
+        if status != "OK":
+            logger.error(
+                "NFL Pipeline run %s (%s): nothing published; bundle kept at %s",
+                status, gate_reason(receipts), writer.run_dir,
+            )
         logger.info(
-            "NFL Pipeline run completed successfully: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
+            "NFL Pipeline run completed: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
             len(all_game_lines),
             spreads_count,
             totals_count,
@@ -896,6 +984,30 @@ def _refresh_tape(
         refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of)
     except Exception as exc:  # network/API failure must not block the slate run
         logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
+
+
+# Exit code when a required stage receipt is not OK (F03); 1 stays "crashed".
+EXIT_REQUIRED_STAGE_FAILED = 3
+
+
+def format_stage_failure(summary: dict[str, Any]) -> str:
+    """Operator message for a PARTIAL/FAILED run: what failed and how to recover."""
+    lines = [
+        f"NFL run {summary.get('status')} for {summary.get('date')}"
+        f"{' window ' + str(summary['window']) if summary.get('window') else ''}: "
+        "nothing was published; the latest files and run pointers still name the last good run.",
+    ]
+    for r in summary.get("stage_receipts") or []:
+        if r.get("required") and r.get("status") not in ("OK", "EMPTY"):
+            lines.append(f"  {r.get('name')}: {r.get('status')} - {r.get('reason') or ''}".rstrip())
+            lines.extend(f"      {e}" for e in (r.get("errors") or [])[:3])
+    lines.append(f"Bundle for inspection: {summary.get('run_dir')}")
+    lines.append(
+        "Recover: INCOMPLETE/FAILED fetches are usually transient (Outlier 429/5xx, session) - "
+        "rerun the same command. INVALID means the feed shape changed - keep the bundle and "
+        "report it. UNSUPPORTED (postseason, pre-2025) has no override until those adapters exist."
+    )
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -1046,6 +1158,9 @@ def main() -> int:
                     f"(Score: {top1.get('confidence_score'):.3f})"
                 )
         print("=" * 60)
+        if summary.get("status") != "OK":
+            print(format_stage_failure(summary), file=sys.stderr)
+            return EXIT_REQUIRED_STAGE_FAILED
         return 0
     except Exception as exc:
         logger.exception("Pipeline execution failed: %s", exc)
