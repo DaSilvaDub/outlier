@@ -43,7 +43,7 @@ props, a Q1 player prop, a team rushing-yards prop, one-sided alternate
 spread/team-total lines and 1ST_QUARTER / H1 game lines.
 A10 builds tape roles/inactives from frozen Week-4 depth and injury rows
 (morning/evening snapshots, an injury update after as_of, a wrong-season row,
-unstamped rows, a whole-day cutoff) and checks tape admission (stale, wrong
+unstamped rows, the real 2026 column layout in live and replay mode, a whole-day cutoff) and checks tape admission (stale, wrong
 season, corrupt, missing). A11 indexes rosters and starters (backup with more
 quotes, team without props, trade/offseason-move identity, inactive starter).
 
@@ -74,7 +74,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 7
+HARNESS_VERSION = 8
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -576,6 +576,15 @@ def a10_depth_rows() -> list[dict[str, str]]:
     return rows
 
 
+# Real nflverse injuries_2026.csv header (verified 2026-10-10 against the
+# release file): no ``date_modified`` column. 2024 had one; 2025/2026 do not.
+INJURIES_2026_COLUMNS = (
+    "season", "season_type", "game_type", "team", "week", "gsis_id", "position", "full_name",
+    "first_name", "last_name", "report_primary_injury", "report_secondary_injury",
+    "report_status", "practice_primary_injury", "practice_secondary_injury", "practice_status",
+)
+
+
 def a10_injury_rows(case: str) -> list[dict[str, str]]:
     def row(name: str, modified: str | None, season: str = "2026") -> dict[str, str]:
         r = {"season": season, "season_type": "REG", "week": "4", "team": "KC", "full_name": name,
@@ -585,10 +594,16 @@ def a10_injury_rows(case: str) -> list[dict[str, str]]:
         return r
 
     base = [row("Travis Kelce", "2026-10-02T20:00:00Z")]
-    if case == "future_update":
+    if case.startswith("future_update"):
         return base + [row("Rashee Rice", "2026-10-04T18:00:00Z")]
     if case == "wrong_season":
         return base + [row("Xavier Worthy", "2025-10-03T20:00:00Z", season="2025")]
+    if case.startswith("layout_2026"):
+        r = {c: "" for c in INJURIES_2026_COLUMNS}
+        r.update({"season": "2026", "season_type": "REG", "game_type": "REG", "team": "KC",
+                  "week": "4", "position": "TE", "full_name": "Travis Kelce",
+                  "first_name": "Travis", "last_name": "Kelce", "report_status": "Out"})
+        return [r]
     if case == "unstamped":
         return [row("Travis Kelce", None)]
     return base
@@ -602,17 +617,24 @@ def _run_tape_step(work: Path) -> str | None:
     games = frozen_nflverse()["/games.csv"]
     real_fetch = tn.fetch_csv
     out: dict[str, Any] = {"roles": {}, "admission": {}}
-    cases = (("point_in_time", A10_AS_OF), ("future_update", A10_AS_OF),
-             ("wrong_season", A10_AS_OF), ("unstamped", A10_AS_OF),
-             ("evening_cutoff", _dt.datetime(2026, 10, 5, 0, 0, tzinfo=_dt.UTC)),
-             ("whole_day_no_as_of", None))
+    # (case, as_of, run mode passed when _auto_roles accepts one)
+    cases = (("point_in_time", A10_AS_OF, "live"), ("future_update", A10_AS_OF, "replay"),
+             ("wrong_season", A10_AS_OF, "live"), ("unstamped", A10_AS_OF, "replay"),
+             ("layout_2026_live", A10_AS_OF, "live"),
+             ("layout_2026_replay", A10_AS_OF, "replay"),
+             ("evening_cutoff", _dt.datetime(2026, 10, 5, 0, 0, tzinfo=_dt.UTC), "live"),
+             ("whole_day_no_as_of", None, None))
+    import inspect
+
+    takes_mode = "run_mode" in inspect.signature(tn._auto_roles).parameters
     try:
-        for case, as_of in cases:
+        for case, as_of, mode in cases:
             inj = a10_injury_rows(case)
             tn.fetch_csv = (  # type: ignore[assignment]
                 lambda url, timeout=60.0, _i=inj: copy.deepcopy(_i) if "injuries" in url
                 else a10_depth_rows())
-            res = tn._auto_roles(SEASON, _dt.date(2026, 10, 4), games, as_of)
+            extra = {"run_mode": mode} if takes_mode else {}
+            res = tn._auto_roles(SEASON, _dt.date(2026, 10, 4), games, as_of, **extra)
             roles, injuries = res[0], res[1]
             out["roles"][case] = {
                 "qb": roles.get("KC", {}).get("qb"), "te": roles.get("KC", {}).get("te"),
