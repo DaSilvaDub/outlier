@@ -19,7 +19,11 @@ B  Live-shaped Week 4 replay, 2026-10-04: the same three fixture events moved
    future information for this slate. A snapshot row taken at 19:30Z (after
    every step) is pre-seeded. Steps:
    B1 16:00Z all sources; B2 16:10Z nflverse schedule download fails;
-   B3 16:20Z no local tape file; B4 18:00Z (after the 17:00Z kickoff).
+   B3 16:20Z no local tape file; B5 16:30Z page 2 of the bulk player props
+   fails (HTTP 500 after retries); B6 16:40Z every event-markets request fails;
+   B7 16:50Z the schedule labels the slate week 19 (postseason); B4 18:00Z
+   (after the 17:00Z kickoff). Player props are served as two token pages
+   through the real ``OutlierNflApiClient`` pagination, so B5 exercises it.
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -47,7 +51,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 1
+HARNESS_VERSION = 2
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -70,6 +74,12 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "B2_schedule_unavailable", "clock": "2026-10-04T16:10:00+00:00",
          "fail_urls": ("/games.csv",)},
         {"name": "B3_no_local_tape", "clock": "2026-10-04T16:20:00+00:00", "no_tape": True},
+        # Phase 2 (#224): a required stage fails or is truncated before kickoff.
+        {"name": "B5_props_page2_fails", "clock": "2026-10-04T16:30:00+00:00",
+         "fail_props_page": 2},
+        {"name": "B6_event_markets_fail", "clock": "2026-10-04T16:40:00+00:00",
+         "fail_markets": True},
+        {"name": "B7_postseason_week", "clock": "2026-10-04T16:50:00+00:00", "week": 19},
         {"name": "B4_after_kickoff", "clock": "2026-10-04T18:00:00+00:00"},
     ],
 }
@@ -251,10 +261,27 @@ def frozen_tape(fixtures_dir: Path) -> dict[str, Any]:
     }
 
 
-class FrozenOutlierClient:
-    """In-memory stand-in for ``OutlierNflApiClient`` serving the shifted fixtures."""
+PROPS_PAGE_SIZE = 4
 
-    def __init__(self, fixtures_dir: Path, shift_days: int = SHIFT_DAYS, week: int = 4) -> None:
+
+def _http_error(message: str, code: int) -> Exception:
+    from outlier_nfl.api import OutlierNflApiError
+
+    exc = OutlierNflApiError(message)
+    exc.status_code = code  # type: ignore[attr-defined]
+    return exc
+
+
+class FrozenOutlierClient:
+    """In-memory stand-in for ``OutlierNflApiClient`` serving the shifted fixtures.
+
+    Player props go through the real client's pagination (``_fetch_paginated``)
+    as token pages of ``PROPS_PAGE_SIZE``; ``fail_props_page`` makes that page
+    fail as an exhausted HTTP 500, ``fail_markets`` fails every event-markets call.
+    """
+
+    def __init__(self, fixtures_dir: Path, shift_days: int = SHIFT_DAYS, week: int = 4,
+                 fail_props_page: int | None = None, fail_markets: bool = False) -> None:
         sched = json.loads((fixtures_dir / "schedule.json").read_text(encoding="utf-8"))
         for ev in sched.get("events", []):
             for key in ("scheduledTime", "startTime"):
@@ -265,15 +292,36 @@ class FrozenOutlierClient:
         self._schedule = sched
         self._markets = json.loads((fixtures_dir / "event_markets.json").read_text(encoding="utf-8"))
         self._props = json.loads((fixtures_dir / "player_props.json").read_text(encoding="utf-8"))
+        self._fail_props_page = fail_props_page
+        self._fail_markets = fail_markets
 
     def fetch_schedule(self, *_a: Any, **_k: Any) -> dict[str, Any]:
         return copy.deepcopy(self._schedule)
 
-    def fetch_event_markets(self, *_a: Any, **_k: Any) -> dict[str, Any]:
+    def fetch_event_markets(self, event_id: str, *_a: Any, **_k: Any) -> dict[str, Any]:
+        if self._fail_markets:
+            raise _http_error(f"HTTP 500 for frozen event markets {event_id}", 500)
         return copy.deepcopy(self._markets)
 
+    def _props_page(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        rows = self._props.get("props", [])
+        pages = max(1, -(-len(rows) // PROPS_PAGE_SIZE))
+        token = (params or {}).get("pageToken")
+        num = int(str(token).rsplit("-", 1)[-1]) if token else 1
+        if num == self._fail_props_page:
+            raise _http_error(f"HTTP 500 for {path} page {num}", 500)
+        chunk = rows[(num - 1) * PROPS_PAGE_SIZE: num * PROPS_PAGE_SIZE]
+        nxt = f"frozen-page-{num + 1}" if num < pages else None
+        return {"props": copy.deepcopy(chunk),
+                "_page": {"nextPageToken": nxt, "pageNumber": num, "pages": pages,
+                          "total": len(rows)}}
+
     def fetch_player_props(self, *_a: Any, **_k: Any) -> dict[str, Any]:
-        return copy.deepcopy(self._props)
+        from outlier_nfl.api import OutlierNflApiClient
+
+        real = OutlierNflApiClient(bearer_token="frozen-harness")
+        real.fetch_json = self._props_page  # type: ignore[method-assign]
+        return real.fetch_player_props()
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +472,12 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
             kwargs["offline_fixtures_dir"] = fixtures
             pipeline = pipeline_mod.NflPipeline(**init)
         else:
-            pipeline = pipeline_mod.NflPipeline(client=FrozenOutlierClient(fixtures), **init)
+            client = FrozenOutlierClient(
+                fixtures, week=int(step.get("week", 4)),
+                fail_props_page=step.get("fail_props_page"),
+                fail_markets=bool(step.get("fail_markets")),
+            )
+            pipeline = pipeline_mod.NflPipeline(client=client, **init)
         if "as_of_utc" in run_params:
             kwargs["as_of_utc"] = step["clock"]
         try:
