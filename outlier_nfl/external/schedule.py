@@ -45,8 +45,18 @@ TEXT_FIELDS = (
 def fetch(client: Client, season: int, as_of_utc: datetime) -> dict[str, Any]:
     """Regular-season game environment records for ``season`` as known at ``as_of_utc``."""
     records: list[dict[str, Any]] = []
+    # Pregame identity/phase only: keep non-REG games out of metrics and week cutoffs.
+    phase_records: list[dict[str, Any]] = []
     for row in client.fetch_csv(SCHEDULE_URL):
-        if str(row.get("season")) != str(season) or row.get("game_type") != "REG":
+        if str(row.get("season")) != str(season):
+            continue
+        phase_records.append({
+            "season": season, "game_type": row.get("game_type"),
+            "gameday": row.get("gameday"),
+            "home_team": normalize_team(row.get("home_team")),
+            "away_team": normalize_team(row.get("away_team")),
+        })
+        if row.get("game_type") != "REG":
             continue
         week = int(num(row.get("week")) or 0)
         if week < 1:
@@ -71,4 +81,4 @@ def fetch(client: Client, season: int, as_of_utc: datetime) -> dict[str, Any]:
             for field in POSTGAME_FIELDS:
                 record[field] = None
         records.append(record)
-    return {"records": records}
+    return {"records": records, "phase_records": phase_records}

@@ -23,7 +23,12 @@ import sys
 from typing import Any, Iterable, Mapping
 
 from outlier_nfl.best_bets import merge_payloads, render_best_bets_markdown
-from outlier_nfl.pipeline import NflPipeline, _refresh_tape
+from outlier_nfl.pipeline import (
+    EXIT_REQUIRED_STAGE_FAILED,
+    NflPipeline,
+    _refresh_tape,
+    format_stage_failure,
+)
 from outlier_nfl.snapshots import week_start
 from outlier_nfl.utils import safe_read_json, safe_write_json, to_eastern_date, to_eastern_datetime
 
@@ -43,6 +48,20 @@ def remaining_week_dates(events: Iterable[Mapping[str, Any]], today: date) -> li
         if today <= d <= end:
             dates.add(day)
     return sorted(dates)
+
+
+class RequiredStageError(RuntimeError):
+    """A slate run's required stage receipt was not OK; the weekly card is not written."""
+
+    def __init__(self, slate: str, summary: Mapping[str, Any]) -> None:
+        bad = [
+            f"{r.get('name')}={r.get('status')}"
+            for r in summary.get("stage_receipts") or []
+            if r.get("required") and r.get("status") not in ("OK", "EMPTY")
+        ]
+        super().__init__(f"{slate}: run {summary.get('status')} ({', '.join(bad)})")
+        self.slate = slate
+        self.summary = dict(summary)
 
 
 def run_week(
@@ -79,6 +98,10 @@ def run_week(
             # --reports-dir.
             reports_dir=reports_dir,
         )
+        # A slate whose required stage failed published nothing and must not be
+        # merged into the weekly card as if it were complete (F03).
+        if summary.get("status") != "OK":
+            raise RequiredStageError(slate, summary)
         if summary.get("best_bets_error"):
             raise RuntimeError(f"{slate}: {summary['best_bets_error']}")
         summaries[slate] = summary.get("best_bets_counts", {})
@@ -130,12 +153,17 @@ def main(argv: list[str] | None = None) -> int:
     today = date.fromisoformat(args.today) if args.today else now_et.date()  # type: ignore[union-attr]
     if not args.no_refresh_tape:
         _refresh_tape(args.data_dir / "NFL", today.isoformat(), None)
-    result = run_week(
-        NflPipeline(data_dir=args.data_dir),
-        today,
-        reports_dir=args.reports_dir,
-        run_stamp=now_et.strftime("%H%M") + "ET" if now_et else None,
-    )
+    try:
+        result = run_week(
+            NflPipeline(data_dir=args.data_dir),
+            today,
+            reports_dir=args.reports_dir,
+            run_stamp=now_et.strftime("%H%M") + "ET" if now_et else None,
+        )
+    except RequiredStageError as exc:
+        print(format_stage_failure(exc.summary), file=sys.stderr)
+        print("Weekly card not written; earlier slates this week were not merged.", file=sys.stderr)
+        return EXIT_REQUIRED_STAGE_FAILED
     print("=" * 60)
     print(f"NFL WEEKLY REFRESH - {today.isoformat()}")
     print(f"Slate dates: {', '.join(result['dates']) or 'none'}")

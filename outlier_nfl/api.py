@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import gzip
 import http.client
+import hashlib
 import json
 import logging
 import os
@@ -70,7 +71,43 @@ STREAM_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
 
 
 class OutlierNflApiError(RuntimeError):
-    """Base exception for Outlier NFL API errors."""
+    """Base exception for Outlier NFL API errors.
+
+    ``status_code`` is the final HTTP status when the error came from one.
+    """
+
+    def __init__(self, message: str = "", *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code: int | None = status_code
+
+
+class IncompletePaginationError(OutlierNflApiError):
+    """A paginated list could not be fetched to its end (F04).
+
+    Raised instead of returning the pages fetched so far: an exhausted-retry
+    page failure, a repeated cursor, a page that does not advance, or the page
+    cap reached while the feed still advertises more pages.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        pages_fetched: int,
+        pages_expected: int | None,
+        records_fetched: int,
+    ) -> None:
+        super().__init__(message)
+        self.reason: str = reason
+        self.pages_fetched: int = pages_fetched
+        self.pages_expected: int | None = pages_expected
+        self.records_fetched: int = records_fetched
+
+
+# A page request with an unproven parameter name failing with one of these means
+# "this parameter is not supported", not "the page failed".
+UNSUPPORTED_PARAM_STATUS = frozenset({400, 404, 422})
 
 
 class AuthRequiredError(OutlierNflApiError):
@@ -266,24 +303,27 @@ def discover_session_credentials(
     return None, None
 
 
-def _records_signature(records: list[Any]) -> tuple[int, tuple[str, ...], tuple[str, ...]]:
-    """Compute a lightweight fingerprint of a page to detect stalled pagination."""
-    ids: list[str] = []
+def _record_identity(r: Any) -> str:
+    if isinstance(r, dict):
+        rec_id = r.get("outcomeId") or r.get("marketId") or r.get("id") or r.get("eventId")
+        if not rec_id and isinstance(r.get("outcome"), dict):
+            rec_id = r["outcome"].get("outcomeId") or r["outcome"].get("marketId")
+        if rec_id:
+            return str(rec_id)
+    return json.dumps(r, sort_keys=True, default=str)
+
+
+def _records_signature(records: list[Any]) -> tuple[int, str]:
+    """Identity of a whole page: its length and a hash of every record's identity.
+
+    Every record counts (F04): a first/last-three fingerprint let a changed middle
+    of a page pass as the same page, and a repeated page pass as a new one.
+    """
+    digest = hashlib.sha256()
     for r in records:
-        if isinstance(r, dict):
-            # Check direct ID keys
-            rec_id = (
-                r.get("outcomeId")
-                or r.get("marketId")
-                or r.get("id")
-                or r.get("eventId")
-            )
-            if not rec_id and isinstance(r.get("outcome"), dict):
-                rec_id = r["outcome"].get("outcomeId") or r["outcome"].get("marketId")
-            ids.append(str(rec_id or ""))
-        else:
-            ids.append(str(r))
-    return (len(records), tuple(ids[:3]), tuple(ids[-3:]))
+        digest.update(_record_identity(r).encode("utf-8"))
+        digest.update(b"\0")
+    return (len(records), digest.hexdigest())
 
 
 def _extract_next_token_and_meta(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -406,11 +446,13 @@ class OutlierNflApiClient:
                 if exc.code == 401:
                     raise AuthRequiredError(f"HTTP 401 Unauthorized for {url}. Valid login session required.") from exc
                 if exc.code == 404:
-                    raise NotFoundError(f"HTTP 404 Not Found for {url}") from exc
+                    raise NotFoundError(f"HTTP 404 Not Found for {url}", status_code=404) from exc
                 if exc.code == 429 and attempt >= policy.max_retries:
-                    raise RateLimitError(f"HTTP 429 Rate limited after {policy.max_retries} attempts: {url}") from exc
+                    raise RateLimitError(
+                        f"HTTP 429 Rate limited after {policy.max_retries} attempts: {url}", status_code=429
+                    ) from exc
                 if exc.code not in RETRYABLE_STATUS_CODES or attempt >= policy.max_retries:
-                    raise OutlierNflApiError(f"HTTP {exc.code} for {url}") from exc
+                    raise OutlierNflApiError(f"HTTP {exc.code} for {url}", status_code=exc.code) from exc
 
                 sleep_time = policy.delay_for(attempt)
                 logger.warning(
@@ -472,7 +514,19 @@ class OutlierNflApiClient:
         current = first
         fetched = 1
 
-        while fetched < max_pages:
+        def incomplete(reason: str, detail: str) -> IncompletePaginationError:
+            return IncompletePaginationError(
+                f"Incomplete pagination for {base_path} ({reason}) after {fetched} page(s)"
+                f"{f' of {total_pages_num}' if total_pages_num else ''}: {detail}",
+                reason=reason,
+                pages_fetched=fetched,
+                pages_expected=total_pages_num,
+                records_fetched=len(records),
+            )
+
+        # A list is complete only when the feed itself says so (F04): no next
+        # cursor and no advertised page beyond the last one fetched.
+        while True:
             token_val, cur_meta = _extract_next_token_and_meta(current)
             try:
                 cur_num = int(cur_meta.get("pageNumber") or fetched)
@@ -480,10 +534,12 @@ class OutlierNflApiClient:
                 cur_num = fetched
 
             use_token = bool(token_val)
+            if not use_token and (not total_pages_num or cur_num >= total_pages_num):
+                break
             if use_token and token_val in seen_tokens:
-                break
-            if not use_token and total_pages_num and cur_num >= total_pages_num:
-                break
+                raise incomplete("repeated_cursor", "the feed returned a cursor it already gave")
+            if fetched >= max_pages:
+                raise incomplete("page_cap", f"max_pages={max_pages} reached with pages remaining")
 
             if use_token:
                 seen_tokens.add(token_val)
@@ -502,18 +558,34 @@ class OutlierNflApiClient:
                     candidate = self.fetch_json(base_path, params=p_dict)
                 except AuthRequiredError:
                     raise
-                except OutlierNflApiError:
-                    continue
+                except OutlierNflApiError as exc:
+                    # Only an unproven parameter name may fail as "unsupported";
+                    # a page failure (exhausted 429/5xx, transport) is incomplete.
+                    unsupported = isinstance(exc, NotFoundError) or (
+                        getattr(exc, "status_code", None) in UNSUPPORTED_PARAM_STATUS
+                    )
+                    if locked_param is None and unsupported:
+                        continue
+                    raise incomplete("page_failed", str(exc)) from exc
 
                 cand_records = candidate.get(record_key)
-                if isinstance(cand_records, list) and cand_records:
-                    if _records_signature(cand_records) != last_sig:
+                if not isinstance(cand_records, list):
+                    if locked_param is None:
+                        continue
+                    raise incomplete("invalid_page", f"{record_key!r} is not a list")
+                if not cand_records:
+                    if locked_param is not None:
                         page = candidate
                         used_param = param_name
                         break
+                    continue
+                if _records_signature(cand_records) != last_sig:
+                    page = candidate
+                    used_param = param_name
+                    break
 
             if page is None:
-                break
+                raise incomplete("no_advance", "no page parameter returned the next page")
 
             locked_param = used_param
             page_records = page.get(record_key, [])
@@ -521,6 +593,9 @@ class OutlierNflApiClient:
             last_sig = _records_signature(page_records)
             fetched += 1
             current = page
+            if not page_records:
+                # A proven cursor led to an empty page: the feed has ended.
+                break
 
         first[record_key] = records
         return first

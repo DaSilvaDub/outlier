@@ -27,6 +27,7 @@ class ExternalLoad:
     records: list[dict[str, Any]] = field(default_factory=list)
     sources: list[SourceRecord] = field(default_factory=list)
     before_week: int | None = None
+    phase_records: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_external_metrics(
@@ -49,7 +50,9 @@ def load_external_metrics(
     client = client or Client(cache_dir="cache/external", ttl=86400)
     out = ExternalLoad()
     try:
-        schedule_records = fetch_schedule(client, season, as_of_utc).get("records", [])
+        schedule_payload = fetch_schedule(client, season, as_of_utc)
+        schedule_records = schedule_payload.get("records", [])
+        out.phase_records = schedule_payload.get("phase_records", [])
     except Exception as exc:  # one source down must not drop the rest
         logger.warning("External source schedule unavailable: %s", exc)
         out.sources.append(SourceRecord("external:schedule", "UNAVAILABLE", f"fetch failed: {exc}"))

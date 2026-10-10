@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from outlier_nfl.api import (
+    IncompletePaginationError,
     AuthRequiredError,
     OutlierNflApiClient,
     OutlierNflApiError,
@@ -205,9 +206,9 @@ def test_pagination_loop_guard_on_duplicate_token():
     # API returns identical token endlessly
     client.fetch_json = MagicMock(return_value=page_stuck)  # type: ignore[method-assign]
 
-    merged = client.fetch_player_props(max_pages=10)
-    # Should break immediately on second cycle detecting duplicate cursor
-    assert len(merged["props"]) == 1
+    # A cursor that never advances is an incomplete feed, not a 1-page one (F04).
+    with pytest.raises(IncompletePaginationError):
+        client.fetch_player_props(max_pages=10)
 
 
 def test_api_recovers_from_transient_corrupted_gzip():

@@ -70,6 +70,10 @@ class RunWriter:
         """Copy staged artifact ``name`` to each destination at commit time."""
         self._publish.setdefault(name, []).extend(Path(d) for d in destinations)
 
+    def withhold_publication(self) -> None:
+        """Drop every publish destination staged so far: the run stays bundle-only."""
+        self._publish.clear()
+
     def stage_json(self, name: str, payload: Any, publish: Iterable[Path] = ()) -> None:
         safe_write_json(self.staged_path(name), payload)
         self.publish(name, publish)
