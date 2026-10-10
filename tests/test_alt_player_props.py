@@ -184,6 +184,23 @@ def test_player_board_enforces_mlb_pitcher_k_over_and_wnba_targets():
     assert [row["player"] for row in wnba_rows] == ["Guard"]
 
 
+def test_wnba_ast_reb_min_line_3_5():
+    """WNBA AST and REB props must be at least line 3.5 to qualify as floor props."""
+    rows = _board(
+        [
+            _prop(league="WNBA", player="Ast Low", market="AST", line=1.5, event_id="e1"),
+            _prop(league="WNBA", player="Ast Borderline Low", market="AST", line=2.5, event_id="e2"),
+            _prop(league="WNBA", player="Ast Valid", market="AST", line=3.5, event_id="e3"),
+            _prop(league="WNBA", player="Reb Low", market="REB", line=2.5, event_id="e4"),
+            _prop(league="WNBA", player="Reb Valid", market="REB", line=3.5, event_id="e5"),
+            _prop(league="WNBA", player="Pts Low Still Allowed", market="PTS", line=2.5, event_id="e6"),
+        ],
+        league="WNBA",
+    )
+    accepted_players = {row["player"] for row in rows}
+    assert accepted_players == {"Ast Valid", "Reb Valid", "Pts Low Still Allowed"}
+
+
 def test_player_parlays_use_player_name_when_player_id_is_missing():
     rows = _board(
         [

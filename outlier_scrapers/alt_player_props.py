@@ -38,6 +38,12 @@ ALT_PLAYER_PROPS_ALLOWED_BOOKS = frozenset(
     {"hardrock", "fanatics", "midnite", "draftkings", "novig"}
 )
 
+# Minimum line constraints for floor props (reject volatile sub-3.5 AST and REB lines)
+WNBA_MIN_PROP_LINES: dict[str, float] = {
+    "AST": 3.5,
+    "REB": 3.5,
+}
+
 ALT_PLAYER_PROPS_HEADER = [
     "league",
     "event_id",
@@ -222,6 +228,17 @@ def build_alt_player_props_board(
         position = str(rec.get("position") or rec.get("side") or "").strip().upper()
         if not _is_allowed_side(token, market, position):
             continue
+
+        line_val = rec.get("line")
+        try:
+            line_num = float(line_val) if line_val is not None else None
+        except (ValueError, TypeError):
+            line_num = None
+
+        if token == "WNBA" and market in WNBA_MIN_PROP_LINES:
+            min_line = WNBA_MIN_PROP_LINES[market]
+            if line_num is not None and line_num < min_line:
+                continue
 
         offer = _best_allowed_offer(rec)
         if offer is None:

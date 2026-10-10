@@ -597,6 +597,11 @@ def is_floor_ladder_opportunity(row: dict[str, Any]) -> bool:
     if line is None:
         return False
 
+    # Assists and Rebounds floor props require a minimum line of 3.5 (drop volatile 1.5 and 2.5 lines)
+    mtype = str(row.get("market_type") or row.get("market") or "").strip().upper()
+    if mtype in {"AST", "ASSISTS", "REB", "REBOUNDS"} and line < 3.5:
+        return False
+
     proj_mean = _to_float(row.get("projection_mean"))
     line_open = _to_float(row.get("line_open"))
 

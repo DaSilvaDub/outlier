@@ -55,6 +55,8 @@ class GradedSignal:
     hit_vs_avg: bool | None
     line: float | None
     hit_vs_line: bool | None
+    run_id: str | None = None  # pipeline run whose scripts were graded
+    source_sha256: str | None = None  # sha256 of the graded scripts file
 
 
 def _f(value: Any) -> float:
@@ -257,15 +259,26 @@ def direction_baselines(
     return out
 
 
-def update_ledger(path: Path, graded: list[GradedSignal], date: str) -> list[dict[str, Any]]:
-    """Replace this date's rows in the JSONL ledger; return the whole ledger."""
+def update_ledger(
+    path: Path,
+    graded: list[GradedSignal],
+    date: str,
+    event_ids: Iterable[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Replace this date's rows for the graded events; return the whole ledger.
+
+    Only rows for ``date`` whose event is in ``event_ids`` (default: the graded
+    signals' events) are replaced, so a partial replay never deletes other
+    events' rows for the same date (F11).
+    """
+    scope = {str(e) for e in event_ids} if event_ids is not None else {g.event_id for g in graded}
     path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 rec = json.loads(line)
-                if rec.get("date") != date:
+                if rec.get("date") != date or str(rec.get("event_id")) not in scope:
                     rows.append(rec)
     rows.extend(asdict(g) for g in graded)
     tmp = path.with_suffix(path.suffix + ".tmp")

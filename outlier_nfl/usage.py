@@ -278,7 +278,14 @@ def load_usage(
     before_week: int | None,
     fetch_rows: FetchRows = fetch_csv,
 ) -> dict[str, PlayerUsage]:
-    """Fetch nflverse player weeks (+ ffopportunity expected stats when available)."""
+    """Fetch nflverse player weeks (+ ffopportunity expected stats when available).
+
+    ``before_week`` is the run's as-of cutoff (F01) and is required: ``None``
+    used to mean "every week of the season", which admitted games played after
+    the slate. Callers without a verified cutoff must skip usage instead.
+    """
+    if before_week is None:
+        raise ValueError("load_usage requires a verified before_week cutoff")
     players = fetch_player_weeks(season, fetch_rows)
     try:
         expected = fetch_rows(EXPECTED_URL.format(season=season))

@@ -82,7 +82,15 @@ def run_week(
         if summary.get("best_bets_error"):
             raise RuntimeError(f"{slate}: {summary['best_bets_error']}")
         summaries[slate] = summary.get("best_bets_counts", {})
-        payload = safe_read_json(pipeline.normalized_dir / f"nfl_best_bets_{slate}.json")
+        # Read the card from this run's bundle: a run after kickoff is bundle-only
+        # and must still be merged without replacing the dated card (F11).
+        run_dir = summary.get("run_dir")
+        card = (
+            Path(run_dir) / "nfl_best_bets.json"
+            if run_dir
+            else pipeline.normalized_dir / f"nfl_best_bets_{slate}.json"
+        )
+        payload = safe_read_json(card)
         # Merge only the card this run wrote; an older file must never pass as a refresh.
         if not isinstance(payload, dict) or payload.get("updated_at") != summary.get("timestamp_utc"):
             raise RuntimeError(f"{slate}: best-bets card missing or not from this run")

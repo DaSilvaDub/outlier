@@ -713,3 +713,39 @@ def test_render_spread_lean_names_the_backed_side():
     assert "- **Spread lean:** AWAY (ATL -1.5)" in md("AWAY", 1.5)
     assert "- **Spread lean:** HOME (NO -3.0)" in md("HOME", -3.0)
     assert "- **Spread lean:** NEUTRAL (NO +0.0)" in md("NEUTRAL", 0.0)
+
+
+def test_underdog_rush_mismatch_triggers_clock_bleed_and_blocks_dome_over():
+    """Verify that an underdog rush mismatch suppresses pace (-3.0 pts), blocks dome OVER, and leans dog on heavy spread."""
+    from outlier_nfl.matchup import (
+        GROUND_DOMINANCE_CLOCK_BLEED,
+        HEAVY_FAVORITE_SPREAD,
+        build_matchup_script,
+    )
+
+    lines = [
+        _line(event_id="evt-tb-dal", market="SPREAD", line=-7.5, position="HOME", team="DAL", home="DAL", away="TB"),
+        _line(event_id="evt-tb-dal", market="SPREAD", line=7.5, position="AWAY", team="TB", home="DAL", away="TB"),
+        _line(event_id="evt-tb-dal", market="TOTAL", line=48.5, position="OVER", team=None, home="DAL", away="TB"),
+        _line(event_id="evt-tb-dal", market="POINTS", line=28.0, team="DAL", home="DAL", away="TB", market_type="TEAM_PROP", proposition="POINTS"),
+        _line(event_id="evt-tb-dal", market="POINTS", line=20.5, team="TB", home="DAL", away="TB", market_type="TEAM_PROP", proposition="POINTS"),
+    ]
+    tape = {
+        "DAL": {"rush_defense": 35.0, "opp_rush_yards_allowed": 160.0},
+        "TB": {"rush_offense": 85.0, "rush_yards": 170.0, "rb1": "Bucky Irving"},
+    }
+
+    script = build_matchup_script("evt-tb-dal", "DAL", "TB", lines, tape)
+
+    # 1. Total lean must be UNDER despite DAL being a dome team in DOME_TEAMS
+    assert script.total_lean == "UNDER"
+    assert any("Ground dominance clock bleed" in n for n in script.notes)
+
+    # 2. Spread lean must be AWAY (TB +7.5) due to possession compression on heavy favorite
+    assert script.spread_lean == "AWAY"
+    assert any("Underdog ground control" in n for n in script.notes)
+
+    # 3. Projected scores reflect the clock-bleed haircut
+    # Without clock bleed, DAL 28, TB 21 + 3.5 = 24.5 -> total ~ 52.5
+    # With -3.0 pt clock bleed, total is reduced
+    assert (script.home_score + script.away_score) <= 50.0
