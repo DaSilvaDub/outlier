@@ -117,3 +117,63 @@ def test_normalized_validation_enforces_keys_and_ownership() -> None:
     assert len(dup) == 1 and "duplicate key" in dup[0]
     foreign = validate_normalized_dataset([_rec(-110, team="MIA")], dataset_type="props")
     assert len(foreign) == 1 and "not in event" in foreign[0]
+
+
+@pytest.mark.parametrize("matchup", ["Buffalo Bills @ Kansas City Chiefs", "buf-bills @ kc-chiefs",
+                                     "BUF @ KC", "Bills @ Chiefs"])
+def test_ownership_resolves_full_name_slug_and_alias_matchups(matchup: str) -> None:
+    rec = {**_rec(-110), "matchup": matchup}
+    assert validate_normalized_dataset([rec], dataset_type="props") == []
+
+
+def test_ownership_prefers_carried_event_teams_and_still_fails_a_foreign_team() -> None:
+    rec = {**_rec(-110, team="MIA"), "matchup": "Buffalo Bills @ Kansas City Chiefs"}
+    assert "not in event" in validate_normalized_dataset([rec], dataset_type="props")[0]
+    carried = {**_rec(-110), "matchup": "garbled", "home_team": "KC", "away_team": "BUF"}
+    assert validate_normalized_dataset([carried], dataset_type="props") == []
+
+
+def test_unresolvable_matchup_skips_the_ownership_check() -> None:
+    rec = {**_rec(-110, team="MIA"), "matchup": "Team One @ Team Two"}
+    assert validate_normalized_dataset([rec], dataset_type="props") == []
+
+
+def test_extracted_props_carry_normalized_event_teams() -> None:
+    sched = {"events": [{"eventId": "ev1", "home": {"teamId": "kc", "name": "Kansas City Chiefs"},
+                         "away": {"teamId": "buf", "name": "Buffalo Bills"}}]}
+    prop = extract_player_props({"props": [_quote(-110)]}, build_schedule_index(sched))[0]
+    assert (prop.home_team, prop.away_team) == ("KC", "BUF")
+    assert validate_normalized_dataset([prop.to_dict()], dataset_type="props") == []
+
+
+def test_main_and_alt_listing_at_same_price_is_one_quote() -> None:
+    from outlier_nfl.schema import dedupe_quotes, player_prop_key
+
+    main = {**_rec(-110), "market_raw": "RECEIVING_YARDS", "market_id": "m-main",
+            "outcome_id": "o-main", "is_consensus_line": False}
+    alt = {**main, "market_raw": "ALT_RECEIVING_YARDS", "market_id": "m-alt",
+           "outcome_id": "o-alt", "is_consensus_line": True}
+    counts: dict[str, int] = {}
+    kept = dedupe_quotes([main, alt], player_prop_key, "player_prop", counts)
+    assert kept == [alt]  # the consensus copy wins
+    assert counts == {"identical_player_prop": 1, "conflicting_player_prop": 0}
+    assert dedupe_quotes([main, {**alt, "best_odds": 120,
+                                 "books": [{"book": "DRAFTKINGS", "odds": 120}]}],
+                         player_prop_key, "player_prop", counts) == []
+    assert counts["conflicting_player_prop"] == 2
+
+
+def test_drop_counts_reach_an_informational_receipt() -> None:
+    from collections import Counter
+
+    from outlier_nfl.stage_receipts import failing, quote_integrity_receipt, run_status
+
+    counts: Counter[str] = Counter()
+    props = [_quote(-110), _quote(120), {"outcome": {**_quote(-110)["outcome"], "eventId": ""}},
+             {"outcome": {**_quote(-110)["outcome"], "teamId": "MIA", "outcomeId": "x"}}]
+    assert extract_player_props({"props": props}, build_schedule_index(SCHED), counts) == []
+    r = quote_integrity_receipt(counts)
+    assert r.status == "OK" and r.required is False and r.received == 4
+    assert r.errors == ["conflicting_player_prop=2", "no_event_id=1", "team_not_in_event=1"]
+    assert failing([r]) == [] and run_status([r]) == "OK"
+    assert quote_integrity_receipt(Counter()).to_dict()["received"] == 0

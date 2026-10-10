@@ -6,6 +6,7 @@ adjustments, and orchestrates extraction of game lines and player propositions.
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
 from typing import Any
 
@@ -135,14 +136,16 @@ def normalize_game_markets(
     event: dict[str, Any],
     event_markets_payload: dict[str, Any] | list[Any],
     team_index: dict[str, str],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflGameLine]:
     """Normalize raw game markets payload into NflGameLine records."""
-    return extract_game_lines(event, event_markets_payload, team_index)
+    return extract_game_lines(event, event_markets_payload, team_index, drop_counts)
 
 
 def normalize_player_props(
     player_props_payload: dict[str, Any] | list[Any],
     schedule_index: dict[str, dict[str, Any]],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflPlayerProp]:
     """Normalize raw bulk player props payload into NflPlayerProp records."""
-    return extract_player_props(player_props_payload, schedule_index)
+    return extract_player_props(player_props_payload, schedule_index, drop_counts)

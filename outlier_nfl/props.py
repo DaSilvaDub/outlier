@@ -55,6 +55,7 @@ def _resolve_event_team(raw: Any, event_info: Mapping[str, Any]) -> str | None:
 def extract_player_props(
     player_props_payload: dict[str, Any] | list[Any],
     schedule_index: dict[str, dict[str, Any]],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflPlayerProp]:
     """Normalize raw bulk player props payload into strongly typed NflPlayerProp objects."""
     results: list[NflPlayerProp] = []
@@ -165,6 +166,8 @@ def extract_player_props(
                 matchup=matchup,
                 team=team,
                 opponent=opponent,
+                home_team=home_code or None,
+                away_team=away_code or None,
                 player_name=player_name,
                 player_id=str(player_id) if player_id else None,
                 market=market,
@@ -188,5 +191,7 @@ def extract_player_props(
 
     if dropped:
         logger.warning("Dropped player props: %s", dict(sorted(dropped.items())))
+    if drop_counts is not None:
+        drop_counts.update(dropped)
     # Identical duplicate quotes are dropped; conflicting versions all dropped (F26).
-    return dedupe_quotes(results, player_prop_key, "player prop")
+    return dedupe_quotes(results, player_prop_key, "player_prop", drop_counts)

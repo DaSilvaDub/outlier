@@ -6,6 +6,7 @@ records for point spreads, game totals, moneylines, and team totals.
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
 from typing import Any
 
@@ -264,6 +265,7 @@ def extract_game_lines(
     event: dict[str, Any],
     event_markets_payload: dict[str, Any] | list[Any],
     team_index: dict[str, str],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflGameLine]:
     """Extract and normalize all game lines and team props for an NFL event."""
     results: list[NflGameLine] = []
@@ -552,4 +554,4 @@ def extract_game_lines(
 
     # Identical duplicates (e.g. one payload served for every market type) are
     # dropped; conflicting versions of one quote are all dropped (F26).
-    return dedupe_quotes(results, game_line_key, "game line")
+    return dedupe_quotes(results, game_line_key, "game_line", drop_counts)

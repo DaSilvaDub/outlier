@@ -25,7 +25,7 @@ a partial slate published as complete is what F03/F04 forbid.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -81,6 +81,23 @@ def validation_receipt(name: str, errors: Iterable[Any], *, count: int | None = 
         return receipt(name, "INVALID", reason=f"{len(errs)} validation error(s)",
                        received=count, errors=errs)
     return receipt(name, "EMPTY" if empty else "OK", received=count)
+
+
+def quote_integrity_receipt(drop_counts: Mapping[str, int]) -> StageReceipt:
+    """Informational receipt of quotes dropped at normalization (F26).
+
+    Never required and always ``OK``, whatever the counts: dropping a foreign
+    or conflicting quote is the intended outcome, so it must not make a run
+    PARTIAL or bundle-only. ``received`` is the total dropped; ``errors`` lists
+    every nonzero count as ``name=count``.
+    """
+    counts = {k: int(v) for k, v in sorted(drop_counts.items()) if v}
+    total = sum(counts.values())
+    return StageReceipt(
+        name="quote_integrity", required=False, status="OK",
+        reason=f"{total} quote(s) dropped at normalization" if total else None,
+        received=total, errors=[f"{k}={v}" for k, v in counts.items()],
+    )
 
 
 def failing(receipts: Iterable[StageReceipt]) -> list[StageReceipt]:
