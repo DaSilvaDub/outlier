@@ -31,6 +31,9 @@ diff command) over A1's calibrated props plus integer-line copies of every prop,
 a passing-only QB anytime-TD row and a row whose stale projection stamp must not
 survive an empirical fallback, against ``frozen_week_stats`` (weeks 1-3).
 A4 runs ``scripts/nfl_rebuild_card.py`` on A1's card when the checkout has it.
+A5/A6 run ``outlier_nfl.settle`` on ``frozen_settle_boxscores`` (pushes, anytime
+vs first TD, passing-only QB, a missing stat; A6: NaN line, infinite odds and
+probability). A7 grades scorecard signals against rows with blank stats.
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -58,7 +61,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 3
+HARNESS_VERSION = 4
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -79,6 +82,13 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "A3_enrich_hierarchy_bw4", "clock": "2026-09-13T16:40:00+00:00",
          "kind": "enrich", "before_week": 4},
         {"name": "A4_rebuild_card", "clock": "2026-09-13T16:50:00+00:00", "kind": "rebuild"},
+        # Phase 3b (#225): settlement and grading on frozen box scores.
+        {"name": "A5_settle_boxscores", "clock": "2026-09-14T12:00:00+00:00", "kind": "settle",
+         "case": "main"},
+        {"name": "A6_settle_nonfinite", "clock": "2026-09-14T12:05:00+00:00", "kind": "settle",
+         "case": "nonfinite"},
+        {"name": "A7_scorecard_missing_stats", "clock": "2026-09-14T12:10:00+00:00",
+         "kind": "scorecard"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -342,9 +352,127 @@ def math_inputs(calibrated: dict[str, Any]) -> dict[str, Any]:
             "records": rows}
 
 
+FROZEN_BOX_EVENT = {
+    "provider_event_id": "frozen-bal-kc-20260913", "event_date": SLATE_DATE["A"],
+    "away": "BAL", "home": "KC", "away_score": 20, "home_score": 27,
+    "players": {
+        "Patrick Mahomes": {"PASSING:YDS": 268, "PASSING:TD": 2, "RUSHING:YDS": 12, "RUSHING:TD": 0},
+        "Travis Kelce": {"RECEIVING:REC": 5, "RECEIVING:YDS": 64, "RECEIVING:TD": 1},
+        "Derrick Henry": {"RUSHING:YDS": 71, "RUSHING:CAR": 18, "RUSHING:TD": 1,
+                          "RECEIVING:REC": 1, "RECEIVING:YDS": 4, "RECEIVING:TD": 0},
+        "Lamar Jackson": {"PASSING:YDS": 210, "PASSING:TD": 1, "RUSHING:YDS": 52, "RUSHING:TD": 0},
+    },
+}
+
+# (case, player, team, market, position, line, extra fields)
+_SETTLE_ROWS = {
+    "main": (
+        ("integer_over_push", "Travis Kelce", "KC", "REC", "OVER", 5.0, {}),
+        ("integer_under_push", "Travis Kelce", "KC", "REC", "UNDER", 5.0, {}),
+        ("half_line_win", "Travis Kelce", "KC", "REC", "OVER", 4.5, {}),
+        ("yards_under_push", "Derrick Henry", "BAL", "RUSH_YDS", "UNDER", 71.0, {}),
+        ("passing_only_qb_anytime_td", "Patrick Mahomes", "KC", "ANYTIME_TD", "OVER", 0.5, {}),
+        ("receiver_anytime_td", "Travis Kelce", "KC", "ANYTIME_TD", "OVER", 0.5, {}),
+        ("first_td_without_order", "Derrick Henry", "BAL", "FIRST_TD", "OVER", 0.5, {}),
+        ("missing_stat", "Lamar Jackson", "BAL", "REC_YDS", "OVER", 10.5, {}),
+    ),
+    "nonfinite": (
+        ("nan_line", "Travis Kelce", "KC", "REC_YDS", "OVER", float("nan"), {}),
+        ("finite_control", "Travis Kelce", "KC", "REC_YDS", "OVER", 60.5, {}),
+        ("infinite_odds", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 60.5,
+         {"best_odds": float("inf")}),
+        ("infinite_probability", "Patrick Mahomes", "KC", "PASS_YDS", "OVER", 250.5,
+         {"implied_probability": float("inf")}),
+    ),
+}
+
+
+def settle_predictions_payload(case: str) -> dict[str, Any]:
+    records = []
+    for name, player, team, market, pos, line, extra in _SETTLE_ROWS[case]:
+        records.append({
+            "event_id": "frozen-bal-kc", "event_starts_at": "2026-09-13T13:00:00-04:00",
+            "matchup": "BAL @ KC", "team": team, "opponent": "BAL" if team == "KC" else "KC",
+            "player_name": player, "market": market, "position": pos, "line": line,
+            "best_odds": -110, "implied_probability": 52.38, "model_p": 0.55,
+            "confidence_tier": "TIER_1_ANCHOR", "harness_case": name, **extra,
+        })
+    return {"date": SLATE_DATE["A"], "window": None, "count": len(records), "records": records}
+
+
+def scorecard_inputs() -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """A7: signals against week-3 rows where some stats are blank (not zero)."""
+    scripts = [{"prop_signals": [
+        {"event_id": "e1", "tag": "T_UNDER", "player_name": "Blank Current", "team": "KC",
+         "market": "REC_YDS", "side": "UNDER"},
+        {"event_id": "e1", "tag": "T_UNDER", "player_name": "Blank Prior", "team": "KC",
+         "market": "REC_YDS", "side": "UNDER"},
+        {"event_id": "e1", "tag": "T_TD", "player_name": "Blank TD", "team": "KC",
+         "market": "ANYTIME_TD", "side": "UNDER"},
+        {"event_id": "e1", "tag": "T_OVER", "player_name": "Full Row", "team": "KC",
+         "market": "REC_YDS", "side": "OVER"},
+    ]}]
+    rows: list[dict[str, str]] = []
+
+    def row(name: str, week: int, yds: str, rtd: str = "0", ctd: str = "0") -> None:
+        rows.append({"season_type": "REG", "week": str(week), "team": "KC",
+                     "player_display_name": name, "receiving_yards": yds,
+                     "rushing_tds": rtd, "receiving_tds": ctd})
+
+    for w, y in ((1, "60"), (2, "70")):
+        row("Blank Current", w, y)
+        row("Full Row", w, y)
+        row("Blank TD", w, "10")
+    row("Blank Prior", 1, "60")
+    row("Blank Prior", 2, "")
+    row("Blank Prior", 3, "50")
+    row("Blank Current", 3, "")
+    row("Full Row", 3, "80")
+    row("Blank TD", 3, "12", rtd="", ctd="")
+    return scripts, rows
+
+
+def _run_settle_step(step: dict[str, Any], work: Path) -> str | None:
+    import dataclasses
+    import os
+
+    out_dir = work / "data" / "NFL" / "settle"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if step["kind"] == "scorecard":
+        from outlier_nfl import scorecard
+
+        scripts, rows = scorecard_inputs()
+        graded, skipped = scorecard.grade_signals(SLATE_DATE["A"], 3, scripts, rows)
+        payload = {"graded": [dataclasses.asdict(g) for g in graded], "skipped": skipped}
+        (out_dir / "scorecard_missing_stats.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        return None
+    from outlier_nfl import settle
+
+    case = step["case"]
+    (out_dir / f"predictions_{case}.json").write_text(
+        json.dumps(settle_predictions_payload(case), indent=2, sort_keys=True), encoding="utf-8")
+    (out_dir / "boxscores_frozen.json").write_text(
+        json.dumps({"source": "frozen harness", "events": [FROZEN_BOX_EVENT]}, indent=2,
+                   sort_keys=True), encoding="utf-8")
+    cwd = os.getcwd()
+    os.chdir(work)  # relative paths keep the report independent of the work dir
+    try:
+        settle.main(["--predictions", f"data/NFL/settle/predictions_{case}.json",
+                     "--boxscores", "data/NFL/settle/boxscores_frozen.json", "--source",
+                     "calibrated", "--all-calibrated",
+                     "--out-json", f"data/NFL/settle/settle_{case}.json",
+                     "--out-md", f"data/NFL/settle/settle_{case}.md"])
+    finally:
+        os.chdir(cwd)
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
+    if step["kind"] in ("settle", "scorecard"):
+        return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"
     out_dir.mkdir(parents=True, exist_ok=True)
     if step["kind"] == "enrich":
