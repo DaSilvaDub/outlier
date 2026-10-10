@@ -143,10 +143,14 @@ def week_stat_value(market: str, row: Mapping[str, Any]) -> float | None:
     """Return the numeric realization for ``market`` from one week-stats row."""
     m = (market or "").upper()
     if m == "ANYTIME_TD":
+        # A player scores by rushing, receiving or a return; a thrown TD is the
+        # receiver's (F08). Without the rushing/receiving columns the row cannot
+        # say whether the player scored, so it is not read as zero.
+        if "rushing_tds" not in row or "receiving_tds" not in row:
+            return None
         return (
             _f(row, "rushing_tds")
             + _f(row, "receiving_tds")
-            + _f(row, "passing_tds")
             + _f(row, "special_teams_tds")
         )
     if m == "RUSH_REC_YDS":

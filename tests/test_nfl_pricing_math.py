@@ -94,3 +94,21 @@ def test_hierarchy_records_win_push_loss() -> None:
     assert rec["model_p"] == rec["model_p_win"] == pytest.approx(0.440493, abs=1e-6)
     assert rec["model_p_push"] == pytest.approx(0.175467, abs=1e-6)
     assert rec["model_p_win"] + rec["model_p_push"] + rec["model_p_loss"] == pytest.approx(1.0, abs=1e-5)
+
+
+# F08 -----------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"passing_tds": 3, "rushing_tds": 0, "receiving_tds": 0}, 0.0),  # passing-only QB
+        ({"passing_tds": 2, "rushing_tds": 1, "receiving_tds": 0}, 1.0),  # rushing QB
+        ({"rushing_tds": 0, "receiving_tds": 2}, 2.0),  # receiver
+        ({"rushing_tds": 0, "receiving_tds": 0, "special_teams_tds": 1}, 1.0),  # return scorer
+        ({"passing_tds": 2}, None),  # scoring components absent: unknown, not zero
+    ],
+)
+def test_anytime_td_counts_only_scored_touchdowns(row: dict[str, Any], expected: float | None) -> None:
+    from outlier_nfl.projection import week_stat_value
+
+    assert week_stat_value("ANYTIME_TD", row) == expected
