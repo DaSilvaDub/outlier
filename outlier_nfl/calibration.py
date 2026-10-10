@@ -15,11 +15,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 import logging
-from collections.abc import MutableMapping
+import math
+from collections.abc import MutableMapping, Sequence
 from typing import Any
 
 from outlier_nfl.config import is_team_total
 from outlier_nfl.games import (
+    american_to_implied_probability,
     sportsbook_best_american,
     sportsbook_implied_probability_pct,
 )
@@ -509,6 +511,59 @@ def attach_empirical_model_p_record(
     return record
 
 
+def _ip(line: Any) -> float | None:
+    """Implied probability (pct) from the quote; None when the line is unpriced."""
+    value = getattr(line, "implied_probability", None)
+    if value is None and getattr(line, "best_odds", None) is not None:
+        value = american_to_implied_probability(line.best_odds)
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def primary_total(lines: Sequence[Any]) -> float | None:
+    """Primary O/U line: the line quoted on both sides whose two implied
+    probabilities are closest to each other (ties: lower line). Without any
+    two-way quote, the priced one-sided line closest to 50%; unpriced lines
+    never count. None when nothing is priced."""
+    by_line: dict[float, dict[str, float]] = {}
+    for ln in lines:
+        ip = _ip(ln)
+        if ln.line is None or ip is None:
+            continue
+        side = str(ln.position or "").upper()
+        if side in ("OVER", "UNDER"):
+            by_line.setdefault(float(ln.line), {})[side] = ip
+    pairs = [(abs(v["OVER"] - v["UNDER"]), k) for k, v in by_line.items() if len(v) == 2]
+    if pairs:
+        return min(pairs)[1]
+    singles = [(abs(ip - 50.0), k) for k, v in by_line.items() for ip in v.values()]
+    return min(singles)[1] if singles else None
+
+
+def primary_spread(lines: Sequence[Any], away_team: str, home_team: str) -> float | None:
+    """Primary spread as the away team's signed line, from a two-way pair
+    (away +x quoted with home -x) closest to a coin flip. Without any pair, the
+    priced one-sided quote closest to 50% (home -x read as away +x)."""
+    by_abs: dict[float, dict[str, tuple[float, float]]] = {}
+    for ln in lines:
+        ip = _ip(ln)
+        if ln.line is None or ip is None or ln.team not in (away_team, home_team):
+            continue
+        by_abs.setdefault(abs(float(ln.line)), {})[ln.team] = (float(ln.line), ip)
+    pairs = []
+    for k, v in by_abs.items():
+        if len(v) == 2 and v[away_team][0] == -v[home_team][0]:
+            pairs.append((abs(v[away_team][1] - v[home_team][1]), k, v[away_team][0]))
+    if pairs:
+        return min(pairs)[2]
+    singles = [(abs(ip - 50.0), k, line if team == away_team else -line)
+               for k, v in by_abs.items() for team, (line, ip) in v.items()]
+    return min(singles)[2] if singles else None
+
+
 def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict[str, Any]]:
     """Extract deficit risk and pace context per event and team.
 
@@ -526,12 +581,14 @@ def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict
         home_team = lines[0].home_team if lines else ""
         away_team = lines[0].away_team if lines else ""
 
-        # Extract Spreads
+        # Primary lines only (F20): the two-way quoted pair closest to a coin
+        # flip, never the ladder extreme, so an unpriced or one-sided alternate
+        # cannot move the game environment.
         spreads = [ln for ln in lines if ln.market == "SPREAD"]
         away_spread_val = 0.0
-        for s in spreads:
-            if s.team == away_team and float(s.line or 0) > 0:
-                away_spread_val = max(away_spread_val, float(s.line or 0))
+        primary = primary_spread(spreads, away_team, home_team)
+        if primary is not None and primary > 0:
+            away_spread_val = primary
 
         # Extract Team Totals. `proposition` carries the raw feed string, so
         # compare it through the canonical is_team_total() predicate rather than
@@ -545,16 +602,8 @@ def extract_game_script_context(game_lines: list[NflGameLine]) -> dict[str, dict
         ]
         # Seeding the accumulator with the default made the default a floor, so a
         # team total genuinely below it was reported as the default instead.
-        home_tt_quoted: float | None = None
-        away_tt_quoted: float | None = None
-        for tt in team_totals:
-            if tt.line is None:
-                continue
-            tt_line = float(tt.line)
-            if tt.team == home_team:
-                home_tt_quoted = tt_line if home_tt_quoted is None else max(home_tt_quoted, tt_line)
-            elif tt.team == away_team:
-                away_tt_quoted = tt_line if away_tt_quoted is None else max(away_tt_quoted, tt_line)
+        home_tt_quoted = primary_total([t for t in team_totals if t.team == home_team])
+        away_tt_quoted = primary_total([t for t in team_totals if t.team == away_team])
 
         home_tt = home_tt_quoted if home_tt_quoted is not None else 27.0
         away_tt = away_tt_quoted if away_tt_quoted is not None else 21.0

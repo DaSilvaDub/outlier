@@ -37,6 +37,10 @@ vs first TD, passing-only QB, a missing stat; A6: NaN line, infinite odds and
 probability). A7 grades scorecard signals against rows with blank stats.
 A8 runs ``extract_token_from_storage_state`` on placeholder storage states and
 records only ``none`` / ``expected`` / ``other`` per case, never a value.
+A9 settles quarter/half-scoped predictions against full-game stats.
+B11 adds ``market_extras``: raw LONGEST_PASSING_COMPLETION / PASSING_COMPLETIONS
+props, a Q1 player prop, a team rushing-yards prop, one-sided alternate
+spread/team-total lines and 1ST_QUARTER / H1 game lines.
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -65,7 +69,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 5
+HARNESS_VERSION = 6
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -95,6 +99,8 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "kind": "scorecard"},
         # Phase 5a (#227): session token extraction on placeholder storage states.
         {"name": "A8_auth_extraction", "clock": "2026-09-14T12:15:00+00:00", "kind": "auth"},
+        {"name": "A9_settle_scope", "clock": "2026-09-14T12:20:00+00:00", "kind": "settle",
+         "case": "scope"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -113,6 +119,8 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "forecast": "empty"},
         {"name": "B10_forecast_partial_window", "clock": "2026-10-04T16:57:00+00:00",
          "forecast": "partial"},
+        # Phase 4a (#226): raw market names, team-prop family, alternates, periods.
+        {"name": "B11_market_scope", "clock": "2026-10-04T16:58:00+00:00", "market_extras": True},
         {"name": "B4_after_kickoff", "clock": "2026-10-04T18:00:00+00:00"},
     ],
 }
@@ -387,6 +395,12 @@ _SETTLE_ROWS = {
         ("first_td_without_order", "Derrick Henry", "BAL", "FIRST_TD", "OVER", 0.5, {}),
         ("missing_stat", "Lamar Jackson", "BAL", "REC_YDS", "OVER", 10.5, {}),
     ),
+    "scope": (
+        ("first_quarter_row", "Travis Kelce", "KC", "REC", "OVER", 2.5, {"scope": "first_quarter"}),
+        ("first_half_row", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 40.5, {"scope": "first_half"}),
+        ("full_game_row", "Travis Kelce", "KC", "REC", "OVER", 4.5, {"scope": "full_game"}),
+        ("no_scope_field", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 60.5, {}),
+    ),
     "nonfinite": (
         ("nan_line", "Travis Kelce", "KC", "REC_YDS", "OVER", float("nan"), {}),
         ("finite_control", "Travis Kelce", "KC", "REC_YDS", "OVER", 60.5, {}),
@@ -575,6 +589,66 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     return None
 
 
+_EVENT = "nfl-event-2026-w1-kc-bal"
+
+
+def _odds(*american: int) -> list[dict[str, Any]]:
+    books = ("DRAFTKINGS", "FANDUEL")
+    return [{"book": b, "american": a, "decimal": round(1 + (a / 100 if a > 0 else 100 / -a), 2)}
+            for b, a in zip(books, american)]
+
+
+def _market(mid: str, mtype: str, prop: str, period: str | None, outcomes: list[dict[str, Any]],
+            label: str = "") -> dict[str, Any]:
+    return {"marketId": mid, "eventId": _EVENT, "marketType": mtype, "proposition": prop,
+            "label": label or prop.title(), "periodLabel": period, "includeOvertime": False,
+            "books": ["DRAFTKINGS", "FANDUEL"], "outcomes": outcomes}
+
+
+def _extra_markets() -> list[dict[str, Any]]:
+    """B9 game lines: team rushing yards, one-sided alternates, period lines."""
+    return [
+        _market("m-kc-team-rush", "TEAM_PROP", "RUSHING_YARDS", None, [
+            {"outcomeId": "o-kc-rush-o", "position": "OVER", "line": 120.5, "teamId": "kc-chiefs",
+             "odds": _odds(-110, -112)},
+            {"outcomeId": "o-kc-rush-u", "position": "UNDER", "line": 120.5, "teamId": "kc-chiefs",
+             "odds": _odds(-110, -108)}]),
+        # One-sided alternates: no opposite side is quoted at these lines.
+        _market("m-spread-alt", "GAMELINE", "SPREAD", None, [
+            {"outcomeId": "o-spread-bal-alt", "position": "AWAY", "line": 10.5,
+             "odds": _odds(-400, -380)}]),
+        _market("m-kc-tt-alt", "TEAM_PROP", "POINTS", None, [
+            {"outcomeId": "o-kc-tt-alt-o", "position": "OVER", "line": 34.5, "teamId": "kc-chiefs",
+             "odds": _odds(400, 380)}]),
+        _market("m-spread-q1", "GAMELINE", "SPREAD", "1ST_QUARTER", [
+            {"outcomeId": "o-q1-kc", "position": "HOME", "line": -0.5, "odds": _odds(-120, -118)},
+            {"outcomeId": "o-q1-bal", "position": "AWAY", "line": 0.5, "odds": _odds(100, 100)}]),
+        _market("m-total-h1", "GAMELINE", "TOTAL", "H1", [
+            {"outcomeId": "o-h1-o", "position": "OVER", "line": 23.5, "odds": _odds(-110, -110)},
+            {"outcomeId": "o-h1-u", "position": "UNDER", "line": 23.5, "odds": _odds(-110, -110)}]),
+    ]
+
+
+def _extra_props(props: dict[str, Any]) -> list[dict[str, Any]]:
+    """B9 player props cloned from Mahomes' passing-yards row."""
+    base = next(p for p in props["props"] if p["outcome"]["proposition"] == "PASSING_YARDS"
+                and p["outcome"]["position"] == "OVER")
+    out = []
+    for suffix, prop, line, period in (("lpc", "LONGEST_PASSING_COMPLETION", 38.5, None),
+                                       ("pcomp", "PASSING_COMPLETIONS", 22.5, None),
+                                       ("q1py", "PASSING_YARDS", 70.5, "Q1")):
+        for pos in ("OVER", "UNDER"):
+            row = copy.deepcopy(base)
+            o = row["outcome"]
+            o.update({"marketId": f"m-mahomes-{suffix}", "outcomeId": f"o-mahomes-{suffix}-{pos[0]}",
+                      "proposition": prop, "position": pos, "line": line,
+                      "marketLabel": f"Patrick Mahomes - {prop.replace('_', ' ').title()}"})
+            if period:
+                o["periodLabel"] = period
+            out.append(row)
+    return out
+
+
 class FrozenOutlierClient:
     """In-memory stand-in for ``OutlierNflApiClient`` serving the shifted fixtures.
 
@@ -585,7 +659,7 @@ class FrozenOutlierClient:
 
     def __init__(self, fixtures_dir: Path, shift_days: int = SHIFT_DAYS, week: int = 4,
                  fail_props_page: int | None = None, fail_markets: bool = False,
-                 empty_props: bool = False) -> None:
+                 empty_props: bool = False, market_extras: bool = False) -> None:
         sched = json.loads((fixtures_dir / "schedule.json").read_text(encoding="utf-8"))
         for ev in sched.get("events", []):
             for key in ("scheduledTime", "startTime"):
@@ -600,6 +674,10 @@ class FrozenOutlierClient:
         self._fail_markets = fail_markets
         if empty_props:
             self._props = {**self._props, "props": []}
+        if market_extras:
+            self._markets = {**self._markets,
+                             "markets": self._markets["markets"] + _extra_markets()}
+            self._props = {**self._props, "props": self._props["props"] + _extra_props(self._props)}
 
     def fetch_schedule(self, *_a: Any, **_k: Any) -> dict[str, Any]:
         return copy.deepcopy(self._schedule)
@@ -794,6 +872,7 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
                 fail_props_page=step.get("fail_props_page"),
                 fail_markets=bool(step.get("fail_markets")),
                 empty_props=bool(step.get("empty_props")),
+                market_extras=bool(step.get("market_extras")),
             )
             pipeline = pipeline_mod.NflPipeline(client=client, **init)
         if "as_of_utc" in run_params:

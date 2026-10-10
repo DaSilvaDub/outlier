@@ -462,6 +462,15 @@ def extract_game_lines(
                     market, outcome, team_index, home_code, home_name, away_code, away_name
                 )
 
+                # Only a points market is a team total; a team yardage (or other)
+                # prop keeps its own family instead of becoming POINTS (F20).
+                if is_team_total(raw_prop):
+                    team_market = PROP_TEAM_TOTAL_POINTS
+                else:
+                    family = normalize_market(raw_prop) or "".join(
+                        ch for ch in str(raw_prop).upper() if ch.isalnum())
+                    team_market = f"TEAM_{family}"
+
                 team_display = get_team_display_name(team_resolved) if team_resolved else "Team"
                 sel = f"{team_display} {pos.capitalize()} {line_float}"
 
@@ -473,7 +482,7 @@ def extract_game_lines(
                         home_team=home_code,
                         away_team=away_code,
                         market_type=MARKET_TYPE_TEAM_PROP,
-                        market=PROP_TEAM_TOTAL_POINTS,
+                        market=team_market,
                         proposition=str(raw_prop),
                         position=pos,
                         line=line_float,
