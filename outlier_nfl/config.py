@@ -517,6 +517,7 @@ NFL_MARKET_ALIASES: dict[str, str] = {
     "PASSTOUCHDOWNS": PROP_PASS_TDS,
     "PASSTDSCORE": PROP_PASS_TDS,
     "PASSCOMPLETIONS": PROP_PASS_COMP,
+    "PASSINGCOMPLETIONS": PROP_PASS_COMP,  # live feed spelling (F19)
     "COMPLETIONS": PROP_PASS_COMP,
     "PASSINGATTEMPTS": PROP_PASS_ATT,
     "PASSATTEMPTS": PROP_PASS_ATT,
@@ -525,8 +526,11 @@ NFL_MARKET_ALIASES: dict[str, str] = {
     "PASSINTERCEPTIONS": PROP_INT,
     "PASSINGINTERCEPTIONS": PROP_INT,
     "INTS": PROP_INT,
+    "INTERCEPTIONSTHROWN": PROP_INT,
     "LONGESTCOMPLETION": PROP_LONG_PASS,
     "LONGESTPASS": PROP_LONG_PASS,
+    "LONGESTPASSINGCOMPLETION": PROP_LONG_PASS,  # live feed spelling (F19)
+    "LONGESTPASSCOMPLETION": PROP_LONG_PASS,
     # Player Props - Rushing
     "RUSHINGYARDS": PROP_RUSH_YARDS,
     "RUSHYARDS": PROP_RUSH_YARDS,
@@ -573,6 +577,15 @@ NFL_MARKET_ALIASES: dict[str, str] = {
     "SACKSTAKEN": PROP_TIMES_SACKED,
     "QBSACKED": PROP_TIMES_SACKED,
 }
+
+# Canonical codes map to themselves, so normalize_market is idempotent (F19):
+# a value already canonicalized upstream ("LONG_PASS", "PASS_COMP") must not
+# fall through to the raw-string fallback.
+NFL_MARKET_ALIASES.update({
+    _compact_key(code): code
+    for code in set(NFL_MARKET_ALIASES.values())
+    if _compact_key(code) not in NFL_MARKET_ALIASES
+})
 
 # Sets for quick market identification
 GAME_TOTAL_PROPOSITIONS: frozenset[str] = frozenset({
