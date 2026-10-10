@@ -147,3 +147,31 @@ def test_settle_cli_survives_infinite_odds(tmp_path) -> None:
 def test_scorecard_non_finite_stat_is_missing() -> None:
     assert sc._actual({"receiving_yards": "nan"}, "REC_YDS") is None
     assert sc._actual({"receiving_yards": "inf"}, "REC_YDS") is None
+
+
+# F16 lock-in ------------------------------------------------------------------
+# Fixed before phase 3 (season derived via nfl_season_for_date); these keep it fixed.
+
+@pytest.mark.parametrize(("slate", "season"), [
+    ("2027-01-10", 2026), ("2027-02-07", 2026), ("2026-09-13", 2026), ("2026-12-27", 2026),
+])
+def test_january_february_settlement_uses_the_prior_season(monkeypatch, slate, season) -> None:
+    from outlier_nfl import boxscore_nflverse as bn
+
+    seen: dict = {}
+    monkeypatch.setattr(bn, "load_nflverse_events", lambda **kw: seen.update(kw) or [])
+    bn.fetch_nflverse_boxscores_for_date(date.fromisoformat(slate))
+    assert seen["season"] == season
+
+
+def test_settle_cli_slate_date_in_january_asks_for_the_prior_season(monkeypatch, tmp_path) -> None:
+    from outlier_nfl import boxscore_nflverse as bn
+    from outlier_nfl import settle
+
+    seen: dict = {}
+    monkeypatch.setattr(bn, "fetch_nflverse_boxscores_for_date",
+                        lambda d, **kw: seen.update(kw, date=d) or [])
+    preds = _write_predictions(tmp_path, [_rec()])
+    assert settle.main(["--predictions", str(preds), "--provider", "nflverse",
+                        "--slate-date", "2027-01-10", "--source", "calibrated"]) == 0
+    assert seen["season"] == 2026 and seen["date"] == date(2027, 1, 10)
