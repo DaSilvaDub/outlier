@@ -22,7 +22,8 @@ B  Live-shaped Week 4 replay, 2026-10-04: the same three fixture events moved
    B3 16:20Z no local tape file; B5 16:30Z page 2 of the bulk player props
    fails (HTTP 500 after retries); B6 16:40Z every event-markets request fails;
    B7 16:50Z the schedule labels the slate week 19 (postseason); B8 16:55Z the
-   props feed returns an empty list; B4 18:00Z
+   props feed returns an empty list; B9 16:56Z the forecast service returns
+   empty hourly arrays; B10 16:57Z it returns only the kickoff hour; B4 18:00Z
    (after the 17:00Z kickoff). Player props are served as two token pages
    through the real ``OutlierNflApiClient`` pagination, so B5 exercises it.
 
@@ -34,6 +35,8 @@ A4 runs ``scripts/nfl_rebuild_card.py`` on A1's card when the checkout has it.
 A5/A6 run ``outlier_nfl.settle`` on ``frozen_settle_boxscores`` (pushes, anytime
 vs first TD, passing-only QB, a missing stat; A6: NaN line, infinite odds and
 probability). A7 grades scorecard signals against rows with blank stats.
+A8 runs ``extract_token_from_storage_state`` on placeholder storage states and
+records only ``none`` / ``expected`` / ``other`` per case, never a value.
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -61,7 +64,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 4
+HARNESS_VERSION = 5
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -89,6 +92,8 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "case": "nonfinite"},
         {"name": "A7_scorecard_missing_stats", "clock": "2026-09-14T12:10:00+00:00",
          "kind": "scorecard"},
+        # Phase 5a (#227): session token extraction on placeholder storage states.
+        {"name": "A8_auth_extraction", "clock": "2026-09-14T12:15:00+00:00", "kind": "auth"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -102,6 +107,11 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "fail_markets": True},
         {"name": "B7_postseason_week", "clock": "2026-10-04T16:50:00+00:00", "week": 19},
         {"name": "B8_props_feed_empty", "clock": "2026-10-04T16:55:00+00:00", "empty_props": True},
+        # Phase 5a (#227): the forecast service answers, but with no usable window.
+        {"name": "B9_forecast_empty_hourly", "clock": "2026-10-04T16:56:00+00:00",
+         "forecast": "empty"},
+        {"name": "B10_forecast_partial_window", "clock": "2026-10-04T16:57:00+00:00",
+         "forecast": "partial"},
         {"name": "B4_after_kickoff", "clock": "2026-10-04T18:00:00+00:00"},
     ],
 }
@@ -469,9 +479,63 @@ def _run_settle_step(step: dict[str, Any], work: Path) -> str | None:
     return None
 
 
+# Placeholder credentials only (not real secrets); A8 never writes a token value.
+_PH_JWT = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJwbGFjZWhvbGRlciJ9.placeholder-signature"  # nosec B105
+_PH_OPAQUE = "placeholder-opaque-session-token-0000"  # nosec B105
+
+
+def auth_cases() -> dict[str, tuple[dict[str, Any], str | None]]:
+    """A8 storage states -> (state, expected placeholder or None)."""
+    app = "https://app.outlier.bet"
+    cookie = {"name": "session", "value": "placeholder-cookie", "domain": "app.outlier.bet"}
+    return {
+        "empty_storage": ({"cookies": [], "origins": []}, None),
+        "cookie_only_long_origin": ({"cookies": [cookie],
+                                     "origins": [{"origin": app, "localStorage": []}]}, None),
+        "long_unrelated_local_storage": ({"cookies": [cookie], "origins": [{"origin": app,
+            "localStorage": [{"name": "lastMessage",
+                              "value": "a long unrelated message that is not a credential"}]}]},
+            None),
+        "nested_auth_entry": ({"cookies": [cookie], "origins": [{"origin": app, "localStorage": [
+            {"name": "persist:root",
+             "value": json.dumps({"auth": json.dumps({"accessToken": _PH_OPAQUE})})}]}]},
+            _PH_OPAQUE),
+        "jwt_access_token": ({"cookies": [], "origins": [{"origin": app, "localStorage": [
+            {"name": "access_token", "value": _PH_JWT}]}]}, _PH_JWT),
+    }
+
+
+def _run_auth_step(work: Path) -> str | None:
+    from outlier_nfl.api import extract_token_from_storage_state
+
+    out: dict[str, str] = {}
+    for case, (state, expected) in auth_cases().items():
+        tok = extract_token_from_storage_state(state)
+        out[case] = "none" if tok is None else ("expected" if tok == expected else "other")
+    dest = work / "data" / "NFL" / "math" / "auth_extraction.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+    return None
+
+
+def frozen_forecast(kind: str, url: str) -> dict[str, Any]:
+    """B9/B10 Open-Meteo answers: empty hourly arrays, or only the kickoff hour."""
+    if kind == "empty":
+        return {"hourly": {"time": [], "wind_speed_10m": [], "temperature_2m": []}}
+    from urllib.parse import parse_qs, urlparse
+
+    day = parse_qs(urlparse(url).query)["start_date"][0]
+    hour = {"2026-10-04": "17:00"}.get(day, "00:00")
+    return {"hourly": {"time": [f"{day}T{hour}"], "wind_speed_10m": [8.0],
+                       "wind_gusts_10m": [14.0], "temperature_2m": [61.0],
+                       "precipitation_probability": [5.0], "precipitation": [0.0]}}
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
+    if step["kind"] == "auth":
+        return _run_auth_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"
@@ -696,7 +760,9 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
                 *a, **{**k, "fetch_rows": lambda url: _rows_for(url, tables, _f)})
         )
 
-        def _no_forecast(url: str, *_a: Any, **_k: Any) -> Any:
+        def _no_forecast(url: str, *_a: Any, _kind: Any = step.get("forecast"), **_k: Any) -> Any:
+            if _kind:
+                return frozen_forecast(str(_kind), url)
             raise OSError("frozen harness: no forecast service")
 
         pipeline_mod.load_slate_weather = (  # type: ignore[assignment]

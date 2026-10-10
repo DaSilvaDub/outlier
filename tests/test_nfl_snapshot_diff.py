@@ -132,3 +132,22 @@ def test_bundle_manifest_hashes_and_sizes_are_scrubbed():
     # Other files keep their own "bytes" fields untouched.
     other = json.dumps({"bytes": 5})
     assert snap._scrub_bundle_hashes("data/NFL/normalized/x.json", other) == other
+
+
+def test_phase5a_steps_and_placeholder_auth_cases():
+    names = [s["name"] for s in snap.STEPS["A"] + snap.STEPS["B"]]
+    assert "A8_auth_extraction" in names
+    b = [s["name"] for s in snap.STEPS["B"]]
+    assert b.index("B10_forecast_partial_window") < b.index("B4_after_kickoff")
+    cases = snap.auth_cases()
+    assert {c for c, (_, exp) in cases.items() if exp} == {"nested_auth_entry", "jwt_access_token"}
+    assert snap.frozen_forecast("empty", "x")["hourly"]["time"] == []
+    url = "https://api.open-meteo.com/v1/forecast?start_date=2026-10-04&end_date=2026-10-04"
+    assert snap.frozen_forecast("partial", url)["hourly"]["time"] == ["2026-10-04T17:00"]
+
+
+def test_auth_step_records_labels_never_values(tmp_path):
+    snap._run_auth_step(tmp_path)
+    out = json.loads((tmp_path / "data/NFL/math/auth_extraction.json").read_text("utf-8"))
+    assert set(out) == set(snap.auth_cases())
+    assert set(out.values()) <= {"none", "expected", "other"}
