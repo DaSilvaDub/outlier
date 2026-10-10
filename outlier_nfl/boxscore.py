@@ -180,12 +180,25 @@ def _stat(stats: Mapping[str, float], *keys: str) -> float | None:
     return None
 
 
+# Markets a box score cannot settle: first/last TD need the scoring order, which
+# the box score does not carry (F09). An anytime total must not stand in for it.
+UNSUPPORTED_SETTLE_MARKETS = frozenset(
+    {"FIRSTTD", "FIRSTTOUCHDOWN", "FIRSTTDSCORER", "LASTTD", "LASTTOUCHDOWN"}
+)
+
+
+def is_unsupported_settle_market(market: str) -> bool:
+    return _token(market) in UNSUPPORTED_SETTLE_MARKETS
+
+
 def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
     """Map a canonical NFL prop market to a box-score actual, or None if unsupported.
 
     Prefer group-qualified keys (PASSING:YDS) so bare YDS/ATT/TD never cross units.
     """
     norm = _token(market)
+    if norm in UNSUPPORTED_SETTLE_MARKETS:
+        return None
     if norm == "PASSYDS":
         return _stat(stats, "PASSING:YDS")
     if norm == "PASSTD":
@@ -228,7 +241,7 @@ def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
         if passing is None or rush is None:
             return None
         return passing + rush
-    if norm in {"ANYTIMETD", "FIRSTTD"}:
+    if norm == "ANYTIMETD":
         # Anytime TD scorer: rush + receiving (+ return) TDs. Passing TDs do not count.
         has_any = False
         total = 0.0
@@ -249,6 +262,9 @@ def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
 
 def grade_side(actual: float, line: float, position: str) -> str:
     """Grade OVER/UNDER/YES against an actual. Returns W, L, or P."""
+    if not (math.isfinite(actual) and math.isfinite(line)):
+        # NaN compares False both ways and would grade a push (F30).
+        raise BoxScoreError(f"Non-finite settle input: actual={actual!r} line={line!r}")
     side = str(position or "").strip().upper()
     if side in {"YES", "Y"}:
         return "W" if actual >= 1.0 else "L"
@@ -315,6 +331,7 @@ __all__ = [
     "NflBoxScoreEvent",
     "fetch_espn_scoreboard",
     "grade_side",
+    "is_unsupported_settle_market",
     "parse_espn_boxscore_players",
     "parse_simplified_events",
     "player_actual",

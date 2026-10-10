@@ -25,6 +25,7 @@ from outlier_nfl.boxscore import (
     BoxScoreError,
     NflBoxScoreEvent,
     grade_side,
+    is_unsupported_settle_market,
     parse_simplified_events,
     player_actual,
     resolve_player_stats,
@@ -180,20 +181,25 @@ def _slate_date_from_prediction(record: Mapping[str, Any], fallback_date: str | 
 
 
 def _optional_float(value: Any) -> float | None:
+    """A finite float, or None: NaN and +/-inf are not usable numbers (F30)."""
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _optional_int(value: Any) -> int | None:
+    """An int, or None for missing, unparseable or non-finite values (F30)."""
     try:
         if value is None or value == "":
             return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -238,9 +244,8 @@ def load_prediction_snapshot(
         line = raw.get("line")
         if line is None:
             continue
-        try:
-            line_f = float(line)
-        except (TypeError, ValueError):
+        line_f = _optional_float(line)
+        if line_f is None:  # unparseable or non-finite: a NaN line must not grade P (F30)
             continue
         player_name = str(raw.get("player_name") or "").strip()
         market = str(raw.get("market") or "").strip()
@@ -413,6 +418,20 @@ def settle_predictions(
             rows.append(row)
             report.skip_reasons[player_reason or "unknown"] = (
                 report.skip_reasons.get(player_reason or "unknown", 0) + 1
+            )
+            _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "skipped")
+            _bump(source_buckets, snap.source, "skipped")
+            continue
+
+        if is_unsupported_settle_market(snap.market):
+            rows.append(SettleRow(
+                prediction=snap,
+                status="skipped",
+                skip_reason="unsupported_market",
+                provider_event_id=event.provider_event_id or None,
+            ))
+            report.skip_reasons["unsupported_market"] = (
+                report.skip_reasons.get("unsupported_market", 0) + 1
             )
             _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "skipped")
             _bump(source_buckets, snap.source, "skipped")
