@@ -166,3 +166,29 @@ def test_tape_and_roster_steps_write_their_reports(tmp_path):
     assert set(tape["roles"]) >= {"point_in_time", "future_update", "wrong_season", "unstamped"}
     assert tape["admission"]["fresh"] == "admitted"
     assert (tmp_path / "data/NFL/math/roster_provenance.json").exists()
+
+
+def test_phase4b_steps_follow_a11_and_b11():
+    assert snap.HARNESS_VERSION == 9
+    a = [s["name"] for s in snap.STEPS["A"]]
+    b = [s["name"] for s in snap.STEPS["B"]]
+    assert a.index("A12_identity_joins") == a.index("A11_roster_provenance") + 1
+    assert a.index("A13_schema_integrity") == a.index("A12_identity_joins") + 1
+    assert b.index("B12_identity_extras") == b.index("B11_market_scope") + 1
+    assert len(set(a)) == len(a) and len(set(b)) == len(b)
+
+
+def test_identity_and_schema_steps_write_their_reports(tmp_path):
+    assert snap._run_identity_step(tmp_path) is None
+    assert snap._run_schema_step(tmp_path) is None
+    math = tmp_path / "data" / "NFL" / "math"
+    ident = json.loads((math / "identity_joins.json").read_text(encoding="utf-8"))
+    assert set(ident) == {"props", "boxscore_same_name", "projection_index"}
+    schema = json.loads((math / "schema_integrity.json").read_text(encoding="utf-8"))
+    assert set(schema) == {"tape", "boxscore", "normalized"}
+
+
+def test_identity_extras_add_foreign_and_duplicate_props():
+    client = snap.FrozenOutlierClient(REPO / "tests" / "fixtures" / "nfl", identity_extras=True)
+    base = snap.FrozenOutlierClient(REPO / "tests" / "fixtures" / "nfl")
+    assert len(client._props["props"]) == len(base._props["props"]) + 3
