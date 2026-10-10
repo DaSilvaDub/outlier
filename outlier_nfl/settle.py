@@ -25,6 +25,7 @@ from outlier_nfl.boxscore import (
     BoxScoreError,
     NflBoxScoreEvent,
     grade_side,
+    is_unsupported_settle_market,
     parse_simplified_events,
     player_actual,
     resolve_player_stats,
@@ -413,6 +414,20 @@ def settle_predictions(
             rows.append(row)
             report.skip_reasons[player_reason or "unknown"] = (
                 report.skip_reasons.get(player_reason or "unknown", 0) + 1
+            )
+            _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "skipped")
+            _bump(source_buckets, snap.source, "skipped")
+            continue
+
+        if is_unsupported_settle_market(snap.market):
+            rows.append(SettleRow(
+                prediction=snap,
+                status="skipped",
+                skip_reason="unsupported_market",
+                provider_event_id=event.provider_event_id or None,
+            ))
+            report.skip_reasons["unsupported_market"] = (
+                report.skip_reasons.get("unsupported_market", 0) + 1
             )
             _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "skipped")
             _bump(source_buckets, snap.source, "skipped")
