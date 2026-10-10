@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import math
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
@@ -81,6 +82,13 @@ class GameWeather:
     precip_prob: float | None = None
     tags: tuple[str, ...] = ()
     pass_adjustment: float = 0.0
+    # F21 provenance. forecast_status: ok | partial_window | no_window_hours |
+    # not_needed (indoor) | venue_unverified | no_kickoff | no_stadium.
+    # venue_source: schedule (a matched nflverse schedule row) | static (the
+    # stadium tables only, so a neutral site cannot be ruled out).
+    forecast_status: str = "not_fetched"
+    venue_source: str = "static"
+    hours_in_window: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -119,6 +127,58 @@ def _parse_kickoff(value: Any) -> datetime | None:
     return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
+REQUIRED_SERIES = ("temperature_2m", "wind_speed_10m", "wind_gusts_10m",
+                   "precipitation_probability", "precipitation")
+
+
+def _finite(value: Any) -> bool:
+    try:
+        return value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def forecast_window_status(payload: Mapping[str, Any], kickoff: datetime) -> tuple[str, int]:
+    """(status, complete hours) for the kickoff window (F21).
+
+    ``ok`` only when every hour from kickoff's hour through kickoff + WINDOW_HOURS
+    has a finite value for every required series.
+    """
+    hourly = payload.get("hourly") or {}
+    start = kickoff.replace(minute=0, second=0, microsecond=0)
+    expected = {start + timedelta(hours=h) for h in range(WINDOW_HOURS + 1)}
+    complete: set[datetime] = set()
+    for i, t in enumerate(hourly.get("time") or []):
+        try:
+            ts = datetime.fromisoformat(str(t)).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts not in expected:
+            continue
+        if all(i < len(hourly.get(k) or []) and _finite((hourly.get(k) or [])[i])
+               for k in REQUIRED_SERIES):
+            complete.add(ts)
+    n = len(complete)
+    if n == len(expected):
+        return "ok", n
+    return ("no_window_hours" if n == 0 else "partial_window"), n
+
+
+def weather_verifies(record: Mapping[str, Any] | None) -> bool:
+    """Whether a weather record is evidence for the weather pillar (F21).
+
+    A schedule-confirmed indoor venue needs no forecast; an outdoor venue needs a
+    complete finite forecast window. Unknown, neutral or retractable venues, a
+    static-table-only venue and records without provenance never verify.
+    """
+    if not record:
+        return False
+    venue = record.get("venue")
+    if venue == "indoor":
+        return record.get("venue_source") == "schedule"
+    return venue == "outdoor" and record.get("forecast_status") == "ok"
+
+
 def summarize_forecast(payload: Mapping[str, Any], kickoff: datetime) -> dict[str, float | None]:
     """Mean wind/temp, max gust/precip probability, summed precip over the game window."""
     hourly = payload.get("hourly") or {}
@@ -136,7 +196,7 @@ def summarize_forecast(payload: Mapping[str, Any], kickoff: datetime) -> dict[st
 
     def values(key: str) -> list[float]:
         series = hourly.get(key) or []
-        return [float(series[i]) for i in idx if i < len(series) and series[i] is not None]
+        return [float(series[i]) for i in idx if i < len(series) and _finite(series[i])]
 
     def mean(key: str) -> float | None:
         v = values(key)
@@ -204,20 +264,36 @@ def game_weather(
     home, away = _event_team_codes(event)
     kickoff = _parse_kickoff(event.get("scheduledTime") or event.get("startTime"))
     venue = venue_status(home, schedule_game)
+    if venue == "indoor":
+        status = "not_needed"
+    elif venue != "outdoor":
+        status = "venue_unverified"
+    elif kickoff is None:
+        status = "no_kickoff"
+    elif home not in STADIUMS:
+        status = "no_stadium"
+    else:
+        status = "not_fetched"
     base = GameWeather(
         event_id=event_id,
         home_team=home,
         away_team=away,
         kickoff_utc=kickoff.isoformat() if kickoff else None,
         venue=venue,
+        forecast_status=status,
+        venue_source="schedule" if schedule_game else "static",
     )
-    if venue != "outdoor" or kickoff is None or home not in STADIUMS:
+    if status != "not_fetched" or kickoff is None:
         return base
     lat, lon = STADIUMS[home]
-    conditions = summarize_forecast(fetch_json(forecast_url(lat, lon, kickoff)), kickoff)
+    payload = fetch_json(forecast_url(lat, lon, kickoff))
+    conditions = summarize_forecast(payload, kickoff)
+    window_status, hours = forecast_window_status(payload, kickoff)
     tags, adj = classify(conditions)
     return replace(
         base,
+        forecast_status=window_status,
+        hours_in_window=hours,
         wind_mph=conditions["wind_mph"],
         gust_mph=conditions["gust_mph"],
         temp_f=conditions["temp_f"],

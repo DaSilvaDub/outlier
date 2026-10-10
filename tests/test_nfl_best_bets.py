@@ -108,7 +108,8 @@ def _inputs(props=None, run_date=GAME_DAY, movement=None, inactive=None, **kw):
         usage_players=[{"player": "A.J. Brown", "team": "PHI", "games": 3, "target_share": 0.27,
                         "carry_share": 0.0, "targets_pg": 9.0, "carries_pg": 0.0}],
         weather=[{"event_id": "E1", "venue": "outdoor", "wind_mph": 6.0, "pass_adjustment": 0.0,
-                  "tags": []}],
+                  "tags": [], "forecast_status": "ok", "venue_source": "schedule",
+                  "hours_in_window": 4}],
         inactive_by_team={"PHI": [], "DAL": ["Trevon Diggs"]} if inactive is None else inactive,
         tapes={"DAL": {"pass_rush": 58.0, "pressure_rate": 0.31}},
         movement=_movement() if movement is None else movement,
@@ -483,3 +484,31 @@ def test_run_week_null_schedule_events_fails_instead_of_empty_card(tmp_path):
     with pytest.raises(TypeError):
         run_week(_Pipeline(), date(2026, 10, 6), reports_dir=tmp_path)  # type: ignore[arg-type]
     assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("record", [
+    {"venue": "outdoor", "wind_mph": None, "temp_f": None, "pass_adjustment": 0.0,
+     "tags": [], "forecast_status": "no_window_hours", "venue_source": "schedule"},
+    {"venue": "outdoor", "wind_mph": 8.0, "pass_adjustment": 0.0, "tags": [],
+     "forecast_status": "partial_window", "venue_source": "schedule", "hours_in_window": 1},
+    {"venue": "neutral", "pass_adjustment": 0.0, "tags": [], "forecast_status": "venue_unverified",
+     "venue_source": "schedule"},
+    {"venue": "retractable", "pass_adjustment": 0.0, "tags": [],
+     "forecast_status": "venue_unverified", "venue_source": "static"},
+    {"venue": "indoor", "pass_adjustment": 0.0, "tags": [], "forecast_status": "not_needed",
+     "venue_source": "static"},
+    {"venue": "outdoor", "wind_mph": 6.0, "pass_adjustment": 0.0, "tags": []},  # no provenance
+])
+def test_unverified_weather_never_verifies_the_pillar(record):
+    """F21 (#227): weather present but unproven leaves injury_weather MISSING."""
+    payload = build_best_bets(_inputs(weather=[{"event_id": "E1", **record}]))
+    pillar = _pick(payload)["pillars"]["injury_weather"]
+    assert pillar["status"] == MISSING
+    assert any(n.startswith("weather not verified") for n in pillar["notes"])
+
+
+def test_schedule_confirmed_indoor_venue_verifies_without_a_forecast():
+    rec = {"event_id": "E1", "venue": "indoor", "pass_adjustment": 0.0, "tags": [],
+           "forecast_status": "not_needed", "venue_source": "schedule"}
+    payload = build_best_bets(_inputs(weather=[rec]))
+    assert _pick(payload)["pillars"]["injury_weather"]["status"] == VERIFIED

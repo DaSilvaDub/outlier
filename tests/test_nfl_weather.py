@@ -188,3 +188,39 @@ def test_pipeline_fixture_mode_never_forecasts(tmp_path: Any, monkeypatch: pytes
         reports_dir=tmp_path / "reports" / "NFL",
     )
     assert summary["status"] == "OK"
+
+
+
+def test_window_status_requires_every_hour_finite() -> None:
+    """F21 (#227): empty, partial and nonfinite windows are not ``ok``."""
+    assert wx.forecast_window_status(_payload([10, 10, 10, 10]), KICKOFF) == ("ok", 4)
+    assert wx.forecast_window_status({"hourly": {"time": []}}, KICKOFF) == ("no_window_hours", 0)
+    assert wx.forecast_window_status({}, KICKOFF) == ("no_window_hours", 0)
+    gappy = _payload([10, 10, 10, 10])
+    gappy["hourly"]["precipitation"][3] = None
+    gappy["hourly"]["wind_speed_10m"][4] = float("nan")
+    assert wx.forecast_window_status(gappy, KICKOFF) == ("partial_window", 2)
+    missing_col = _payload([10, 10, 10, 10])
+    del missing_col["hourly"]["wind_gusts_10m"]
+    assert wx.forecast_window_status(missing_col, KICKOFF) == ("no_window_hours", 0)
+
+
+def test_game_weather_records_provenance_and_empty_forecast_does_not_verify() -> None:
+    empty = wx.game_weather(EVENT, {"roof": "outdoors"}, lambda url: {"hourly": {"time": []}})
+    assert (empty.venue, empty.forecast_status, empty.hours_in_window) == ("outdoor", "no_window_hours", 0)
+    assert empty.pass_adjustment == 0.0 and not wx.weather_verifies(empty.to_dict())
+    full = wx.game_weather(EVENT, {"roof": "outdoors"}, lambda url: _payload([10, 10, 10, 10]))
+    assert full.forecast_status == "ok" and full.venue_source == "schedule"
+    assert wx.weather_verifies(full.to_dict())
+
+
+@pytest.mark.parametrize(("home", "game", "verifies"), [
+    ("DET", {"roof": "dome"}, True),                                  # schedule-confirmed dome
+    ("DET", None, False),                                             # static table only
+    ("DAL", None, False),                                             # retractable, roof unknown
+    ("JAX", {"location": "Neutral", "roof": "outdoors"}, False),      # neutral/international
+])
+def test_venue_provenance_gates_verification(home: str, game: Any, verifies: bool) -> None:
+    ev = {**EVENT, "home": {"alias": home}}
+    w = wx.game_weather(ev, game, lambda url: {"hourly": {"time": []}})
+    assert wx.weather_verifies(w.to_dict()) is verifies
