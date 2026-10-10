@@ -151,3 +151,18 @@ def test_auth_step_records_labels_never_values(tmp_path):
     out = json.loads((tmp_path / "data/NFL/math/auth_extraction.json").read_text("utf-8"))
     assert set(out) == set(snap.auth_cases())
     assert set(out.values()) <= {"none", "expected", "other"}
+
+
+def test_phase5b_steps_do_not_collide_with_phase4a_names():
+    names = [s["name"] for s in snap.STEPS["A"] + snap.STEPS["B"]]
+    assert "A10_tape_admissibility" in names and "A11_roster_provenance" in names
+    assert not any(n.startswith(("A9_", "B11_")) for n in names if "tape" in n or "roster" in n)
+
+
+def test_tape_and_roster_steps_write_their_reports(tmp_path):
+    snap._run_tape_step(tmp_path)
+    snap._run_roster_step(tmp_path)
+    tape = json.loads((tmp_path / "data/NFL/math/tape_admissibility.json").read_text("utf-8"))
+    assert set(tape["roles"]) >= {"point_in_time", "future_update", "wrong_season", "unstamped"}
+    assert tape["admission"]["fresh"] == "admitted"
+    assert (tmp_path / "data/NFL/math/roster_provenance.json").exists()
