@@ -1,3 +1,26 @@
+# HANDOFF — 2026-10-10 (Antigravity/Gemini, WNBA Postgame Audit Upgrades: Assist Barrier, Rebound Defense Conflict & Scoring Priority)
+
+**Branch**: `feat/wnba-postgame-upgrades` · **Last commit**: `4a4d5f3`
+
+## Accomplished
+1. **Teammate Assist Correlation Barrier (`outlier_scrapers/alt_player_props.py`)**:
+   - In `build_alt_player_props_parlays()`: drop any parlay pairing two players from the same team that both require `AST` / `ASSISTS` OVERs (`pos1 == "OVER" and pos2 == "OVER"`).
+   - Prevents assist cannibalization where two teammates require an unviable proportion of the team's finite made field goals.
+2. **Elite Rebound Defense Conflict Gate (`outlier_scrapers/slate_quality.py` & `pack_selection.py`)**:
+   - Added `ELITE_REBOUND_DEFENSES_WNBA` (`NYL`, `CON`, `MIN`).
+   - Implemented `opponent_elite_rebound_defense_conflict()`: flags player Rebound OVERs facing top rebound defenses if L5 hit rate is cold (<40%) or projection cushion is narrow (<0.5).
+   - In `pack_selection.py`: stamps `dq_flags.append("opponent_elite_rebound_defense")` and clears `recommended_units_pre_news`.
+3. **Scoring Floor Ladder Priority (`outlier_scrapers/alt_player_props.py`)**:
+   - In `_floor_ladder_score()`: applies a `market_factor` (1.10x for PTS, 1.05x for combo scoring PA/PR/PRA) prioritizing continuous scoring volume over discrete single-event hooks (AST, REB).
+4. **Unit Tests & Verification**:
+   - `tests/test_alt_player_props.py`: `test_teammate_assist_over_parlays_are_blocked()` verifies same-team dual-assist combinations are dropped while opposite-team and assist+points combos remain valid.
+   - `tests/test_slate_quality.py`: `test_opponent_elite_rebound_defense_conflict()` verifies cold rebound overs against NYL are flagged while safe lines and scoring props pass.
+   - Test suites: all 47 tests passed in 1.83s (`test_alt_player_props.py` + `test_slate_quality.py`), and all 170 tests passed in 16.61s (`test_pack.py`).
+5. **Report Artifact**:
+   - Published comprehensive post-game forensic audit: [`reports/audits/2026-10-09_WNBA_Postgame_Audit.md`](reports/audits/2026-10-09_WNBA_Postgame_Audit.md).
+
+---
+
 # HANDOFF - 2026-10-10 (Codex, NFL missing phase fallback)
 
 ## Last Commit SHA
