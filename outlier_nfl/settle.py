@@ -91,6 +91,7 @@ class PredictionSnap:
     close_implied: float | None = None
     close_source: str | None = None
     model_p: float | None = None
+    scope: str | None = None  # None: the artifact predates scope (treated as full game)
 
     @property
     def team_codes(self) -> frozenset[str]:
@@ -283,6 +284,7 @@ def load_prediction_snapshot(
                 close_implied=_optional_float(raw.get("close_implied")),
                 close_source=str(raw["close_source"]) if raw.get("close_source") else None,
                 model_p=_optional_float(model_raw),
+                scope=str(raw["scope"]) if raw.get("scope") else None,
             )
         )
     return snaps
@@ -396,6 +398,17 @@ def settle_predictions(
 
     rows: list[SettleRow] = []
     for snap in predictions:
+        # A quarter/half/overtime (or unknown-period) prediction cannot be graded
+        # with full-game box-score stats (F10).
+        if snap.scope not in (None, "full_game"):
+            rows.append(SettleRow(prediction=snap, status="skipped",
+                                  skip_reason="partial_period_scope"))
+            report.skip_reasons["partial_period_scope"] = (
+                report.skip_reasons.get("partial_period_scope", 0) + 1
+            )
+            _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "skipped")
+            _bump(source_buckets, snap.source, "skipped")
+            continue
         event, event_reason = _match_event(snap, events)
         if event is None:
             row = SettleRow(prediction=snap, status="skipped", skip_reason=event_reason)

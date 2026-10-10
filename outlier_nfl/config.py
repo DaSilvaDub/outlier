@@ -667,27 +667,48 @@ SCOPE_FIRST_QUARTER: str = "first_quarter"
 SCOPE_SECOND_QUARTER: str = "second_quarter"
 SCOPE_THIRD_QUARTER: str = "third_quarter"
 SCOPE_FOURTH_QUARTER: str = "fourth_quarter"
+SCOPE_OVERTIME: str = "overtime"
+SCOPE_UNKNOWN: str = "unknown"
 
 _PERIOD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    (SCOPE_FIRST_HALF, re.compile(r"\b(1st half|first half|1h)\b", re.IGNORECASE)),
-    (SCOPE_SECOND_HALF, re.compile(r"\b(2nd half|second half|2h)\b", re.IGNORECASE)),
-    (SCOPE_FIRST_QUARTER, re.compile(r"\b(1st quarter|first quarter|1q)\b", re.IGNORECASE)),
-    (SCOPE_SECOND_QUARTER, re.compile(r"\b(2nd quarter|second quarter|2q)\b", re.IGNORECASE)),
-    (SCOPE_THIRD_QUARTER, re.compile(r"\b(3rd quarter|third quarter|3q)\b", re.IGNORECASE)),
-    (SCOPE_FOURTH_QUARTER, re.compile(r"\b(4th quarter|fourth quarter|4q)\b", re.IGNORECASE)),
+    (SCOPE_FIRST_HALF, re.compile(r"\b(1st half|first half|1h|h1|half 1)\b", re.IGNORECASE)),
+    (SCOPE_SECOND_HALF, re.compile(r"\b(2nd half|second half|2h|h2|half 2)\b", re.IGNORECASE)),
+    (SCOPE_FIRST_QUARTER, re.compile(r"\b(1st quarter|first quarter|1q|q1|quarter 1)\b", re.IGNORECASE)),
+    (SCOPE_SECOND_QUARTER, re.compile(r"\b(2nd quarter|second quarter|2q|q2|quarter 2)\b", re.IGNORECASE)),
+    (SCOPE_THIRD_QUARTER, re.compile(r"\b(3rd quarter|third quarter|3q|q3|quarter 3)\b", re.IGNORECASE)),
+    (SCOPE_FOURTH_QUARTER, re.compile(r"\b(4th quarter|fourth quarter|4q|q4|quarter 4)\b", re.IGNORECASE)),
+    (SCOPE_OVERTIME, re.compile(r"\b(ot|overtime)\b", re.IGNORECASE)),
+)
+# Period labels that mean the whole game.
+_FULL_GAME_LABEL = re.compile(
+    r"^(full game|game|full time|ft|fg|match|entire game|whole game)$", re.IGNORECASE
 )
 
 
-def detect_scope(period_label: str | None, market_label: str | None = None) -> str:
-    """Detect whether a market applies to full game or a specific quarter/half.
+def _period_text(value: Any) -> str:
+    """Provider encodings such as ``1ST_QUARTER`` / ``First-Half`` read as words."""
+    return re.sub(r"[_\-]+", " ", str(value)).strip()
 
-    Defaults to 'full_game' if period_label is None or not matched.
+
+def detect_scope(period_label: str | None, market_label: str | None = None) -> str:
+    """Detect whether a market applies to the full game or a specific period.
+
+    No period label (None/empty) means full game. A period label that names a
+    quarter, half or overtime maps to that scope; any other non-empty period
+    label is ``unknown``, never full game (F10). The market label is only
+    searched for an explicit period phrase.
     """
-    for candidate in (period_label, market_label):
-        if not candidate:
-            continue
-        text = str(candidate).strip()
+    if period_label is not None and str(period_label).strip():
+        text = _period_text(period_label)
         for scope_name, pattern in _PERIOD_PATTERNS:
             if pattern.search(text):
+                return scope_name
+        if _FULL_GAME_LABEL.match(text):
+            return SCOPE_FULL_GAME
+        return SCOPE_UNKNOWN
+    if market_label:
+        text = _period_text(market_label)
+        for scope_name, pattern in _PERIOD_PATTERNS:
+            if scope_name != SCOPE_OVERTIME and pattern.search(text):
                 return scope_name
     return SCOPE_FULL_GAME

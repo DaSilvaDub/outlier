@@ -112,3 +112,49 @@ def test_matchup_context_ignores_one_sided_alternates() -> None:
     base = _market_context(_PRIMARY, "KC", "BUF")
     assert _market_context(alts + _PRIMARY, "KC", "BUF") == base
     assert (base["home_spread"], base["home_tt"]) == (-2.5, 24.5)
+
+
+# F10 -----------------------------------------------------------------------
+
+from outlier_nfl.config import detect_scope  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("period", "scope"),
+    [
+        ("Q1", "first_quarter"), ("1ST_QUARTER", "first_quarter"), ("H1", "first_half"),
+        ("FIRST_HALF", "first_half"), ("2nd Half", "second_half"), ("Q4", "fourth_quarter"),
+        ("OT", "overtime"), ("OVERTIME", "overtime"), ("FULL_GAME", "full_game"),
+        ("Game", "full_game"), (None, "full_game"), ("", "full_game"),
+        ("REGULATION_TIME", "unknown"), ("P3", "unknown"),
+    ],
+)
+def test_provider_period_encodings(period: str | None, scope: str) -> None:
+    assert detect_scope(period) == scope
+
+
+def test_market_label_overtime_word_is_not_a_period() -> None:
+    # "OT" inside a market label is not read as an overtime scope.
+    assert detect_scope(None, "Patrick Mahomes - Passing Yards (incl. OT)") == "full_game"
+
+
+def test_settle_skips_partial_period_predictions(tmp_path) -> None:
+    import json
+
+    from outlier_nfl.settle import load_prediction_snapshot, settle_predictions
+    from outlier_nfl.boxscore import parse_simplified_events
+
+    recs = [{"event_id": "e", "event_starts_at": "2026-09-13T13:00:00-04:00", "team": "KC",
+             "opponent": "BAL", "player_name": "Travis Kelce", "market": "REC", "position": "OVER",
+             "line": 2.5, "scope": s} for s in ("first_quarter", "unknown", "full_game")]
+    path = tmp_path / "nfl_calibrated_props_2026-09-13.json"
+    path.write_text(json.dumps({"date": "2026-09-13", "records": recs}), encoding="utf-8")
+    snaps = load_prediction_snapshot(path, require_tier1_or_matchup=False)
+    events = parse_simplified_events({"events": [{
+        "event_date": "2026-09-13", "away": "BAL", "home": "KC", "away_score": 20, "home_score": 27,
+        "players": {"Travis Kelce": {"RECEIVING:REC": 5}}}]})
+    report = settle_predictions(snaps, events)
+    statuses = [(r["prediction"]["scope"], r["status"], r.get("skip_reason")) for r in report.rows]
+    assert statuses == [("first_quarter", "skipped", "partial_period_scope"),
+                        ("unknown", "skipped", "partial_period_scope"),
+                        ("full_game", "settled", None)]
