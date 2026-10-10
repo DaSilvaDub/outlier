@@ -105,6 +105,28 @@ class ProjectionResult:
     n_games: int
     source: str = MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
     method: str = "gamelog_rate_laplace"
+    # P(push); 0.0 on a half line, None when the model does not price pushes (F07).
+    p_push: float | None = 0.0
+
+    @property
+    def p_loss(self) -> float | None:
+        if self.p_push is None:
+            return None
+        return round(max(0.0, 1.0 - self.model_p - self.p_push), 6)
+
+
+def is_integer_line(line: float) -> bool:
+    return float(line) == math.floor(float(line))
+
+
+def _poisson_pmf(rate: float, k: int) -> float:
+    """P(X == k) for X~Poisson(rate), with the same rate cap as ``_poisson_sf_gt``."""
+    if k < 0:
+        return 0.0
+    if rate <= 0:
+        return 1.0 if k == 0 else 0.0
+    rate = min(float(rate), 80.0)
+    return math.exp(-rate + k * math.log(rate) - math.lgamma(k + 1))
 
 
 def _f(row: Mapping[str, Any], key: str) -> float:
@@ -121,10 +143,14 @@ def week_stat_value(market: str, row: Mapping[str, Any]) -> float | None:
     """Return the numeric realization for ``market`` from one week-stats row."""
     m = (market or "").upper()
     if m == "ANYTIME_TD":
+        # A player scores by rushing, receiving or a return; a thrown TD is the
+        # receiver's (F08). Without the rushing/receiving columns the row cannot
+        # say whether the player scored, so it is not read as zero.
+        if "rushing_tds" not in row or "receiving_tds" not in row:
+            return None
         return (
             _f(row, "rushing_tds")
             + _f(row, "receiving_tds")
-            + _f(row, "passing_tds")
             + _f(row, "special_teams_tds")
         )
     if m == "RUSH_REC_YDS":
@@ -211,7 +237,9 @@ def project_hit_probability(
     n = len(values)
     raw_rate = hits / n
     model_p = shrink_hit_rate(raw_rate, n, alpha=alpha, beta=None)
-    return ProjectionResult(model_p=round(model_p, 6), n_games=n)
+    # Strict hits; a push on an integer line is not modeled by a hit rate.
+    return ProjectionResult(model_p=round(model_p, 6), n_games=n,
+                            p_push=None if is_integer_line(line) else 0.0)
 
 
 
@@ -271,11 +299,14 @@ def project_hit_probability_v2(
 
     mean = sum(values) / len(values)
     if chosen == "poisson":
+        # Strict win/push/loss (F07): on an integer line X == line is a push, not
+        # an UNDER win. P(UNDER wins) = P(X <= line - 1).
         p_over = _poisson_sf_gt(mean, float(line))
+        p_push = _poisson_pmf(mean, int(line)) if is_integer_line(line) else 0.0
         if pos in {"OVER", "YES"}:
             model_p = p_over
         elif pos == "UNDER":
-            model_p = 1.0 - p_over
+            model_p = 1.0 - p_over - p_push
         else:
             return None
         return ProjectionResult(
@@ -283,6 +314,7 @@ def project_hit_probability_v2(
             n_games=len(values),
             source=MODEL_P_SOURCE_PROJECTION_NFLVERSE_POISSON,
             method="gamelog_poisson",
+            p_push=round(p_push, 6),
         )
 
     if len(values) < 2:
@@ -303,6 +335,8 @@ def project_hit_probability_v2(
         n_games=len(values),
         source=MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN,
         method="gamelog_gaussian",
+        # Continuous approximation: push mass on an integer line is not modeled.
+        p_push=None if is_integer_line(line) else 0.0,
     )
 
 
@@ -355,6 +389,9 @@ def attach_projection_model_p_record(
     record["model_p_source"] = result.source
     record["model_p_n_games"] = result.n_games
     record["model_p_method"] = result.method
+    record["model_p_win"] = result.model_p
+    record["model_p_push"] = result.p_push
+    record["model_p_loss"] = result.p_loss
     return record
 
 
@@ -373,6 +410,11 @@ def attach_model_p_hierarchy_record(
     """
     from outlier_nfl.calibration import attach_empirical_model_p_record
 
+    if record.get("model_p") is None and record.get("p_model") is not None:
+        record["model_p"] = record.get("p_model")
+    if not overwrite and record.get("model_p") is not None:
+        # Fill-only: an existing model_p and its provenance are kept as they are.
+        return record
     if overwrite:
         record.pop("model_p", None)
         record.pop("model_p_source", None)
@@ -393,6 +435,12 @@ def attach_model_p_hierarchy_record(
         ):
             return record
 
+    # Falling back to empirical hit rates: a projection's method/count no longer
+    # describe model_p, so they must not survive next to it (F06).
+    record.pop("model_p_method", None)
+    record.pop("model_p_n_games", None)
+    for key in ("model_p_win", "model_p_push", "model_p_loss"):
+        record.pop(key, None)
     attach_empirical_model_p_record(
         record, overwrite=True, method="laplace", alpha=alpha
     )

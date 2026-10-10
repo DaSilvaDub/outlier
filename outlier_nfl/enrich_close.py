@@ -359,10 +359,11 @@ def attach_close_fields(
             record.setdefault("model_p", None)
             record.setdefault("model_p_source", None)
     elif model_mode == "hierarchy":
+        # Honour the caller: overwrite_model_p=False keeps an existing model_p (F06).
         attach_model_p_hierarchy_record(
             record,
             week_index=week_index,
-            overwrite=True,
+            overwrite=overwrite_model_p,
             alpha=alpha,
         )
 

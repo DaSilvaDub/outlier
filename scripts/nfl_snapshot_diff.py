@@ -26,6 +26,12 @@ B  Live-shaped Week 4 replay, 2026-10-04: the same three fixture events moved
    (after the 17:00Z kickoff). Player props are served as two token pages
    through the real ``OutlierNflApiClient`` pagination, so B5 exercises it.
 
+A3 runs ``enrich_close --attach-model-p hierarchy --before-week 4`` (the #202
+diff command) over A1's calibrated props plus integer-line copies of every prop,
+a passing-only QB anytime-TD row and a row whose stale projection stamp must not
+survive an empirical fallback, against ``frozen_week_stats`` (weeks 1-3).
+A4 runs ``scripts/nfl_rebuild_card.py`` on A1's card when the checkout has it.
+
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
 
@@ -52,7 +58,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 2
+HARNESS_VERSION = 3
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -69,6 +75,10 @@ STEPS: dict[str, list[dict[str, Any]]] = {
     "A": [
         {"name": "A1_full", "clock": "2026-09-13T15:00:00+00:00", "window": None},
         {"name": "A2_window_1pm", "clock": "2026-09-13T16:30:00+00:00", "window": "1pm"},
+        # Phase 3a (#225): pricing math on A1's props, no pipeline run.
+        {"name": "A3_enrich_hierarchy_bw4", "clock": "2026-09-13T16:40:00+00:00",
+         "kind": "enrich", "before_week": 4},
+        {"name": "A4_rebuild_card", "clock": "2026-09-13T16:50:00+00:00", "kind": "rebuild"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -274,6 +284,100 @@ def _http_error(message: str, code: int) -> Exception:
     return exc
 
 
+# Weeks 1-3 of player stats for the fixture players (A3). Mahomes throws TDs but
+# never scores one; Henry and Kelce score; Lamar Jackson is absent on purpose.
+_WEEK_STATS = (
+    ("Patrick Mahomes", "KC", "QB", {"passing_yards": (281, 255, 300), "passing_tds": (2, 1, 3),
+                                     "attempts": (36, 33, 38), "completions": (24, 22, 26),
+                                     "rushing_yards": (12, 20, 8)}),
+    ("Derrick Henry", "BAL", "RB", {"rushing_yards": (88, 64, 102), "carries": (19, 16, 22),
+                                    "rushing_tds": (1, 0, 2), "receptions": (1, 2, 1)}),
+    ("Travis Kelce", "KC", "TE", {"receiving_yards": (71, 49, 66), "receptions": (6, 4, 5),
+                                  "targets": (8, 6, 7), "receiving_tds": (0, 1, 0)}),
+)
+_WEEK_STAT_COLUMNS = ("passing_yards", "passing_tds", "attempts", "completions", "rushing_yards",
+                      "carries", "rushing_tds", "receptions", "targets", "receiving_yards",
+                      "receiving_tds", "special_teams_tds")
+
+
+def frozen_week_stats(path: Path) -> Path:
+    """Write the A3 nflverse ``stats_player_week`` CSV (weeks 1-3, REG)."""
+    import csv
+
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        w = csv.writer(handle)
+        w.writerow(("season", "season_type", "week", "player_display_name", "team", "position")
+                   + _WEEK_STAT_COLUMNS)
+        for week in (1, 2, 3):
+            for name, team, pos, stats in _WEEK_STATS:
+                w.writerow((SEASON, "REG", week, name, team, pos)
+                           + tuple(stats.get(c, (0, 0, 0))[week - 1] for c in _WEEK_STAT_COLUMNS))
+    return path
+
+
+def math_inputs(calibrated: dict[str, Any]) -> dict[str, Any]:
+    """A1's calibrated props plus the integer-line and provenance cases (A3)."""
+    base = [r for r in calibrated.get("records", []) if isinstance(r, dict)]
+    rows = [copy.deepcopy(r) for r in base]
+    for r in base:
+        try:
+            line = float(r["line"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if line != int(line) and line > 1:
+            rows.append({**copy.deepcopy(r), "line": float(int(line)), "harness_case": "integer_line"})
+            other = "UNDER" if str(r.get("position")).upper() == "OVER" else "OVER"
+            rows.append({**copy.deepcopy(r), "line": float(int(line)), "position": other,
+                         "harness_case": "integer_line_other_side"})
+    mahomes = next((r for r in base if r.get("player_name") == "Patrick Mahomes"), None)
+    if mahomes:
+        rows.append({**copy.deepcopy(mahomes), "market": "ANYTIME_TD", "position": "OVER",
+                     "line": 0.5, "harness_case": "passing_only_qb_anytime_td"})
+    lamar = next((r for r in base if r.get("player_name") == "Lamar Jackson"), None)
+    if lamar:
+        rows.append({**copy.deepcopy(lamar), "model_p": 0.61, "model_p_source":
+                     "projection_nflverse_gaussian", "model_p_method": "gamelog_gaussian",
+                     "model_p_n_games": 3, "harness_case": "stale_projection_stamp"})
+    return {**{k: v for k, v in calibrated.items() if k != "records"}, "count": len(rows),
+            "records": rows}
+
+
+def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
+    """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
+    norm = work / "data" / "NFL" / "normalized"
+    out_dir = work / "data" / "NFL" / "math"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if step["kind"] == "enrich":
+        from outlier_nfl import enrich_close
+
+        cal = json.loads((norm / f"nfl_calibrated_props_{SLATE_DATE['A']}.json").read_text("utf-8"))
+        inputs = out_dir / "math_inputs.json"
+        inputs.write_text(json.dumps(math_inputs(cal), indent=2, sort_keys=True), encoding="utf-8")
+        stats = frozen_week_stats(out_dir / "stats_player_week_frozen.csv")
+        enrich_close.main([
+            "--predictions", str(inputs), "--out", str(out_dir / "hierarchy_bw4.json"),
+            "--attach-model-p", "hierarchy", "--nflverse-week-stats", str(stats),
+            "--before-week", str(step["before_week"]),
+        ])
+        return None
+    script = repo / "scripts" / "nfl_rebuild_card.py"
+    if not script.exists():
+        return "rebuild script not present in this checkout"
+    import runpy
+
+    argv = sys.argv
+    sys.argv = [str(script), "--card", str(norm / f"nfl_best_bets_{SLATE_DATE['A']}.json"),
+                "--version", "phase3a"]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            return f"rebuild exited {exc.code}"
+    finally:
+        sys.argv = argv
+    return None
+
+
 class FrozenOutlierClient:
     """In-memory stand-in for ``OutlierNflApiClient`` serving the shifted fixtures.
 
@@ -444,6 +548,14 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
     run_ids: dict[str, str] = {}
     for step in STEPS[slate]:
         _freeze_clock(step["clock"])
+        if step.get("kind"):
+            try:
+                error = _run_math_step(step, work, repo)
+            except Exception as exc:  # noqa: BLE001 - a failure is a captured result too
+                error = f"{type(exc).__name__}: {exc}"
+            previous = _capture_step(work, out / step["name"], previous, run_ids,
+                                     {"summary_status": None, "error": error})
+            continue
         fail = tuple(step.get("fail_urls", ()))
         ext_common.Client.fetch_csv = (  # type: ignore[method-assign]
             lambda self, url, timeout=120.0, _f=fail: _rows_for(url, tables, _f)
