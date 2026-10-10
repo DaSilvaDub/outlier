@@ -618,11 +618,16 @@ def _run_tape_step(work: Path) -> str | None:
     real_fetch = tn.fetch_csv
     out: dict[str, Any] = {"roles": {}, "admission": {}}
     # (case, as_of, run mode passed when _auto_roles accepts one)
-    cases = (("point_in_time", A10_AS_OF, "live"), ("future_update", A10_AS_OF, "replay"),
-             ("wrong_season", A10_AS_OF, "live"), ("unstamped", A10_AS_OF, "replay"),
-             ("layout_2026_live", A10_AS_OF, "live"),
-             ("layout_2026_replay", A10_AS_OF, "replay"),
-             ("evening_cutoff", _dt.datetime(2026, 10, 5, 0, 0, tzinfo=_dt.UTC), "live"),
+    # The step runs with datetime frozen (a subclass swapped into each module), so
+    # build as_of from the module's class: a plain datetime would fail its
+    # isinstance check and silently take the whole-day branch of _after_as_of.
+    as_of_now = tn.datetime(2026, 10, 4, 14, 0, tzinfo=_dt.UTC)
+    evening = tn.datetime(2026, 10, 5, 0, 0, tzinfo=_dt.UTC)
+    cases = (("point_in_time", as_of_now, "live"), ("future_update", as_of_now, "replay"),
+             ("wrong_season", as_of_now, "live"), ("unstamped", as_of_now, "replay"),
+             ("layout_2026_live", as_of_now, "live"),
+             ("layout_2026_replay", as_of_now, "replay"),
+             ("evening_cutoff", evening, "live"),
              ("whole_day_no_as_of", None, None))
     import inspect
 
