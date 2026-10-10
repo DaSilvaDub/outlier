@@ -548,14 +548,20 @@ NFL_2026_STARTING_QBS: dict[str, str] = {
 }
 
 
-def get_starting_qb(team: str, rosters: Mapping[str, dict[str, Any]] | None = None) -> str:
-    """Retrieve the verified starting quarterback for a given NFL team code."""
+def get_starting_qb(
+    team: str, rosters: Mapping[str, dict[str, Any]] | None = None, allow_static: bool = False
+) -> str:
+    """The indexed starting quarterback for a team code.
+
+    The fixed 2026 table is consulted only with ``allow_static`` (fixtures and
+    tests, F18); it is never current evidence for another date or season.
+    """
     t_clean = team.strip().upper()
     if rosters and t_clean in rosters:
         qb = rosters[t_clean].get("starting_qb")
         if qb:
             return str(qb).strip()
-    if t_clean in NFL_2026_STARTING_QBS:
+    if allow_static and t_clean in NFL_2026_STARTING_QBS:
         return NFL_2026_STARTING_QBS[t_clean]
     raise ValueError(f"Unknown or unverified starting quarterback for NFL team code: {team}")
 
@@ -644,22 +650,35 @@ def validate_analysis_text_for_roster_errors(text: str) -> list[str]:
     return errors
 
 
+# Starter status (F18). ``confirmed`` needs an official active/inactive list,
+# which no source here provides yet, so nothing is emitted as confirmed today.
+STARTER_CONFIRMED = "confirmed"
+STARTER_PROBABLE = "probable"  # point-in-time depth/tape role from an admitted tape
+STARTER_STATIC_FIXTURE = "static_fixture"  # fixed 2026 table, fixture runs only
+STARTER_UNKNOWN = "unknown"
+EVIDENCED_STARTER_STATUSES = (STARTER_CONFIRMED, STARTER_PROBABLE, STARTER_STATIC_FIXTURE)
+
+
 def build_team_roster_index(
     props: list[NflPlayerProp] | list[dict[str, Any]],
-    include_league_baseline: bool = True,
+    include_league_baseline: bool = False,
+    tape_roles: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Build a verified active roster index mapping each team code to their starting QB and key skill players.
+    """Index each team's starting QB and quoted skill players, with provenance (F18).
 
     Args:
-        props: Player prop records from Outlier normalized feeds.
-        include_league_baseline: If True, populates all 32 NFL teams with baseline 2026 starting
-            QBs and skill players so kickoff window filters do not erase league-wide ground truth.
+        props: Player prop records from Outlier normalized feeds. They prove a
+            player is quoted for the team, never who starts: the most-quoted
+            passer is not promoted to starting QB.
+        include_league_baseline: Fixture runs only. Seeds all 32 teams from the
+            fixed 2026 tables (``starting_qb_status`` ``static_fixture``).
+        tape_roles: Per-team roles from the run's admitted tape; its ``qb`` is the
+            ``probable`` starter.
 
     Returns:
-        Dictionary keyed by canonical team code (e.g. 'IND', 'KC', 'PIT', 'NYJ') containing:
-        - 'starting_qb': Name of the primary passer
-        - 'key_rbs': List of top rushing personnel
-        - 'key_pass_catchers': List of top receiving targets
+        Team code -> ``starting_qb`` (None when unknown), ``starting_qb_status``
+        (confirmed / probable / static_fixture / unknown), ``starting_qb_source``,
+        ``key_rbs`` and ``key_pass_catchers``.
     """
     rosters: dict[str, dict[str, Any]] = {}
 
@@ -668,6 +687,8 @@ def build_team_roster_index(
             rosters[t] = {
                 "team": t,
                 "starting_qb": chart["starting_qb"],
+                "starting_qb_status": STARTER_STATIC_FIXTURE,
+                "starting_qb_source": "static_2026_fixture",
                 "key_rbs": list(chart.get("rbs", [])),
                 "key_pass_catchers": list(chart.get("wrs", [])) + ([chart["te"]] if chart.get("te") else []),
             }
@@ -679,7 +700,6 @@ def build_team_roster_index(
             teams.add(str(team_val).strip().upper())
 
     for t in sorted(teams):
-        passers: dict[str, int] = {}
         rushers: dict[str, int] = {}
         receivers: dict[str, int] = {}
 
@@ -695,37 +715,35 @@ def build_team_roster_index(
             mkt = p.market if isinstance(p, NflPlayerProp) else p.get("market")
             books_count = len(p.books) if isinstance(p, NflPlayerProp) else len(p.get("books", []))
 
-            # PASS_COMP / PASS_TD are the codes normalize_market actually emits
-            # (config.PROP_PASS_COMP / PROP_PASS_TDS); the longer spellings never match.
-            if mkt in (
-                "PASS_YDS",
-                "PASS_ATTEMPTS",
-                "PASS_ATT",
-                "PASS_COMP",
-                "PASS_COMPLETIONS",
-                "PASS_TD",
-                "PASS_TDS",
-            ):
-                passers[name] = passers.get(name, 0) + max(1, books_count)
-            elif mkt in ("RUSH_YDS", "RUSH_ATTEMPTS", "RUSH_ATT"):
+            if mkt in ("RUSH_YDS", "RUSH_ATTEMPTS", "RUSH_ATT"):
                 rushers[name] = rushers.get(name, 0) + max(1, books_count)
             elif mkt in ("REC_YDS", "RECEPTIONS", "REC", "TARGETS"):
                 receivers[name] = receivers.get(name, 0) + max(1, books_count)
 
-        top_qb = sorted(passers.items(), key=lambda x: -x[1])[:1]
         top_rbs = [r[0] for r in sorted(rushers.items(), key=lambda x: -x[1])[:3]]
         top_wrs = [w[0] for w in sorted(receivers.items(), key=lambda x: -x[1])[:4]]
 
-        base_rbs = rosters.get(t, {}).get("key_rbs", [])
-        base_wrs = rosters.get(t, {}).get("key_pass_catchers", [])
+        base = rosters.get(t, {})
+        base_rbs = base.get("key_rbs", [])
+        base_wrs = base.get("key_pass_catchers", [])
 
         # Merge feed rushers ahead of baseline
         combined_rbs = top_rbs + [r for r in base_rbs if r not in top_rbs]
         combined_wrs = top_wrs + [w for w in base_wrs if w not in top_wrs]
 
+        tape_qb = str((tape_roles or {}).get(t, {}).get("qb") or "").strip()
+        if tape_qb:
+            qb, status, source = tape_qb, STARTER_PROBABLE, "tape_roles"
+        elif base.get("starting_qb"):
+            qb, status, source = base["starting_qb"], base["starting_qb_status"], base["starting_qb_source"]
+        else:
+            qb, status, source = None, STARTER_UNKNOWN, None
+
         rosters[t] = {
             "team": t,
-            "starting_qb": top_qb[0][0] if top_qb else rosters.get(t, {}).get("starting_qb"),
+            "starting_qb": qb,
+            "starting_qb_status": status,
+            "starting_qb_source": source,
             "key_rbs": combined_rbs,
             "key_pass_catchers": combined_wrs,
         }
@@ -750,6 +768,7 @@ def verify_player_team_attribution(
     expected_team: str,
     rosters: Mapping[str, dict[str, Any]],
     position: str | None = None,
+    allow_static: bool = False,
 ) -> bool:
     """Verify whether a player is correctly attributed to the expected team in the active roster.
 
@@ -758,40 +777,30 @@ def verify_player_team_attribution(
     """
     t_clean = expected_team.strip().upper()
     team_info = rosters.get(t_clean)
-    # `or ""` rather than str(None): an absent starter must read as empty so the
-    # emptiness guard in _names_overlap() catches it. "none" is a truthy sentinel
-    # that silently re-opens the hole.
-    verified_qb = str(
-        (team_info.get("starting_qb") if team_info else NFL_2026_STARTING_QBS.get(t_clean)) or ""
-    ).strip().lower()
+    # Only the supplied index counts (F18): no fixed-table fallback for a team it
+    # does not cover. `or ""` keeps an absent starter empty for _names_overlap().
+    verified_qb = str((team_info.get("starting_qb") if team_info else None) or "").strip().lower()
 
     p_clean = player_name.strip().lower()
     if not p_clean:
         return False
 
-    # Check for known former-team violations
-    for move_player, move_meta in OFFSEASON_MOVES_2026.items():
-        if _names_overlap(p_clean, move_player.strip().lower()):
-            if t_clean != move_meta["current_team"]:
-                return False
-            return True
-
     # If position is quarterback, enforce strict starter match
     if position and position.upper() == "QB":
         return _names_overlap(p_clean, verified_qb)
 
-    # Check QB match
+    # The supplied index wins over the fixed 2026 offseason-move table (F18).
     if _names_overlap(p_clean, verified_qb):
         return True
-
-    # Check known RBs/WRs from depth chart
     if team_info:
-        for rb in team_info.get("key_rbs", []):
-            if _names_overlap(p_clean, str(rb).strip().lower()):
+        for name in list(team_info.get("key_rbs", [])) + list(team_info.get("key_pass_catchers", [])):
+            if _names_overlap(p_clean, str(name).strip().lower()):
                 return True
 
-        for wr in team_info.get("key_pass_catchers", []):
-            if _names_overlap(p_clean, str(wr).strip().lower()):
-                return True
+    # Not in the supplied index. The fixed 2026 move table rejects a known former
+    # team, and verifies the current one only with ``allow_static`` (fixtures).
+    for move_player, move_meta in OFFSEASON_MOVES_2026.items():
+        if _names_overlap(p_clean, move_player.strip().lower()):
+            return allow_static and t_clean == move_meta["current_team"]
 
     return False

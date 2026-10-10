@@ -412,7 +412,8 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
         },
     ]
 
-    candidates = discover_alt_floor_candidates(props)
+    # Fixture run: the static 2026 chart orders the WRs (F18: fixture-only).
+    candidates = discover_alt_floor_candidates(props, static_depth=True)
     rec_cands = {c.player_name: c for c in candidates["REC_YDS"]}
 
     # Brian Thomas Jr. (WR1) should have higher confidence score than Parker Washington (WR3)
@@ -603,3 +604,27 @@ def test_alt_floors_juice_cap_and_play_type():
     assert "| `PARLAY_ONLY` |" in md
     assert "| `STRAIGHT` |" in md
     assert "Juice Cap Policy" in md
+
+
+def test_live_floor_depth_comes_from_tape_roles_not_static_chart() -> None:
+    """F18: outside fixtures the WR order is the tape's (wr_deep, wr_slot); none -> no penalty."""
+    from outlier_nfl.alt_floors import _floor_depth_chart
+
+    tapes = {"JAX": {"wr_deep": "Parker Washington", "wr_slot": "Brian Thomas Jr.", "te": "T"}}
+    assert _floor_depth_chart("JAX", tapes, False) == {
+        "wrs": ["Parker Washington", "Brian Thomas Jr."], "te": "T"}
+    assert _floor_depth_chart("JAX", None, False) == {"wrs": [], "te": None}
+    assert _floor_depth_chart("JAX", None, True)["wrs"][0] == "Brian Thomas Jr."
+
+
+def test_empty_evidenced_starter_set_blocks_qb_floors() -> None:
+    """F18: a supplied but empty starter set means no QB is evidenced, so no PASS_YDS floor."""
+    base = {"player_name": "Backup Passer", "team": "KC", "opponent": "BAL", "matchup": "BAL @ KC",
+            "market": "PASS_YDS", "position": "OVER", "scope": "full_game",
+            "l10_hit_rate": 0.9, "l5_hit_rate": 0.9, "season_hit_rate": 0.9}
+    props = [{**base, "line": 250.5, "is_consensus_line": True,
+              "books": [{"book": "FANDUEL", "odds": -110}]},
+             {**base, "line": 200.5, "is_consensus_line": False,
+              "books": [{"book": "HARDROCK", "odds": -200}]}]
+    assert len(discover_alt_floor_candidates(props).get("PASS_YDS", [])) == 1  # unrestricted
+    assert discover_alt_floor_candidates(props, starting_qbs=set()).get("PASS_YDS", []) == []

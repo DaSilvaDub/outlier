@@ -58,7 +58,7 @@ from outlier_nfl.schema import (
     validate_player_props_payload,
     validate_schedule_payload,
 )
-from outlier_nfl.roster import build_team_roster_index
+from outlier_nfl.roster import EVIDENCED_STARTER_STATUSES, build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
 from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.run_writer import RunWriter
@@ -468,6 +468,7 @@ class NflPipeline:
             ),
             slate_events=slate_events,
             defensive_out_by_team=tape.team_lists("defensive_starters_out"),
+            static_fallback=ctx.mode == "fixture",
         )
         if matchup_scripts:
             logger.info(
@@ -640,7 +641,9 @@ class NflPipeline:
         stage("nfl_high_prob_props", anchors_payload)
 
         # Build verified active roster index
-        rosters = build_team_roster_index(all_player_props)
+        rosters = build_team_roster_index(
+            all_player_props, include_league_baseline=ctx.mode == "fixture", tape_roles=tapes
+        )
         rosters_payload = {
             "date": target_date,
             "window": window,
@@ -730,7 +733,8 @@ class NflPipeline:
             from outlier_nfl.alt_floors import generate_alt_floors_pipeline
 
             starting_qbs_set = {
-                r["starting_qb"] for r in rosters.values() if r.get("starting_qb")
+                r["starting_qb"] for r in rosters.values()
+                if r.get("starting_qb") and r.get("starting_qb_status") in EVIDENCED_STARTER_STATUSES
             }
             alt_floors_summary = generate_alt_floors_pipeline(
                 props=all_player_props,
@@ -742,6 +746,7 @@ class NflPipeline:
                 weather_records=weather_records,
                 tapes=tapes,
                 write_latest=publish_latest,
+                static_depth=ctx.mode == "fixture",
             )
             if publish:
                 writer.stage_tree("exports", self.data_dir / "NFL" / "exports")

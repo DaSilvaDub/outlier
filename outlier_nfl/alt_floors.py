@@ -122,6 +122,25 @@ def _extract_book_quote(
     return ("CONSENSUS", None)
 
 
+def _floor_depth_chart(
+    team: str, tapes: dict[str, dict[str, Any]] | None, static_depth: bool
+) -> dict[str, Any]:
+    """WR order and TE for the depth adjustments (F18).
+
+    From the run's admitted tape roles (``wr_deep`` then ``wr_slot``, ``te``);
+    the fixed 2026 chart only with ``static_depth`` (fixture runs). No roles
+    means no depth adjustment.
+    """
+    if static_depth:
+        try:
+            return get_team_depth_chart(team)
+        except ValueError:
+            return {}
+    roles = (tapes or {}).get(team) or {}
+    wrs = [str(roles[k]) for k in ("wr_deep", "wr_slot") if roles.get(k)]
+    return {"wrs": wrs, "te": roles.get("te")}
+
+
 def discover_alt_floor_candidates(
     props: list[dict[str, Any]] | list[Any],
     *,
@@ -131,6 +150,7 @@ def discover_alt_floor_candidates(
     starting_qbs: set[str] | None = None,
     weather_by_event: dict[str, dict[str, Any]] | None = None,
     tapes: dict[str, dict[str, Any]] | None = None,
+    static_depth: bool = False,
 ) -> dict[str, list[AltFloorProp]]:
     """Discover and evaluate all candidate alternate floor props.
 
@@ -138,7 +158,9 @@ def discover_alt_floor_candidates(
     on hit rate stability, safety cushion, book pricing, and situational context.
     """
     thresholds = min_lines or DEFAULT_MIN_LINES
-    active_qbs = starting_qbs or set()
+    # A supplied (even empty) starter set restricts PASS_YDS: no evidenced
+    # starter means no QB floor (F18). None keeps the unrestricted default.
+    active_qbs = set(starting_qbs) if starting_qbs is not None else None
 
     # 1. Build consensus map if not passed
     cons_map: dict[tuple[str, str], float] = dict(consensus_map or {})
@@ -171,7 +193,7 @@ def discover_alt_floor_candidates(
             continue
 
         # In PASS_YDS, restrict to starting QBs if index is provided
-        if mkt == "PASS_YDS" and active_qbs and player not in active_qbs:
+        if mkt == "PASS_YDS" and active_qbs is not None and player not in active_qbs:
             continue
 
         try:
@@ -226,7 +248,7 @@ def discover_alt_floor_candidates(
 
         # Depth chart & Game script situational adjustments
         team_str = str(row.get("team") or "").strip().upper()
-        depth_chart = get_team_depth_chart(team_str)
+        depth_chart = _floor_depth_chart(team_str, tapes, static_depth)
         player_clean = player.strip().lower()
 
         if mkt == "RUSH_YDS":
@@ -574,6 +596,7 @@ def generate_alt_floors_pipeline(
     weather_records: list[dict[str, Any]] | None = None,
     tapes: dict[str, dict[str, Any]] | None = None,
     write_latest: bool = True,
+    static_depth: bool = False,
 ) -> dict[str, Any]:
     """Complete pipeline orchestration for Alt Floor Props extraction and reporting."""
     weather_by_event: dict[str, dict[str, Any]] = {}
@@ -590,6 +613,7 @@ def generate_alt_floors_pipeline(
         starting_qbs=starting_qbs,
         weather_by_event=weather_by_event,
         tapes=tapes,
+        static_depth=static_depth,
     )
 
     top3, master_pool = rank_alt_floors(candidates)
