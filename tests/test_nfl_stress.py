@@ -31,6 +31,7 @@ import pytest
 
 from outlier_nfl.api import (
     AuthRequiredError,
+    IncompletePaginationError,
     NotFoundError,
     OutlierNflApiClient,
     OutlierNflApiError,
@@ -454,9 +455,10 @@ def test_pagination_halts_on_identical_records_signature():
     # Return page_1 on initial call, and page_2 for any subsequent calls
     client.fetch_json = MagicMock(side_effect=lambda path, params=None: page_1 if not params else page_2)  # type: ignore[method-assign]
 
-    result = client.fetch_player_props(max_pages=10)
-    # Merged records should only contain page 1 items because page 2 signature matched last_sig
-    assert len(result["props"]) == 2
+    # A page identical to the last one does not advance: incomplete, never page 1 alone (F04).
+    with pytest.raises(IncompletePaginationError) as exc_info:
+        client.fetch_player_props(max_pages=10)
+    assert exc_info.value.reason == "no_advance"
 
 
 def test_pagination_halts_on_token_cycle():
@@ -487,20 +489,28 @@ def test_pagination_halts_on_token_cycle():
 
     client.fetch_json = MagicMock(side_effect=mock_fetch)  # type: ignore[method-assign]
 
-    result = client.fetch_player_props(max_pages=10)
-    # Should stop on third page when tok_B is recognized as already seen
-    assert len(result["props"]) == 3
+    # Seeing tok_B again is a cursor cycle: incomplete, not a 3-page success (F04).
+    with pytest.raises(IncompletePaginationError) as exc_info:
+        client.fetch_player_props(max_pages=10)
+    assert exc_info.value.reason == "repeated_cursor"
+    assert exc_info.value.records_fetched == 3
 
 
 def test_pagination_halts_on_empty_initial_page():
-    """Pagination stops immediately if the first page contains an empty record list."""
+    """An empty first page that still advertises more pages is incomplete (F04)."""
     empty_page = {"props": [], "_page": {"nextPageToken": "tok_2", "pages": 3}}
 
     client = OutlierNflApiClient(bearer_token="test_token")
     client.fetch_json = MagicMock(return_value=empty_page)  # type: ignore[method-assign]
 
-    result = client.fetch_player_props(max_pages=5)
-    assert result["props"] == []
+    with pytest.raises(IncompletePaginationError):
+        client.fetch_player_props(max_pages=5)
+
+
+def test_pagination_empty_first_page_without_more_pages_is_empty():
+    client = OutlierNflApiClient(bearer_token="test_token")
+    client.fetch_json = MagicMock(return_value={"props": [], "_page": {"pages": 1}})  # type: ignore[method-assign]
+    assert client.fetch_player_props(max_pages=5)["props"] == []
 
 
 def test_pagination_respects_max_pages_limit():
@@ -515,8 +525,10 @@ def test_pagination_respects_max_pages_limit():
     client.fetch_json = MagicMock(side_effect=[make_page(i) for i in range(1, 20)])  # type: ignore[method-assign]
 
     max_pages = 4
-    result = client.fetch_player_props(max_pages=max_pages)
-    assert len(result["props"]) == max_pages
+    # Never past the cap, and hitting it with pages left is incomplete (F04).
+    with pytest.raises(IncompletePaginationError) as exc_info:
+        client.fetch_player_props(max_pages=max_pages)
+    assert exc_info.value.reason == "page_cap"
     assert client.fetch_json.call_count == max_pages
 
 
@@ -534,8 +546,8 @@ def test_pagination_propagates_auth_required_error():
         client.fetch_player_props(max_pages=5)
 
 
-def test_pagination_recovers_gracefully_on_transient_error_on_later_page():
-    """If a subsequent page throws OutlierNflApiError, pagination returns accumulated records."""
+def test_pagination_raises_incomplete_on_failed_later_page():
+    """A later page failing after retries raises; page 1 is never returned as the feed (F04)."""
     p1 = {
         "props": [{"outcome": {"outcomeId": "p1"}}],
         "_page": {"nextPageToken": "tok_2", "pageNumber": 1},
@@ -549,9 +561,10 @@ def test_pagination_recovers_gracefully_on_transient_error_on_later_page():
 
     client.fetch_json = MagicMock(side_effect=mock_fetch)  # type: ignore[method-assign]
 
-    result = client.fetch_player_props(max_pages=5)
-    assert len(result["props"]) == 1
-    assert result["props"][0]["outcome"]["outcomeId"] == "p1"
+    with pytest.raises(IncompletePaginationError) as exc_info:
+        client.fetch_player_props(max_pages=5)
+    assert exc_info.value.reason == "page_failed"
+    assert exc_info.value.records_fetched == 1
 
 
 # =============================================================================
