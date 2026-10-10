@@ -913,6 +913,9 @@ def _apply_quality_and_signal_flags(
         dq_flags.append("team_total_scoring_conflict")
     if slate_quality.opponent_high_k_rate_conflict(row):
         dq_flags.append("opponent_high_k_lineup")
+    if slate_quality.opponent_elite_rebound_defense_conflict(row):
+        dq_flags.append("opponent_elite_rebound_defense")
+        row["recommended_units_pre_news"] = ""
     if slate_quality.wnba_playoff_role_player_over_risk(row):
         dq_flags.append("wnba_playoff_role_player_risk")
     if slate_quality.severe_line_discount_trap(row):

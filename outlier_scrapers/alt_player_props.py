@@ -174,6 +174,16 @@ def _floor_ladder_score(row: dict[str, Any]) -> float:
     # Hit rate baseline
     hit_base = (l10 * 0.40) + (l5 * 0.35) + (szn * 0.25)
 
+    # Market robustness factor: continuous scoring markets (PTS, PA, PR, PRA) carry
+    # higher event opportunity and foul-shot insulation than discrete 1-event props (AST, REB)
+    market = str(row.get("market") or "").strip().upper()
+    if market in {"PTS", "POINTS"}:
+        market_factor = 1.10
+    elif market in {"PA", "PR", "PRA"}:
+        market_factor = 1.05
+    else:
+        market_factor = 1.00
+
     # Odds efficiency factor: prioritize sweet-spot floor odds (-110 to -250)
     # over severe minus-money juice (< -400, e.g. -700).
     if -250 <= odds <= -110:
@@ -185,7 +195,7 @@ def _floor_ladder_score(row: dict[str, Any]) -> float:
     else:
         odds_factor = 0.75
 
-    return hit_base * odds_factor
+    return hit_base * odds_factor * market_factor
 
 
 def _is_allowed_side(league: str, market: str, position: str) -> bool:
@@ -367,6 +377,25 @@ def build_alt_player_props_parlays(board: list[dict[str, Any]]) -> list[dict[str
                 continue
             same_event = leg1.get("event_id") == leg2.get("event_id")
             if same_event and str(leg1.get("league") or "").upper() == "MLB":
+                continue
+
+            # Teammate assist correlation barrier: drop combinations where two players
+            # on the same team both require assist OVERs, preventing finite made-basket cannibalization
+            team1 = str(leg1.get("team") or "").strip().upper()
+            team2 = str(leg2.get("team") or "").strip().upper()
+            mkt1 = str(leg1.get("market") or "").strip().upper()
+            mkt2 = str(leg2.get("market") or "").strip().upper()
+            pos1 = str(leg1.get("position") or "").strip().upper()
+            pos2 = str(leg2.get("position") or "").strip().upper()
+            if (
+                same_event
+                and team1
+                and team1 == team2
+                and mkt1 in {"AST", "ASSISTS"}
+                and mkt2 in {"AST", "ASSISTS"}
+                and pos1 == "OVER"
+                and pos2 == "OVER"
+            ):
                 continue
             dec1 = _american_to_decimal(leg1.get("best_odds"))
             dec2 = _american_to_decimal(leg2.get("best_odds"))

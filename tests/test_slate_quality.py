@@ -639,3 +639,31 @@ def test_is_floor_ladder_opportunity_detects_dustin_may_profile():
     reb_valid_row = dict(may_row, market_type="REB", selection="Player - Rebounds OVER 3.5", line=3.5, projection_mean=5.0)
     assert is_floor_ladder_opportunity(reb_valid_row) is True
 
+
+def test_opponent_elite_rebound_defense_conflict():
+    from outlier_scrapers.slate_quality import opponent_elite_rebound_defense_conflict
+
+    # Rebound Over against NYL with low hit rate or tight cushion
+    nyl_cold_row = {
+        "sport": "WNBA",
+        "market_type": "REB",
+        "selection": "Angel Reese - Rebounds OVER 9.5",
+        "opponent": "NYL",
+        "line": 9.5,
+        "hit_rate_component": 20.0,
+        "projection_mean": 9.8,
+    }
+    assert opponent_elite_rebound_defense_conflict(nyl_cold_row) is True
+
+    # High hit rate and comfortable projection cushion against NYL clears
+    nyl_safe_row = dict(nyl_cold_row, hit_rate_component=60.0, projection_mean=11.2)
+    assert opponent_elite_rebound_defense_conflict(nyl_safe_row) is False
+
+    # Points or Assists against NYL are not rebound conflicts
+    nyl_pts_row = dict(nyl_cold_row, market_type="PTS", selection="Angel Reese - Points OVER 12.5")
+    assert opponent_elite_rebound_defense_conflict(nyl_pts_row) is False
+
+    # Under Rebounds against NYL is not an Over conflict
+    nyl_under_row = dict(nyl_cold_row, selection="Angel Reese - Rebounds UNDER 9.5")
+    assert opponent_elite_rebound_defense_conflict(nyl_under_row) is False
+

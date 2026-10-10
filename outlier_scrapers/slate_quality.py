@@ -83,6 +83,14 @@ HIGH_K_OPPONENTS_MLB = frozenset({
     "SEA",
     "PIT",
 })
+ELITE_REBOUND_DEFENSES_WNBA = frozenset({
+    "NYL",
+    "NEW YORK LIBERTY",
+    "CON",
+    "CONNECTICUT SUN",
+    "MIN",
+    "MINNESOTA LYNX",
+})
 PHANTOM_EDGE_THRESHOLD = 0.10
 # Live Kelly from gamelog independents stays off until so_eval prefers independent.
 # Force: OUTLIER_PROMOTE_INDEPENDENT_SO=1
@@ -580,6 +588,34 @@ def opponent_high_k_rate_conflict(row: dict[str, Any]) -> bool:
     if proj_mean is None:
         return True
     return (line - proj_mean) < 1.5
+
+
+def opponent_elite_rebound_defense_conflict(row: dict[str, Any]) -> bool:
+    """True when player Rebound OVER faces an elite rebound defense with cold recency or narrow projection cushion."""
+    if not is_player_prop(row):
+        return False
+    if _selection_side(row) != "OVER":
+        return False
+    sport = str(row.get("sport") or row.get("league") or "").strip().upper()
+    if sport != "WNBA":
+        return False
+    mtype = str(row.get("market_type") or row.get("market") or "").strip().upper()
+    if mtype not in {"REB", "REBOUNDS"}:
+        return False
+    opp = str(row.get("opponent") or row.get("opp_name") or "").strip().upper()
+    if opp not in ELITE_REBOUND_DEFENSES_WNBA:
+        return False
+
+    # Facing an elite rebounding frontcourt: flag if L5 hit rate is below 40% or projection mean doesn't exceed line by at least 1.0
+    l5 = _to_float(row.get("hit_rate_component"))
+    proj_mean = _to_float(row.get("projection_mean"))
+    line = _to_float(row.get("line"))
+
+    if l5 is not None and l5 < 40.0:
+        return True
+    if line is not None and proj_mean is not None and (proj_mean - line) < 0.5:
+        return True
+    return False
 
 
 def is_floor_ladder_opportunity(row: dict[str, Any]) -> bool:

@@ -21,6 +21,7 @@ def _prop(
     l10: float = 90.0,
     scope: str = "full_game",
     event_id: str = "e1",
+    team: str = "HOME",
 ) -> dict:
     return {
         "league": league,
@@ -29,7 +30,7 @@ def _prop(
         "outcome_id": f"o-{player}-{market}-{position}",
         "player": player,
         "player_id": player.casefold(),
-        "team": "HOME",
+        "team": team,
         "matchup": "AWAY @ HOME",
         "market": market,
         "position": position,
@@ -223,6 +224,31 @@ def test_mlb_alt_k_parlays_reject_same_game_legs():
     )
     assert len(rows) == 2
     assert build_alt_player_props_parlays(rows) == []
+
+
+def test_teammate_assist_over_parlays_are_blocked():
+    """Teammate dual-assist OVER parlays must be dropped to avoid made-basket cannibalization."""
+    rows = _board(
+        [
+            _prop(league="WNBA", player="Guard A", team="LVA", market="AST", line=5.5, odds=-140, event_id="e1"),
+            _prop(league="WNBA", player="Guard B", team="LVA", market="AST", line=6.5, odds=120, event_id="e1"),
+            _prop(league="WNBA", player="Opponent Guard", team="GSV", market="AST", line=4.5, odds=-150, event_id="e1"),
+            _prop(league="WNBA", player="Scorer", team="LVA", market="PTS", line=18.5, odds=-110, event_id="e1"),
+        ],
+        league="WNBA",
+    )
+    parlays = build_alt_player_props_parlays(rows)
+    # Guard A + Guard B should NOT be paired
+    pairings = {
+        (p["leg_1_player"], p["leg_2_player"])
+        for p in parlays
+    }
+    assert ("Guard A", "Guard B") not in pairings
+    assert ("Guard B", "Guard A") not in pairings
+    # But Guard A (AST) + Scorer (PTS) on same team is allowed
+    assert ("Guard A", "Scorer") in pairings or ("Scorer", "Guard A") in pairings
+    # And Guard A (LVA) + Opponent Guard (GSV) across opposite teams in same game is allowed
+    assert ("Guard A", "Opponent Guard") in pairings or ("Opponent Guard", "Guard A") in pairings
 
 
 def test_missing_season_hit_rate_does_not_score_the_player_as_zero_percent():
