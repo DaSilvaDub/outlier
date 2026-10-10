@@ -148,36 +148,56 @@ def _normalize_bearer_token(value: Any) -> str | None:
     return text
 
 
-def _extract_token_from_object(payload: Any) -> str | None:
-    """Recursively search a dict, list, or JSON string for bearer auth tokens."""
+_JWT_RE = re.compile(r"^eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+$")
+
+
+def _is_credential_key(key: Any) -> bool:
+    compact = re.sub(r"[^a-z0-9]+", "", str(key or "").lower())
+    return any(re.sub(r"[^a-z0-9]+", "", m) in compact for m in TOKEN_MARKERS)
+
+
+def _decode_json_text(text: str) -> Any:
+    if text.startswith("{") or text.startswith("["):
+        try:
+            return json.loads(text, strict=False)
+        except ValueError:
+            return None
+    return None
+
+
+def _extract_token_from_object(payload: Any, keyed: bool = False) -> str | None:
+    """Find a bearer token in a dict, list or JSON string (F24).
+
+    A scalar string counts only when it sits under a recognized credential key
+    (``keyed``) or is JWT-shaped. Arbitrary long strings such as an origin URL
+    or a stored message are never treated as credentials. Tokens are never logged.
+    """
     if isinstance(payload, dict):
         for key, val in payload.items():
-            k_clean = str(key or "").lower().replace(".", "").replace("-", "").replace("_", "")
-            if any(m.replace("-", "").replace("_", "") in k_clean for m in TOKEN_MARKERS):
-                tok = _normalize_bearer_token(val)
-                if tok:
-                    return tok
-            found = _extract_token_from_object(val)
-            if found:
-                return found
+            if _is_credential_key(key):
+                found = _extract_token_from_object(val, keyed=True)
+                if found:
+                    return found
+        for key, val in payload.items():
+            if not _is_credential_key(key) and isinstance(val, (dict, list, str)):
+                found = _extract_token_from_object(val)
+                if found:
+                    return found
         return None
     if isinstance(payload, list):
         for item in payload:
-            found = _extract_token_from_object(item)
+            found = _extract_token_from_object(item, keyed=keyed)
             if found:
                 return found
         return None
     if isinstance(payload, str):
         text = payload.strip()
-        if text.startswith("{") or text.startswith("["):
-            try:
-                decoded = json.loads(text, strict=False)
-                found = _extract_token_from_object(decoded)
-                if found:
-                    return found
-            except Exception:
-                pass
-        return _normalize_bearer_token(text)
+        decoded = _decode_json_text(text)
+        if decoded is not None:
+            return _extract_token_from_object(decoded, keyed=keyed)
+        tok = _normalize_bearer_token(text)
+        if tok and (keyed or _JWT_RE.match(tok)):
+            return tok
     return None
 
 
@@ -199,7 +219,7 @@ def extract_token_from_storage_state(storage_state: dict[str, Any]) -> str | Non
                             compact = re.sub(r"[^a-z0-9]+", "", name)
                             if any(m.replace("-", "").replace("_", "") in compact for m in TOKEN_MARKERS):
                                 val = item.get("value")
-                                token = _extract_token_from_object(val)
+                                token = _extract_token_from_object(val, keyed=True)
                                 if token:
                                     return token
 
@@ -214,8 +234,10 @@ def extract_token_from_storage_state(storage_state: dict[str, Any]) -> str | Non
                     if token:
                         return token
 
-    # 3. Search anywhere in storage_state object
-    return _extract_token_from_object(storage_state)
+    # 3. Search the rest of the state (not cookies: those are sent as a Cookie
+    # header, never as Authorization) for a credential-keyed entry or a JWT.
+    rest = {k: v for k, v in storage_state.items() if k != "cookies"}
+    return _extract_token_from_object(rest)
 
 
 def build_cookie_header_from_storage_state(
