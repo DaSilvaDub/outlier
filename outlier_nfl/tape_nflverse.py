@@ -124,6 +124,48 @@ def _team(code: Any) -> str:
     return normalize_team(raw) or raw
 
 
+TEAM_ROW_COLUMNS: tuple[str, ...] = ("game_id", "team", "opponent_team", "season_type", "week")
+GAME_ROW_COLUMNS: tuple[str, ...] = (
+    "game_id", "season", "game_type", "gameday", "home_team", "away_team",
+    "home_score", "away_score",
+)
+
+
+class TapeSchemaError(ValueError):
+    """An nflverse table is missing columns the tape needs (F26)."""
+
+
+def _require_columns(rows: list[Mapping[str, str]], required: Iterable[str], label: str) -> None:
+    if not rows:
+        return
+    missing = [c for c in required if c not in rows[0]]
+    if missing:
+        raise TapeSchemaError(f"{label}: missing required columns {missing}")
+
+
+def _unique_team_games(
+    rows: Iterable[Mapping[str, str]],
+) -> dict[tuple[str, str], Mapping[str, str]]:
+    """One row per ``(game_id, team)`` (F26).
+
+    Identical repeats are dropped with a logged count. A key whose copies
+    disagree cannot be resolved, so that whole game is dropped for both teams.
+    """
+    groups: dict[tuple[str, str], list[Mapping[str, str]]] = defaultdict(list)
+    for r in rows:
+        groups[(str(r["game_id"]), str(r["team"]))].append(r)
+    conflicted = {
+        gid for (gid, _t), versions in groups.items()
+        if len({tuple(sorted(v.items())) for v in versions}) > 1
+    }
+    identical = sum(len(v) - 1 for (gid, _t), v in groups.items() if gid not in conflicted)
+    if identical:
+        logger.warning("Dropped %d identical duplicate team-game row(s)", identical)
+    for gid in sorted(conflicted):
+        logger.warning("Dropping game %s: conflicting duplicate team-game rows", gid)
+    return {k: v[0] for k, v in groups.items() if k[0] not in conflicted}
+
+
 def build_per_game(
     team_rows: Iterable[Mapping[str, str]],
     game_rows: Iterable[Mapping[str, str]],
@@ -135,6 +177,10 @@ def build_per_game(
     Only regular-season games of ``season`` with a final score are kept, and
     when ``before`` is set only games played strictly before that date.
     """
+    game_rows = list(game_rows)
+    team_rows = list(team_rows)
+    if team_rows:  # the games table is only joined when there are team rows
+        _require_columns(game_rows, GAME_ROW_COLUMNS, "nflverse games")
     games: dict[str, Mapping[str, str]] = {}
     for g in game_rows:
         if str(g.get("season")) != str(season) or g.get("game_type") != "REG":
@@ -149,12 +195,14 @@ def build_per_game(
                 continue
         games[str(g["game_id"])] = g
 
-    rows = [
+    _require_columns(team_rows, TEAM_ROW_COLUMNS, "nflverse team stats")
+    candidates = [
         r
         for r in team_rows
         if r.get("season_type") == "REG" and str(r.get("game_id")) in games
     ]
-    by_key = {(str(r["game_id"]), str(r["team"])): r for r in rows}
+    by_key = _unique_team_games(candidates)
+    rows = list(by_key.values())
 
     per_game: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
@@ -162,6 +210,11 @@ def build_per_game(
         opp = by_key.get((str(r["game_id"]), str(r["opponent_team"])))
         if opp is None:
             logger.warning("Missing opponent row for %s in %s", r["team"], r["game_id"])
+            continue
+        if str(opp.get("opponent_team")) != str(r["team"]) or str(r["team"]) not in (
+            str(game.get("home_team")), str(game.get("away_team"))
+        ):
+            logger.warning("Asymmetric team-game rows for %s in %s", r["team"], r["game_id"])
             continue
         is_home = game.get("home_team") == r["team"]
         points = _num(game["home_score"] if is_home else game["away_score"])

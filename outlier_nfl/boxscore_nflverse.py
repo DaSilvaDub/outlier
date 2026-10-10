@@ -528,19 +528,6 @@ def _player_stats_from_week_row(row: Mapping[str, Any]) -> dict[str, float]:
     return bucket
 
 
-def _merge_player_buckets(
-    left: dict[str, float], right: dict[str, float]
-) -> dict[str, float]:
-    out = dict(left)
-    for key, value in right.items():
-        # Sum numeric counting stats when a player appears twice (rare).
-        if key in out and key.endswith(("YDS", "TD", "REC", "ATT", "CAR", "CMP", "COMP", "INT", "TOT", "TKL", "SACK", "SK", "AST", "ASSISTS", "SOLO", "FG", "XP", "PTS", "TGT", "TACKLESASSISTS")):
-            out[key] = out[key] + value
-        else:
-            out[key] = value
-    return out
-
-
 def _player_keys(
     by_id: Mapping[str, tuple[str, str, dict[str, float]]],
 ) -> dict[str, dict[str, float]]:
@@ -586,6 +573,13 @@ def load_nflverse_events(
         else ensure_games_csv(cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink)
     )
 
+    # Headers are checked on every load, not only after a download (F26): a
+    # stats file without ``game_id`` would otherwise yield games with no players.
+    _validate_csv_bytes(games_path.read_bytes(), label=games_path.name,
+                        required=GAMES_REQUIRED_COLUMNS)
+    _validate_csv_bytes(stats_path.read_bytes(), label=stats_path.name,
+                        required=WEEK_STATS_REQUIRED_COLUMNS, any_of=WEEK_STATS_NAME_COLUMNS)
+
     games_by_id: dict[str, dict[str, str]] = {}
     with games_path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
@@ -608,6 +602,11 @@ def load_nflverse_events(
     players_by_game: dict[str, dict[str, tuple[str, str, dict[str, float]]]] = {
         gid: {} for gid in games_by_id
     }
+    # One row per player-game (F26): identical repeats count once, conflicting
+    # versions drop that player from that game.
+    seen_rows: dict[tuple[str, str], tuple[tuple[str, Any], ...]] = {}
+    conflicting: set[tuple[str, str]] = set()
+    repeats = 0
     with stats_path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             gid = str(row.get("game_id") or "").strip()
@@ -623,11 +622,20 @@ def load_nflverse_events(
             pid = str(row.get("player_id") or "").strip() or f"name:{token}"
             team = str(row.get("team") or row.get("recent_team") or "").strip().upper()
             bucket = players_by_game[gid]
-            if pid in bucket:
-                prev_token, prev_team, prev = bucket[pid]
-                bucket[pid] = (prev_token, prev_team, _merge_player_buckets(prev, stats))
-            else:
-                bucket[pid] = (token, team, stats)
+            fingerprint = tuple(sorted(row.items()))
+            if (gid, pid) in seen_rows:
+                if seen_rows[(gid, pid)] == fingerprint:
+                    repeats += 1
+                else:
+                    conflicting.add((gid, pid))
+                continue
+            seen_rows[(gid, pid)] = fingerprint
+            bucket[pid] = (token, team, stats)
+    for gid, pid in sorted(conflicting):
+        logger.warning("Dropping %s from %s: conflicting duplicate stat rows", pid, gid)
+        players_by_game[gid].pop(pid, None)
+    if repeats:
+        logger.warning("Ignored %d identical duplicate player-game stat row(s)", repeats)
 
     events: list[NflBoxScoreEvent] = []
     for gid, grow in sorted(games_by_id.items()):

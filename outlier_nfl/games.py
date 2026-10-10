@@ -29,6 +29,7 @@ from outlier_nfl.constants import (
     MARKET_TYPE_TEAM_PROP,
 )
 from outlier_nfl.models import BookPrice, NflGameLine
+from outlier_nfl.schema import dedupe_quotes, game_line_key
 from outlier_nfl.utils import coerce_odds, format_signed_line
 
 logger = logging.getLogger("outlier_nfl.games")
@@ -549,4 +550,6 @@ def extract_game_lines(
                     )
                 )
 
-    return results
+    # Identical duplicates (e.g. one payload served for every market type) are
+    # dropped; conflicting versions of one quote are all dropped (F26).
+    return dedupe_quotes(results, game_line_key, "game line")

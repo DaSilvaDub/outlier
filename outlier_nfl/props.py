@@ -23,6 +23,7 @@ from outlier_nfl.games import (
     sportsbook_implied_probability_pct,
 )
 from outlier_nfl.models import NflPlayerProp
+from outlier_nfl.schema import dedupe_quotes, player_prop_key
 from outlier_nfl.utils import coerce_float, coerce_odds
 
 logger = logging.getLogger("outlier_nfl.props")
@@ -187,4 +188,5 @@ def extract_player_props(
 
     if dropped:
         logger.warning("Dropped player props: %s", dict(sorted(dropped.items())))
-    return results
+    # Identical duplicate quotes are dropped; conflicting versions all dropped (F26).
+    return dedupe_quotes(results, player_prop_key, "player prop")
