@@ -50,6 +50,7 @@ from outlier_nfl.matchup import PropSignal, _names_match, resolve_signal_conflic
 from outlier_nfl.snapshots import prop_key
 from outlier_nfl.tape_nflverse import _name_key
 from outlier_nfl.utils import to_eastern_date
+from outlier_nfl.weather import weather_verifies
 
 VERIFIED = "VERIFIED"
 ESTIMATED = "ESTIMATED"
@@ -532,12 +533,20 @@ def _injury_weather(
         pillar.notes.append("injury report not loaded")
 
     weather = src.weather.get(str(prop.get("event_id")))
+    weather_ok = weather_verifies(weather)
     if weather:
         src.used["weather"].add(str(prop.get("event_id")))
         pillar.evidence["weather"] = {
             k: weather.get(k) for k in ("venue", "wind_mph", "gust_mph", "temp_f", "precip_prob",
-                                        "pass_adjustment", "tags")
+                                        "pass_adjustment", "tags", "forecast_status",
+                                        "venue_source")
         }
+        if not weather_ok:
+            pillar.notes.append(
+                f"weather not verified: venue {weather.get('venue')} "
+                f"({weather.get('venue_source', 'unknown')}), "
+                f"forecast {weather.get('forecast_status', 'unknown')}"
+            )
     else:
         pillar.notes.append("no kickoff forecast for this game")
 
@@ -547,7 +556,7 @@ def _injury_weather(
 
     if disqualified:
         pillar.status = CONTRADICTS
-    elif not injury_ok or not weather:
+    elif not injury_ok or not weather_ok:
         pillar.status = MISSING
     elif event_date != src.inputs.run_date:
         pillar.status = STALE
