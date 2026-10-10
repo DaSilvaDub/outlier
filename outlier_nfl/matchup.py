@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from outlier_nfl.config import PROP_TIMES_SACKED, is_team_total, normalize_team
-from outlier_nfl.calibration import attach_empirical_model_p
+from outlier_nfl.calibration import attach_empirical_model_p, primary_spread, primary_total
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 from outlier_nfl.run_context import RunContext, SourceRecord, try_parse_utc
@@ -400,7 +400,14 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
         g for g in lines
         if g.market == "SPREAD" and (g.team == home or g.position == "HOME")
     ]
-    if home_spreads:
+    # Primary lines come from the shared two-way-quote selection (F20); the
+    # most-books heuristic below is only the fallback when nothing is priced.
+    primary_away = primary_spread(
+        [g for g in lines if g.market == "SPREAD"], away, home
+    )
+    if primary_away is not None:
+        home_spread = -primary_away
+    elif home_spreads:
         best_spread = max(
             home_spreads,
             key=lambda x: (len(x.books or ()), -abs(x.best_odds - (-110) if x.best_odds else 999)),
@@ -413,7 +420,13 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
         g for g in lines
         if g.market == "TOTAL" and g.market_type == "GAMELINE" and g.position == "OVER"
     ]
-    if game_totals:
+    primary_game_total = primary_total(
+        [g for g in lines if g.market == "TOTAL" and g.market_type == "GAMELINE"]
+    )
+    if primary_game_total is not None:
+        total = primary_game_total
+        total_source = "market"
+    elif game_totals:
         best_total = max(
             game_totals,
             key=lambda x: (len(x.books or ()), -abs(x.best_odds - (-110) if x.best_odds else 999)),
@@ -442,13 +455,20 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
 
     home_best = max(home_tts, key=lambda x: len(x.books or ())) if home_tts else None
     away_best = max(away_tts, key=lambda x: len(x.books or ())) if away_tts else None
-    if home_best is not None and home_best.line is not None:
+    home_primary, away_primary = primary_total(home_tts), primary_total(away_tts)
+    if home_primary is not None:
+        home_tt = home_primary
+        home_tt_source = "market"
+    elif home_best is not None and home_best.line is not None:
         home_tt = float(home_best.line)
         home_tt_source = "market"
     else:
         home_tt = 24.0
         home_tt_source = "default"
-    if away_best is not None and away_best.line is not None:
+    if away_primary is not None:
+        away_tt = away_primary
+        away_tt_source = "market"
+    elif away_best is not None and away_best.line is not None:
         away_tt = float(away_best.line)
         away_tt_source = "market"
     else:

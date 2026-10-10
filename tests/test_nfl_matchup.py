@@ -284,6 +284,7 @@ def test_deficit_risk_rush_over_is_not_revived_by_matchup_boost():
         _line(
             market="POINTS",
             line=28.5,
+            position="OVER",  # a team total is an O/U line (F20 reads O/U sides)
             team="KC",
             home="KC",
             away="IND",
@@ -717,11 +718,7 @@ def test_render_spread_lean_names_the_backed_side():
 
 def test_underdog_rush_mismatch_triggers_clock_bleed_and_blocks_dome_over():
     """Verify that an underdog rush mismatch suppresses pace (-3.0 pts), blocks dome OVER, and leans dog on heavy spread."""
-    from outlier_nfl.matchup import (
-        GROUND_DOMINANCE_CLOCK_BLEED,
-        HEAVY_FAVORITE_SPREAD,
-        build_matchup_script,
-    )
+    from outlier_nfl.matchup import build_matchup_script
 
     lines = [
         _line(event_id="evt-tb-dal", market="SPREAD", line=-7.5, position="HOME", team="DAL", home="DAL", away="TB"),
