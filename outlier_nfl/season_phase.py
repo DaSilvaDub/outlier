@@ -12,8 +12,8 @@ The phase is carried separately from the week: an event's own season-type
 field wins (``seasonType``/``season_type``/``gameType``/``game_type``); else
 weeks 1-18 are ``REG`` and 19+ are ``POST``. A January week-18 game is ``REG``.
 When both are absent, the already-loaded nflverse schedule supplies ``game_type``
-for the same Eastern kickoff date and ordered home/away teams. Unknown or
-conflicting matches remain unsupported.
+for the same Eastern kickoff date, season and team pair in either order
+(neutral sites). No match or more than one match remains unsupported.
 """
 
 from __future__ import annotations
@@ -64,14 +64,22 @@ def event_season_type(
     if kickoff is None or not normalize_team(home) or not normalize_team(away):
         return None
     day = kickoff.astimezone(EASTERN).date().isoformat()
-    kinds = {
-        event_season_type({"game_type": row.get("game_type")})
-        for row in schedule_records
+    # Neutral-site games (London, Germany, ...) can list home/away differently in
+    # the API and nflverse: match the unordered team pair, plus kickoff date and
+    # season. Exactly one row must match; zero or several leave the game unknown.
+    pair = frozenset({normalize_team(home), normalize_team(away)})
+    season = event.get("season")
+    matches = [
+        row for row in schedule_records
         if row.get("gameday") == day
-        and normalize_team(row.get("home_team")) == home
-        and normalize_team(row.get("away_team")) == away
-    }
-    return next(iter(kinds)) if len(kinds) == 1 else None
+        and frozenset({normalize_team(row.get("home_team")),
+                       normalize_team(row.get("away_team"))}) == pair
+        and (season in (None, "") or row.get("season") in (None, "")
+             or str(row.get("season")) == str(season))
+    ]
+    if len(matches) != 1:
+        return None
+    return event_season_type({"game_type": matches[0].get("game_type")})
 
 
 def slate_season_type(

@@ -156,12 +156,13 @@ def test_schedule_fallback_matches_eastern_kickoff_date_and_team_aliases(
 
 
 @pytest.mark.parametrize("change", [
-    {"gameday": "2026-10-05"}, {"home_team": "SF", "away_team": "LAR"},
-    {"away_team": "KC"}, {"game_type": ""},
+    {"gameday": "2026-10-05"}, {"away_team": "KC"}, {"game_type": ""}, {"season": 2025},
 ])
 def test_schedule_fallback_refuses_unmatched_or_typeless_rows(change: dict[str, str]) -> None:
     event = {"startTime": "2026-10-05T00:20:00Z", "home_team": "LAR", "away_team": "SF"}
-    row = {"gameday": "2026-10-04", "home_team": "LA", "away_team": "SF", "game_type": "REG"}
+    event["season"] = 2026
+    row = {"gameday": "2026-10-04", "home_team": "LA", "away_team": "SF", "game_type": "REG",
+           "season": 2026}
     row.update(change)
     assert event_season_type(event, [row]) is None
     assert season_phase_receipt([event], 2026, [row]).status == "UNSUPPORTED"
@@ -176,3 +177,23 @@ def test_schedule_fallback_does_not_override_event_phase_or_accept_conflicting_m
     assert event_season_type(event, []) is None
     assert event_season_type({**event, "scheduledTime": "invalid"}, [row]) is None
     assert event_season_type({"scheduledTime": event["scheduledTime"]}, [row]) is None
+
+
+def test_schedule_fallback_matches_neutral_site_game_with_swapped_home_away() -> None:
+    # London game: Outlier lists JAX at home, nflverse lists BUF at home.
+    event = {"scheduledTime": "2026-10-11T13:30:00Z", "season": 2026,
+             "home_team": "JAX", "away_team": "BUF"}
+    row = {"gameday": "2026-10-11", "season": 2026, "home_team": "BUF", "away_team": "JAX",
+           "game_type": "REG"}
+    assert event_season_type(event, [row]) == "REG"
+    assert season_phase_receipt([event], 2026, [row]).status == "OK"
+
+
+def test_schedule_fallback_rejects_more_than_one_matching_row() -> None:
+    event = {"scheduledTime": "2026-10-11T13:30:00Z", "home_team": "JAX", "away_team": "BUF"}
+    row = {"gameday": "2026-10-11", "home_team": "BUF", "away_team": "JAX", "game_type": "REG"}
+    swapped = {**row, "home_team": "JAX", "away_team": "BUF"}
+    # Two rows for the same pair and day (same type, either order) is ambiguous.
+    assert event_season_type(event, [row, swapped]) is None
+    assert event_season_type(event, [row, dict(row)]) is None
+    assert season_phase_receipt([event], 2026, [row, swapped]).status == "UNSUPPORTED"
