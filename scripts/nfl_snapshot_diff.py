@@ -319,7 +319,8 @@ class FrozenOutlierClient:
     def fetch_player_props(self, *_a: Any, **_k: Any) -> dict[str, Any]:
         from outlier_nfl.api import OutlierNflApiClient
 
-        real = OutlierNflApiClient(bearer_token="frozen-harness")
+        # Placeholder, never sent anywhere: fetch_json is replaced just below.
+        real = OutlierNflApiClient(bearer_token="frozen-harness")  # nosec B106
         real.fetch_json = self._props_page  # type: ignore[method-assign]
         return real.fetch_player_props()
 
