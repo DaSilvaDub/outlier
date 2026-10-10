@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 
+from outlier_nfl.run_context import make_run_context
+
 import outlier_nfl.tape_nflverse as tn
 from outlier_nfl import pipeline as nfl_pipeline
 from outlier_nfl.matchup import TAPE_MAX_AGE_DAYS, tape_inadmissible_reason
@@ -119,41 +121,79 @@ def _row_2026(name: str) -> dict[str, str]:
     return r
 
 
-def _build_2026(monkeypatch: pytest.MonkeyPatch, as_of: datetime, started: datetime | None
+def _build_2026(monkeypatch: pytest.MonkeyPatch, as_of: datetime, mode: str | None
                 ) -> dict[str, Any]:
     rows = [_row_2026("Travis Kelce")]
     assert "date_modified" not in rows[0]
     monkeypatch.setattr(tn, "fetch_csv", lambda url, timeout=60.0: rows if "injuries" in url else [])
     return tn.build_tape_payload(2026, before=date(2026, 10, 4), team_rows=[],
                                  game_rows=KICKOFF_GAMES, advanced=False, as_of_utc=as_of,
-                                 run_started_utc=started)
+                                 run_mode=mode)
 
 
 def test_live_run_admits_the_unstamped_2026_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = _build_2026(monkeypatch, AS_OF, AS_OF)  # 14:00Z, before the 17:00Z kickoff
+    payload = _build_2026(monkeypatch, AS_OF, "live")
     assert payload["run_mode"] == "live"
     assert payload["injury_report_status"] == "live_unstamped"
     assert payload["injury_report_loaded"] is True
     assert payload["inactive"] == {"KC": ["Travis Kelce"]}
 
 
-@pytest.mark.parametrize(("as_of", "started", "mode"), [
-    # Replay with a recent --as-of: 20 minutes behind the wall clock is past the
-    # 15-minute tolerance, so it is a replay even though as_of is close to now.
-    (datetime(2026, 10, 4, 13, 40, tzinfo=UTC), AS_OF, "replay"),
-    (datetime(2026, 9, 27, 14, 0, tzinfo=UTC), AS_OF, "replay"),
-    (datetime(2026, 10, 4, 17, 30, tzinfo=UTC), datetime(2026, 10, 4, 17, 30, tzinfo=UTC),
-     "retrospective"),
-    (AS_OF, None, None),  # no wall clock: cannot claim live
-])
-def test_non_live_runs_refuse_the_unstamped_2026_report(
-    monkeypatch: pytest.MonkeyPatch, as_of: datetime, started: datetime | None, mode: str | None
+@pytest.mark.parametrize("mode", ["replay", "retrospective", "fixture", None])
+def test_tape_uses_the_mode_it_is_given_and_non_live_refuses(
+    monkeypatch: pytest.MonkeyPatch, mode: str | None
 ) -> None:
-    payload = _build_2026(monkeypatch, as_of, started)
+    # Same as_of and same games as the live case: only the supplied mode differs,
+    # so nothing is re-derived from the schedule or from how recent as_of is.
+    payload = _build_2026(monkeypatch, AS_OF, mode)
     assert payload["run_mode"] == mode
     assert payload["injury_report_status"] == "unstamped"
     assert payload["injury_report_loaded"] is False
     assert payload["inactive"] == {}
+
+
+def test_replay_with_a_recent_as_of_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    # as_of 20 minutes behind the wall clock: past the 15-minute tolerance.
+    ctx = make_run_context(slate_date="2026-10-04", window=None,
+                           as_of_utc=datetime(2026, 10, 4, 13, 40, tzinfo=UTC), fixture=False,
+                           run_started_utc=AS_OF)
+    assert ctx.mode == "replay"
+    payload = _build_2026(monkeypatch, ctx.as_of_utc, ctx.mode)
+    assert payload["injury_report_status"] == "unstamped"
+
+
+def test_late_window_live_run_after_the_early_kickoff_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # London 13:30Z already kicked off; the pipeline's ctx for the late window
+    # only sees that window's events (20:25Z), so the run is live.
+    now = datetime(2026, 10, 4, 19, 0, tzinfo=UTC)
+    london = {"scheduledTime": "2026-10-04T13:30:00Z"}
+    late = {"scheduledTime": "2026-10-04T20:25:00Z"}
+    whole_day = make_run_context(slate_date="2026-10-04", window=None, as_of_utc=now,
+                                 fixture=False, slate_events=[london, late], run_started_utc=now)
+    assert whole_day.mode == "retrospective"  # what a slate-day re-derivation would say
+    ctx = make_run_context(slate_date="2026-10-04", window="late", as_of_utc=now, fixture=False,
+                           slate_events=[late], run_started_utc=now)
+    assert ctx.mode == "live"
+    payload = _build_2026(monkeypatch, now, ctx.mode)
+    assert payload["injury_report_status"] == "live_unstamped"
+    assert payload["injury_report_loaded"] is True
+
+
+def test_pipeline_refreshes_the_tape_with_its_own_ctx_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(nfl_pipeline, "_refresh_tape", lambda *a: seen.append(a))
+    fixtures = Path(__file__).parent / "fixtures" / "nfl"
+    nfl_pipeline.NflPipeline(data_dir=tmp_path).run(
+        date="2026-09-13", offline_fixtures_dir=fixtures, write_latest=False,
+        reports_dir=tmp_path / "reports", refresh_tape=True, tape_last_n=2)
+    assert len(seen) == 1
+    _dir, slate, last_n, as_of, mode = seen[0]
+    assert (slate, last_n, mode) == ("2026-09-13", 2, "fixture")
+    assert isinstance(as_of, datetime) and as_of.tzinfo is not None
 
 
 def test_live_mode_still_refuses_a_row_revised_after_as_of() -> None:

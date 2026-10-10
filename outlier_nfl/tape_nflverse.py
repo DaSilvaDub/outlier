@@ -649,39 +649,6 @@ def _auto_roles(
     return roles, injuries, defensive_out, status
 
 
-def _tape_run_mode(
-    game_rows: Iterable[Mapping[str, str]],
-    before: date | None,
-    as_of_utc: datetime | None,
-    run_started_utc: datetime | None,
-) -> str | None:
-    """RunContext mode of the run this tape is built for.
-
-    None without ``as_of_utc`` or without the run's wall clock
-    (``run_started_utc``): a caller that cannot say when it runs cannot claim
-    to be live, so unstamped injury reports fail closed for it.
-
-    Same rules as the pipeline: retrospective at/after the slate's first
-    kickoff (from the nflverse schedule), replay when as_of trails the run's
-    wall clock by more than the tolerance, else live.
-    """
-    if as_of_utc is None or before is None or run_started_utc is None:
-        return None
-    from outlier_nfl.run_context import make_run_context, schedule_kickoff_utc
-
-    kickoffs = [
-        k for k in (schedule_kickoff_utc(g.get("gameday"), g.get("gametime"))
-                    for g in game_rows if str(g.get("gameday")) == before.isoformat())
-        if k is not None
-    ]
-    ctx = make_run_context(
-        slate_date=before.isoformat(), window=None, as_of_utc=as_of_utc, fixture=False,
-        slate_events=[{"scheduledTime": k.isoformat()} for k in kickoffs],
-        run_started_utc=run_started_utc,
-    )
-    return ctx.mode
-
-
 def build_tape_payload(
     season: int,
     before: date | None = None,
@@ -696,7 +663,7 @@ def build_tape_payload(
     grades: Mapping[str, Mapping[str, float]] | None = None,
     defensive_out: Mapping[str, list[str]] | None = None,
     as_of_utc: datetime | None = None,
-    run_started_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
@@ -713,7 +680,6 @@ def build_tape_payload(
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
     injury_status: str | None = None
-    run_mode = _tape_run_mode(game_rows, before, as_of_utc, run_started_utc)
     if auto_roles and depth_roles is None and inactive is None:
         depth_roles, inactive, defensive_out, injury_status = _auto_roles(
             season, before, game_rows, as_of_utc, run_mode
@@ -801,7 +767,7 @@ def refresh_prior_week_tape(
     before: date | None = None,
     last_n: int | None = None,
     as_of_utc: datetime | None = None,
-    run_started_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> Path:
     """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
 
@@ -811,7 +777,7 @@ def refresh_prior_week_tape(
     path = Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
         season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc,
-        run_started_utc=run_started_utc,
+        run_mode=run_mode,
     )
     payload["fetched_at_utc"] = datetime.now(UTC).isoformat()
     if not payload["teams"]:
