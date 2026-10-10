@@ -246,16 +246,56 @@ def slate_week(
     return min(weeks) if weeks else None
 
 
+def injury_report_status(
+    injury_rows: Iterable[Mapping[str, str]],
+    season: int | None,
+    week: int | None,
+    as_of_utc: datetime | None,
+) -> str:
+    """Point-in-time status of the injury report for ``season``/``week`` (F02).
+
+    ``no_cutoff`` without ``as_of_utc`` (offline/fixture builds). Otherwise every
+    row of that report must carry a ``date_modified`` at or before ``as_of_utc``:
+    nflverse keeps only each row's latest version, so a row revised later
+    (``revised_after_as_of``) or with no stamp (``unstamped``) means the report as
+    it stood at ``as_of`` cannot be reconstructed.
+    """
+    if as_of_utc is None:
+        return "no_cutoff"
+    for r in injury_rows:  # naive stamps read as UTC, like depth-chart ``dt``
+        if r.get("season_type", "REG") != "REG":
+            continue
+        if season is not None and r.get("season") and str(r.get("season")) != str(season):
+            continue
+        if week is not None and int(_num(r.get("week"))) != week:
+            continue
+        stamp = snapshot_time(r.get("date_modified"))
+        if stamp is None:
+            return "unstamped"
+        if stamp > as_of_utc:
+            return "revised_after_as_of"
+    return "point_in_time"
+
+
+ADMISSIBLE_INJURY_STATUSES = ("point_in_time", "no_cutoff")
+
+
 def inactive_players(
     injury_rows: Iterable[Mapping[str, str]],
     week: int | None,
     statuses: Iterable[str] = INACTIVE_STATUSES,
+    season: int | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Players ruled ``statuses`` on the given week's report, per team.
 
-    With ``week=None`` the latest reported week is used.
+    With ``week=None`` the latest reported week is used. With ``season`` rows
+    stamped with another season are ignored (F02).
     """
-    rows = [r for r in injury_rows if r.get("season_type", "REG") == "REG"]
+    rows = [
+        r for r in injury_rows
+        if r.get("season_type", "REG") == "REG"
+        and (season is None or not r.get("season") or str(r.get("season")) == str(season))
+    ]
     if week is None:
         reported = [int(_num(r.get("week"))) for r in rows if r.get("week")]
         week = max(reported) if reported else None
@@ -539,19 +579,28 @@ def _auto_roles(
     game_rows: list[dict[str, str]],
     as_of_utc: datetime | None = None,
 ) -> tuple[
-    dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]]
+    dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]],
+    str | None,
 ]:
-    """Depth-chart roles, inactives and defensive starters out.
+    """Depth-chart roles, inactives, defensive starters out and injury report status.
 
     Inactives are None when the injury report could not be fetched, so callers
     never mistake a failed fetch for a report with nobody out. Roles and
     defensive starters out are empty on any depth-chart failure. Depth snapshots
     are cut at ``as_of_utc`` (full timestamp) when given, else at ``before``.
     """
+    status: str | None = None
     try:
+        injury_rows = fetch_csv(INJURIES_URL.format(season=season))
+        week = slate_week(game_rows, season, before)
         injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
-            fetch_csv(INJURIES_URL.format(season=season)), slate_week(game_rows, season, before)
+            injury_rows, week, season=season
         )
+        status = injury_report_status(injury_rows, season, week, as_of_utc)
+        if status not in ADMISSIBLE_INJURY_STATUSES:
+            # Not the report as it stood at as_of: treat as not loaded (F02).
+            logger.warning("Injury report not point-in-time (%s); not used", status)
+            injuries = None
     except Exception as exc:  # the trace reports the injury pillar as MISSING
         logger.warning("Injury report unavailable: %s", exc)
         injuries = None
@@ -563,7 +612,7 @@ def _auto_roles(
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
         roles, defensive_out = {}, {}
-    return roles, injuries, defensive_out
+    return roles, injuries, defensive_out, status
 
 
 def build_tape_payload(
@@ -595,8 +644,11 @@ def build_tape_payload(
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
+    injury_status: str | None = None
     if auto_roles and depth_roles is None and inactive is None:
-        depth_roles, inactive, defensive_out = _auto_roles(season, before, game_rows, as_of_utc)
+        depth_roles, inactive, defensive_out, injury_status = _auto_roles(
+            season, before, game_rows, as_of_utc
+        )
     # Only an injury report that was actually fetched (or supplied) counts as loaded.
     injury_report_loaded = inactive is not None
     merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
@@ -625,6 +677,7 @@ def build_tape_payload(
         "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
         "injury_report_loaded": injury_report_loaded,
+        "injury_report_status": injury_status,
         "defensive_starters_out": {
             t: list(names) for t, names in sorted((defensive_out or {}).items())
         },

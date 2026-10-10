@@ -115,6 +115,10 @@ class MatchupScript:
         return payload
 
 
+# A tape is built with ``before`` = its slate date; one more than a week older
+# describes an earlier week's injuries/roles and is refused as stale (F02).
+TAPE_MAX_AGE_DAYS = 7
+
 # Hand-built Week-1 tapes shipped with the package/tests: fixture replays only (F02).
 PACKAGED_TAPE_PATHS = (
     Path(__file__).resolve().parent / "tape" / "prior_week_tape.json",
@@ -191,6 +195,10 @@ def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext
         return f"unparseable 'before' {before!r}"
     if before_day > date.fromisoformat(ctx.slate_date):
         return f"built from games before {before_day}, after slate {ctx.slate_date}"
+    age = (date.fromisoformat(ctx.slate_date) - before_day).days
+    if age > TAPE_MAX_AGE_DAYS:
+        return (f"stale: built from games before {before_day}, {age} days before slate "
+                f"{ctx.slate_date} (max {TAPE_MAX_AGE_DAYS}; run with --refresh-tape)")
     if ctx.historical:  # retrospective or replay: the tape must predate as_of
         written = _tape_written_at(raw, path)
         if written > ctx.as_of_utc:
