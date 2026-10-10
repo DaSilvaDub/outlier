@@ -91,7 +91,7 @@ def _number(value: Any) -> float | None:
     if value in (None, "", "-"):
         return None
     try:
-        return float(str(value).replace("-", "-"))
+        return float(str(value).replace("−", "-"))
     except (TypeError, ValueError):
         return None
 
@@ -270,8 +270,15 @@ def build_alt_player_props_board(
 
         decimal_price = _american_to_decimal(best_odds)
         implied_p = (1.0 / decimal_price) if decimal_price and decimal_price > 0 else 0.5
-        season_val = percent_number(rec.get("season_pct")) or 0.0
-        model_p = _calculate_alt_player_prop_probability(l10, season_val, l5, implied_p)
+        # percent_number() returns None when the feed carries no season hit rate
+        # (normalizer passes curSeason straight through). The 0.0 below is only a
+        # display default for the CSV column -- it must not reach the probability
+        # model, where a missing season rate has its own branch. Collapsing None
+        # to 0.0 there scores the player as if they had hit 0% all season, which
+        # understates model_prob by up to 30 points and flips a real edge negative.
+        season_pct = percent_number(rec.get("season_pct"))
+        season_val = season_pct or 0.0
+        model_p = _calculate_alt_player_prop_probability(l10, season_pct, l5, implied_p)
         edge = round((model_p - implied_p) * 100.0, 2)
         units = 0.5 if edge > 0 else ""
 

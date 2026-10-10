@@ -73,6 +73,51 @@
 
 ---
 
+# HANDOFF — 2026-10-07 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-6ulxns` · **Last commit**: `6da35ed`
+
+## Accomplished
+1. **Daily code-health review** of `origin/master` @ `d37a98b`. mypy and pyright are
+   clean; 1335 offline tests pass. Every remaining test failure in this sandbox is a
+   missing third-party package (structlog / sqlalchemy / google-genai / dateutil), not
+   a defect — PyPI egress is blocked, as `docs/CLOUD-SANDBOX-LIMITATIONS.md` records.
+2. **Fixed a real defect in PR #237's new floor-ladder scoring** (`6da35ed`):
+   `build_alt_player_props_board` did `percent_number(rec.get("season_pct")) or 0.0`
+   and passed that into `_calculate_alt_player_prop_probability`, whose
+   `season_pct is None` branch was therefore unreachable. A line the book carries no
+   season hit rate for was scored as a 0%-all-season player: at L5 = L10 = 80% on a
+   -150 floor line, `model_prob` 0.584 instead of 0.680, `edge_pct` -1.6 instead of
+   +8.0, and `recommended_units` blanked — a real edge published as non-actionable.
+   The 0.0 stays as the display default for the `season_pct` CSV column.
+3. **Fixed `_number()`'s no-op `.replace("-", "-")`** in the same module (should be
+   U+2212 → ASCII, as every sibling module and `normalizer._to_float` do). Latent on
+   today's normalizer path, but it drops the whole row when only `odds_raw` carries
+   the price.
+4. Three regression tests added to `tests/test_alt_player_props.py`; all three fail
+   against the previous module.
+
+## Verification
+- `pytest` (offline set, CI's five reasoning files ignored): 1335 passed, 43 skipped.
+  Same 67 failed / 24 errors as before the change, all missing-dependency.
+- `mypy outlier_scrapers outlier_nfl`: clean, 123 files.
+- `pyright outlier_scrapers outlier_nfl`: clean apart from missing-import warnings.
+- `ruff check` on the changed files under the repo's configured ruleset: clean.
+- All 489 `outlier_nfl` tests pass (F15 box-score cache work verified).
+
+## Next Steps / Open questions
+1. **`_floor_ladder_score` has the same None/0.0 conflation** (`alt_player_props.py:165`,
+   `float(row.get("season_pct") or 0.0)` with weights 0.40/0.35/0.25). Left alone on
+   purpose: it only affects ranking, and re-normalizing the weights changes which props
+   get selected into a pack. Needs a desk call, not an automated fix.
+2. **`slate_quality.is_floor_ladder_opportunity` fails open on a missing price**: when
+   both `decimal_price` and `price` are absent, the favored-territory gate is skipped
+   entirely and the row can still be flagged. Against the repo's fail-closed convention
+   elsewhere; confirm whether that is intended.
+3. No reasoning models / desk runs were invoked (house rule; none requested).
+
+---
+
 # HANDOFF — 2026-10-06 (Antigravity/Gemini, Floor Ladder Detection & Multi-Book Recovery)
 
 **Branch**: `feat/floor-ladder-calibration` (merged) · **Last commit**: `8c74d8b` · **PR**: [#237](https://github.com/DaSilvaDub/outlier/pull/237)

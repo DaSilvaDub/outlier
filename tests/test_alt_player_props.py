@@ -223,3 +223,49 @@ def test_mlb_alt_k_parlays_reject_same_game_legs():
     )
     assert len(rows) == 2
     assert build_alt_player_props_parlays(rows) == []
+
+
+def test_missing_season_hit_rate_does_not_score_the_player_as_zero_percent():
+    """A feed with no season hit rate must not be modelled as a 0% season.
+
+    ``percent_number`` returns None when the normalizer found no ``curSeason``
+    stat. Defaulting that to 0.0 before the probability model made the row look
+    like a player who had hit 0% all season, dropping ``model_prob`` far enough
+    to flip a real edge negative and blank ``recommended_units``.
+    """
+    absent = _prop(player="No Season", odds=-150, line=2.5, l5=80.0, l10=80.0)
+    absent.pop("season_pct")
+    present = _prop(player="Has Season", odds=-150, line=2.5, l5=80.0, l10=80.0, event_id="e2")
+    present["season_pct"] = 80.0
+
+    by_player = {row["player"]: row for row in _board([absent, present])}
+
+    # L5 == L10 == season, so a row with no season rate must score the same as
+    # one whose season rate matches its recent form.
+    assert by_player["No Season"]["model_prob"] == by_player["Has Season"]["model_prob"]
+    assert by_player["No Season"]["edge_pct"] > 0
+    assert by_player["No Season"]["recommended_units"] == 0.5
+    # The CSV column keeps its 0.0 display default.
+    assert by_player["No Season"]["season_pct"] == 0.0
+
+
+def test_a_real_zero_percent_season_rate_is_still_modelled_as_zero():
+    """0.0 from the feed is data, not a missing value, and must still count."""
+    zero = _prop(player="Cold", odds=-150, line=2.5, l5=80.0, l10=80.0)
+    zero["season_pct"] = 0.0
+    absent = _prop(player="Unknown", odds=-150, line=2.5, l5=80.0, l10=80.0, event_id="e2")
+    absent.pop("season_pct")
+
+    by_player = {row["player"]: row for row in _board([zero, absent])}
+    assert by_player["Cold"]["model_prob"] < by_player["Unknown"]["model_prob"]
+
+
+def test_unicode_minus_odds_are_parsed_like_ascii_minus():
+    """The feed emits U+2212 for negative odds; _number must normalize it."""
+    unicode_minus = _prop(player="Unicode", odds=None, event_id="e1")
+    unicode_minus["books"] = [{"book": "Fanatics", "odds": None, "odds_raw": "−150"}]
+    ascii_minus = _prop(player="Ascii", odds=None, event_id="e2")
+    ascii_minus["books"] = [{"book": "Fanatics", "odds": None, "odds_raw": "-150"}]
+
+    by_player = {row["player"]: row for row in _board([unicode_minus, ascii_minus])}
+    assert by_player["Unicode"]["best_odds"] == by_player["Ascii"]["best_odds"] == -150
