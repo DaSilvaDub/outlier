@@ -21,7 +21,8 @@ B  Live-shaped Week 4 replay, 2026-10-04: the same three fixture events moved
    B1 16:00Z all sources; B2 16:10Z nflverse schedule download fails;
    B3 16:20Z no local tape file; B5 16:30Z page 2 of the bulk player props
    fails (HTTP 500 after retries); B6 16:40Z every event-markets request fails;
-   B7 16:50Z the schedule labels the slate week 19 (postseason); B4 18:00Z
+   B7 16:50Z the schedule labels the slate week 19 (postseason); B8 16:55Z the
+   props feed returns an empty list; B4 18:00Z
    (after the 17:00Z kickoff). Player props are served as two token pages
    through the real ``OutlierNflApiClient`` pagination, so B5 exercises it.
 
@@ -80,6 +81,7 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "B6_event_markets_fail", "clock": "2026-10-04T16:40:00+00:00",
          "fail_markets": True},
         {"name": "B7_postseason_week", "clock": "2026-10-04T16:50:00+00:00", "week": 19},
+        {"name": "B8_props_feed_empty", "clock": "2026-10-04T16:55:00+00:00", "empty_props": True},
         {"name": "B4_after_kickoff", "clock": "2026-10-04T18:00:00+00:00"},
     ],
 }
@@ -281,7 +283,8 @@ class FrozenOutlierClient:
     """
 
     def __init__(self, fixtures_dir: Path, shift_days: int = SHIFT_DAYS, week: int = 4,
-                 fail_props_page: int | None = None, fail_markets: bool = False) -> None:
+                 fail_props_page: int | None = None, fail_markets: bool = False,
+                 empty_props: bool = False) -> None:
         sched = json.loads((fixtures_dir / "schedule.json").read_text(encoding="utf-8"))
         for ev in sched.get("events", []):
             for key in ("scheduledTime", "startTime"):
@@ -294,6 +297,8 @@ class FrozenOutlierClient:
         self._props = json.loads((fixtures_dir / "player_props.json").read_text(encoding="utf-8"))
         self._fail_props_page = fail_props_page
         self._fail_markets = fail_markets
+        if empty_props:
+            self._props = {**self._props, "props": []}
 
     def fetch_schedule(self, *_a: Any, **_k: Any) -> dict[str, Any]:
         return copy.deepcopy(self._schedule)
@@ -477,6 +482,7 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
                 fixtures, week=int(step.get("week", 4)),
                 fail_props_page=step.get("fail_props_page"),
                 fail_markets=bool(step.get("fail_markets")),
+                empty_props=bool(step.get("empty_props")),
             )
             pipeline = pipeline_mod.NflPipeline(client=client, **init)
         if "as_of_utc" in run_params:

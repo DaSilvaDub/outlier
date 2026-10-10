@@ -103,3 +103,30 @@ def gate_reason(receipts: Iterable[StageReceipt]) -> str | None:
     if not bad:
         return None
     return "required_stage_not_ok: " + ", ".join(f"{r.name}={r.status}" for r in bad)
+
+
+def props_admission_check(receipts: list[StageReceipt], slate_events: list[Any],
+                          admitted_props: list[Any]) -> None:
+    """Make the ``player_props`` receipt record the admitted count; zero for a slate with events is INCOMPLETE.
+
+    It is INCOMPLETE, not FAILED: the feed answered, but the slate's props are
+    missing. That is usually transient (not posted yet early in the week, or a
+    feed glitch), and the fix is to rerun later, the same as a missing page.
+    """
+    for i, r in enumerate(receipts):
+        if r.name != "player_props":
+            continue
+        if not r.passed:
+            return
+        n = len(admitted_props)
+        if slate_events and n == 0:
+            receipts[i] = receipt(
+                "player_props", "INCOMPLETE",
+                reason=f"0 props admitted for {len(slate_events)} slate events: it may be too "
+                "early (props not posted yet) or the feed may have glitched; rerun later",
+                expected=len(slate_events), received=0, errors=r.errors,
+            )
+        else:
+            receipts[i] = receipt("player_props", r.status, reason=r.reason, expected=r.expected,
+                                  received=n, errors=r.errors)
+        return

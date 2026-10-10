@@ -64,6 +64,7 @@ from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.run_writer import RunWriter
 from outlier_nfl.season_phase import season_phase_receipt, slate_season_type
 from outlier_nfl.stage_receipts import (
+    props_admission_check,
     StageReceipt,
     failing,
     gate_reason,
@@ -346,6 +347,10 @@ class NflPipeline:
             else:
                 all_player_props = []
                 receipts.append(receipt("player_props", "EMPTY", received=0))
+
+        # A slate with games but no admitted props (feed glitch, props not posted
+        # yet, or none matching the slate) must not pass as a complete slate (F03).
+        props_admission_check(receipts, slate_events, all_player_props)
 
         ctx = make_run_context(
             slate_date=target_date,

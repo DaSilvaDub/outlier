@@ -199,3 +199,49 @@ def test_weekly_rejects_a_non_ok_slate(tmp_path, monkeypatch, capsys):
     assert weekly.main(["--today", SLATE, "--no-refresh-tape", "--data-dir", str(tmp_path)]) == \
         EXIT_REQUIRED_STAGE_FAILED
     assert "Weekly card not written" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: a slate with events but zero admitted props never publishes
+# ---------------------------------------------------------------------------
+
+class _NoMatchingProps(snap.FrozenOutlierClient):
+    def fetch_player_props(self, *_a: Any, **_k: Any) -> dict[str, Any]:
+        out = super().fetch_player_props()
+        for p in out["props"]:
+            p["outcome"]["eventId"] = "nfl-event-some-other-slate"
+        return out
+
+
+@pytest.mark.parametrize(
+    "client",
+    [snap.FrozenOutlierClient(FIXTURES_DIR, empty_props=True), _NoMatchingProps(FIXTURES_DIR)],
+    ids=["feed_returns_zero_props", "props_match_no_slate_event"],
+)
+def test_zero_admitted_props_with_events_blocks_publication(tmp_path, pregame, client, monkeypatch,
+                                                           capsys):
+    good, before = pregame
+    run = _run(tmp_path, client)
+    assert run["status"] == "PARTIAL" and run["player_props_count"] == 0
+    r = _receipt(run, "player_props")
+    assert (r["status"], r["expected"], r["received"]) == ("INCOMPLETE", 3, 0)
+    assert "0 props admitted for 3 slate events" in r["reason"] and "rerun later" in r["reason"]
+    _assert_gated(tmp_path, run, before, good["run_id"])
+
+    monkeypatch.setattr(NflPipeline, "run", lambda self, **k: run)
+    monkeypatch.setattr(sys, "argv", ["outlier_nfl.pipeline", "--date", SLATE])
+    assert nfl_pipeline.main() == EXIT_REQUIRED_STAGE_FAILED
+    err = capsys.readouterr().err
+    assert "0 props admitted for 3 slate events" in err and "too early" in err
+
+
+def test_zero_event_slate_stays_ok_and_props_receipt_empty(tmp_path):
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, empty_props=True),
+               clock="2026-10-06T15:00:00+00:00", day="2026-10-06")
+    assert run["status"] == "OK" and run["publication"] == "published"
+    assert _receipt(run, "player_props")["status"] == "EMPTY"
+
+
+def test_admitted_props_count_is_recorded(tmp_path, pregame):
+    good, _ = pregame
+    assert _receipt(good, "player_props")["received"] == good["player_props_count"] == 8
