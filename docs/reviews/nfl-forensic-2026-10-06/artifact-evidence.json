@@ -1,0 +1,344 @@
+{
+  "audited_source_head": "b7638f7213e09d14775544f0b00b557405d99d02",
+  "python": "3.13.12",
+  "slates": [
+    {
+      "date": "2026-10-01",
+      "prop_rows": 4380,
+      "game_rows": 1304,
+      "missing_player_id": 0,
+      "missing_team": 0,
+      "missing_opponent": 0,
+      "non_fullgame_props": 1663,
+      "raw_market_counts": {
+        "ASSISTS": 99,
+        "DEFENSIVE_INTERCEPTIONS": 19,
+        "DEFENSIVE_TACKLES_ASSISTS": 136,
+        "DEFENSIVE_TACKLES": 111,
+        "EXTRA_POINTS": 13,
+        "FANTASY_SCORE_PP": 87,
+        "FANTASY_SCORE_UD": 34,
+        "FIRST_TEAM_RECEPTION": 12,
+        "FIRST_TEAM_TOUCHDOWN": 28,
+        "FIRST_TD": 47,
+        "FUMBLES_LOST": 8,
+        "INTERCEPTIONS_THROWN": 13,
+        "KICK_PTS": 35,
+        "LAST_TOUCHDOWN": 30,
+        "LONGEST_PASSING_COMPLETION": 39,
+        "LONG_REC": 199,
+        "LONG_RUSH": 52,
+        "MADE_FIELD_GOALS": 15,
+        "MOST_PASSING_YARDS": 2,
+        "MOST_RECEIVING_YARDS": 14,
+        "MOST_RUSHING_YARDS": 4,
+        "PASS_ATT": 101,
+        "PASSING_COMPLETIONS": 84,
+        "PASSING_COMPLETION_PERCENTAGE": 4,
+        "PASS_RUSH_YDS": 135,
+        "PASSING_TIMES_SACKED": 6,
+        "PASS_TD": 32,
+        "PASS_YDS": 361,
+        "RECEIVING_TARGETS": 96,
+        "REC_YDS": 1140,
+        "REC": 352,
+        "RUSH_ATT": 126,
+        "RUSH_REC_YDS": 156,
+        "RUSHING_TOUCHDOWNS": 1,
+        "RUSH_YDS": 419,
+        "SACKS": 63,
+        "TOUCHDOWNS_INCL_PASSING": 3,
+        "ANYTIME_TD": 304
+      },
+      "outcome_line_side_duplicate_excess": 1,
+      "validated": 0,
+      "validated_nonpositive_ev": 0,
+      "validated_zero_l5_season_anytime_td": 0,
+      "first_td_anchor_rows": 4,
+      "card_counts": {
+        "VALIDATED": 0,
+        "PROVISIONAL": 207,
+        "REJECTED": 334
+      },
+      "summary_card_counts": {
+        "VALIDATED": 0,
+        "PROVISIONAL": 207,
+        "REJECTED": 334
+      },
+      "external_source_counts": {
+        "ngs": 414,
+        "pbp": 192,
+        "schedule": 272
+      }
+    },
+    {
+      "date": "2026-10-04",
+      "prop_rows": 53223,
+      "game_rows": 22677,
+      "missing_player_id": 0,
+      "missing_team": 0,
+      "missing_opponent": 0,
+      "non_fullgame_props": 21358,
+      "raw_market_counts": {
+        "ASSISTS": 1011,
+        "DEFENSIVE_INTERCEPTIONS": 276,
+        "DEFENSIVE_TACKLES_ASSISTS": 1666,
+        "DEFENSIVE_TACKLES": 1127,
+        "EXTRA_POINTS": 157,
+        "FANTASY_SCORE_DK": 124,
+        "FANTASY_SCORE_PP": 1246,
+        "FANTASY_SCORE_UD": 286,
+        "FIRST_TEAM_RECEPTION": 292,
+        "FIRST_TEAM_TOUCHDOWN": 394,
+        "FIRST_TD": 616,
+        "FUMBLES_LOST": 136,
+        "INTERCEPTIONS_THROWN": 143,
+        "KICK_PTS": 327,
+        "LAST_TOUCHDOWN": 388,
+        "LONGEST_PASSING_COMPLETION": 414,
+        "LONG_REC": 1933,
+        "LONG_RUSH": 697,
+        "MADE_FIELD_GOALS": 180,
+        "MOST_PASSING_YARDS": 28,
+        "MOST_RECEIVING_YARDS": 178,
+        "MOST_RUSHING_YARDS": 90,
+        "PASS_ATT": 1039,
+        "PASSING_COMPLETIONS": 855,
+        "PASSING_COMPLETION_PERCENTAGE": 56,
+        "PASS_RUSH_YDS": 2238,
+        "PASSING_TIMES_SACKED": 33,
+        "PASS_TD": 432,
+        "PASS_YDS": 4727,
+        "PUNTS_INSIDE_20": 20,
+        "RECEIVING_TARGETS": 512,
+        "REC_YDS": 13451,
+        "REC": 3815,
+        "RUSH_ATT": 1635,
+        "RUSH_REC_YDS": 1564,
+        "RUSHING_TOUCHDOWNS": 37,
+        "RUSH_YDS": 5946,
+        "SACKS": 752,
+        "TOUCHDOWNS_INCL_PASSING": 80,
+        "ANYTIME_TD": 4322
+      },
+      "outcome_line_side_duplicate_excess": 2,
+      "validated": 674,
+      "validated_nonpositive_ev": 106,
+      "validated_zero_l5_season_anytime_td": 10,
+      "first_td_anchor_rows": 41,
+      "card_counts": {
+        "VALIDATED": 674,
+        "PROVISIONAL": 1387,
+        "REJECTED": 5755
+      },
+      "summary_card_counts": {
+        "VALIDATED": 674,
+        "PROVISIONAL": 1387,
+        "REJECTED": 5755
+      },
+      "external_source_counts": {
+        "ngs": 425,
+        "pbp": 196,
+        "schedule": 272
+      }
+    },
+    {
+      "date": "2026-10-05",
+      "prop_rows": 4590,
+      "game_rows": 1689,
+      "missing_player_id": 0,
+      "missing_team": 0,
+      "missing_opponent": 0,
+      "non_fullgame_props": 1790,
+      "raw_market_counts": {
+        "ASSISTS": 83,
+        "DEFENSIVE_INTERCEPTIONS": 24,
+        "DEFENSIVE_TACKLES_ASSISTS": 122,
+        "DEFENSIVE_TACKLES": 101,
+        "EXTRA_POINTS": 16,
+        "FANTASY_SCORE_DK": 12,
+        "FANTASY_SCORE_PP": 77,
+        "FANTASY_SCORE_UD": 32,
+        "FIRST_TEAM_RECEPTION": 11,
+        "FIRST_TEAM_TOUCHDOWN": 37,
+        "FIRST_TD": 49,
+        "FUMBLES_LOST": 11,
+        "INTERCEPTIONS_THROWN": 12,
+        "KICK_PTS": 35,
+        "LAST_TOUCHDOWN": 26,
+        "LONGEST_PASSING_COMPLETION": 39,
+        "LONG_REC": 182,
+        "LONG_RUSH": 51,
+        "MADE_FIELD_GOALS": 16,
+        "MOST_PASSING_YARDS": 2,
+        "MOST_RECEIVING_YARDS": 17,
+        "MOST_RUSHING_YARDS": 8,
+        "PASS_ATT": 110,
+        "PASSING_COMPLETIONS": 82,
+        "PASSING_COMPLETION_PERCENTAGE": 4,
+        "PASS_RUSH_YDS": 210,
+        "PASSING_TIMES_SACKED": 4,
+        "PASS_TD": 33,
+        "PASS_YDS": 385,
+        "PUNTS_INSIDE_20": 4,
+        "RECEIVING_TARGETS": 73,
+        "REC_YDS": 1252,
+        "REC": 359,
+        "RUSH_ATT": 127,
+        "RUSH_REC_YDS": 135,
+        "RUSHING_TOUCHDOWNS": 2,
+        "RUSH_YDS": 510,
+        "SACKS": 44,
+        "TOUCHDOWNS_INCL_PASSING": 5,
+        "ANYTIME_TD": 288
+      },
+      "outcome_line_side_duplicate_excess": 2,
+      "validated": 34,
+      "validated_nonpositive_ev": 5,
+      "validated_zero_l5_season_anytime_td": 1,
+      "first_td_anchor_rows": 7,
+      "card_counts": {
+        "VALIDATED": 34,
+        "PROVISIONAL": 88,
+        "REJECTED": 412
+      },
+      "summary_card_counts": {
+        "VALIDATED": 34,
+        "PROVISIONAL": 88,
+        "REJECTED": 418
+      },
+      "external_source_counts": {
+        "ngs": 542,
+        "pbp": 252,
+        "schedule": 272
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_props_2026-10-01.json",
+      "sha256": "5c040df2dbd6bcd4e3bb0c8a9e73d27e36562029fca862178430f8320509665b",
+      "bytes": 6975582
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_games_2026-10-01.json",
+      "sha256": "29f0defa1c565debe68dcafb27fb0c03dbb868019542af79859831be592e53bc",
+      "bytes": 1579234
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_best_bets_2026-10-01.json",
+      "sha256": "1af03710620351d86bbd8d0057905103b59dab741f7b9cc5c5bcc31351b3b152",
+      "bytes": 2432600
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\summary_2026-10-01.json",
+      "sha256": "500af5c4ac7e277a94a0839de9aedfc1884c43520389d0c661d9779ad22d2270",
+      "bytes": 2579
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_high_prob_props_2026-10-01.json",
+      "sha256": "a2e202d523b427f9f60bd3a857be68750e0c2e4d5ed042241a853de3aa297a4b",
+      "bytes": 116625
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_external_metrics_2026-10-01.json",
+      "sha256": "b944e76ab2eddb94f20acc2e795a84957386b2a4def37266225325169fe3ebb7",
+      "bytes": 563120
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_props_2026-10-04.json",
+      "sha256": "04fd92aac0e599fabafc47e02b35d7ab584cd48294570f6e4eff0d79a9e60bb7",
+      "bytes": 85744452
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_games_2026-10-04.json",
+      "sha256": "d110a1a52e271d6e2a93a9a793541daaa296da42a9f54b687c02093079acf0b9",
+      "bytes": 28561601
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_best_bets_2026-10-04.json",
+      "sha256": "410f0639a10aebc3a1f1c3a737fd1213f1a9c810b5f6b973a147add7dec841d2",
+      "bytes": 37276450
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\summary_2026-10-04.json",
+      "sha256": "b9397181449b6d14ea2280db62b42aaa23c59e7e7cc4f3ba5db11d8283a7e538",
+      "bytes": 21787
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_high_prob_props_2026-10-04.json",
+      "sha256": "2479599bf94458a946fd6c495ebddaa083b3643f87474d1dc1c88102182b30a1",
+      "bytes": 1372352
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_external_metrics_2026-10-04.json",
+      "sha256": "20e7a0cfb8e254afdf3b23e7efdd7d36d1a3900fa504e1d7cd06926904e72d17",
+      "bytes": 570570
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_props_2026-10-05.json",
+      "sha256": "0c1efb828d674a0cb34768394dbe4e17955b9424779e9826a27ca698b1766ddd",
+      "bytes": 7424690
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_games_2026-10-05.json",
+      "sha256": "df9ccba88badffca478790db87a7075d843d873505cae59c2988699a838feb52",
+      "bytes": 2195542
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_best_bets_2026-10-05.json",
+      "sha256": "c2643f9aea064099c22db05d2a97410bd730899384a24748d0f17bed3d13d591",
+      "bytes": 2530971
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\summary_2026-10-05.json",
+      "sha256": "a0cb210387c1a8164bcf57a8e0e80379884f5441a58e492e991817de74a9dc59",
+      "bytes": 17741
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_high_prob_props_2026-10-05.json",
+      "sha256": "393b86e9f4780a265da557898e0fc45fee74cdf18d042ee4215ac1bf95732405",
+      "bytes": 181127
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_external_metrics_2026-10-05.json",
+      "sha256": "988a21111e391f05b17508a03a640c3a9001a0720ed923d1956055b0fcf466d4",
+      "bytes": 655057
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\normalized\\nfl_calibrated_props_2026-09-20.json",
+      "sha256": "72fa9919a1cd40aaa0c0b008206921dcffdb57a9f43dafd90d5ce52dabc2096c",
+      "bytes": 412093
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\snapshots\\nfl_prop_snapshots_2026-09-29.jsonl",
+      "sha256": "b08596eb24f40687d81858820cc67531ffa88d7fb85776984fd94e99da439b5a",
+      "bytes": 12354147
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\data\\NFL\\tape\\prior_week.json",
+      "sha256": "a71c43759d47b483e82401dd07f0097d15bb3f90f4577ce099ac54e2ad007c96",
+      "bytes": 21514
+    }
+  ],
+  "september20": {
+    "updated_at": "2026-09-21T03:57:56.527103+00:00",
+    "count": 361,
+    "post_kickoff_rows": 361,
+    "kickoffs": [
+      "2026-09-21T00:20:00+00:00"
+    ]
+  },
+  "snapshots": {
+    "rows": 23274,
+    "run_timestamps": 9,
+    "exact_duplicate_excess": 84,
+    "post_kickoff_rows": 0
+  },
+  "tape_envelope": {
+    "season": 2026,
+    "week": "1-3",
+    "before": "2026-10-01",
+    "injury_report_loaded": true
+  }
+}
