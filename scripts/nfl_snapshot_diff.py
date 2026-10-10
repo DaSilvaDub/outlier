@@ -449,6 +449,7 @@ def _run_settle_step(step: dict[str, Any], work: Path) -> str | None:
         return None
     from outlier_nfl import settle
 
+    _freeze_clock(step["clock"])  # settle may be imported only now
     case = step["case"]
     (out_dir / f"predictions_{case}.json").write_text(
         json.dumps(settle_predictions_payload(case), indent=2, sort_keys=True), encoding="utf-8")
