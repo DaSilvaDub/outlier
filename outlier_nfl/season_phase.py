@@ -11,6 +11,9 @@ seasons (legacy depth-chart schema) are rejected before publication with an
 The phase is carried separately from the week: an event's own season-type
 field wins (``seasonType``/``season_type``/``gameType``/``game_type``); else
 weeks 1-18 are ``REG`` and 19+ are ``POST``. A January week-18 game is ``REG``.
+When both are absent, the already-loaded nflverse schedule supplies ``game_type``
+for the same Eastern kickoff date and ordered home/away teams. Unknown or
+conflicting matches remain unsupported.
 """
 
 from __future__ import annotations
@@ -18,6 +21,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from outlier_nfl.config import normalize_team
+from outlier_nfl.matchup import _event_team_codes
+from outlier_nfl.run_context import EASTERN, event_kickoff_utc
 from outlier_nfl.stage_receipts import StageReceipt, receipt
 
 SUPPORTED_SEASON_TYPES = frozenset({"REG"})
@@ -36,7 +42,9 @@ _ALIASES = {
 }
 
 
-def event_season_type(event: Mapping[str, Any]) -> str | None:
+def event_season_type(
+    event: Mapping[str, Any], schedule_records: Sequence[Mapping[str, Any]] = (),
+) -> str | None:
     """``REG``/``POST``/``PRE`` for one schedule event, or None when it cannot be told."""
     for key in _TYPE_KEYS:
         raw = event.get(key)
@@ -46,15 +54,31 @@ def event_season_type(event: Mapping[str, Any]) -> str | None:
     try:
         week = int(event.get("week"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return None
+        week = 0
     if 1 <= week <= LAST_REGULAR_SEASON_WEEK:
         return "REG"
-    return "POST" if week > LAST_REGULAR_SEASON_WEEK else None
+    if week > LAST_REGULAR_SEASON_WEEK:
+        return "POST"
+    kickoff = event_kickoff_utc(event)
+    home, away = _event_team_codes(event)
+    if kickoff is None or not normalize_team(home) or not normalize_team(away):
+        return None
+    day = kickoff.astimezone(EASTERN).date().isoformat()
+    kinds = {
+        event_season_type({"game_type": row.get("game_type")})
+        for row in schedule_records
+        if row.get("gameday") == day
+        and normalize_team(row.get("home_team")) == home
+        and normalize_team(row.get("away_team")) == away
+    }
+    return next(iter(kinds)) if len(kinds) == 1 else None
 
 
-def slate_season_type(events: Iterable[Mapping[str, Any]]) -> str | None:
+def slate_season_type(
+    events: Iterable[Mapping[str, Any]], schedule_records: Sequence[Mapping[str, Any]] = (),
+) -> str | None:
     """The slate's single phase, ``MIXED`` when events disagree, None when empty/unknown."""
-    kinds = {event_season_type(e) for e in events}
+    kinds = {event_season_type(e, schedule_records) for e in events}
     if not kinds:
         return None
     if len(kinds) > 1:
@@ -62,13 +86,16 @@ def slate_season_type(events: Iterable[Mapping[str, Any]]) -> str | None:
     return next(iter(kinds))
 
 
-def season_phase_receipt(events: Sequence[Mapping[str, Any]], season: int | None) -> StageReceipt:
+def season_phase_receipt(
+    events: Sequence[Mapping[str, Any]], season: int | None,
+    schedule_records: Sequence[Mapping[str, Any]] = (),
+) -> StageReceipt:
     """Required receipt: OK only for a regular-season slate of a supported season."""
     if not events:
         return receipt("season_phase", "EMPTY", received=0)
     kinds: dict[str, int] = {}
     for e in events:
-        k = event_season_type(e) or "UNKNOWN"
+        k = event_season_type(e, schedule_records) or "UNKNOWN"
         kinds[k] = kinds.get(k, 0) + 1
     unsupported = {k: n for k, n in kinds.items() if k not in SUPPORTED_SEASON_TYPES}
     if unsupported:

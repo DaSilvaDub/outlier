@@ -357,6 +357,46 @@ class NflPipeline:
         )
         sources: list[SourceRecord] = []
 
+        # Load external advanced metrics for the season
+        # Offline fixture replays never touch the network.
+        external_metrics: list[dict[str, Any]] = []
+        phase_records: list[dict[str, Any]] = []
+        # First week whose data is not admissible at ctx.as_of_utc (None: no verified cutoff).
+        before_week: int | None = None
+        if offline_fixtures_dir is None:
+            try:
+                # January/February playoff slates belong to the previous season.
+                season_year = ctx.season
+                if season_year is None:
+                    logger.warning(
+                        "Could not derive an NFL season from target date %r; "
+                        "skipping external metrics",
+                        target_date,
+                    )
+                    sources.append(
+                        SourceRecord("external", "UNAVAILABLE", "no NFL season for slate date")
+                    )
+                else:
+                    loaded = load_external_metrics(
+                        season_year,
+                        slate_date=target_date,
+                        as_of_utc=ctx.as_of_utc,
+                        client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
+                    )
+                    external_metrics = loaded.records
+                    phase_records = loaded.phase_records
+                    before_week = loaded.before_week
+                    sources.extend(loaded.sources)
+                    logger.info(
+                        "Loaded %d external metric records (weeks < %s admitted at %s)",
+                        len(external_metrics), before_week, ctx.as_of_iso,
+                    )
+            except Exception as exc:
+                logger.warning("Failed loading external metrics: %s", exc)
+                sources.append(SourceRecord("external", "UNAVAILABLE", f"load failed: {exc}"))
+        else:
+            sources.append(SourceRecord("external", "UNAVAILABLE", "offline fixture replay"))
+
         # Every artifact is staged into runs/<run_id>/ and published at the end (F27).
         # One suffix names every published file: a window run writes only
         # *_<date>_<window> names, never the slate-wide bare-date files (F11).
@@ -370,8 +410,8 @@ class NflPipeline:
         publish = ctx.publishes
         publication_reason = ctx.publication_reason
         # Only a regular-season slate of a supported season can publish (F29).
-        receipts.append(season_phase_receipt(slate_events, ctx.season))
-        season_type = slate_season_type(slate_events)
+        receipts.append(season_phase_receipt(slate_events, ctx.season, phase_records))
+        season_type = slate_season_type(slate_events, phase_records)
         # A required stage that is not OK keeps the run out of every dated and
         # latest file and pointer, whatever its mode (F03).
         gate = gate_reason(receipts)
@@ -403,43 +443,6 @@ class NflPipeline:
         if not tape.admitted:
             logger.warning("Matchup tape %s: %s", tape.source.status, tape.source.reason)
         tapes = tape.teams
-        # Load external advanced metrics for the season
-        # Offline fixture replays never touch the network.
-        external_metrics: list[dict[str, Any]] = []
-        # First week whose data is not admissible at ctx.as_of_utc (None: no verified cutoff).
-        before_week: int | None = None
-        if offline_fixtures_dir is None:
-            try:
-                # January/February playoff slates belong to the previous season.
-                season_year = ctx.season
-                if season_year is None:
-                    logger.warning(
-                        "Could not derive an NFL season from target date %r; "
-                        "skipping external metrics",
-                        target_date,
-                    )
-                    sources.append(
-                        SourceRecord("external", "UNAVAILABLE", "no NFL season for slate date")
-                    )
-                else:
-                    loaded = load_external_metrics(
-                        season_year,
-                        slate_date=target_date,
-                        as_of_utc=ctx.as_of_utc,
-                        client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
-                    )
-                    external_metrics = loaded.records
-                    before_week = loaded.before_week
-                    sources.extend(loaded.sources)
-                    logger.info(
-                        "Loaded %d external metric records (weeks < %s admitted at %s)",
-                        len(external_metrics), before_week, ctx.as_of_iso,
-                    )
-            except Exception as exc:
-                logger.warning("Failed loading external metrics: %s", exc)
-                sources.append(SourceRecord("external", "UNAVAILABLE", f"load failed: {exc}"))
-        else:
-            sources.append(SourceRecord("external", "UNAVAILABLE", "offline fixture replay"))
         # Persist external metrics to JSON for downstream use and analysis
         external_metrics_payload = {
             "date": target_date,

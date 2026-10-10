@@ -101,9 +101,15 @@ def test_schedule_records_environment_and_lines() -> None:
         {"season": "2026", "game_type": "POST", "week": "19", "game_id": "p"},
         {"season": "2025", "game_type": "REG", "week": "3", "game_id": "old"},
     ]
-    out = schedule.fetch(  # type: ignore[arg-type]
+    payload = schedule.fetch(  # type: ignore[arg-type]
         FakeClient({"games.csv": rows}), 2026, as_of_utc=datetime(2026, 9, 28, 12, tzinfo=timezone.utc)
-    )["records"]
+    )
+    out = payload["records"]
+    assert [r["game_type"] for r in payload["phase_records"]] == ["REG", "POST"]
+    assert payload["phase_records"][0]["away_team"] == "LAR"
+    assert set(payload["phase_records"][0]) == {
+        "season", "game_type", "gameday", "home_team", "away_team",
+    }  # phase fallback never exposes scores, closing prices or observed weather
     assert len(out) == 1
     g = out[0]
     assert g["away_team"] == "LAR" and g["home_team"] == "DEN" and g["div_game"] is False
@@ -134,6 +140,8 @@ def test_load_external_metrics_isolates_failing_sources() -> None:
     kinds = sorted(r["kind"] for r in loaded.records if r["source"] != "schedule")
     assert kinds == ["passing", "team_defense", "team_offense"]
     assert loaded.before_week == 3
+    assert len(loaded.phase_records) == 3
+    assert {r["game_type"] for r in loaded.phase_records} == {"REG"}
     status = {s.name: s.status for s in loaded.sources}
     assert status["external:ngs:rushing"] == "UNAVAILABLE"
     assert status["external:ngs:passing"] == "AVAILABLE"

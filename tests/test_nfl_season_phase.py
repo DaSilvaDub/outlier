@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from outlier_nfl.external import ExternalLoad
+from outlier_nfl.matchup import _event_team_codes
 from outlier_nfl.pipeline import NflPipeline
 from outlier_nfl.run_context import parse_utc
 from outlier_nfl.season_phase import event_season_type, season_phase_receipt, slate_season_type
@@ -101,3 +103,76 @@ def test_january_regular_season_slate_publishes(tmp_path: Path) -> None:
     phase = next(r for r in run["stage_receipts"] if r["name"] == "season_phase")
     assert phase["status"] == "OK"
     assert run["status"] == "OK" and run["publication"] == "published"
+
+
+@pytest.mark.parametrize("matched", [True, False])
+def test_missing_type_and_week_uses_loaded_schedule_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matched: bool,
+) -> None:
+    client = snap.FrozenOutlierClient(FIXTURES_DIR)
+    rows = []
+    for event in client._schedule["events"]:
+        event.pop("week")
+        assert not any(k in event for k in ("seasonType", "season_type", "gameType", "game_type"))
+        home, away = _event_team_codes(event)
+        rows.append({
+            "source": "schedule", "season": 2026, "game_type": "REG", "week": 4,
+            "gameday": "2026-10-04" if matched else "2026-10-11",
+            "home_team": home, "away_team": away,
+        })
+    calls = []
+
+    def load(*args: Any, **kwargs: Any) -> ExternalLoad:
+        calls.append((args, kwargs))
+        return ExternalLoad(phase_records=rows, before_week=4)
+
+    monkeypatch.setattr("outlier_nfl.pipeline.load_external_metrics", load)
+    run = _run(tmp_path, client, "2026-10-04", "2026-10-04T15:00:00+00:00")
+    assert len(calls) == 1  # reuse F01's load, including its verified cutoff
+    assert calls[0][1]["as_of_utc"] == parse_utc("2026-10-04T15:00:00+00:00")
+    phase = next(r for r in run["stage_receipts"] if r["name"] == "season_phase")
+    assert run["season_type"] == ("REG" if matched else None)
+    assert phase["status"] == ("OK" if matched else "UNSUPPORTED")
+    assert run["publication"] == ("published" if matched else "bundle_only")
+    assert run["status"] == ("OK" if matched else "FAILED")
+    assert bool(_published(tmp_path)) is matched
+
+
+@pytest.mark.parametrize("game_type, expected", [("REG", "REG"), ("WC", "POST"),
+                                                ("PRE", "PRE"), (None, None)])
+def test_schedule_fallback_matches_eastern_kickoff_date_and_team_aliases(
+    game_type: str | None, expected: str | None,
+) -> None:
+    # Monday UTC is still Sunday Eastern; nflverse LA is Outlier LAR.
+    event = {"scheduledTime": "2026-10-05T00:20:00Z",
+             "home": {"name": "Los Angeles Rams"}, "away": {"alias": "SF"}}
+    rows = [{"gameday": "2026-10-04", "home_team": "LA", "away_team": "SF",
+             "game_type": game_type}]
+    assert event_season_type(event, rows) == expected
+    assert slate_season_type([event], rows) == expected
+    assert season_phase_receipt([event], 2026, rows).status == (
+        "OK" if expected == "REG" else "UNSUPPORTED"
+    )
+
+
+@pytest.mark.parametrize("change", [
+    {"gameday": "2026-10-05"}, {"home_team": "SF", "away_team": "LAR"},
+    {"away_team": "KC"}, {"game_type": ""},
+])
+def test_schedule_fallback_refuses_unmatched_or_typeless_rows(change: dict[str, str]) -> None:
+    event = {"startTime": "2026-10-05T00:20:00Z", "home_team": "LAR", "away_team": "SF"}
+    row = {"gameday": "2026-10-04", "home_team": "LA", "away_team": "SF", "game_type": "REG"}
+    row.update(change)
+    assert event_season_type(event, [row]) is None
+    assert season_phase_receipt([event], 2026, [row]).status == "UNSUPPORTED"
+
+
+def test_schedule_fallback_does_not_override_event_phase_or_accept_conflicting_matches() -> None:
+    event = {"scheduledTime": "2026-10-04T17:00:00Z", "home_team": "KC", "away_team": "BAL"}
+    row = {"gameday": "2026-10-04", "home_team": "KC", "away_team": "BAL", "game_type": "REG"}
+    assert event_season_type({**event, "week": 19}, [row]) == "POST"
+    assert event_season_type({**event, "seasonType": "PRE"}, [row]) == "PRE"
+    assert event_season_type(event, [row, {**row, "game_type": "POST"}]) is None
+    assert event_season_type(event, []) is None
+    assert event_season_type({**event, "scheduledTime": "invalid"}, [row]) is None
+    assert event_season_type({"scheduledTime": event["scheduledTime"]}, [row]) is None
