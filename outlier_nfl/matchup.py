@@ -21,7 +21,7 @@ from outlier_nfl.calibration import attach_empirical_model_p, primary_spread, pr
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 from outlier_nfl.run_context import RunContext, SourceRecord, try_parse_utc
-from outlier_nfl.tape_nflverse import tape_team_lists
+from outlier_nfl.tape_nflverse import TAPE_MAX_AGE_DAYS, tape_team_lists
 
 logger = logging.getLogger("outlier_nfl.matchup")
 
@@ -117,7 +117,7 @@ class MatchupScript:
 
 # A tape is built with ``before`` = its slate date; one more than a week older
 # describes an earlier week's injuries/roles and is refused as stale (F02).
-TAPE_MAX_AGE_DAYS = 7
+# The limit, TAPE_MAX_AGE_DAYS, lives in tape_nflverse (depth snapshots use it too).
 
 # Hand-built Week-1 tapes shipped with the package/tests: fixture replays only (F02).
 PACKAGED_TAPE_PATHS = (

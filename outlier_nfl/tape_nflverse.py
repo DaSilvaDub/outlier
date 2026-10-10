@@ -362,28 +362,54 @@ def _as_of_day(as_of: date | datetime) -> date:
     return as_of.astimezone(_EASTERN).date() if isinstance(as_of, datetime) else as_of
 
 
+ROLE_POSITIONS = frozenset({"QB", "RB", "TE", "WR"})
+# Oldest a tape (or a depth snapshot inside one) may be relative to the slate (F02/F18).
+TAPE_MAX_AGE_DAYS = 7
+
+
+def _stale(dt: str, as_of: date | datetime | None) -> bool:
+    """True when snapshot ``dt`` is more than TAPE_MAX_AGE_DAYS before ``as_of``."""
+    if as_of is None:
+        return False
+    day = as_of.date() if isinstance(as_of, datetime) else as_of
+    try:
+        snap = date.fromisoformat(dt[:10])
+    except ValueError:
+        return True
+    return (day - snap).days > TAPE_MAX_AGE_DAYS
+
+
 def depth_chart_roles(
     depth_rows: Iterable[Mapping[str, str]],
     inactive: Mapping[str, list[dict[str, str]]] | None = None,
     as_of: date | datetime | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Top healthy QB/RB/TE plus outside and slot WR from the latest snapshot per team.
+    """Top healthy QB/RB/TE plus outside and slot WR per team.
 
+    Each role position (QB, RB, TE, WR) is read from the team's newest snapshot
+    that lists that position: nflverse sometimes posts a partial snapshot (e.g.
+    defense only), which must not blank the offense from the previous full one.
     ``as_of`` keeps only snapshots knowable then: an aware datetime is compared to
     the full snapshot timestamp, a date keeps snapshots dated on or before that day.
+    A snapshot more than ``TAPE_MAX_AGE_DAYS`` before ``as_of`` is stale and never
+    used, so a weeks-old chart cannot name a probable starter.
     """
-    latest: dict[str, str] = {}
-    by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
+    latest: dict[tuple[str, str], str] = {}
+    by_pos: dict[tuple[str, str], list[Mapping[str, str]]] = defaultdict(list)
     for r in depth_rows:
         dt = str(r.get("dt") or "")
-        if not dt or _after_as_of(dt, as_of):
+        pos = str(r.get("pos_abb") or "")
+        if not dt or pos not in ROLE_POSITIONS or _after_as_of(dt, as_of) or _stale(dt, as_of):
             continue
-        team = _team(r.get("team"))
-        if dt > latest.get(team, ""):
-            latest[team] = dt
-            by_team[team] = []
-        if dt == latest[team]:
-            by_team[team].append(r)
+        key = (_team(r.get("team")), pos)
+        if dt > latest.get(key, ""):
+            latest[key] = dt
+            by_pos[key] = []
+        if dt == latest[key]:
+            by_pos[key].append(r)
+    by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
+    for (team, _pos), pos_rows in by_pos.items():
+        by_team[team].extend(pos_rows)
 
     roles: dict[str, dict[str, str]] = {}
     for team, rows in by_team.items():

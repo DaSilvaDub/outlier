@@ -159,3 +159,45 @@ def test_non_live_runs_refuse_the_unstamped_2026_report(
 def test_live_mode_still_refuses_a_row_revised_after_as_of() -> None:
     rows = [_inj("A", "2026-10-04T18:00:00Z"), _row_2026("B")]
     assert tn.injury_report_status(rows, 2026, 4, AS_OF, "live") == "revised_after_as_of"
+
+
+def _depth(dt: str, pos: str, name: str, rank: str = "1", slot: str = "") -> dict[str, str]:
+    return {"dt": dt, "team": "LAC", "pos_abb": pos, "player_name": name, "pos_rank": rank,
+            "pos_slot": slot, "gsis_id": ""}
+
+
+LAC_AS_OF = datetime(2026, 10, 10, 19, 52, tzinfo=UTC)
+
+
+def _lac_offense(dt: str) -> list[dict[str, str]]:
+    return [_depth(dt, "QB", "Justin Herbert"), _depth(dt, "QB", "Trey Lance", "2"),
+            _depth(dt, "RB", "Omarion Hampton"), _depth(dt, "TE", "Tyler Conklin"),
+            _depth(dt, "WR", "Ladd McConkey", slot="1"), _depth(dt, "FS", "Old Safety")]
+
+
+DEFENSE_ONLY = [_depth("2026-10-10T13:32:40Z", "FS", "Derwin James"),
+                _depth("2026-10-10T13:32:40Z", "LCB", "Donte Jackson")]
+
+
+def test_partial_defense_only_snapshot_keeps_offense_from_the_older_full_one() -> None:
+    # Real LAC layout, 2026-10-10: 13:32Z snapshot lists only defense, 06:02Z is full.
+    roles = tn.depth_chart_roles(_lac_offense("2026-10-10T06:02:29Z") + DEFENSE_ONLY,
+                                 as_of=LAC_AS_OF)
+    assert roles["LAC"]["qb"] == "Justin Herbert"
+    assert roles["LAC"]["rb1"] == "Omarion Hampton"
+    assert roles["LAC"]["te"] == "Tyler Conklin"
+
+
+def test_stale_full_snapshot_plus_recent_defense_only_gives_no_qb() -> None:
+    stale = _lac_offense("2026-09-20T06:00:00Z")  # 20 days before as_of
+    roles = tn.depth_chart_roles(stale + DEFENSE_ONLY, as_of=LAC_AS_OF)
+    assert "qb" not in roles.get("LAC", {})
+    assert roles.get("LAC", {}) == {}
+
+
+def test_offense_snapshot_after_as_of_is_ignored() -> None:
+    rows = (_lac_offense("2026-10-10T06:02:29Z") + DEFENSE_ONLY
+            + [_depth("2026-10-10T21:00:00Z", "QB", "Trey Lance")])  # after the 19:52Z as_of
+    assert tn.depth_chart_roles(rows, as_of=LAC_AS_OF)["LAC"]["qb"] == "Justin Herbert"
+    only_later = [_depth("2026-10-10T21:00:00Z", "QB", "Trey Lance")] + DEFENSE_ONLY
+    assert "qb" not in tn.depth_chart_roles(only_later, as_of=LAC_AS_OF).get("LAC", {})
