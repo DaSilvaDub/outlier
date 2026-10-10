@@ -41,6 +41,11 @@ A9 settles quarter/half-scoped predictions against full-game stats.
 B11 adds ``market_extras``: raw LONGEST_PASSING_COMPLETION / PASSING_COMPLETIONS
 props, a Q1 player prop, a team rushing-yards prop, one-sided alternate
 spread/team-total lines and 1ST_QUARTER / H1 game lines.
+A10 builds tape roles/inactives from frozen Week-4 depth and injury rows
+(morning/evening snapshots, an injury update after as_of, a wrong-season row,
+unstamped rows, the real 2026 column layout in live and replay mode, a whole-day cutoff) and checks tape admission (stale, wrong
+season, corrupt, missing). A11 indexes rosters and starters (backup with more
+quotes, team without props, trade/offseason-move identity, inactive starter).
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -69,7 +74,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 6
+HARNESS_VERSION = 8
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -101,6 +106,9 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "A8_auth_extraction", "clock": "2026-09-14T12:15:00+00:00", "kind": "auth"},
         {"name": "A9_settle_scope", "clock": "2026-09-14T12:20:00+00:00", "kind": "settle",
          "case": "scope"},
+        # Phase 5b (#227): tape/injury admissibility and roster provenance, no pipeline run.
+        {"name": "A10_tape_admissibility", "clock": "2026-09-14T12:25:00+00:00", "kind": "tape"},
+        {"name": "A11_roster_provenance", "clock": "2026-09-14T12:30:00+00:00", "kind": "roster"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -549,11 +557,176 @@ def frozen_forecast(kind: str, url: str) -> dict[str, Any]:
                        "precipitation_probability": [5.0], "precipitation": [0.0]}}
 
 
+# ---------------------------------------------------------------------------
+# A10/A11 (phase 5b): tape/injury admissibility and roster provenance
+# ---------------------------------------------------------------------------
+
+A10_AS_OF = _dt.datetime(2026, 10, 4, 14, 0, tzinfo=_dt.UTC)
+
+
+def a10_depth_rows() -> list[dict[str, str]]:
+    """KC Week-4 depth: a morning snapshot and an evening one (after A10_AS_OF)."""
+    rows = []
+    for dt, qb in (("2026-10-04T12:00:00Z", "Patrick Mahomes"), ("2026-10-04T23:00:00Z", "Evening Backup")):
+        for name, pos, slot, rank in ((qb, "QB", "QB", "1"), ("Isiah Pacheco", "RB", "RB", "1"),
+                                      ("Travis Kelce", "TE", "TE", "1"), ("Rashee Rice", "WR", "LWR", "1"),
+                                      ("Xavier Worthy", "WR", "SWR", "1"), ("Kelce Backup", "TE", "TE", "2")):
+            rows.append({"dt": dt, "team": "KC", "player_name": name, "gsis_id": "",
+                         "pos_abb": pos, "pos_slot": slot, "pos_rank": rank, "pos_grp": "Offense"})
+    return rows
+
+
+# Real nflverse injuries_2026.csv header (verified 2026-10-10 against the
+# release file): no ``date_modified`` column. 2024 had one; 2025/2026 do not.
+INJURIES_2026_COLUMNS = (
+    "season", "season_type", "game_type", "team", "week", "gsis_id", "position", "full_name",
+    "first_name", "last_name", "report_primary_injury", "report_secondary_injury",
+    "report_status", "practice_primary_injury", "practice_secondary_injury", "practice_status",
+)
+
+
+def a10_injury_rows(case: str) -> list[dict[str, str]]:
+    def row(name: str, modified: str | None, season: str = "2026") -> dict[str, str]:
+        r = {"season": season, "season_type": "REG", "week": "4", "team": "KC", "full_name": name,
+             "gsis_id": "", "position": "WR", "report_status": "Out"}
+        if modified is not None:
+            r["date_modified"] = modified
+        return r
+
+    base = [row("Travis Kelce", "2026-10-02T20:00:00Z")]
+    if case.startswith("future_update"):
+        return base + [row("Rashee Rice", "2026-10-04T18:00:00Z")]
+    if case == "wrong_season":
+        return base + [row("Xavier Worthy", "2025-10-03T20:00:00Z", season="2025")]
+    if case.startswith("layout_2026"):
+        r = {c: "" for c in INJURIES_2026_COLUMNS}
+        r.update({"season": "2026", "season_type": "REG", "game_type": "REG", "team": "KC",
+                  "week": "4", "position": "TE", "full_name": "Travis Kelce",
+                  "first_name": "Travis", "last_name": "Kelce", "report_status": "Out"})
+        return [r]
+    if case == "unstamped":
+        return [row("Travis Kelce", None)]
+    return base
+
+
+def _run_tape_step(work: Path) -> str | None:
+    import outlier_nfl.tape_nflverse as tn
+    from outlier_nfl.matchup import tape_inadmissible_reason
+    from outlier_nfl.run_context import RunContext
+
+    games = frozen_nflverse()["/games.csv"]
+    real_fetch = tn.fetch_csv
+    out: dict[str, Any] = {"roles": {}, "admission": {}}
+    # (case, as_of, run mode passed when _auto_roles accepts one)
+    # The step runs with datetime frozen (a subclass swapped into each module), so
+    # build as_of from the module's class: a plain datetime would fail its
+    # isinstance check and silently take the whole-day branch of _after_as_of.
+    as_of_now = tn.datetime(2026, 10, 4, 14, 0, tzinfo=_dt.UTC)
+    evening = tn.datetime(2026, 10, 5, 0, 0, tzinfo=_dt.UTC)
+    cases = (("point_in_time", as_of_now, "live"), ("future_update", as_of_now, "replay"),
+             ("wrong_season", as_of_now, "live"), ("unstamped", as_of_now, "replay"),
+             ("layout_2026_live", as_of_now, "live"),
+             ("layout_2026_replay", as_of_now, "replay"),
+             ("evening_cutoff", evening, "live"),
+             ("whole_day_no_as_of", None, None))
+    import inspect
+
+    takes_mode = "run_mode" in inspect.signature(tn._auto_roles).parameters
+    try:
+        for case, as_of, mode in cases:
+            inj = a10_injury_rows(case)
+            tn.fetch_csv = (  # type: ignore[assignment]
+                lambda url, timeout=60.0, _i=inj: copy.deepcopy(_i) if "injuries" in url
+                else a10_depth_rows())
+            extra = {"run_mode": mode} if takes_mode else {}
+            res = tn._auto_roles(SEASON, _dt.date(2026, 10, 4), games, as_of, **extra)
+            roles, injuries = res[0], res[1]
+            out["roles"][case] = {
+                "qb": roles.get("KC", {}).get("qb"), "te": roles.get("KC", {}).get("te"),
+                "wr_deep": roles.get("KC", {}).get("wr_deep"),
+                "inactive": None if injuries is None
+                else sorted(p["name"] for p in injuries.get("KC", [])),
+                "injury_report_status": res[3] if len(res) > 3 else None,
+            }
+    finally:
+        tn.fetch_csv = real_fetch  # type: ignore[assignment]
+    ctx = RunContext(slate_date="2026-10-04", window=None, season=SEASON,
+                     as_of_utc=A10_AS_OF, mode="live", first_kickoff_utc=None)
+    tape_dir = work / "data" / "NFL" / "a10"
+    tape_dir.mkdir(parents=True, exist_ok=True)
+    envelopes = {
+        "fresh": {"season": SEASON, "before": "2026-10-04"},
+        "one_week_old": {"season": SEASON, "before": "2026-09-27"},
+        "stale_two_weeks": {"season": SEASON, "before": "2026-09-20"},
+        "wrong_season": {"season": SEASON - 1, "before": "2025-12-28"},
+        "no_before": {"season": SEASON},
+    }
+    for name, env in envelopes.items():
+        path = tape_dir / f"{name}.json"
+        path.write_text(json.dumps(env), encoding="utf-8")
+        out["admission"][name] = tape_inadmissible_reason(env, path, ctx) or "admitted"
+    dest = work / "data" / "NFL" / "math" / "tape_admissibility.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+    return None
+
+
+def _a11_prop(team: str, name: str, market: str, books: int) -> dict[str, Any]:
+    return {"team": team, "player_name": name, "market": market,
+            "books": [{"book": f"B{i}", "odds": -110} for i in range(books)]}
+
+
+def _run_roster_step(work: Path) -> str | None:
+    import inspect
+
+    from outlier_nfl import matchup, roster
+
+    props = [_a11_prop("KC", "Patrick Mahomes", "PASS_YDS", 2),
+             _a11_prop("KC", "Backup Passer", "PASS_YDS", 5),
+             _a11_prop("KC", "Backup Passer", "PASS_TD", 5),
+             _a11_prop("KC", "Travis Kelce", "REC_YDS", 4)]
+    params = inspect.signature(roster.build_team_roster_index).parameters
+    kwargs: dict[str, Any] = {}
+    if "tape_roles" in params:
+        kwargs["tape_roles"] = {"KC": {"qb": "Patrick Mahomes"}}
+    idx = roster.build_team_roster_index(props, **kwargs)
+    bare = roster.build_team_roster_index(props)
+
+    def qb(entry: dict[str, Any] | None) -> dict[str, Any]:
+        e = entry or {}
+        return {k: e.get(k) for k in ("starting_qb", "starting_qb_status", "starting_qb_source")}
+
+    out = {
+        "teams_count_bare": len(bare),
+        "kc_bare": qb(bare.get("KC")),
+        "kc_with_tape_roles": qb(idx.get("KC")),
+        "ind_without_props": qb(bare.get("IND")),
+        # A supplied index says LAR; the 2026 offseason-move table says IND.
+        "trade_supplied_identity": roster.verify_player_team_attribution(
+            "Daniel Jones", "LAR", {"LAR": {"starting_qb": "Daniel Jones", "key_rbs": [],
+                                            "key_pass_catchers": []}}, position="QB"),
+        "team_missing_from_index_qb": roster.verify_player_team_attribution(
+            "Patrick Mahomes", "KC", {}, position="QB"),
+        # No tape role: does a static 2026 chart fill the gap?
+        "rb1_without_tape_role": matchup._role_player({}, "KC", "rb1", ()),
+        "qb_without_tape_role_starter_out": matchup._role_player(
+            {}, "KC", "qb", ("patrick mahomes",)),
+    }
+    dest = work / "data" / "NFL" / "math" / "roster_provenance.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
     if step["kind"] == "auth":
         return _run_auth_step(work)
+    if step["kind"] == "tape":
+        return _run_tape_step(work)
+    if step["kind"] == "roster":
+        return _run_roster_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"

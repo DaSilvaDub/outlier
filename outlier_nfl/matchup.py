@@ -21,7 +21,7 @@ from outlier_nfl.calibration import attach_empirical_model_p, primary_spread, pr
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 from outlier_nfl.run_context import RunContext, SourceRecord, try_parse_utc
-from outlier_nfl.tape_nflverse import tape_team_lists
+from outlier_nfl.tape_nflverse import TAPE_MAX_AGE_DAYS, tape_team_lists
 
 logger = logging.getLogger("outlier_nfl.matchup")
 
@@ -115,6 +115,10 @@ class MatchupScript:
         return payload
 
 
+# A tape is built with ``before`` = its slate date; one more than a week older
+# describes an earlier week's injuries/roles and is refused as stale (F02).
+# The limit, TAPE_MAX_AGE_DAYS, lives in tape_nflverse (depth snapshots use it too).
+
 # Hand-built Week-1 tapes shipped with the package/tests: fixture replays only (F02).
 PACKAGED_TAPE_PATHS = (
     Path(__file__).resolve().parent / "tape" / "prior_week_tape.json",
@@ -191,6 +195,10 @@ def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext
         return f"unparseable 'before' {before!r}"
     if before_day > date.fromisoformat(ctx.slate_date):
         return f"built from games before {before_day}, after slate {ctx.slate_date}"
+    age = (date.fromisoformat(ctx.slate_date) - before_day).days
+    if age > TAPE_MAX_AGE_DAYS:
+        return (f"stale: built from games before {before_day}, {age} days before slate "
+                f"{ctx.slate_date} (max {TAPE_MAX_AGE_DAYS}; run with --refresh-tape)")
     if ctx.historical:  # retrospective or replay: the tape must predate as_of
         written = _tape_written_at(raw, path)
         if written > ctx.as_of_utc:
@@ -302,12 +310,15 @@ def _depth(team: str) -> dict[str, Any]:
 
 
 def _role_player(
-    tape: Mapping[str, Any], team: str, role: str, inactive: Iterable[str] = ()
+    tape: Mapping[str, Any], team: str, role: str, inactive: Iterable[str] = (),
+    static_fallback: bool = False,
 ) -> str | None:
-    """Tape role, else the depth chart's first player for it who is not ``inactive``.
+    """Tape role, else (fixture runs only) the static 2026 chart's first active player.
 
-    When every candidate is inactive the depth-chart default comes back and the
-    caller's eligibility check drops it.
+    Without ``static_fallback`` a role the tape does not name is unknown (F18):
+    the fixed 2026 chart is not evidence for another date or season. When every
+    candidate is inactive the depth-chart default comes back and the caller's
+    eligibility check drops it.
     """
     out = set(inactive)
 
@@ -317,6 +328,8 @@ def _role_player(
     named = _text(tape, role)
     if active(named):
         return named
+    if not static_fallback:
+        return None
     chart = _depth(team)
     if role == "qb":
         qb = chart.get("starting_qb")
@@ -566,6 +579,7 @@ def build_matchup_script(
     tapes: Mapping[str, Mapping[str, Any]] | None = None,
     injuries: Iterable[str] | None = None,
     defensive_out: Mapping[str, Sequence[str]] | None = None,
+    static_fallback: bool = False,
 ) -> MatchupScript:
     """Build the highest-probability script and mismatch card for one game.
 
@@ -626,7 +640,7 @@ def build_matchup_script(
             f"Trench mismatch: {attack_team} run game overpowers {defend_team} front; "
             f"+{TRENCH_SCORE_BOOST:.1f} pts to {attack_team}."
         )
-        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive))
+        rb1 = _eligible(_role_player(attack_tape, attack_team, "rb1", inactive, static_fallback))
         if not rb1:
             return
         mismatches.append(f"{rb1} rush vs {defend_team} run D")
@@ -663,7 +677,7 @@ def build_matchup_script(
         # The pass rush drives sacks; a weak-QB gate added nothing in the backtest.
         if not _is_strong_pass_rush(rush_unit):
             return
-        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive))
+        qb = _eligible(_role_player(qb_tape, qb_team, "qb", inactive, static_fallback))
         if not qb:
             return
         grade = rush_unit.get("pass_rush")
@@ -688,8 +702,8 @@ def build_matchup_script(
         if not _is_leaky_pass_d(defend_unit):
             return
         pass_tape = home_tape if pass_team == home else away_tape
-        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive))
-        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive))
+        te = _eligible(_role_player(pass_tape, pass_team, "te", inactive, static_fallback))
+        slot = _eligible(_role_player(pass_tape, pass_team, "wr_slot", inactive, static_fallback))
         mismatches.append(f"{pass_team} underneath vs {defend_team} secondary")
         if te:
             signals.append(
@@ -879,10 +893,13 @@ def build_matchup_scripts(
     injuries_by_event: Mapping[str, Iterable[str]] | None = None,
     slate_events: Iterable[Mapping[str, Any]] | None = None,
     defensive_out_by_team: Mapping[str, Sequence[str]] | None = None,
+    static_fallback: bool = False,
 ) -> list[MatchupScript]:
     """Build one script per unique event_id on the slate, including games with no lines yet.
 
     ``defensive_out_by_team`` is the tape's ``defensive_starters_out`` block.
+    ``static_fallback`` (fixture runs only) fills roles the tape lacks from the
+    fixed 2026 charts (F18).
     """
     by_event: dict[str, list[NflGameLine]] = {}
     meta: dict[str, tuple[str, str]] = {}
@@ -918,6 +935,7 @@ def build_matchup_scripts(
                 tapes=tapes,
                 injuries=injured,
                 defensive_out=defensive_out_by_team,
+                static_fallback=static_fallback,
             )
         )
     return scripts

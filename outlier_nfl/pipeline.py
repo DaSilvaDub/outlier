@@ -58,7 +58,7 @@ from outlier_nfl.schema import (
     validate_player_props_payload,
     validate_schedule_payload,
 )
-from outlier_nfl.roster import build_team_roster_index
+from outlier_nfl.roster import EVIDENCED_STARTER_STATUSES, build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
 from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.run_writer import RunWriter
@@ -132,6 +132,8 @@ class NflPipeline:
         write_latest: bool | None = None,
         target_alt_book: str = "HARDROCK",
         as_of_utc: datetime | str | None = None,
+        refresh_tape: bool = False,
+        tape_last_n: int | None = None,
     ) -> dict[str, Any]:
         """Execute full extraction and normalization run.
 
@@ -360,6 +362,10 @@ class NflPipeline:
             slate_events=slate_events,
             run_started_utc=now_dt,
         )
+        if refresh_tape:
+            # After ctx, so the tape's injury admission uses this run's own mode
+            # (window-aware), never a re-derivation from the whole slate day.
+            _refresh_tape(self.nfl_dir, target_date, tape_last_n, ctx.as_of_utc, ctx.mode)
         sources: list[SourceRecord] = []
 
         # Load external advanced metrics for the season
@@ -468,6 +474,7 @@ class NflPipeline:
             ),
             slate_events=slate_events,
             defensive_out_by_team=tape.team_lists("defensive_starters_out"),
+            static_fallback=ctx.mode == "fixture",
         )
         if matchup_scripts:
             logger.info(
@@ -640,7 +647,9 @@ class NflPipeline:
         stage("nfl_high_prob_props", anchors_payload)
 
         # Build verified active roster index
-        rosters = build_team_roster_index(all_player_props)
+        rosters = build_team_roster_index(
+            all_player_props, include_league_baseline=ctx.mode == "fixture", tape_roles=tapes
+        )
         rosters_payload = {
             "date": target_date,
             "window": window,
@@ -730,7 +739,8 @@ class NflPipeline:
             from outlier_nfl.alt_floors import generate_alt_floors_pipeline
 
             starting_qbs_set = {
-                r["starting_qb"] for r in rosters.values() if r.get("starting_qb")
+                r["starting_qb"] for r in rosters.values()
+                if r.get("starting_qb") and r.get("starting_qb_status") in EVIDENCED_STARTER_STATUSES
             }
             alt_floors_summary = generate_alt_floors_pipeline(
                 props=all_player_props,
@@ -742,6 +752,7 @@ class NflPipeline:
                 weather_records=weather_records,
                 tapes=tapes,
                 write_latest=publish_latest,
+                static_depth=ctx.mode == "fixture",
             )
             if publish:
                 writer.stage_tree("exports", self.data_dir / "NFL" / "exports")
@@ -983,18 +994,23 @@ def _refresh_tape(
     target_date: str | None,
     last_n: int | None,
     as_of_utc: datetime | str | None = None,
+    run_mode: str | None = None,
 ) -> None:
     """Rebuild the matchup tape from games before the slate; keep the old tape on failure.
 
     The tape is built as of ``as_of_utc`` (default now) and records it, so a run
-    can verify the tape was knowable at its own cutoff.
+    can verify the tape was knowable at its own cutoff. ``run_mode`` is the
+    calling run's ``RunContext.mode``; only ``live`` admits an unstamped injury
+    report, so a call without it fails closed.
     """
     raw = target_date or to_eastern_date(datetime.now(timezone.utc))
     try:
         slate = date.fromisoformat(str(raw))
         season = slate.year if slate.month >= 3 else slate.year - 1
         as_of = parse_utc(as_of_utc) if as_of_utc is not None else datetime.now(timezone.utc)
-        refresh_prior_week_tape(nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of)
+        refresh_prior_week_tape(
+            nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of, run_mode=run_mode
+        )
     except Exception as exc:  # network/API failure must not block the slate run
         logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
 
@@ -1097,9 +1113,6 @@ def main() -> int:
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-    if args.refresh_tape:
-        _refresh_tape(args.data_dir / "NFL", args.date, args.tape_last_n, args.as_of)
-
     try:
         pipeline = NflPipeline(data_dir=args.data_dir)
         try:
@@ -1110,6 +1123,8 @@ def main() -> int:
                 generate_game_script=args.generate_game_script,
                 target_alt_book=args.target_alt_book,
                 as_of_utc=args.as_of,
+                refresh_tape=args.refresh_tape,
+                tape_last_n=args.tape_last_n,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)

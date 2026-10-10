@@ -655,9 +655,24 @@ def test_inactive_rb1_falls_back_to_next_healthy_depth_chart_back():
         "CAR": {"rush_defense": 35.0, "opp_rush_yards_allowed": 165.0},
         "PHI": {"rush_offense": 85.0, "rush_yards": 180.0},  # no tape rb1 -> depth chart
     }
-    script = build_matchup_script("e", "CAR", "PHI", [], tape, injuries=[starter])
+    script = build_matchup_script("e", "CAR", "PHI", [], tape, injuries=[starter],
+                                  static_fallback=True)  # fixture runs only (F18)
     rush = [s for s in script.prop_signals if s.tag == "MATCHUP_RUSH_MISMATCH"]
     assert rush and {s.player_name for s in rush} == {backup}
+
+
+def test_live_script_never_fills_a_missing_tape_role_from_the_static_chart():
+    """F18: without a tape rb1 a live script emits no rush signal, not the 2026 chart's RB."""
+    from outlier_nfl.matchup import _role_player, build_matchup_script
+
+    tape = {
+        "CAR": {"rush_defense": 35.0, "opp_rush_yards_allowed": 165.0},
+        "PHI": {"rush_offense": 85.0, "rush_yards": 180.0},
+    }
+    script = build_matchup_script("e", "CAR", "PHI", [], tape)
+    assert not [s for s in script.prop_signals if s.tag == "MATCHUP_RUSH_MISMATCH"]
+    assert _role_player({}, "KC", "qb") is None
+    assert _role_player({"qb": "Tape QB"}, "KC", "qb") == "Tape QB"
 
 
 def test_dome_band_needs_a_trench_or_injury_edge_to_lean_over():

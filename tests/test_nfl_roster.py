@@ -103,10 +103,15 @@ def test_build_team_roster_index_and_attribution() -> None:
         ),
     ]
 
-    rosters = build_team_roster_index(sample_props)
+    # F18: starters come from the run's tape roles, never from quote counts.
+    rosters = build_team_roster_index(
+        sample_props, tape_roles={"PIT": {"qb": "Aaron Rodgers"}, "NYJ": {"qb": "Geno Smith"}}
+    )
 
     assert "PIT" in rosters
     assert rosters["PIT"]["starting_qb"] == "Aaron Rodgers"
+    assert rosters["PIT"]["starting_qb_status"] == "probable"
+    assert rosters["PIT"]["starting_qb_source"] == "tape_roles"
     assert "Jaylen Warren" in rosters["PIT"]["key_rbs"]
     assert "DK Metcalf" in rosters["PIT"]["key_pass_catchers"]
 
@@ -176,28 +181,30 @@ def test_attribution_fails_closed_when_a_team_has_no_indexed_starting_qb() -> No
     assert verify_player_team_attribution("Rhamondre Stevenson", "NE", rosters) is True
 
 
-def test_qb_priced_only_on_completions_or_passing_tds_is_still_indexed() -> None:
-    """PASS_COMP / PASS_TD are the canonical codes normalize_market emits."""
+def test_quoted_passer_is_not_a_starter_without_tape_evidence() -> None:
+    """F18: being quoted (PASS_COMP / PASS_TD here) never makes a starting QB."""
     rosters = build_team_roster_index(
         [_prop("GB", "Jordan Love", "PASS_COMP"), _prop("GB", "Jordan Love", "PASS_TD")]
     )
 
-    assert rosters["GB"]["starting_qb"] == "Jordan Love"
+    assert rosters["GB"]["starting_qb"] is None
+    assert rosters["GB"]["starting_qb_status"] == "unknown"
 def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
-    """Explicitly verify Daniel Jones on Colts and Kenneth Walker III on Chiefs."""
+    """Fixture registry: the static 2026 tables verify only with allow_static (F18)."""
     rosters = build_team_roster_index([], include_league_baseline=True)
 
     # Colts check
     assert rosters["IND"]["starting_qb"] == "Daniel Jones"
+    assert rosters["IND"]["starting_qb_status"] == "static_fixture"
     assert get_starting_qb("IND", rosters) == "Daniel Jones"
-    assert verify_player_team_attribution("Daniel Jones", "IND", rosters, position="QB") is True
-    assert verify_player_team_attribution("Anthony Richardson", "IND", rosters, position="QB") is False
+    assert verify_player_team_attribution("Daniel Jones", "IND", rosters, position="QB", allow_static=True) is True
+    assert verify_player_team_attribution("Anthony Richardson", "IND", rosters, position="QB", allow_static=True) is False
 
     # Chiefs check
     assert rosters["KC"]["starting_qb"] == "Patrick Mahomes"
     assert "Kenneth Walker III" in rosters["KC"]["key_rbs"]
-    assert verify_player_team_attribution("Kenneth Walker III", "KC", rosters) is True
-    assert verify_player_team_attribution("Kenneth Walker III", "SEA", rosters) is False
+    assert verify_player_team_attribution("Kenneth Walker III", "KC", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Kenneth Walker III", "SEA", rosters, allow_static=True) is False
 
     # Offseason movement registry checks
     assert OFFSEASON_MOVES_2026["Kenneth Walker III"]["current_team"] == "KC"
@@ -208,47 +215,47 @@ def test_colts_daniel_jones_and_chiefs_kenneth_walker_registry() -> None:
     # Hollywood Brown checks
     assert "Hollywood Brown" in rosters["PHI"]["key_pass_catchers"]
     assert "Hollywood Brown" not in rosters["KC"]["key_pass_catchers"]
-    assert verify_player_team_attribution("Hollywood Brown", "PHI", rosters) is True
-    assert verify_player_team_attribution("Hollywood Brown", "KC", rosters) is False
+    assert verify_player_team_attribution("Hollywood Brown", "PHI", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Hollywood Brown", "KC", rosters, allow_static=True) is False
     assert OFFSEASON_MOVES_2026["Hollywood Brown"]["current_team"] == "PHI"
     assert "KC" in OFFSEASON_MOVES_2026["Hollywood Brown"]["former_teams"]
 
     # A.J. Brown checks
     assert "A.J. Brown" in rosters["NE"]["key_pass_catchers"]
     assert "A.J. Brown" not in rosters["PHI"]["key_pass_catchers"]
-    assert verify_player_team_attribution("A.J. Brown", "NE", rosters) is True
-    assert verify_player_team_attribution("A.J. Brown", "PHI", rosters) is False
+    assert verify_player_team_attribution("A.J. Brown", "NE", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("A.J. Brown", "PHI", rosters, allow_static=True) is False
     assert OFFSEASON_MOVES_2026["A.J. Brown"]["current_team"] == "NE"
     assert "PHI" in OFFSEASON_MOVES_2026["A.J. Brown"]["former_teams"]
     assert OFFSEASON_MOVES_2026["AJ Brown"]["current_team"] == "NE"
 
     # Newly audited 2026 moves
-    assert verify_player_team_attribution("Keenan Allen", "IND", rosters) is True
-    assert verify_player_team_attribution("Keenan Allen", "CHI", rosters) is False
-    assert verify_player_team_attribution("Romeo Doubs", "NE", rosters) is True
-    assert verify_player_team_attribution("Romeo Doubs", "GB", rosters) is False
-    assert verify_player_team_attribution("Rico Dowdle", "PIT", rosters) is True
-    assert verify_player_team_attribution("Rico Dowdle", "DAL", rosters) is False
-    assert verify_player_team_attribution("Kenneth Gainwell", "TB", rosters) is True
-    assert verify_player_team_attribution("Kenneth Gainwell", "PHI", rosters) is False
-    assert verify_player_team_attribution("Michael Pittman Jr.", "PIT", rosters) is True
-    assert verify_player_team_attribution("Michael Pittman Jr.", "IND", rosters) is False
-    assert verify_player_team_attribution("Wan'Dale Robinson", "TEN", rosters) is True
-    assert verify_player_team_attribution("Wan'Dale Robinson", "NYG", rosters) is False
-    assert verify_player_team_attribution("Tank Bigsby", "PHI", rosters) is True
-    assert verify_player_team_attribution("Tank Bigsby", "JAX", rosters) is False
-    assert verify_player_team_attribution("Jonnu Smith", "GB", rosters) is True
-    assert verify_player_team_attribution("Jonnu Smith", "MIA", rosters) is False
-    assert verify_player_team_attribution("Jordan Mason", "MIN", rosters) is True
-    assert verify_player_team_attribution("Jordan Mason", "SF", rosters) is False
-    assert verify_player_team_attribution("Jauan Jennings", "MIN", rosters) is True
-    assert verify_player_team_attribution("Jauan Jennings", "SF", rosters) is False
-    assert verify_player_team_attribution("Noah Fant", "NO", rosters) is True
-    assert verify_player_team_attribution("Noah Fant", "SEA", rosters) is False
-    assert verify_player_team_attribution("Malik Willis", "MIA", rosters) is True
-    assert verify_player_team_attribution("Malik Willis", "GB", rosters) is False
-    assert verify_player_team_attribution("Tua Tagovailoa", "ATL", rosters) is True
-    assert verify_player_team_attribution("Tua Tagovailoa", "MIA", rosters) is False
+    assert verify_player_team_attribution("Keenan Allen", "IND", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Keenan Allen", "CHI", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Romeo Doubs", "NE", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Romeo Doubs", "GB", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Rico Dowdle", "PIT", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Rico Dowdle", "DAL", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Kenneth Gainwell", "TB", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Kenneth Gainwell", "PHI", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Michael Pittman Jr.", "PIT", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Michael Pittman Jr.", "IND", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Wan'Dale Robinson", "TEN", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Wan'Dale Robinson", "NYG", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Tank Bigsby", "PHI", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Tank Bigsby", "JAX", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Jonnu Smith", "GB", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Jonnu Smith", "MIA", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Jordan Mason", "MIN", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Jordan Mason", "SF", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Jauan Jennings", "MIN", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Jauan Jennings", "SF", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Noah Fant", "NO", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Noah Fant", "SEA", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Malik Willis", "MIA", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Malik Willis", "GB", rosters, allow_static=True) is False
+    assert verify_player_team_attribution("Tua Tagovailoa", "ATL", rosters, allow_static=True) is True
+    assert verify_player_team_attribution("Tua Tagovailoa", "MIA", rosters, allow_static=True) is False
     assert rosters["MIA"]["starting_qb"] == "Malik Willis"
     assert OFFSEASON_MOVES_2026["Tua Tagovailoa"]["current_team"] == "ATL"
     assert "MIA" in OFFSEASON_MOVES_2026["Tua Tagovailoa"]["former_teams"]
@@ -348,3 +355,32 @@ def test_validate_analysis_text_still_catches_capitalized_team_references() -> N
 def test_unknown_team_starting_qb_raises() -> None:
     with pytest.raises(ValueError, match="Unknown or unverified"):
         get_starting_qb("FAKE_TEAM")
+
+
+def test_static_tables_are_not_current_evidence() -> None:
+    """F18: no static fallback for live indexes; supplied identity beats the move table."""
+    assert "IND" not in build_team_roster_index([])
+    with pytest.raises(ValueError):
+        get_starting_qb("IND")
+    assert get_starting_qb("IND", allow_static=True) == "Daniel Jones"
+    # Team absent from the supplied index: no NFL_2026_STARTING_QBS fallback.
+    assert verify_player_team_attribution("Patrick Mahomes", "KC", {}, position="QB") is False
+    # Trade after the table was written: the supplied index (LAR) wins over the table (IND).
+    traded = {"LAR": {"starting_qb": "Daniel Jones", "key_rbs": [], "key_pass_catchers": []}}
+    assert verify_player_team_attribution("Daniel Jones", "LAR", traded, position="QB") is True
+    assert verify_player_team_attribution("Daniel Jones", "LAR", traded) is True
+    # The move table alone never verifies outside fixtures.
+    assert verify_player_team_attribution("Kenneth Walker III", "KC", {}) is False
+    assert verify_player_team_attribution("Kenneth Walker III", "KC", {}, allow_static=True) is True
+
+
+def test_backup_with_more_quotes_is_not_promoted() -> None:
+    props = [{"team": "KC", "player_name": "Patrick Mahomes", "market": "PASS_YDS", "books": [{}]},
+             {"team": "KC", "player_name": "Backup Passer", "market": "PASS_YDS",
+              "books": [{}, {}, {}, {}, {}]}]
+    bare = build_team_roster_index(props)
+    assert bare["KC"]["starting_qb"] is None and bare["KC"]["starting_qb_status"] == "unknown"
+    taped = build_team_roster_index(props, tape_roles={"KC": {"qb": "Patrick Mahomes"}})
+    assert taped["KC"]["starting_qb"] == "Patrick Mahomes"
+    assert taped["KC"]["starting_qb_status"] == "probable"
+    assert all(r["starting_qb_status"] != "confirmed" for r in taped.values())

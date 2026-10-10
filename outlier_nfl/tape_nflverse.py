@@ -246,16 +246,63 @@ def slate_week(
     return min(weeks) if weeks else None
 
 
+def injury_report_status(
+    injury_rows: Iterable[Mapping[str, str]],
+    season: int | None,
+    week: int | None,
+    as_of_utc: datetime | None,
+    run_mode: str | None = None,
+) -> str:
+    """Point-in-time status of the injury report for ``season``/``week`` (F02).
+
+    ``no_cutoff`` without ``as_of_utc`` (offline/fixture builds). Otherwise a
+    row revised after ``as_of_utc`` is ``revised_after_as_of``: nflverse keeps
+    only each row's latest version, so the report as it stood cannot be rebuilt.
+    Rows without a ``date_modified`` (the 2025/2026 files have no such column)
+    are ``live_unstamped`` only when ``run_mode == "live"`` (the file is the
+    current report); any other mode, including an unspecified one, fails closed
+    as ``unstamped``. The decision uses the run mode, never how close as_of is
+    to now.
+    """
+    if as_of_utc is None:
+        return "no_cutoff"
+    unstamped = False
+    for r in injury_rows:  # naive stamps read as UTC, like depth-chart ``dt``
+        if r.get("season_type", "REG") != "REG":
+            continue
+        if season is not None and r.get("season") and str(r.get("season")) != str(season):
+            continue
+        if week is not None and int(_num(r.get("week"))) != week:
+            continue
+        stamp = snapshot_time(r.get("date_modified"))
+        if stamp is None:
+            unstamped = True
+        elif stamp > as_of_utc:
+            return "revised_after_as_of"
+    if unstamped:
+        return "live_unstamped" if run_mode == "live" else "unstamped"
+    return "point_in_time"
+
+
+ADMISSIBLE_INJURY_STATUSES = ("point_in_time", "no_cutoff", "live_unstamped")
+
+
 def inactive_players(
     injury_rows: Iterable[Mapping[str, str]],
     week: int | None,
     statuses: Iterable[str] = INACTIVE_STATUSES,
+    season: int | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Players ruled ``statuses`` on the given week's report, per team.
 
-    With ``week=None`` the latest reported week is used.
+    With ``week=None`` the latest reported week is used. With ``season`` rows
+    stamped with another season are ignored (F02).
     """
-    rows = [r for r in injury_rows if r.get("season_type", "REG") == "REG"]
+    rows = [
+        r for r in injury_rows
+        if r.get("season_type", "REG") == "REG"
+        and (season is None or not r.get("season") or str(r.get("season")) == str(season))
+    ]
     if week is None:
         reported = [int(_num(r.get("week"))) for r in rows if r.get("week")]
         week = max(reported) if reported else None
@@ -315,28 +362,54 @@ def _as_of_day(as_of: date | datetime) -> date:
     return as_of.astimezone(_EASTERN).date() if isinstance(as_of, datetime) else as_of
 
 
+ROLE_POSITIONS = frozenset({"QB", "RB", "TE", "WR"})
+# Oldest a tape (or a depth snapshot inside one) may be relative to the slate (F02/F18).
+TAPE_MAX_AGE_DAYS = 7
+
+
+def _stale(dt: str, as_of: date | datetime | None) -> bool:
+    """True when snapshot ``dt`` is more than TAPE_MAX_AGE_DAYS before ``as_of``."""
+    if as_of is None:
+        return False
+    day = as_of.date() if isinstance(as_of, datetime) else as_of
+    try:
+        snap = date.fromisoformat(dt[:10])
+    except ValueError:
+        return True
+    return (day - snap).days > TAPE_MAX_AGE_DAYS
+
+
 def depth_chart_roles(
     depth_rows: Iterable[Mapping[str, str]],
     inactive: Mapping[str, list[dict[str, str]]] | None = None,
     as_of: date | datetime | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Top healthy QB/RB/TE plus outside and slot WR from the latest snapshot per team.
+    """Top healthy QB/RB/TE plus outside and slot WR per team.
 
+    Each role position (QB, RB, TE, WR) is read from the team's newest snapshot
+    that lists that position: nflverse sometimes posts a partial snapshot (e.g.
+    defense only), which must not blank the offense from the previous full one.
     ``as_of`` keeps only snapshots knowable then: an aware datetime is compared to
     the full snapshot timestamp, a date keeps snapshots dated on or before that day.
+    A snapshot more than ``TAPE_MAX_AGE_DAYS`` before ``as_of`` is stale and never
+    used, so a weeks-old chart cannot name a probable starter.
     """
-    latest: dict[str, str] = {}
-    by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
+    latest: dict[tuple[str, str], str] = {}
+    by_pos: dict[tuple[str, str], list[Mapping[str, str]]] = defaultdict(list)
     for r in depth_rows:
         dt = str(r.get("dt") or "")
-        if not dt or _after_as_of(dt, as_of):
+        pos = str(r.get("pos_abb") or "")
+        if not dt or pos not in ROLE_POSITIONS or _after_as_of(dt, as_of) or _stale(dt, as_of):
             continue
-        team = _team(r.get("team"))
-        if dt > latest.get(team, ""):
-            latest[team] = dt
-            by_team[team] = []
-        if dt == latest[team]:
-            by_team[team].append(r)
+        key = (_team(r.get("team")), pos)
+        if dt > latest.get(key, ""):
+            latest[key] = dt
+            by_pos[key] = []
+        if dt == latest[key]:
+            by_pos[key].append(r)
+    by_team: dict[str, list[Mapping[str, str]]] = defaultdict(list)
+    for (team, _pos), pos_rows in by_pos.items():
+        by_team[team].extend(pos_rows)
 
     roles: dict[str, dict[str, str]] = {}
     for team, rows in by_team.items():
@@ -538,20 +611,30 @@ def _auto_roles(
     before: date | None,
     game_rows: list[dict[str, str]],
     as_of_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> tuple[
-    dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]]
+    dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]],
+    str | None,
 ]:
-    """Depth-chart roles, inactives and defensive starters out.
+    """Depth-chart roles, inactives, defensive starters out and injury report status.
 
     Inactives are None when the injury report could not be fetched, so callers
     never mistake a failed fetch for a report with nobody out. Roles and
     defensive starters out are empty on any depth-chart failure. Depth snapshots
     are cut at ``as_of_utc`` (full timestamp) when given, else at ``before``.
     """
+    status: str | None = None
     try:
+        injury_rows = fetch_csv(INJURIES_URL.format(season=season))
+        week = slate_week(game_rows, season, before)
         injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
-            fetch_csv(INJURIES_URL.format(season=season)), slate_week(game_rows, season, before)
+            injury_rows, week, season=season
         )
+        status = injury_report_status(injury_rows, season, week, as_of_utc, run_mode)
+        if status not in ADMISSIBLE_INJURY_STATUSES:
+            # Not the report as it stood at as_of: treat as not loaded (F02).
+            logger.warning("Injury report not point-in-time (%s); not used", status)
+            injuries = None
     except Exception as exc:  # the trace reports the injury pillar as MISSING
         logger.warning("Injury report unavailable: %s", exc)
         injuries = None
@@ -563,7 +646,7 @@ def _auto_roles(
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
         roles, defensive_out = {}, {}
-    return roles, injuries, defensive_out
+    return roles, injuries, defensive_out, status
 
 
 def build_tape_payload(
@@ -580,6 +663,7 @@ def build_tape_payload(
     grades: Mapping[str, Mapping[str, float]] | None = None,
     defensive_out: Mapping[str, list[str]] | None = None,
     as_of_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
@@ -595,8 +679,11 @@ def build_tape_payload(
         team_rows = fetch_csv(TEAM_WEEK_URL.format(season=season))
     if game_rows is None:
         game_rows = fetch_csv(SCHEDULES_URL)
+    injury_status: str | None = None
     if auto_roles and depth_roles is None and inactive is None:
-        depth_roles, inactive, defensive_out = _auto_roles(season, before, game_rows, as_of_utc)
+        depth_roles, inactive, defensive_out, injury_status = _auto_roles(
+            season, before, game_rows, as_of_utc, run_mode
+        )
     # Only an injury report that was actually fetched (or supplied) counts as loaded.
     injury_report_loaded = inactive is not None
     merged: dict[str, dict[str, Any]] = {t: dict(r) for t, r in (roles or {}).items()}
@@ -625,6 +712,8 @@ def build_tape_payload(
         "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
         "injury_report_loaded": injury_report_loaded,
+        "injury_report_status": injury_status,
+        "run_mode": run_mode,
         "defensive_starters_out": {
             t: list(names) for t, names in sorted((defensive_out or {}).items())
         },
@@ -678,6 +767,7 @@ def refresh_prior_week_tape(
     before: date | None = None,
     last_n: int | None = None,
     as_of_utc: datetime | None = None,
+    run_mode: str | None = None,
 ) -> Path:
     """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
 
@@ -686,7 +776,8 @@ def refresh_prior_week_tape(
     """
     path = Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
-        season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc
+        season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc,
+        run_mode=run_mode,
     )
     payload["fetched_at_utc"] = datetime.now(UTC).isoformat()
     if not payload["teams"]:
