@@ -62,6 +62,7 @@ from outlier_nfl.roster import build_team_roster_index
 from outlier_nfl.best_bets import TraceInputs, build_best_bets, render_best_bets_markdown
 from outlier_nfl.run_context import SourceRecord, make_run_context, parse_utc
 from outlier_nfl.run_writer import RunWriter
+from outlier_nfl.season_phase import season_phase_receipt, slate_season_type
 from outlier_nfl.stage_receipts import (
     StageReceipt,
     failing,
@@ -368,6 +369,9 @@ class NflPipeline:
         # originals: it is kept as an immutable bundle only (F11).
         publish = ctx.publishes
         publication_reason = ctx.publication_reason
+        # Only a regular-season slate of a supported season can publish (F29).
+        receipts.append(season_phase_receipt(slate_events, ctx.season))
+        season_type = slate_season_type(slate_events)
         # A required stage that is not OK keeps the run out of every dated and
         # latest file and pointer, whatever its mode (F03).
         gate = gate_reason(receipts)
@@ -757,6 +761,7 @@ class NflPipeline:
             "before_week": before_week,
             "sources": [src.to_dict() for src in sources],
             "stage_receipts": [r.to_dict() for r in receipts],
+            "season_type": season_type,
             "events_count": len(slate_events),
             "game_lines_count": len(all_game_lines),
             "spreads_count": spreads_count,
