@@ -393,6 +393,10 @@ def attach_model_p_hierarchy_record(
         ):
             return record
 
+    # Falling back to empirical hit rates: a projection's method/count no longer
+    # describe model_p, so they must not survive next to it (F06).
+    record.pop("model_p_method", None)
+    record.pop("model_p_n_games", None)
     attach_empirical_model_p_record(
         record, overwrite=True, method="laplace", alpha=alpha
     )
