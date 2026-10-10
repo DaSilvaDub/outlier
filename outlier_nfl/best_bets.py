@@ -20,7 +20,10 @@ and the probability change it contributed:
                      EV and a capped quarter-Kelly stake.
 
 Pillar statuses: VERIFIED, ESTIMATED, MISSING, STALE, CONTRADICTS. A pick is
-VALIDATED only when all six are VERIFIED and the edge is positive; any
+VALIDATED only when all six are VERIFIED and the expected return at the quoted
+price is positive (a positive no-vig edge alone is a diagnostic, not approval).
+An integer line can push; until the pick's probability prices the push, its
+price pillar is at most ESTIMATED, so it cannot be VALIDATED. Any
 CONTRADICTS (or the player being inactive) rejects it; everything else is
 PROVISIONAL with the gaps listed.
 
@@ -631,6 +634,32 @@ def _opposite_implied(prop: Mapping[str, Any], by_line: Mapping[tuple[Any, ...],
     return _pct(row.get("implied_probability")) if row else None
 
 
+def push_aware_ev(p_win: float, p_push: float, decimal: float) -> float:
+    """Expected return per unit staked: a push returns the stake (F05/F07)."""
+    p_loss = max(0.0, 1.0 - p_win - p_push)
+    return p_win * (decimal - 1.0) - p_loss
+
+
+def price_gate(final_p: float, decimal: float, line: Any, edge: float) -> tuple[float, str | None, list[str]]:
+    """EV at the quote and the price-pillar status cap it implies (F05).
+
+    Returns ``(ev, cap, notes)``. ``cap`` is CONTRADICTS when the edge or the
+    expected return is not positive, ESTIMATED for an integer line (its push is
+    not priced by ``final_p``), else None (no cap).
+    """
+    ln = _f(line)
+    integer = ln is not None and float(ln).is_integer()
+    # Half lines cannot push; on an integer line final_p is a binary hit rate.
+    ev = push_aware_ev(final_p, 0.0, decimal)
+    if edge <= 0:
+        return ev, CONTRADICTS, ["no edge at the best available price"]
+    if ev <= 0:
+        return ev, CONTRADICTS, ["no positive expected return at the quoted price"]
+    if integer:
+        return ev, ESTIMATED, ["integer line can push; push probability not priced, so not validated"]
+    return ev, None, []
+
+
 def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
     pillar = Pillar()
     odds = prop.get("best_odds")
@@ -653,18 +682,21 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
         pillar.notes.append("opposite side not quoted; fair price assumes standard vig")
         status = ESTIMATED
     edge = final_p - fair
-    ev = final_p * dec - 1.0
+    ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
     b = dec - 1.0
     kelly = (b * final_p - (1.0 - final_p)) / b if b > 0 else 0.0
     stake = max(0.0, min(MAX_STAKE, kelly * QUARTER_KELLY))
     pillar.evidence.update(
         {"best_odds": int(odds), "decimal": round(dec, 4), "implied": round(implied, 4),
          "fair_p": round(fair, 4), "model_p": round(final_p, 4), "edge": round(edge, 4),
-         "ev_per_unit": round(ev, 4), "stake_if_validated": round(stake, 4)}
+         "ev_per_unit": round(ev, 4), "ev_at_quote_positive": ev > 0,
+         "stake_if_validated": round(stake, 4)}
     )
-    if edge <= 0:
+    pillar.notes.extend(gate_notes)
+    if cap == CONTRADICTS:
         pillar.status = CONTRADICTS
-        pillar.notes.append("no edge at the best available price")
+    elif cap == ESTIMATED:
+        pillar.status = ESTIMATED
     else:
         pillar.status = status
     return pillar

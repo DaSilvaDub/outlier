@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from outlier_nfl import best_bets as bb
+
 from outlier_nfl.projection import attach_model_p_hierarchy_record, project_hit_probability_v2
 
 
@@ -112,3 +114,96 @@ def test_anytime_td_counts_only_scored_touchdowns(row: dict[str, Any], expected:
     from outlier_nfl.projection import week_stat_value
 
     assert week_stat_value("ANYTIME_TD", row) == expected
+
+
+# F05 -----------------------------------------------------------------------
+
+
+
+
+def _quote(final_p: float, line: float, odds: int = -110, opp: float = 0.5238):
+    prop = {"player_name": "x", "market": "REC", "position": "OVER", "line": line,
+            "best_odds": odds, "implied_probability": 0.5238, "scope": "full_game"}
+    other = {**prop, "position": "UNDER", "implied_probability": opp}
+    by_line = {bb.prop_key(other) + (line,): other}
+    return bb._price(prop, final_p, by_line)
+
+
+def test_positive_edge_with_negative_ev_is_rejected() -> None:
+    # p=.51 at -110/-110: no-vig fair .50 (edge +.01) but EV = .51*1.909-1 < 0.
+    pillar = _quote(0.51, 5.5)
+    assert pillar.evidence["edge"] > 0 and pillar.evidence["ev_per_unit"] < 0
+    assert pillar.status == bb.CONTRADICTS
+    assert "no positive expected return at the quoted price" in pillar.notes
+
+
+def test_p_above_break_even_passes_the_price_pillar() -> None:
+    pillar = _quote(0.56, 5.5)  # break-even at -110 is 0.5238
+    assert pillar.status == bb.VERIFIED and pillar.evidence["ev_at_quote_positive"] is True
+
+
+def test_integer_line_is_never_validated_until_pushes_are_priced() -> None:
+    pillar = _quote(0.60, 5.0)
+    assert pillar.status == bb.ESTIMATED
+    assert any("push" in n for n in pillar.notes)
+
+
+def test_push_aware_ev() -> None:
+    # Mean 2, UNDER 2 at even money: win .406006, push .270671, loss .323323.
+    assert bb.push_aware_ev(0.406006, 0.270671, 2.0) == pytest.approx(0.406006 - 0.323323, abs=1e-6)
+
+
+# Rebuild: a NEW versioned card, original byte-identical ------------------------
+
+def _card(tmp_path, picks):
+    import json
+
+    card = tmp_path / "nfl_best_bets_2026-10-04.json"
+    card.write_text(json.dumps({"date": "2026-10-04", "counts": {}, "picks": picks}), encoding="utf-8")
+    return card
+
+
+def _pick(final_p: float, line: float, verdict: str, odds: int = -110, edge: float = 0.01) -> dict:
+    pillars = {n: {"status": bb.VERIFIED, "delta": 0.0, "evidence": {}, "notes": []} for n in
+               ("historical", "opportunity", "matchup", "injury_weather", "market", "price")}
+    return {"verdict": verdict, "player_name": "x", "market": "REC", "position": "OVER",
+            "line": line, "best_odds": odds, "final_p": final_p, "edge": edge,
+            "stake_fraction": 0.02, "pillars": pillars, "base_p": final_p, "rank": 1,
+            "matchup": "A @ B", "team": "A", "fair_p": 0.5, "ev_per_unit": 0.0}
+
+
+def test_rebuild_writes_versioned_card_and_leaves_original_byte_identical(tmp_path) -> None:
+    import json
+
+    from scripts import nfl_rebuild_card as rb
+
+    card = _card(tmp_path, [_pick(0.51, 5.5, bb.VALIDATED), _pick(0.60, 5.0, bb.VALIDATED, edge=0.08),
+                            _pick(0.60, 5.5, bb.VALIDATED, edge=0.08)])
+    original = card.read_bytes()
+    assert rb.main(["--card", str(card), "--version", "phase3a"]) == 0
+    assert card.read_bytes() == original
+    out = tmp_path / "nfl_best_bets_2026-10-04.v-phase3a.json"
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["original_counts"] == {} and data["counts"] == {
+        bb.VALIDATED: 1, bb.PROVISIONAL: 1, bb.REJECTED: 1}
+    verdicts = {(p["line"], p["final_p"]): p["verdict"] for p in data["picks"]}
+    assert verdicts == {(5.5, 0.51): bb.REJECTED, (5.0, 0.60): bb.PROVISIONAL,
+                        (5.5, 0.60): bb.VALIDATED}
+    assert all(p["original_verdict"] == bb.VALIDATED for p in data["picks"])
+    assert data["rebuild"]["source_sha256"] == __import__("hashlib").sha256(original).hexdigest()
+    assert (tmp_path / "nfl_best_bets_2026-10-04.v-phase3a.md").exists()
+    # A second run never overwrites the first rebuild, or the original.
+    with pytest.raises(SystemExit):
+        rb.main(["--card", str(card), "--version", "phase3a"])
+    assert card.read_bytes() == original
+
+
+def test_rebuild_never_promotes_a_verdict(tmp_path) -> None:
+    import json
+
+    from scripts import nfl_rebuild_card as rb
+
+    card = _card(tmp_path, [_pick(0.60, 5.5, bb.PROVISIONAL, edge=0.08)])
+    rb.main(["--card", str(card), "--version", "v2"])
+    data = json.loads((tmp_path / "nfl_best_bets_2026-10-04.v-v2.json").read_text())
+    assert data["picks"][0]["verdict"] == bb.PROVISIONAL
