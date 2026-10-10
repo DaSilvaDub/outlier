@@ -373,6 +373,11 @@ def attach_model_p_hierarchy_record(
     """
     from outlier_nfl.calibration import attach_empirical_model_p_record
 
+    if record.get("model_p") is None and record.get("p_model") is not None:
+        record["model_p"] = record.get("p_model")
+    if not overwrite and record.get("model_p") is not None:
+        # Fill-only: an existing model_p and its provenance are kept as they are.
+        return record
     if overwrite:
         record.pop("model_p", None)
         record.pop("model_p_source", None)

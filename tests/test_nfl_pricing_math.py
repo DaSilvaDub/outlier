@@ -30,3 +30,25 @@ def test_hierarchy_projection_keeps_its_own_method_and_count() -> None:
     attach_model_p_hierarchy_record(rec, week_index={"LAMARJACKSON": weeks})
     assert rec["model_p_source"] == "projection_nflverse_gaussian"
     assert (rec["model_p_method"], rec["model_p_n_games"]) == ("gamelog_gaussian", 3)
+
+
+# F06b ----------------------------------------------------------------------
+
+def test_enrich_close_hierarchy_honours_overwrite_model_p_false() -> None:
+    from outlier_nfl.enrich_close import attach_close_fields
+
+    weeks = {"LAMARJACKSON": [{"rushing_yards": y} for y in (40, 60, 80)]}
+    keep = _row(model_p=0.7, model_p_source="empirical_hit_rate_market_prior")
+    attach_close_fields(keep, attach_model_p="hierarchy", week_index=weeks, overwrite_model_p=False)
+    assert (keep["model_p"], keep["model_p_source"]) == (0.7, "empirical_hit_rate_market_prior")
+
+    replace = _row(model_p=0.7, model_p_source="empirical_hit_rate_market_prior")
+    attach_close_fields(replace, attach_model_p="hierarchy", week_index=weeks, overwrite_model_p=True)
+    assert replace["model_p_source"] == "projection_nflverse_gaussian"
+
+
+def test_hierarchy_fills_a_missing_model_p_when_not_overwriting() -> None:
+    weeks = {"LAMARJACKSON": [{"rushing_yards": y} for y in (40, 60, 80)]}
+    rec = _row()
+    attach_model_p_hierarchy_record(rec, week_index=weeks, overwrite=False)
+    assert rec["model_p_source"] == "projection_nflverse_gaussian"
