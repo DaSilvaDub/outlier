@@ -66,15 +66,39 @@ def _f(value: Any) -> float:
         return 0.0
 
 
+def _stat(value: Any) -> float | None:
+    """A realized statistic, or None when it is missing or unparseable (F14).
+
+    Unlike ``_f`` this never turns a missing value into 0: a blank receiving
+    yards cell is not a zero-yard game.
+    """
+    if value in (None, "", "NA"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _player_key(team: Any, name: Any) -> tuple[str, str]:
     return _team(team), _name_key(name)
 
 
 def _actual(row: Mapping[str, str], market: str) -> float | None:
     if market == TD_MARKET:
-        return _f(row.get("rushing_tds")) + _f(row.get("receiving_tds"))
+        rush, rec = _stat(row.get("rushing_tds")), _stat(row.get("receiving_tds"))
+        return None if rush is None or rec is None else rush + rec
     column = MARKET_COLUMNS.get(market)
-    return _f(row.get(column)) if column else None
+    return _stat(row.get(column)) if column else None
+
+
+def _gradable(market: str) -> bool:
+    return market == TD_MARKET or market in MARKET_COLUMNS
+
+
+def _prior_values(prior: Iterable[Mapping[str, str]], market: str) -> list[float]:
+    """Realized prior values; games with the stat missing are left out, not zeroed."""
+    return [v for v in (_actual(r, market) for r in prior) if v is not None]
 
 
 def _direction_hit(side: str, actual: float, reference: float) -> bool | None:
@@ -203,15 +227,17 @@ def grade_signals(
                 continue
             actual = _actual(row, market)
             if actual is None:
-                skipped.append({**base, "reason": "market not gradable from box scores"})
+                reason = ("stat missing from this week's box score" if _gradable(market)
+                          else "market not gradable from box scores")
+                skipped.append({**base, "reason": reason})
                 continue
-            prior = history.get(key, [])
+            prior = _prior_values(history.get(key, []), market)
             prior_avg: float | None = None
             hit_avg: bool | None = None
             if market == TD_MARKET:
                 hit_avg = (actual >= 1) if side == "OVER" else (actual == 0)
             elif len(prior) >= MIN_PRIOR_GAMES:
-                prior_avg = round(sum(_actual(r, market) or 0.0 for r in prior) / len(prior), 2)
+                prior_avg = round(sum(prior) / len(prior), 2)
                 hit_avg = _direction_hit(side, actual, prior_avg)
             line = lookup_consensus_line(
                 lines, str(s.get("event_id") or ""), key[0], key[1], market
@@ -244,13 +270,13 @@ def direction_baselines(
         over = under = 0
         for games in by_player.values():
             cur = games.get(week)
-            prior = [g for wk, g in games.items() if wk < week]
-            if cur is None or len(prior) < MIN_PRIOR_GAMES:
+            prior = _prior_values((g for wk, g in games.items() if wk < week), market)
+            act = _actual(cur, market) if cur is not None else None
+            if act is None or len(prior) < MIN_PRIOR_GAMES:
                 continue
-            avg = sum(_actual(g, market) or 0.0 for g in prior) / len(prior)
+            avg = sum(prior) / len(prior)
             if avg <= 0:
                 continue
-            act = _actual(cur, market) or 0.0
             over += act > avg
             under += act < avg
         if over + under:
