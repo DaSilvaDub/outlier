@@ -1,3 +1,35 @@
+# HANDOFF - 2026-10-10 (Codex, NFL missing phase fallback)
+
+## Last Commit SHA
+Code commit: `db3b1504fd98f5a32fdaf0dcdc71e1b82350b12c` (coordination handoff follows this code commit).
+
+## PR
+https://github.com/DaSilvaDub/outlier/pull/239
+Existing phase-2 repair branch: `fix/nfl-repair-phase2-gates-r2`.
+Local isolated worktree branch: `fix/nfl-season-phase-fallback`.
+
+## Files Touched
+- `outlier_nfl/external/schedule.py`: emit phase-only identity metadata for all games in the requested season, preserving REG-only metrics.
+- `outlier_nfl/external/__init__.py`: carry that metadata in `ExternalLoad.phase_records` from the same schedule fetch.
+- `outlier_nfl/pipeline.py`: load F01 external inputs before deciding publication and pass phase metadata to the receipt and summary.
+- `outlier_nfl/season_phase.py`: fall back to nflverse game_type by Eastern kickoff date and ordered normalized teams when event type/week cannot resolve phase.
+- `tests/test_nfl_season_phase.py`, `tests/test_nfl_external.py`: missing metadata success/failure, aliases/night kickoff, unsupported/ambiguous phases, adapter/cutoff coverage.
+
+## Verification
+- Success regression failed before the repair and passed after.
+- 65 targeted phase/external/leakage/stage tests passed.
+- Additional integration/pagination/snapshot group: 23 passed; two Windows snapshot determinism failures concern escaped absolute work paths. Both reproduced on unchanged PR base e8ea822 (2 failed in 26.05s); normalizing only work_one/work_two makes all saved files identical.
+- mypy outlier_nfl: success; pyright outlier_nfl: 0 errors/warnings.
+- Changed-code Ruff: clean; pipeline has the same 20 E402 findings as the base, clean with E402 excluded.
+- Independent read-only review: no material blockers.
+- No live payload checks or paid provider calls.
+
+## Next Steps
+Review/merge PR #239 after hosted checks. Live-payload confirmation is no longer a prerequisite for this phase fallback. This work does not merge or run the Sunday production pipeline. Canonical local calibration/report edits were preserved.
+Beads task: `dasil-9xv`.
+
+---
+
 # HANDOFF — 2026-10-09 (Antigravity/Gemini, WNBA Floor Ladder Min Line Calibration: AST & REB >= 3.5)
 
 **Branch**: `feat/wnba-ast-reb-min-line` · **Last commit**: `d86727c`
