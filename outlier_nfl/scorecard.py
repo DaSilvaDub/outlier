@@ -15,6 +15,8 @@ record accumulates week over week; the summary reads the whole ledger.
 
 from __future__ import annotations
 
+import math
+
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import date as date_cls
@@ -75,9 +77,10 @@ def _stat(value: Any) -> float | None:
     if value in (None, "", "NA"):
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None  # F30: NaN/inf are not stats
 
 
 def _player_key(team: Any, name: Any) -> tuple[str, str]:

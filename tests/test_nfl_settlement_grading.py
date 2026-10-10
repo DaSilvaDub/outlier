@@ -86,3 +86,64 @@ def test_direction_baselines_ignore_missing_stats() -> None:
     rows = _rows("A", {1: "60", 2: "70", 3: ""}) + _rows("B", {1: "60", 2: "70", 3: "80"})
     assert sc.direction_baselines(3, rows, ["REC_YDS"]) == {("REC_YDS", "OVER"): 1.0,
                                                            ("REC_YDS", "UNDER"): 0.0}
+
+
+# F30 -----------------------------------------------------------------------
+
+def test_non_finite_line_does_not_grade_a_push() -> None:
+    from outlier_nfl.boxscore import BoxScoreError, grade_side
+
+    with pytest.raises(BoxScoreError):
+        grade_side(71.0, float("nan"), "OVER")
+    with pytest.raises(BoxScoreError):
+        grade_side(float("inf"), 60.5, "UNDER")
+
+
+def _write_predictions(tmp_path, records):
+    import json
+
+    path = tmp_path / "nfl_calibrated_props_2026-09-13.json"
+    path.write_text(json.dumps({"date": "2026-09-13", "records": records}), encoding="utf-8")
+    return path
+
+
+def _rec(**kw):
+    base = {"event_id": "e", "matchup": "BAL @ KC", "team": "BAL", "opponent": "KC",
+            "player_name": "Derrick Henry", "market": "RUSH_YDS", "position": "OVER",
+            "line": 60.5, "best_odds": -110, "implied_probability": 52.38}
+    return {**base, **kw}
+
+
+def test_loader_drops_nan_line_and_nulls_infinite_numbers(tmp_path) -> None:
+    from outlier_nfl.settle import load_prediction_snapshot
+
+    path = _write_predictions(tmp_path, [
+        _rec(line=float("nan")), _rec(best_odds=float("inf")),
+        _rec(implied_probability=float("inf"), model_p=float("-inf"), close_odds=float("nan")),
+    ])
+    snaps = load_prediction_snapshot(path, source="calibrated", require_tier1_or_matchup=False)
+    assert len(snaps) == 2  # the NaN line is not a gradeable row
+    assert snaps[0].best_odds is None
+    assert (snaps[1].implied_probability, snaps[1].model_p, snaps[1].close_odds) == (None, None, None)
+
+
+def test_settle_cli_survives_infinite_odds(tmp_path) -> None:
+    import json
+
+    from outlier_nfl import settle
+
+    preds = _write_predictions(tmp_path, [_rec(best_odds=float("inf"))])
+    box = tmp_path / "box.json"
+    box.write_text(json.dumps({"events": [{"event_date": "2026-09-13", "away": "BAL", "home": "KC",
+                                           "away_score": 20, "home_score": 27, "players": {
+                                               "Derrick Henry": {"RUSHING:YDS": 71}}}]}))
+    out = tmp_path / "out.json"
+    assert settle.main(["--predictions", str(preds), "--boxscores", str(box), "--source",
+                        "calibrated", "--all-calibrated", "--out-json", str(out)]) == 0
+    row = json.loads(out.read_text())["rows"][0]
+    assert (row["status"], row["result"]) == ("settled", "W")
+
+
+def test_scorecard_non_finite_stat_is_missing() -> None:
+    assert sc._actual({"receiving_yards": "nan"}, "REC_YDS") is None
+    assert sc._actual({"receiving_yards": "inf"}, "REC_YDS") is None

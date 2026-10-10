@@ -262,6 +262,9 @@ def player_actual(market: str, stats: Mapping[str, float]) -> float | None:
 
 def grade_side(actual: float, line: float, position: str) -> str:
     """Grade OVER/UNDER/YES against an actual. Returns W, L, or P."""
+    if not (math.isfinite(actual) and math.isfinite(line)):
+        # NaN compares False both ways and would grade a push (F30).
+        raise BoxScoreError(f"Non-finite settle input: actual={actual!r} line={line!r}")
     side = str(position or "").strip().upper()
     if side in {"YES", "Y"}:
         return "W" if actual >= 1.0 else "L"

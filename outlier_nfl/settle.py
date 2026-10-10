@@ -181,20 +181,25 @@ def _slate_date_from_prediction(record: Mapping[str, Any], fallback_date: str | 
 
 
 def _optional_float(value: Any) -> float | None:
+    """A finite float, or None: NaN and +/-inf are not usable numbers (F30)."""
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _optional_int(value: Any) -> int | None:
+    """An int, or None for missing, unparseable or non-finite values (F30)."""
     try:
         if value is None or value == "":
             return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -239,9 +244,8 @@ def load_prediction_snapshot(
         line = raw.get("line")
         if line is None:
             continue
-        try:
-            line_f = float(line)
-        except (TypeError, ValueError):
+        line_f = _optional_float(line)
+        if line_f is None:  # unparseable or non-finite: a NaN line must not grade P (F30)
             continue
         player_name = str(raw.get("player_name") or "").strip()
         market = str(raw.get("market") or "").strip()
