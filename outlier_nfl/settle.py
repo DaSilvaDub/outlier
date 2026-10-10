@@ -420,7 +420,7 @@ def settle_predictions(
             _bump(source_buckets, snap.source, "skipped")
             continue
 
-        stats, player_reason = resolve_player_stats(event, snap.player_name)
+        stats, player_reason = resolve_player_stats(event, snap.player_name, snap.team)
         if stats is None:
             row = SettleRow(
                 prediction=snap,

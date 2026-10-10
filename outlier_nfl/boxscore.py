@@ -111,7 +111,8 @@ def parse_simplified_events(payload: Mapping[str, Any] | list[Any]) -> list[NflB
                     group, label = key_text.split(":", 1)
                     bucket[f"{_token(group)}:{_token(label)}"] = parsed
             if bucket:
-                players[_token(name)] = bucket
+                # ``TOKEN#TEAM#ID`` keys (same-name players, F17) keep their parts.
+                players["#".join(_token(part) for part in str(name).split("#"))] = bucket
         events.append(
             NflBoxScoreEvent(
                 provider_event_id=str(raw.get("provider_event_id") or raw.get("event_id") or ""),
@@ -284,14 +285,25 @@ def grade_side(actual: float, line: float, position: str) -> str:
 
 
 def resolve_player_stats(
-    event: NflBoxScoreEvent, player_name: str
+    event: NflBoxScoreEvent, player_name: str, team: str | None = None
 ) -> tuple[dict[str, float] | None, str | None]:
-    """Resolve unique player stats by tokenized name. Skip on ambiguity or miss."""
+    """Resolve unique player stats by tokenized name. Skip on ambiguity or miss.
+
+    Players who share a name in one game are keyed ``TOKEN#TEAM#ID`` (F17); a
+    ``team`` picks one of them only when exactly one plays for that team.
+    """
     needle = _token(player_name)
     if not needle:
         return None, "empty_player_name"
     if needle in event.players:
         return event.players[needle], None
+    shared = [(k, v) for k, v in event.players.items() if k.split("#", 1)[0] == needle and "#" in k]
+    if shared:
+        team_code = str(team or "").strip().upper()
+        owned = [(k, v) for k, v in shared if team_code and k.split("#")[1] == team_code]
+        if len(owned) == 1:
+            return owned[0][1], None
+        return None, "ambiguous_player_match"
     hits = [
         (key, stats)
         for key, stats in event.players.items()

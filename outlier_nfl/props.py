@@ -6,6 +6,8 @@ into normalized NflPlayerProp instances.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Mapping
 import logging
 from typing import Any
 
@@ -26,12 +28,36 @@ from outlier_nfl.utils import coerce_float, coerce_odds
 logger = logging.getLogger("outlier_nfl.props")
 
 
+def _resolve_event_team(raw: Any, event_info: Mapping[str, Any]) -> str | None:
+    """Canonical team code for a provider team reference (F17).
+
+    ``raw`` may be a code/name, a numeric or string provider ID, or a team
+    object (``{"teamId": ...}`` / ``{"alias": ...}``). IDs are compared as
+    strings against the event's own team IDs.
+    """
+    if isinstance(raw, Mapping):
+        for key in ("alias", "abbreviation", "code"):
+            code = normalize_team(raw.get(key))
+            if code:
+                return code
+        raw = raw.get("teamId") or raw.get("id")
+    if raw is None or raw == "":
+        return None
+    text = str(raw).strip()
+    for side in ("home", "away"):
+        tid = event_info.get(f"{side}_team_id")
+        if tid is not None and str(tid).strip() == text:
+            return event_info.get(f"{side}_team")
+    return normalize_team(text)
+
+
 def extract_player_props(
     player_props_payload: dict[str, Any] | list[Any],
     schedule_index: dict[str, dict[str, Any]],
 ) -> list[NflPlayerProp]:
     """Normalize raw bulk player props payload into strongly typed NflPlayerProp objects."""
     results: list[NflPlayerProp] = []
+    dropped: Counter[str] = Counter()
 
     if isinstance(player_props_payload, dict):
         props = player_props_payload.get("props", [])
@@ -47,7 +73,11 @@ def extract_player_props(
         outcome = item.get("outcome") if isinstance(item.get("outcome"), dict) else item
         if not isinstance(outcome, dict):
             continue
-        event_id = str(outcome.get("eventId") or outcome.get("id") or "")
+        # Only ``eventId`` names the event; an outcome's own ``id`` is not an event id (F17).
+        event_id = str(outcome.get("eventId") or item.get("eventId") or "").strip()
+        if not event_id:
+            dropped["no_event_id"] += 1
+            continue
         event_info = schedule_index.get(event_id, {})
 
         event_starts_at = event_info.get("start_time") or outcome.get("eventStartsAt")
@@ -77,31 +107,29 @@ def extract_player_props(
         if line_float is None:
             continue
 
-        # Team & Opponent resolution
-        raw_team = outcome.get("teamId") or outcome.get("team")
-        team = normalize_team(raw_team)
-        if not team and event_info:
-            home_tid = event_info.get("home_team_id")
-            away_tid = event_info.get("away_team_id")
-            if raw_team and raw_team == home_tid:
-                team = event_info.get("home_team")
-            elif raw_team and raw_team == away_tid:
-                team = event_info.get("away_team")
-
+        # Team & Opponent resolution (F17): provider IDs compare as strings, and
+        # the opponent is assigned only when the team is one of the event's two.
+        team = _resolve_event_team(outcome.get("teamId") or outcome.get("team"), event_info)
         home_code = event_info.get("home_team")
         away_code = event_info.get("away_team")
-        if team and home_code and away_code:
-            opponent = away_code if team == home_code else home_code
+        if home_code and away_code:
+            if team is None:
+                opp = _resolve_event_team(
+                    outcome.get("oppTeamId") or outcome.get("opponent"), event_info)
+                if opp in (home_code, away_code):
+                    team = away_code if opp == home_code else home_code
+            if team not in (home_code, away_code):
+                if team is not None:
+                    dropped["team_not_in_event"] += 1
+                    logger.warning("Dropping %s prop: team %s is not in event %s (%s)",
+                                   player_name, team, event_id, matchup)
+                    continue
+                opponent = None
+            else:
+                opponent = away_code if team == home_code else home_code
         else:
-            raw_opp = outcome.get("oppTeamId") or outcome.get("opponent")
-            opponent = normalize_team(raw_opp)
-            if not opponent and event_info:
-                home_tid = event_info.get("home_team_id")
-                away_tid = event_info.get("away_team_id")
-                if raw_opp and raw_opp == home_tid:
-                    opponent = event_info.get("home_team")
-                elif raw_opp and raw_opp == away_tid:
-                    opponent = event_info.get("away_team")
+            opponent = _resolve_event_team(
+                outcome.get("oppTeamId") or outcome.get("opponent"), event_info)
 
         # Books and best odds
         books = extract_book_prices(outcome)
@@ -157,4 +185,6 @@ def extract_player_props(
             )
         )
 
+    if dropped:
+        logger.warning("Dropped player props: %s", dict(sorted(dropped.items())))
     return results
