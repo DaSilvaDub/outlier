@@ -85,7 +85,11 @@ def _check(args: argparse.Namespace) -> int:
             card = ", ".join(f"{k} {v}" for k, v in sorted(st.card.items())) or "none"
             print(f"STATUS {st.slate:<19} {st.status:<18} regradable games "
                   f"{len(st.regradable_events)}, first kickoff {st.first_kickoff} "
-                  f"({st.kickoff_source}), card: {card}")
+                  f"({st.kickoff_source}), card: {card}"
+                  + ("" if st.status != "legacy_regradable" else
+                     f", rows: original_model_p {st.probability_sources['original_model_p']} "
+                     "(original, pre-repair), recomputed_from_hit_rates "
+                     f"{st.probability_sources['recomputed_from_hit_rates']}"))
             for f in st.files:
                 print(f"  {f.verdict:<24} {f.original_path}"
                       + (f" (original for {len(f.original_for)}/{f.games} games)"

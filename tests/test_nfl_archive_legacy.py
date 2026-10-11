@@ -304,3 +304,26 @@ def test_a_hit_rate_alone_is_a_probability(tree):
              BEFORE["2026-10-04"])
     al.record_legacy(nfl, ("2026-10-04",), reports)
     assert al.legacy_status(nfl, "2026-10-04").status == "legacy_regradable"
+
+
+def test_probability_source_is_counted_per_slate(tree, capsys):
+    nfl, reports = tree
+    base = {k: v for k, v in _prop("E104A", "2026-10-04T17:00:00Z").items()
+            if k not in ("model_p", "l10_hit_rate")}
+    rows = [base | {"player_name": "A", "model_p": 0.6},
+            base | {"player_name": "B", "model_p": 0.58, "l5_hit_rate": 60.0},
+            base | {"player_name": "C", "l20_hit_rate": 65.0}]
+    for pre in al.PREDICTION_PREFIXES:
+        _put(nfl / "normalized" / f"{pre}2026-10-04.json", _payload("2026-10-04", rows),
+             BEFORE["2026-10-04"])
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    # each row is in 3 prediction files but is counted once
+    assert st.probability_sources == {"original_model_p": 2, "recomputed_from_hit_rates": 1}
+    check = ["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04"]
+    nfl_archive.main(check)
+    assert ("original_model_p 2 (original, pre-repair), recomputed_from_hit_rates 1"
+            in capsys.readouterr().out)
+    nfl_archive.main(check + ["--json"])
+    assert json.loads(capsys.readouterr().out)["legacy"][0]["probability_sources"] == {
+        "original_model_p": 6, "recomputed_from_hit_rates": 3}

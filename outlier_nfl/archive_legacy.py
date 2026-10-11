@@ -143,6 +143,9 @@ class LegacyStatus:
     card: dict[str, str]           # {"json"/"md": original | post_slate | partial}
     files: list[FileVerdict] = field(default_factory=list)
     snapshot_rows: dict[str, int] = field(default_factory=dict)
+    # regradable rows by probability source: original_model_p (a saved model_p,
+    # original pre-repair) | recomputed_from_hit_rates (today's code would compute it)
+    probability_sources: dict[str, int] = field(default_factory=dict)
 
 
 def _load(nfl_dir: Path, e: ar.ArchiveEntry) -> Any:
@@ -220,6 +223,13 @@ def _finite(value: Any) -> bool:
         return False
 
 
+def probability_source(r: dict[str, Any]) -> str:
+    """``original_model_p`` when a finite model_p was saved, else ``recomputed_from_hit_rates``."""
+    if _finite(r.get("model_p")) or _finite(r.get("p_model")):
+        return "original_model_p"
+    return "recomputed_from_hit_rates"
+
+
 def _regradable_row(r: dict[str, Any]) -> bool:
     """A line, a price and a probability: without all three a row can't be regraded."""
     price = r.get("sportsbook_best_odds", r.get("best_odds"))
@@ -246,6 +256,7 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
     regradable: set[str] = set()
     card: dict[str, str] = {}
     snap_rows: dict[str, int] = {}
+    seen_rows: dict[tuple[str, ...], str] = {}
     for e in have:
         name = Path(e.original_path or "").name
         mt = _ts(e.mtime)
@@ -263,8 +274,13 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
         files.append(v)
         if e.role == ar.LEGACY_ROLE and name.startswith(PREDICTION_PREFIXES) and orig:
             ok = set(orig)
-            regradable |= {str(r.get("event_id")) for r in _records(_load(root, e))
-                           if str(r.get("event_id")) in ok and _regradable_row(r)}
+            for r in _records(_load(root, e)):
+                if str(r.get("event_id")) in ok and _regradable_row(r):
+                    regradable.add(str(r.get("event_id")))
+                    # one prediction appears in several files: count it once
+                    seen_rows.setdefault((str(r.get("event_id")), str(r.get("player_name")),
+                                          str(r.get("market")), str(r.get("position")),
+                                          str(r.get("line"))), probability_source(r))
         if name.startswith(CARD_PREFIX) and e.role == ar.LEGACY_ROLE:
             card[name.rsplit(".", 1)[-1]] = v.verdict
     # The weekly snapshot file is shared by every slate in its week and only grows,
@@ -278,9 +294,12 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
         _judge_snapshot_rows(root, biggest, slate, kick, snap_rows)
         files.append(FileVerdict(biggest.original_path or biggest.path, biggest.role,
                                  biggest.mtime or "", biggest.sha256, 0, [], []))
+    prob_sources = {k: sum(1 for v in seen_rows.values() if v == k)
+                    for k in ("original_model_p", "recomputed_from_hit_rates")}
     first = min(kick.values()).isoformat() if kick else None
     return LegacyStatus(slate, "legacy_regradable" if regradable else "unrecoverable",
-                        first, source, sorted(regradable), card, files, snap_rows)
+                        first, source, sorted(regradable), card, files, snap_rows,
+                        prob_sources)
 
 
 def _judge_snapshot_rows(root: Path, e: ar.ArchiveEntry, slate: str,
