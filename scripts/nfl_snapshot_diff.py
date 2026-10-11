@@ -55,6 +55,11 @@ players in one game. A15 maps quotes with verified, early, after-kickoff and
 unknown timing, and enriches with supplied feeds labeled as snapshot,
 synthetic, unlabeled and book close. A16 settles closes at the bet's own line,
 at a moved line (87.5 vs 187.5), in fraction units, and with no close line.
+A17 scans alt floors with missing odds, NaN odds, a quote for a game already
+kicked off, an inactive RB, one name in two events, only a DFS book, an
+unresolved team and no injury report. A18 runs the extra-pack export for a
+missing requested date (another latest present), corrupt JSON, a valid empty
+slate, a mismatched payload date and a valid one-row slate.
 A13 runs the schema checks: identical and conflicting
 duplicate team-game rows, a missing opponent row, a week-stats file without
 ``game_id``, and duplicate normalized props. B12 adds ``identity_extras`` to the
@@ -88,7 +93,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 10
+HARNESS_VERSION = 11
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -131,6 +136,11 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "kind": "close_provenance"},
         {"name": "A16_settle_clv", "clock": "2026-09-14T12:55:00+00:00", "kind": "settle",
          "case": "clv"},
+        # Phase 7a (#229): alt-floor eligibility and explicit-date export.
+        {"name": "A17_alt_floor_eligibility", "clock": "2026-09-13T15:00:00+00:00",
+         "kind": "alt_floors"},
+        {"name": "A18_export_explicit_date", "clock": "2026-09-14T13:05:00+00:00",
+         "kind": "export_pack"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -1076,6 +1086,155 @@ def _run_close_provenance_step(work: Path) -> str | None:
     return None
 
 
+A17_AS_OF = "2026-09-13T15:00:00+00:00"
+
+
+def _floor_pair(player: str = "Derrick Henry", event_id: str = "e-bal-kc", team: Any = "BAL",
+                books: Any = None, starts: str = "2026-09-13T17:00:00Z",
+                player_id: str = "00-HENRY") -> list[dict[str, Any]]:
+    """A consensus line plus one alt floor below it for ``player``."""
+    base = {"player_name": player, "player_id": player_id, "team": team, "opponent": "KC",
+            "matchup": "BAL @ KC", "event_id": event_id, "event_starts_at": starts,
+            "market": "RUSH_YDS", "position": "OVER", "scope": "full_game"}
+    alt_books = [{"book": "HARDROCK", "odds": -400}] if books is None else books
+    return [
+        {**base, "line": 79.5, "is_consensus_line": True,
+         "books": [{"book": "HARDROCK", "odds": -110}]},
+        {**base, "line": 49.5, "books": alt_books, "l5_hit_rate": 0.8,
+         "l10_hit_rate": 0.8, "season_hit_rate": 0.8},
+    ]
+
+
+def alt_floor_cases() -> dict[str, tuple[list[dict[str, Any]], dict[str, Any]]]:
+    """A17 cases -> (props, extra discover kwargs the new code accepts)."""
+    ok_injuries = {"BAL": [], "KC": []}
+    return {
+        "eligible_control": (_floor_pair(), {"inactive_by_team": ok_injuries}),
+        "missing_odds": (_floor_pair(books=[]), {"inactive_by_team": ok_injuries}),
+        "nan_odds": (_floor_pair(books=[{"book": "HARDROCK", "odds": float("nan")}]),
+                     {"inactive_by_team": ok_injuries}),
+        "stale_quote_after_kickoff": (_floor_pair(starts="2026-09-13T14:00:00Z"),
+                                      {"inactive_by_team": ok_injuries}),
+        "inactive_rb": (_floor_pair(), {"inactive_by_team": {"BAL": ["Derrick Henry"]}}),
+        "same_name_two_events": (
+            _floor_pair() + _floor_pair(event_id="e-other", player_id="00-OTHER", team="KC"),
+            {"inactive_by_team": ok_injuries}),
+        "target_book_absent_dfs_only": (
+            _floor_pair(books=[{"book": "PRIZEPICKS", "odds": -150}]),
+            {"inactive_by_team": ok_injuries}),
+        "target_book_absent_retail": (
+            _floor_pair(books=[{"book": "DRAFTKINGS", "odds": -350}]),
+            {"inactive_by_team": ok_injuries}),
+        "unresolved_team": (_floor_pair(team=None), {"inactive_by_team": ok_injuries}),
+        "no_injury_report": (_floor_pair(), {"inactive_by_team": None}),
+    }
+
+
+def _run_alt_floor_step(work: Path) -> str | None:
+    """A17 (F23): which floors are executable and which are inventory."""
+    import inspect
+
+    from outlier_nfl import alt_floors
+
+    accepted = set(inspect.signature(alt_floors.discover_alt_floor_candidates).parameters)
+    out: dict[str, Any] = {}
+    for case, (props, extra) in alt_floor_cases().items():
+        kwargs = {"as_of_utc": A17_AS_OF, "require_injury_evidence": True, **extra}
+
+        def run(props: list[dict[str, Any]] = props, kwargs: dict[str, Any] = kwargs) -> Any:
+            cands = alt_floors.discover_alt_floor_candidates(
+                props, **{k: v for k, v in kwargs.items() if k in accepted})
+            ranked = alt_floors.rank_alt_floors(cands)
+            master = ranked[1]
+            flat = [c for mkt in sorted(cands) for c in cands[mkt]]
+            return {
+                "candidates": [{
+                    "player": c.player_name, "event_id": c.event_id, "book": c.target_book,
+                    "odds": c.target_odds, "actionable": getattr(c, "actionable", True),
+                    "inventory_reason": getattr(c, "inventory_reason", None)} for c in flat],
+                "master_pool": [(m.player_name, m.event_id) for m in master],
+                "inventory": [(i.player_name, i.inventory_reason)
+                              for i in (ranked[2] if len(ranked) > 2 else [])],
+            }
+        out[case] = _try(run)
+    dest = work / "data" / "NFL" / "math" / "alt_floor_eligibility.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
+def _export_payload(date: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"date": date, "window": None, "run_id": f"{date}-RUN", "count": len(records),
+            "records": records}
+
+
+EXPORT_RECORD = {"player_name": "Patrick Mahomes", "player_id": "00-MAHOMES",
+                 "event_id": "e-bal-kc", "matchup": "BAL @ KC", "team": "KC",
+                 "opponent": "BAL", "market": "PASS_YDS", "position": "OVER", "line": 250.5,
+                 "best_odds": -110, "books": [{"book": "FANDUEL", "odds": -110}],
+                 "confidence_tier": "TIER_1_ANCHOR", "scope": "full_game", "actionable": True,
+                 "correlation_role": "PRIMARY"}
+
+
+def _run_export_pack_step(work: Path, repo: Path) -> str | None:
+    """A18 (F25): explicit-date export refuses another slate, corrupt or mismatched input."""
+    import contextlib
+    import importlib.util
+    import io
+
+    spec = importlib.util.spec_from_file_location(
+        "export_nfl_extra_pack", repo / "scripts" / "export_nfl_extra_pack.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    cases: dict[str, dict[str, Any]] = {
+        "missing_date_other_latest": {"latest": _export_payload("2026-09-06", [EXPORT_RECORD])},
+        "corrupt_json": {"dated_raw": "{not json"},
+        "valid_empty_slate": {"dated": _export_payload("2026-09-13", [])},
+        "mismatched_payload_date": {"dated": _export_payload("2026-09-06", [EXPORT_RECORD])},
+        "valid_one_row": {"dated": _export_payload("2026-09-13", [EXPORT_RECORD])},
+    }
+    out: dict[str, Any] = {}
+    for case, spec_files in cases.items():
+        root = work / "data" / "NFL" / "export_cases" / case
+        norm = root / "normalized"
+        norm.mkdir(parents=True, exist_ok=True)
+        if "latest" in spec_files:
+            (norm / "nfl_high_prob_props_latest.json").write_text(
+                json.dumps(spec_files["latest"]), encoding="utf-8")
+        if "dated" in spec_files:
+            (norm / "nfl_high_prob_props_2026-09-13.json").write_text(
+                json.dumps(spec_files["dated"]), encoding="utf-8")
+        if "dated_raw" in spec_files:
+            (norm / "nfl_high_prob_props_2026-09-13.json").write_text(
+                spec_files["dated_raw"], encoding="utf-8")
+        csv_path = root / "exports" / "nfl_only.csv"
+        mod.NORMALIZED = norm
+        mod.OUT_CSV = csv_path
+        err = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["export_nfl_extra_pack.py", "--date", "2026-09-13"]
+        try:
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                code = mod.main()
+        except SystemExit as exc:
+            code = exc.code
+        finally:
+            sys.argv = argv
+        rows = None
+        header = None
+        if csv_path.exists():
+            lines = csv_path.read_text(encoding="utf-8").splitlines()
+            header, rows = lines[0].split(","), len(lines) - 1
+        out[case] = {"exit_code": code, "csv_written": csv_path.exists(), "csv_rows": rows,
+                     "csv_header": header,
+                     "stderr": err.getvalue().replace(str(root), "<case>").strip()}
+    dest = work / "data" / "NFL" / "math" / "export_explicit_date.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
@@ -1093,6 +1252,10 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
         return _run_close_join_step(work)
     if step["kind"] == "close_provenance":
         return _run_close_provenance_step(work)
+    if step["kind"] == "alt_floors":
+        return _run_alt_floor_step(work)
+    if step["kind"] == "export_pack":
+        return _run_export_pack_step(work, repo)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"
