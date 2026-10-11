@@ -49,11 +49,11 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 
 | Item | Status | Tests |
 |---|---|---|
-| Immutable archived pregame feeds, as_of_utc and availability stamps | gap | no archive manifest exists (phase-1 archive script deferred). #252's pinned *results* cache is related but covers post-game box scores, not pregame feeds: `test_nfl_boxscore_cache::test_pinned_cache_never_touches_network_even_when_stale`, `::test_pinned_cache_refuses_hash_mismatch`, `::test_pinned_cache_refuses_file_without_sidecar`, `::test_pinned_cache_refuses_missing_file` |
+| Immutable archived pregame feeds, as_of_utc and availability stamps | covered (9c) | `archive/manifest.jsonl` (`outlier_nfl/archive.py`): `test_nfl_archive_manifest::test_valid_entries_round_trip`, `::test_invalid_pregame_fields_are_named`; `test_nfl_archive_writer::test_records_every_pregame_role_without_touching_the_bundle`, `::test_changed_file_is_refused_and_the_entry_kept`, `::test_raw_file_edited_after_the_run_is_never_archived`, `::test_nflverse_inputs_get_their_own_role_with_fetched_at`; `test_nfl_archive_check::test_missing_role_sha_and_size_mismatch_and_deleted_file`. #252 pinned results cache: `test_nfl_boxscore_cache::test_pinned_cache_refuses_hash_mismatch`, `::test_pinned_cache_refuses_file_without_sidecar`. Box scores from settles before #252 were never kept, so the archive can't reconstruct them |
 | Current corrected sources explicitly retrospective | partial | `test_nfl_tape_nflverse::test_retrospective_run_refuses_tape_written_after_as_of`; `test_nfl_publication::test_past_as_of_replay_before_kickoff_is_recorded_and_bundle_only` |
-| Multi-season fixtures | gap | — |
-| Playoffs fixtures | partial | `test_nfl_season_phase::test_postseason_slate_is_rejected_before_publication`; harness B7 |
-| Stat-correction fixtures | partial | `test_nfl_boxscore_cache::test_stat_correction_arrives_on_explicit_refresh`, `::test_pinned_parses_the_bytes_it_verified` (#252) |
+| Multi-season fixtures | gap | The checker requires inputs per season (`test_nfl_archive_check::test_missing_nflverse_season_is_a_gap`), but no multi-season pipeline fixture exists. That needs real archived slates from earlier seasons, which is data, not a test |
+| Playoffs fixtures | covered | Playoffs are refused by design: `test_nfl_edges_e2e::test_every_playoff_round_is_post_by_type_week_and_schedule_and_is_refused` (real 2025 WC/DIV/CON/SB rows); `test_nfl_season_phase::test_postseason_slate_is_rejected_before_publication`; harness B7 |
+| Stat-correction fixtures | partial | `test_nfl_boxscore_cache::test_stat_correction_arrives_on_explicit_refresh`, `::test_pinned_parses_the_bytes_it_verified` (#252); the archive pins which nflverse files a regrade used (`test_nfl_archive_writer::test_nflverse_csv_that_fails_its_sidecar_is_refused`). There is no end-to-end corrected-regrade fixture yet (10b) |
 
 ## 5. Incremental / repeated updates (9a)
 
@@ -62,7 +62,7 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 | Same run ID has identical semantic outputs | covered (9a) | RC `::test_repeated_run_on_the_same_inputs_has_identical_semantic_outputs`; `test_nfl_publication::test_run_writer_refuses_reuse`; `test_nfl_boxscore_cache::test_settle_cli_pinned_regrade_is_reproducible` (#252: a pinned re-grade gives identical output); harness determinism (two captures, no diff) |
 | No duplicate ledger/snapshot records | covered | `test_nfl_persistence::test_same_run_id_never_duplicates_snapshot_rows`, `::test_same_run_id_ledger_rows_are_replaced_not_duplicated`; harness A21 |
 | Changed run ID adds an observation with coherent provenance | covered (9a) | `test_nfl_persistence::test_changed_run_id_adds_one_observation`; RC `::test_changed_run_id_replaces_the_ledger_observation_coherently`; `test_nfl_publication::test_snapshot_rows_carry_the_run_id` |
-| Concurrent jobs cannot lose dates | covered (9a) | `test_nfl_persistence::test_concurrent_ledger_writers_lose_no_dates`, `::test_two_threads_on_a_stale_lock_never_overlap`; RC `::test_concurrent_snapshot_appends_lose_no_rows`; `test_nfl_edges_e2e::test_two_os_processes_lose_no_snapshot_or_ledger_rows` (9b: two spawned OS processes) |
+| Concurrent jobs cannot lose dates | covered (9a) | `test_nfl_persistence::test_concurrent_ledger_writers_lose_no_dates`, `::test_two_threads_on_a_stale_lock_never_overlap`; RC `::test_concurrent_snapshot_appends_lose_no_rows`; `test_nfl_edges_e2e::test_two_os_processes_lose_no_snapshot_or_ledger_rows` (9b: two spawned OS processes; 9c: a shared start barrier guarantees they overlap) |
 
 ## 6. End-to-end (9b)
 
@@ -114,7 +114,7 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 | Correct three-outcome economics | covered | `test_nfl_pricing_math::test_push_aware_ev`, `::test_integer_line_is_never_validated_until_pushes_are_priced`; RC `::test_push_aware_ev_never_counts_push_mass_as_win_or_loss` |
 | No as-of violations | covered | §7 rows above; `test_nfl_asof_leakage::test_naive_as_of_is_rejected` |
 | Coherent run hashes | covered | `test_nfl_publication::test_run_bundle_manifest_hashes_match_and_pointer_written_last`; `test_nfl_snapshot_diff::test_bundle_manifest_hashes_and_sizes_are_scrubbed` |
-| Complete expected slate coverage | partial | `test_nfl_pagination_completeness` (feed completeness); expected-slate-vs-archive check needs the 9c archive manifest |
+| Complete expected slate coverage | covered (9c) | `test_nfl_archive_check::test_no_manifest_reports_every_role_of_every_pointed_slate`, `::test_expected_slate_without_a_pointer_is_a_gap`, `::test_rerun_moving_the_pointer_is_flagged_until_archived`, `::test_cli_exit_codes`; feed completeness: `test_nfl_pagination_completeness` |
 | Green NFL checks in frozen Python 3.11 CI | covered (CI) | `core` / `typecheck` workflows (F28 gate owned by Pipeline Health); not a pytest test |
 
 ## Summary
@@ -124,14 +124,14 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 | 1 Unit calculations | 5 | 0 | 0 | 9a |
 | 2 Data integrity | 6 | 0 | 0 | 9a |
 | 3 Integration | 4 | 0 | 0 | 9b |
-| 4 Historical backfill | 0 | 3 | 2 | 9c |
+| 4 Historical backfill | 2 | 2 | 1 | 9c |
 | 5 Incremental/repeated | 4 | 0 | 0 | 9a |
 | 6 End-to-end | 9 | 0 | 0 | 9b |
 | 7 Leakage prevention | 5 | 0 | 0 | 9a |
 | 8 NFL edges | 12 | 1 | 0 | 9b |
-| Release criteria | 6 | 1 | 0 | 9c (coverage) |
+| Release criteria | 7 | 0 | 0 | 9c |
 
 Before 9a, categories 1/2/5/7 had 1 + 2 + 3 + 1 items short of full coverage
 (offered-price EV; declared counts, two teams per game; same-run semantic
 identity, changed-run ledger provenance, concurrent snapshot appends;
-retrospective close), now filled by `tests/test_nfl_release_contracts.py`. Phase 9b (#231 part b) fills categories 3, 6 and 8 with `tests/test_nfl_edges_e2e.py`; IR/PUP stays partial because no real source carries that status.
+retrospective close), now filled by `tests/test_nfl_release_contracts.py`. Phase 9b (#231 part b) fills categories 3, 6 and 8 with `tests/test_nfl_edges_e2e.py`; IR/PUP stays partial because no real source carries that status. Phase 9c (#231 part c) adds the archive manifest (`archive/manifest.jsonl`, writer and read-only checker `scripts/nfl_archive.py`). Multi-season fixtures remain a data gap.
