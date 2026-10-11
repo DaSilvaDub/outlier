@@ -1126,6 +1126,12 @@ def alt_floor_cases() -> dict[str, tuple[list[dict[str, Any]], dict[str, Any]]]:
             _floor_pair(books=[{"book": "DRAFTKINGS", "odds": -350}]),
             {"inactive_by_team": ok_injuries}),
         "unresolved_team": (_floor_pair(team=None), {"inactive_by_team": ok_injuries}),
+        # Review round 2: live feeds may carry display names, not compact codes.
+        **{f"display_name_{key}": (_floor_pair(books=[{"book": name, "odds": -400}]),
+                                   {"inactive_by_team": ok_injuries})
+           for key, name in (("hard_rock", "Hard Rock"), ("hardrock_r", "Hardrock R"),
+                             ("espn_bet", "ESPN Bet"), ("draftkings", "DraftKings"),
+                             ("prizepicks", "PrizePicks"))},
         "no_injury_report": (_floor_pair(), {"inactive_by_team": None}),
     }
 
