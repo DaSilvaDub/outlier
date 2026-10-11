@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from outlier_nfl.utils import atomic_write_bytes
 from outlier_nfl.tape_nflverse import NFLVERSE_RELEASES, fetch_bytes, parse_csv_bytes
 
 __all__ = ["Client", "NFLVERSE_RELEASES", "num"]
@@ -37,9 +38,7 @@ class Client:
         if self.ttl > 0 and path.exists() and time.time() - path.stat().st_mtime < self.ttl:
             return parse_csv_bytes(path.read_bytes())
         data = fetch_bytes(url, timeout)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
+        atomic_write_bytes(path, data)  # unique temp name (F27)
         return parse_csv_bytes(data)
 
 

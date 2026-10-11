@@ -39,13 +39,14 @@ import gzip
 import io
 import json
 import logging
-import os
 import re
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.request import Request, urlopen
+
+from outlier_nfl.utils import atomic_write_bytes, atomic_write_text
 from zoneinfo import ZoneInfo
 
 from outlier_nfl.config import normalize_team
@@ -807,10 +808,8 @@ def write_tape(path: Path, payload: Mapping[str, Any]) -> Path | None:
     backup: Path | None = None
     if path.exists():
         backup = path.with_name(path.stem + ".prev" + path.suffix)
-        backup.write_bytes(path.read_bytes())
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+        atomic_write_bytes(backup, path.read_bytes())
+    atomic_write_text(path, json.dumps(payload, indent=2))  # unique temp name (F27)
     return backup
 
 

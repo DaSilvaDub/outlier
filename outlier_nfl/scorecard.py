@@ -26,6 +26,7 @@ from typing import Any, Iterable, Mapping
 
 from outlier_nfl.config import PROP_PASS_YARDS, PROP_TIMES_SACKED
 from outlier_nfl.tape_nflverse import _name_key, _team
+from outlier_nfl.utils import atomic_write_text
 
 # Signal market -> nflverse stats_player_week column.
 MARKET_COLUMNS: dict[str, str] = {
@@ -310,9 +311,7 @@ def update_ledger(
                 if rec.get("date") != date or str(rec.get("event_id")) not in scope:
                     rows.append(rec)
     rows.extend(asdict(g) for g in graded)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, "".join(json.dumps(r) + "\n" for r in rows))  # unique temp (F27)
     return rows
 
 

@@ -129,6 +129,40 @@ def _replace_with_retry(
             raise
 
 
+def unique_temp_path(target: Path) -> Path:
+    """Hidden sibling temp name unique to this process, thread and call (F27)."""
+    suffix = f"{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.{uuid.uuid4().hex}"
+    return target.parent / f".{target.name}.{suffix}.tmp"
+
+
+def atomic_write_bytes(path: Path | str, data: bytes) -> None:
+    """Write ``data`` to a unique temp sibling, then replace ``path`` (F27).
+
+    A fixed ``<name>.tmp`` collides when two jobs overlap or a crashed job left
+    one behind; a unique name never does.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = unique_temp_path(target)
+    try:
+        with open(temp_path, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(temp_path, target)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def atomic_write_text(path: Path | str, text: str) -> None:
+    """UTF-8 text through :func:`atomic_write_bytes`."""
+    atomic_write_bytes(path, text.encode("utf-8"))
+
+
 def safe_write_json(
     path: Path | str,
     payload: Any,
