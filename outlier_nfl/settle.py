@@ -756,7 +756,16 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
         if args.provider != "nflverse" or not args.nflverse_cache:
             raise SystemExit("--nflverse-pinned requires --provider nflverse and --nflverse-cache DIR")
         if args.nflverse_refresh or args.nflverse_allow_shrink:
-            raise SystemExit("--nflverse-pinned cannot be combined with --nflverse-refresh/--nflverse-allow-shrink")
+            raise SystemExit(
+                "--nflverse-pinned cannot be combined with --nflverse-refresh/--nflverse-allow-shrink"
+            )
+        from outlier_nfl.boxscore_nflverse import default_cache_dir, same_dir
+
+        if same_dir(Path(args.nflverse_cache), default_cache_dir()):
+            raise SystemExit(
+                "--nflverse-pinned refuses the shared default nflverse cache "
+                f"({default_cache_dir()}); copy the files into the regrade's own folder"
+            )
     if args.boxscores:
         return load_boxscores(args.boxscores)
     if args.provider == "nflverse":

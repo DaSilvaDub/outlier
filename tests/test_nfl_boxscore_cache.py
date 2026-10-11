@@ -473,3 +473,51 @@ def test_settle_cli_pinned_rejects_unpinnable_combinations(tmp_path, net, clock,
     with pytest.raises(SystemExit, match="nflverse-pinned"):
         _settle_pinned(tmp_path, cache, tmp_path / "out.json", *args)
     assert net.calls == []
+
+
+@pytest.mark.parametrize("spelling", ["relative", "symlink", "env"])
+def test_pinned_refuses_shared_default_cache_under_any_spelling(
+    tmp_path, net, clock, monkeypatch, spelling
+):
+    home = tmp_path / "home"
+    shared = home / ".cache" / "outlier_nflverse"
+    shared.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("OUTLIER_NFLVERSE_CACHE", raising=False)
+    if spelling == "env":
+        monkeypatch.setenv("OUTLIER_NFLVERSE_CACHE", str(shared))
+    _seed_cache(shared, net)
+    if spelling == "relative":
+        monkeypatch.chdir(home)
+        given = Path(".cache") / ".." / ".cache" / "outlier_nflverse"
+    elif spelling == "symlink":
+        given = tmp_path / "alias"
+        given.symlink_to(shared, target_is_directory=True)
+    else:
+        given = shared
+    with pytest.raises(BoxScoreError, match="shared default"):
+        nv.ensure_games_csv(cache_dir=given, pinned=True)
+    with pytest.raises(SystemExit, match="shared default"):
+        _settle_pinned(tmp_path, given, tmp_path / "out.json", "--nflverse-cache", str(given),
+                       "--nflverse-pinned")
+    assert net.calls == []
+
+
+def test_pinned_parses_the_bytes_it_verified(tmp_path, net, clock, monkeypatch):
+    _seed_cache(tmp_path, net)
+    games = tmp_path / "games.csv"
+    real_read = Path.read_bytes
+    reads: dict[str, int] = {}
+
+    def swap_after_first_read(self: Path) -> bytes:
+        data = real_read(self)
+        if self == games:
+            reads["n"] = reads.get("n", 0) + 1
+            if reads["n"] == 1:
+                games.write_bytes(_games(WEEK1_GAME, WEEK2_GAME))
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", swap_after_first_read)
+    with pytest.raises(BoxScoreError, match="does not match its sidecar"):
+        _load_week(tmp_path, pinned=True)
