@@ -148,6 +148,7 @@ class LegacyStatus:
     # original pre-repair) | recomputed_from_hit_rates (today's code would compute it)
     probability_sources: dict[str, int] = field(default_factory=dict)
     refused_reason: str | None = None  # set when status is "refused"
+    dated_by: str = "mtime"  # legacy files have no run manifest; their mtime dates them
 
 
 def _load(nfl_dir: Path, e: ar.ArchiveEntry) -> Any:

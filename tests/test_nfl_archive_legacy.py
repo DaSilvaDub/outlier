@@ -262,10 +262,12 @@ def test_cli_record_and_check(tree, capsys):
     assert nfl_archive.main(check) == 0
     out = capsys.readouterr().out
     assert "STATUS 2026-09-27          legacy_regradable" in out and "card: none" in out
+    assert all("files dated by mtime" in x for x in out.splitlines() if x.startswith("STATUS"))
     assert out.strip().splitlines()[-1].startswith("slates 3, complete 3")
     assert nfl_archive.main(check + ["--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert [s["status"] for s in body["legacy"]] == ["legacy_regradable"] * 3
+    assert {s["dated_by"] for s in body["legacy"]} == {"mtime"}
 
 
 def test_legacy_status_source_has_no_write_calls():
