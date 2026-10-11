@@ -45,11 +45,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.request import Request, urlopen
-
-from outlier_nfl.utils import atomic_write_bytes, atomic_write_text, file_lock
 from zoneinfo import ZoneInfo
 
 from outlier_nfl.config import normalize_team
+from outlier_nfl.utils import atomic_write_bytes, atomic_write_text, file_lock
 
 logger = logging.getLogger(__name__)
 
