@@ -1,8 +1,8 @@
 """Archive manifest for historical NFL slates (#231 part c).
 
 ``<nfl_dir>/archive/manifest.jsonl`` holds one JSON object per line, one line per
-archived file. Each line records a file where it already sits. Archiving never
-copies, moves or rewrites the file itself.
+archived file. Run bundles are recorded where they sit. nflverse inputs are
+recorded as write-once archive copies. Archiving never moves or rewrites an original.
 
 Fields (every one is validated by :func:`parse_entry`):
 
