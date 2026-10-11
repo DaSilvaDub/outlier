@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 
 from outlier_nfl import archive as ar
-from outlier_nfl import pipeline as nfl_pipeline
 from outlier_nfl import rebuild as rb
 from outlier_nfl.pipeline import NflPipeline
 from outlier_nfl.run_context import parse_utc
@@ -27,14 +26,66 @@ PREGAME = "2026-10-04T15:00:00+00:00"
 NOW = datetime(2026, 10, 11, 3, 0, tzinfo=timezone.utc)
 
 
+NETWORK_CALLS: list[Any] = []
+
+
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
-    """External/weather/usage loaders would fetch current nflverse; keep tests hermetic."""
-    def unavailable(*_a: Any, **_k: Any) -> Any:
+    """Real loaders (conftest's offline stubs undone) with every socket blocked and logged.
+
+    Tests assert the rebuild makes no network call. The original live runs may try
+    (and fail), just as a real live run without network would.
+    """
+    import socket
+
+    from outlier_nfl import external, usage, weather
+
+    NETWORK_CALLS.clear()
+
+    def deny(_self: Any, address: Any, *_a: Any) -> None:
+        NETWORK_CALLS.append(address)
         raise OSError("network disabled in tests")
 
-    for name in ("load_external_metrics", "load_slate_weather", "load_usage"):
-        monkeypatch.setattr(nfl_pipeline, name, unavailable)
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny)
+    monkeypatch.setattr(socket, "create_connection", lambda address, *a, **k: deny(None, address))
+    monkeypatch.setattr("outlier_nfl.pipeline.load_external_metrics",
+                        external.load_external_metrics)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", weather.load_slate_weather)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_usage", usage.load_usage)
+
+
+# Real column layouts: nflverse games.csv (``boxscore_nflverse.GAMES_REQUIRED_COLUMNS``
+# plus ``gametime``/``game_type``) and stats_player_week (``usage.py`` reads player_id,
+# player_display_name, position, season, week, season_type, game_id, team, targets,
+# target_share, carries, receiving_yards, rushing_yards).
+GAMES_CSV = (
+    "game_id,season,game_type,week,gameday,gametime,away_team,home_team,away_score,home_score\n"
+    + "".join(f"2026_{w:02d}_BAL_KC,2026,REG,{w},2026-09-{13 + 7 * (w - 1) - 7:02d},13:00,"
+              f"BAL,KC,20,24\n" for w in (1, 2, 3))
+    + "2026_04_BAL_KC,2026,REG,4,2026-10-04,13:00,BAL,KC,,\n"
+).encode()
+STATS_CSV = (
+    "player_id,player_display_name,position,season,week,season_type,game_id,team,targets,"
+    "target_share,carries,receiving_yards,rushing_yards\n"
+    + "".join(f"P1,Travis Kelce,TE,2026,{w},REG,2026_{w:02d}_BAL_KC,KC,8,0.25,0,70,0\n"
+              for w in (1, 2, 3))
+).encode()
+
+
+def _archive_nflverse(tmp_path: Path, nfl: Path, fetched_at: str = "2026-10-04T12:00:00+00:00"):
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    cache = tmp_path / "nflverse_cache"
+    cache.mkdir(exist_ok=True)
+    for name, data in (("stats_player_week_2026.csv", STATS_CSV), ("games.csv", GAMES_CSV)):
+        (cache / name).write_bytes(data)
+        _write_meta(cache / name, CacheMeta(url=f"https://x/{name}", fetched_at=fetched_at,
+                                            sha256=hashlib.sha256(data).hexdigest(),
+                                            size=len(data), rows=data.count(b"\n") - 1))
+    assert not ar.record_nflverse(nfl, cache, [2026]).conflicts
 
 
 def _tape(nfl: Path) -> Path:
@@ -63,6 +114,8 @@ def _originals(nfl: Path) -> dict[str, bytes]:
 def archived(tmp_path):
     nfl, run_id = live_original(tmp_path)
     assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    NETWORK_CALLS.clear()  # the original live run may try; the rebuild must not
     return nfl, run_id
 
 
