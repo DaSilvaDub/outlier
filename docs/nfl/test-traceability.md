@@ -49,17 +49,17 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 
 | Item | Status | Tests |
 |---|---|---|
-| Immutable archived pregame feeds, as_of_utc and availability stamps | gap | no archive manifest exists (phase-1 archive script deferred) |
+| Immutable archived pregame feeds, as_of_utc and availability stamps | gap | no archive manifest exists (phase-1 archive script deferred). #252's pinned *results* cache is related but covers post-game box scores, not pregame feeds: `test_nfl_boxscore_cache::test_pinned_cache_never_touches_network_even_when_stale`, `::test_pinned_cache_refuses_hash_mismatch`, `::test_pinned_cache_refuses_file_without_sidecar`, `::test_pinned_cache_refuses_missing_file` |
 | Current corrected sources explicitly retrospective | partial | `test_nfl_tape_nflverse::test_retrospective_run_refuses_tape_written_after_as_of`; `test_nfl_publication::test_past_as_of_replay_before_kickoff_is_recorded_and_bundle_only` |
 | Multi-season fixtures | gap | — |
 | Playoffs fixtures | partial | `test_nfl_season_phase::test_postseason_slate_is_rejected_before_publication`; harness B7 |
-| Stat-correction fixtures | partial | `test_nfl_boxscore_cache::test_stat_correction_arrives_on_explicit_refresh` |
+| Stat-correction fixtures | partial | `test_nfl_boxscore_cache::test_stat_correction_arrives_on_explicit_refresh`, `::test_pinned_parses_the_bytes_it_verified` (#252) |
 
 ## 5. Incremental / repeated updates (9a)
 
 | Item | Status | Tests |
 |---|---|---|
-| Same run ID has identical semantic outputs | covered (9a) | RC `::test_repeated_run_on_the_same_inputs_has_identical_semantic_outputs`; `test_nfl_publication::test_run_writer_refuses_reuse`; harness determinism (two captures, no diff) |
+| Same run ID has identical semantic outputs | covered (9a) | RC `::test_repeated_run_on_the_same_inputs_has_identical_semantic_outputs`; `test_nfl_publication::test_run_writer_refuses_reuse`; `test_nfl_boxscore_cache::test_settle_cli_pinned_regrade_is_reproducible` (#252: a pinned re-grade gives identical output); harness determinism (two captures, no diff) |
 | No duplicate ledger/snapshot records | covered | `test_nfl_persistence::test_same_run_id_never_duplicates_snapshot_rows`, `::test_same_run_id_ledger_rows_are_replaced_not_duplicated`; harness A21 |
 | Changed run ID adds an observation with coherent provenance | covered (9a) | `test_nfl_persistence::test_changed_run_id_adds_one_observation`; RC `::test_changed_run_id_replaces_the_ledger_observation_coherently`; `test_nfl_publication::test_snapshot_rows_carry_the_run_id` |
 | Concurrent jobs cannot lose dates | covered (9a) | `test_nfl_persistence::test_concurrent_ledger_writers_lose_no_dates`, `::test_two_threads_on_a_stale_lock_never_overlap`; RC `::test_concurrent_snapshot_appends_lose_no_rows` |
