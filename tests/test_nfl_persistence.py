@@ -171,3 +171,59 @@ def test_same_run_id_ledger_rows_are_replaced_not_duplicated(tmp_path):
     for _ in range(2):
         rows = scorecard.update_ledger(path, [_graded("2026-09-13", "e1")], "2026-09-13")
     assert len(rows) == 1 and len(path.read_text("utf-8").splitlines()) == 1
+
+
+# --- replay --refresh-tape never rewrites the shared tape ---------------------
+
+def _fake_refresh(calls):
+    def fake(nfl_dir, season, **kw):
+        target = Path(kw.get("path") or Path(nfl_dir) / "tape" / "prior_week.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"who": kw.get("run_mode")}), encoding="utf-8")
+        calls.append(target)
+        return target
+    return fake
+
+
+@pytest.mark.parametrize("mode", ["replay", "retrospective", "fixture", None])
+def test_non_live_refresh_builds_its_own_tape(tmp_path, monkeypatch, mode):
+    from outlier_nfl import pipeline
+
+    shared = tmp_path / "tape" / "prior_week.json"
+    shared.parent.mkdir()
+    shared.write_text('{"who": "live"}', encoding="utf-8")
+    calls: list[Path] = []
+    monkeypatch.setattr(pipeline, "refresh_prior_week_tape", _fake_refresh(calls))
+    root = pipeline._refresh_tape(tmp_path, "2026-10-04", None, "2026-10-04T16:00:00+00:00", mode)
+    assert json.loads(shared.read_text("utf-8")) == {"who": "live"}
+    assert root == tmp_path / "tape" / "replay" / "2026-10-04" / "20261004T160000Z"
+    assert calls == [root / "tape" / "prior_week.json"]
+
+
+def test_live_refresh_still_writes_the_shared_tape(tmp_path, monkeypatch):
+    from outlier_nfl import pipeline
+
+    calls: list[Path] = []
+    monkeypatch.setattr(pipeline, "refresh_prior_week_tape", _fake_refresh(calls))
+    root = pipeline._refresh_tape(tmp_path, "2026-10-04", None, "2026-10-04T16:00:00+00:00",
+                                  "live")
+    assert root == tmp_path and calls == [tmp_path / "tape" / "prior_week.json"]
+
+
+def test_failed_refresh_falls_back_to_the_existing_tape_dir(tmp_path, monkeypatch):
+    from outlier_nfl import pipeline
+
+    def boom(*a, **k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(pipeline, "refresh_prior_week_tape", boom)
+    assert pipeline._refresh_tape(tmp_path, "2026-10-04", None, None, "replay") == tmp_path
+
+
+def test_refresh_prior_week_tape_honours_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(tape_nflverse, "build_tape_payload",
+                        lambda *a, **k: {"teams": {"KC": {}}, "week": [3]})
+    target = tmp_path / "scoped" / "tape" / "prior_week.json"
+    got = tape_nflverse.refresh_prior_week_tape(tmp_path, 2026, path=target)
+    assert got == target and target.exists()
+    assert not (tmp_path / "tape" / "prior_week.json").exists()

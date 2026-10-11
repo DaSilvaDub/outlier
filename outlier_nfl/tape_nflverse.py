@@ -821,13 +821,17 @@ def refresh_prior_week_tape(
     last_n: int | None = None,
     as_of_utc: datetime | None = None,
     run_mode: str | None = None,
+    path: Path | None = None,
 ) -> Path:
-    """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
+    """Rebuild ``<nfl_dir>/tape/prior_week.json`` (or ``path``) and return its path.
+
+    ``path`` lets a non-live run build its own tape instead of rewriting the
+    shared one that live runs read (F27).
 
     The envelope records ``as_of_utc`` (the point in time the tape represents)
     and ``fetched_at_utc`` so a run can check the tape was knowable at its cutoff.
     """
-    path = Path(nfl_dir) / "tape" / "prior_week.json"
+    path = Path(path) if path is not None else Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
         season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc,
         run_mode=run_mode,
