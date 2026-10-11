@@ -750,6 +750,22 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
 
 
 def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
+    if args.nflverse_pinned:
+        # A pinned regrade names its folder explicitly and never refreshes, so the
+        # default user cache (which other runs keep refreshing) is never pinned.
+        if args.provider != "nflverse" or not args.nflverse_cache:
+            raise SystemExit("--nflverse-pinned requires --provider nflverse and --nflverse-cache DIR")
+        if args.nflverse_refresh or args.nflverse_allow_shrink:
+            raise SystemExit(
+                "--nflverse-pinned cannot be combined with --nflverse-refresh/--nflverse-allow-shrink"
+            )
+        from outlier_nfl.boxscore_nflverse import default_cache_dir, same_dir
+
+        if same_dir(Path(args.nflverse_cache), default_cache_dir()):
+            raise SystemExit(
+                "--nflverse-pinned refuses the shared default nflverse cache "
+                f"({default_cache_dir()}); copy the files into the regrade's own folder"
+            )
     if args.boxscores:
         return load_boxscores(args.boxscores)
     if args.provider == "nflverse":
@@ -766,6 +782,7 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
                 cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
                 refresh=args.nflverse_refresh,
                 allow_shrink=True if args.nflverse_allow_shrink else None,
+                pinned=args.nflverse_pinned,
             )
         if args.season is None or args.week is None:
             raise SystemExit("nflverse provider requires --slate-date or --season and --week")
@@ -775,6 +792,7 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
             cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
             refresh=args.nflverse_refresh,
             allow_shrink=True if args.nflverse_allow_shrink else None,
+            pinned=args.nflverse_pinned,
         )
     raise SystemExit("Provide --boxscores and/or --provider nflverse")
 
@@ -820,6 +838,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--nflverse-allow-shrink",
         action="store_true",
         help="Accept an nflverse refresh with fewer rows than the cached copy (upstream removal).",
+    )
+    parser.add_argument(
+        "--nflverse-pinned",
+        action="store_true",
+        help=(
+            "Settle from exactly the files in --nflverse-cache: no network, no refresh. Each file "
+            "needs a .meta.json sidecar whose sha256 matches, or settle fails."
+        ),
     )
     parser.add_argument(
         "--source",

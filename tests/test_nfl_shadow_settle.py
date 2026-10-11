@@ -618,7 +618,8 @@ def test_nflverse_boxscore_fetch_reads_a_january_slate_as_the_previous_season(mo
     seen: list[int] = []
 
     def fake_load(
-        *, season, event_date=None, week=None, cache_dir=None, refresh=False, allow_shrink=None
+        *, season, event_date=None, week=None, cache_dir=None, refresh=False, allow_shrink=None,
+        pinned=False,
     ):
         seen.append(season)
         return []
