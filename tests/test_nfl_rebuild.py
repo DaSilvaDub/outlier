@@ -140,3 +140,36 @@ def test_rebuild_serves_exactly_the_archived_inputs(archived, monkeypatch):
     raw = nfl / "runs" / run_id / "raw"
     assert seen["props"] == json.loads((raw / "player_props.json").read_text("utf-8"))
     assert seen["markets"] == json.loads((raw / "event_markets.json").read_text("utf-8"))
+
+
+def test_rebuild_writes_a_cause_labelled_comparison(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    out = nfl / "versions" / "r1"
+    comp = json.loads((out / "comparison.json").read_text("utf-8"))
+    assert comp["edge_basis"].startswith("sportsbook prices only")
+    assert comp["original_picks"] > 0 and comp["rebuilt_picks"] > 0
+    assert all(d["causes"] for d in comp["differences"])
+    assert m["comparison"]["differences"] == len(comp["differences"])
+    assert "# NFL rebuild comparison: 2026-10-04 (r1)" in (out / "comparison.md").read_text("utf-8")
+
+
+def test_edited_original_card_refuses_the_comparison(archived):
+    nfl, run_id = archived
+    card = nfl / "runs" / run_id / "nfl_best_bets.json"
+    card.write_bytes(card.read_bytes() + b" ")
+    with pytest.raises(rb.RebuildRefused, match="sealed in its run manifest"):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+
+
+def test_cli(archived, capsys):
+    from scripts import nfl_rebuild
+
+    nfl, _ = archived
+    assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl)]) == 0
+    assert f"ADMISSIBLE {SLATE}" in capsys.readouterr().out
+    assert nfl_rebuild.main(["rebuild", "--nfl-dir", str(nfl), "--slate", SLATE,
+                             "--rebuild-id", "cli1"]) == 0
+    assert "wrote" in capsys.readouterr().out
+    assert nfl_rebuild.main(["rebuild", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 2
+    assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 1

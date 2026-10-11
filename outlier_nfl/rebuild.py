@@ -231,6 +231,32 @@ def rebuild_slate(
         "publication": summary.get("publication"),
         "tape_supplied": tape is not None,
     }
+    original_card = _original_card(root, verdict.run_id or "", original_manifest)
+    rebuilt_card = json.loads((rebuilt_run / CARD).read_text(encoding="utf-8"))
+    from outlier_nfl.rebuild_compare import compare_cards, render_markdown
+
+    comparison = compare_cards(original_card, rebuilt_card)
+    manifest["comparison"] = {"json": "comparison.json", "markdown": "comparison.md",
+                              "differences": len(comparison["differences"]),
+                              "cause_counts": comparison["cause_counts"]}
+    (out / "comparison.json").write_text(
+        json.dumps({**comparison, "rebuild_id": rid, "slate": slate}, indent=2) + "\n",
+        encoding="utf-8")
+    (out / "comparison.md").write_text(render_markdown(comparison, manifest), encoding="utf-8")
     (out / "rebuild_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+CARD = "nfl_best_bets.json"
+
+
+def _original_card(root: Path, run_id: str, run_manifest: dict[str, Any]) -> dict[str, Any]:
+    """The original run's card, verified against the sha256 its run manifest sealed."""
+    path = root / "runs" / run_id / CARD
+    sealed = {a.get("name"): a.get("sha256") for a in run_manifest.get("artifacts") or []}
+    data = path.read_bytes()
+    if sealed.get(CARD) != hashlib.sha256(data).hexdigest():
+        raise RebuildRefused(f"{path} does not match the sha256 sealed in its run manifest")
+    card: dict[str, Any] = json.loads(data)
+    return card
