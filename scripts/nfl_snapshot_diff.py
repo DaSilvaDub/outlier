@@ -1184,7 +1184,8 @@ def _run_export_pack_step(work: Path, repo: Path) -> str | None:
 
     spec = importlib.util.spec_from_file_location(
         "export_nfl_extra_pack", repo / "scripts" / "export_nfl_extra_pack.py")
-    assert spec and spec.loader
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load scripts/export_nfl_extra_pack.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     cases: dict[str, dict[str, Any]] = {
