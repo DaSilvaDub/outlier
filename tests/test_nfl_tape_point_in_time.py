@@ -185,7 +185,7 @@ def test_pipeline_refreshes_the_tape_with_its_own_ctx_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     seen: list[tuple[Any, ...]] = []
-    monkeypatch.setattr(nfl_pipeline, "_refresh_tape", lambda *a: seen.append(a))
+    monkeypatch.setattr(nfl_pipeline, "_refresh_tape", lambda *a: seen.append(a) or a[0])
     fixtures = Path(__file__).parent / "fixtures" / "nfl"
     nfl_pipeline.NflPipeline(data_dir=tmp_path).run(
         date="2026-09-13", offline_fixtures_dir=fixtures, write_latest=False,

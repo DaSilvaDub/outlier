@@ -39,7 +39,6 @@ import gzip
 import io
 import json
 import logging
-import os
 import re
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
@@ -49,6 +48,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from outlier_nfl.config import normalize_team
+from outlier_nfl.utils import atomic_write_bytes, atomic_write_text, file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -805,12 +805,11 @@ def write_tape(path: Path, payload: Mapping[str, Any]) -> Path | None:
     """Atomically write ``payload``; keep the previous file as ``<name>.prev.json``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     backup: Path | None = None
-    if path.exists():
-        backup = path.with_name(path.stem + ".prev" + path.suffix)
-        backup.write_bytes(path.read_bytes())
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    with file_lock(path):  # backup + replace as one step per writer (F27)
+        if path.exists():
+            backup = path.with_name(path.stem + ".prev" + path.suffix)
+            atomic_write_bytes(backup, path.read_bytes())
+        atomic_write_text(path, json.dumps(payload, indent=2))  # unique temp name (F27)
     return backup
 
 
@@ -821,13 +820,17 @@ def refresh_prior_week_tape(
     last_n: int | None = None,
     as_of_utc: datetime | None = None,
     run_mode: str | None = None,
+    path: Path | None = None,
 ) -> Path:
-    """Rebuild ``<nfl_dir>/tape/prior_week.json`` in place and return its path.
+    """Rebuild ``<nfl_dir>/tape/prior_week.json`` (or ``path``) and return its path.
+
+    ``path`` lets a non-live run build its own tape instead of rewriting the
+    shared one that live runs read (F27).
 
     The envelope records ``as_of_utc`` (the point in time the tape represents)
     and ``fetched_at_utc`` so a run can check the tape was knowable at its cutoff.
     """
-    path = Path(nfl_dir) / "tape" / "prior_week.json"
+    path = Path(path) if path is not None else Path(nfl_dir) / "tape" / "prior_week.json"
     payload = build_tape_payload(
         season, before=before, last_n=last_n, roles=load_existing_roles(path), as_of_utc=as_of_utc,
         run_mode=run_mode,

@@ -15,7 +15,8 @@ import os
 from pathlib import Path
 import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 import uuid
 import zoneinfo
 
@@ -127,6 +128,144 @@ def _replace_with_retry(
                         _unlink_with_retry(backup)
                         return
             raise
+
+
+class LockTimeout(TimeoutError):
+    """A shared writer lock stayed held past its bounded wait (F27)."""
+
+
+LOCK_TIMEOUT_SECONDS = 30.0
+LOCK_STALE_SECONDS = 600.0
+_clock = time.monotonic  # module-level so tests can drive the lock deadline
+_sleep = time.sleep
+
+
+@contextmanager
+def file_lock(
+    path: Path | str,
+    timeout: float = LOCK_TIMEOUT_SECONDS,
+    stale_after: float = LOCK_STALE_SECONDS,
+    poll: float = 0.05,
+) -> Iterator[Path]:
+    """Serialize writers of ``path`` through ``<path>.lock`` (F27).
+
+    The lock file is created exclusively (works on Windows and POSIX). A lock
+    older than ``stale_after`` seconds is treated as left by a crashed job and
+    removed; age is used rather than the holder's PID because PID liveness is
+    not portable to Windows. Waiting longer than ``timeout`` raises
+    :class:`LockTimeout` instead of hanging a scheduled run.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock = target.with_name(target.name + ".lock")
+    deadline = _clock() + timeout
+    while True:
+        # Checked first on every pass, so no branch below can spin past the
+        # deadline (a stale lock Windows refuses to move included).
+        if _clock() >= deadline:
+            raise LockTimeout(
+                f"Lock file {lock} has been held for more than {timeout:g}s. Another run "
+                f"may be writing; if no other run is, delete {lock} and rerun."
+            )
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if _steal_if_stale(lock, stale_after):
+                continue  # this waiter cleared it; try to create at once
+            _sleep(poll)
+            continue
+        try:
+            os.write(fd, f"{os.getpid()} {datetime.now(timezone.utc).isoformat()}\n".encode())
+        finally:
+            os.close(fd)
+        break
+    try:
+        yield lock
+    finally:
+        _unlink_with_retry(lock)
+
+
+def _lock_age(path: Path) -> float | None:
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _steal_if_stale(lock: Path, stale_after: float) -> bool:
+    """Clear a stale ``lock``; True when the caller should retry creating it now.
+
+    The stale file is first renamed to a name unique to this waiter, so of
+    several waiters that saw it stale only the one whose rename succeeds goes
+    on. If the renamed file turns out fresh (another waiter replaced it in
+    between), it is put back and this waiter keeps waiting.
+    """
+    age = _lock_age(lock)
+    if age is None:
+        return True  # released meanwhile; the deadline still bounds retries
+    if age <= stale_after:
+        return False
+    grave = lock.with_name(f"{lock.name}.stale.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        os.replace(lock, grave)
+    except FileNotFoundError:
+        return True  # another waiter moved it first
+    except OSError as exc:
+        logger.warning(
+            "Stale lock file %s could not be removed (%s); if no other run is writing, "
+            "delete it.", lock, exc,
+        )
+        return False
+    grave_age = _lock_age(grave)
+    if grave_age is not None and grave_age <= stale_after:
+        # Not the stale file we judged: hand it back unless someone recreated it.
+        try:
+            os.link(grave, lock)
+        except OSError:
+            pass
+        _unlink_with_retry(grave)
+        return False
+    logger.warning(
+        "Removed stale lock file %s (%.0fs old, limit %.0fs), left by a crashed run.",
+        lock, age, stale_after,
+    )
+    if not _unlink_with_retry(grave):
+        logger.warning("Could not delete moved stale lock %s; it no longer blocks writers.", grave)
+    return True
+
+
+def unique_temp_path(target: Path) -> Path:
+    """Hidden sibling temp name unique to this process, thread and call (F27)."""
+    suffix = f"{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.{uuid.uuid4().hex}"
+    return target.parent / f".{target.name}.{suffix}.tmp"
+
+
+def atomic_write_bytes(path: Path | str, data: bytes) -> None:
+    """Write ``data`` to a unique temp sibling, then replace ``path`` (F27).
+
+    A fixed ``<name>.tmp`` collides when two jobs overlap or a crashed job left
+    one behind; a unique name never does.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = unique_temp_path(target)
+    try:
+        with open(temp_path, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(temp_path, target)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def atomic_write_text(path: Path | str, text: str) -> None:
+    """UTF-8 text through :func:`atomic_write_bytes`."""
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def safe_write_json(

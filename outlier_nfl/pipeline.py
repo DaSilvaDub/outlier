@@ -369,7 +369,11 @@ class NflPipeline:
         if refresh_tape:
             # After ctx, so the tape's injury admission uses this run's own mode
             # (window-aware), never a re-derivation from the whole slate day.
-            _refresh_tape(self.nfl_dir, target_date, tape_last_n, ctx.as_of_utc, ctx.mode)
+            tape_root = _refresh_tape(
+                self.nfl_dir, target_date, tape_last_n, ctx.as_of_utc, ctx.mode
+            )
+        else:
+            tape_root = self.nfl_dir
         sources: list[SourceRecord] = []
 
         # Load external advanced metrics for the season
@@ -453,7 +457,7 @@ class NflPipeline:
         # =====================================================================
         # One validated, point-in-time tape read feeds scripts, inactives and the
         # injury pillar; a refused tape disables all of them together (F02).
-        tape = load_tape_envelope(self.nfl_dir, ctx)
+        tape = load_tape_envelope(tape_root, ctx)
         sources.append(tape.source)
         if not tape.admitted:
             logger.warning("Matchup tape %s: %s", tape.source.status, tape.source.reason)
@@ -1007,8 +1011,14 @@ def _refresh_tape(
     last_n: int | None,
     as_of_utc: datetime | str | None = None,
     run_mode: str | None = None,
-) -> None:
+) -> Path:
     """Rebuild the matchup tape from games before the slate; keep the old tape on failure.
+
+    Returns the directory whose ``tape/prior_week.json`` the run should read.
+    Only a live run rewrites the shared ``<nfl_dir>/tape/prior_week.json``. Any
+    other mode (replay, retrospective, fixture, or unknown) builds its tape under
+    ``<nfl_dir>/tape/replay/<slate>/<as_of>/`` so a replay can never replace the
+    tape the next live run reads (F27).
 
     The tape is built as of ``as_of_utc`` (default now) and records it, so a run
     can verify the tape was knowable at its own cutoff. ``run_mode`` is the
@@ -1020,11 +1030,17 @@ def _refresh_tape(
         slate = date.fromisoformat(str(raw))
         season = slate.year if slate.month >= 3 else slate.year - 1
         as_of = parse_utc(as_of_utc) if as_of_utc is not None else datetime.now(timezone.utc)
+        root = Path(nfl_dir)
+        if run_mode != "live":
+            root = root / "tape" / "replay" / slate.isoformat() / f"{as_of:%Y%m%dT%H%M%SZ}"
         refresh_prior_week_tape(
-            nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of, run_mode=run_mode
+            nfl_dir, season, before=slate, last_n=last_n, as_of_utc=as_of, run_mode=run_mode,
+            path=root / "tape" / "prior_week.json",
         )
+        return root
     except Exception as exc:  # network/API failure must not block the slate run
         logger.warning("Tape refresh failed, keeping existing tape: %s", exc)
+        return Path(nfl_dir)
 
 
 # Exit code when a required stage receipt is not OK (F03); 1 stays "crashed".

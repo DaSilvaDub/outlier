@@ -219,7 +219,7 @@ def test_phase7a_steps_follow_a16(tmp_path):
 
 
 def test_phase7b_steps_follow_a18(tmp_path):
-    assert snap.HARNESS_VERSION == 12
+    assert snap.HARNESS_VERSION >= 12
     a = [s["name"] for s in snap.STEPS["A"]]
     i = a.index("A18_export_explicit_date")
     assert a[i + 1:i + 3] == ["A19_usage_pairing", "A20_model_p_smoothing"]
@@ -227,3 +227,12 @@ def test_phase7b_steps_follow_a18(tmp_path):
     assert snap._run_model_p_step(tmp_path) is None
     math = tmp_path / "data" / "NFL" / "math"
     assert (math / "usage_pairing.json").exists() and (math / "model_p_smoothing.json").exists()
+
+
+def test_phase8_step_follows_a20(tmp_path):
+    assert snap.HARNESS_VERSION == 13
+    a = [s["name"] for s in snap.STEPS["A"]]
+    assert a[a.index("A20_model_p_smoothing") + 1] == "A21_persistence"
+    assert snap._run_persistence_step(tmp_path) is None
+    assert (tmp_path / "data" / "NFL" / "math" / "persistence.json").exists()
+    assert not (tmp_path / "data" / "NFL" / "persistence_scratch").exists()
