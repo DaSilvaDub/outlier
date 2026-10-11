@@ -46,6 +46,13 @@ A10 builds tape roles/inactives from frozen Week-4 depth and injury rows
 unstamped rows, the real 2026 column layout in live and replay mode, a whole-day cutoff) and checks tape admission (stale, wrong
 season, corrupt, missing). A11 indexes rosters and starters (backup with more
 quotes, team without props, trade/offseason-move identity, inactive starter).
+A12 runs the entity joins on library inputs: a prop whose team is not in its
+event, numeric vs string team IDs, an ID-only team object, an outcome with no
+eventId, two same-name players in one box score and in the projection index,
+and a traded player. A13 runs the schema checks: identical and conflicting
+duplicate team-game rows, a missing opponent row, a week-stats file without
+``game_id``, and duplicate normalized props. B12 adds ``identity_extras`` to the
+replay feed: a foreign-team prop and an identical and a conflicting duplicate of Mahomes' passing-yards OVER.
 
 Each step runs with the wall clock frozen and ``uuid4`` made deterministic, in
 a fixed work directory, so two captures of the same code are byte-identical.
@@ -74,7 +81,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 8
+HARNESS_VERSION = 9
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -109,6 +116,8 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         # Phase 5b (#227): tape/injury admissibility and roster provenance, no pipeline run.
         {"name": "A10_tape_admissibility", "clock": "2026-09-14T12:25:00+00:00", "kind": "tape"},
         {"name": "A11_roster_provenance", "clock": "2026-09-14T12:30:00+00:00", "kind": "roster"},
+        {"name": "A12_identity_joins", "clock": "2026-09-14T12:35:00+00:00", "kind": "identity"},
+        {"name": "A13_schema_integrity", "clock": "2026-09-14T12:40:00+00:00", "kind": "schema"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -129,6 +138,8 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "forecast": "partial"},
         # Phase 4a (#226): raw market names, team-prop family, alternates, periods.
         {"name": "B11_market_scope", "clock": "2026-10-04T16:58:00+00:00", "market_extras": True},
+        {"name": "B12_identity_extras", "clock": "2026-10-04T16:59:00+00:00",
+         "identity_extras": True},
         {"name": "B4_after_kickoff", "clock": "2026-10-04T18:00:00+00:00"},
     ],
 }
@@ -718,6 +729,175 @@ def _run_roster_step(work: Path) -> str | None:
     return None
 
 
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> Path:
+    import csv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cols: list[str] = []
+    for r in rows:
+        cols += [c for c in r if c not in cols]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow({c: r.get(c, "") for c in cols})
+    return path
+
+
+def _try(fn: Any) -> Any:
+    try:
+        return fn()
+    except Exception as exc:  # recorded as the outcome of the case
+        return {"error": type(exc).__name__, "message": str(exc)[:160]}
+
+
+A12_GAMES = [{"game_id": "2026_01_BUF_KC", "season": "2026", "week": "1", "gameday": "2026-09-13",
+              "game_type": "REG", "away_team": "BUF", "home_team": "KC", "away_score": "20",
+              "home_score": "27"}]
+
+
+def _a12_stat(name: str, pid: str, team: str, yards: str, week: str = "1",
+              gid: str = "2026_01_BUF_KC") -> dict[str, str]:
+    return {"game_id": gid, "season": "2026", "week": week, "season_type": "REG",
+            "player_id": pid, "player_display_name": name, "player_name": name,
+            "team": team, "recent_team": team, "position": "WR", "receiving_yards": yards,
+            "receptions": "4"}
+
+
+def _run_identity_step(work: Path) -> str | None:
+    from outlier_nfl import boxscore, boxscore_nflverse, projection
+    from outlier_nfl.normalizer import build_schedule_index
+    from outlier_nfl.props import extract_player_props
+
+    sched = {"events": [{"eventId": "ev-buf-kc", "id": "ev-buf-kc",
+                         "scheduledTime": "2026-09-13T17:00:00+00:00",
+                         "home": {"teamId": 12, "alias": "KC", "name": "Kansas City Chiefs"},
+                         "away": {"teamId": 2, "alias": "BUF", "name": "Buffalo Bills"}}]}
+    index = build_schedule_index(sched)
+
+    def prop(**over: Any) -> dict[str, Any]:
+        o = {"eventId": "ev-buf-kc", "marketId": "m1", "outcomeId": "o1", "proposition":
+             "RECEIVING_YARDS", "position": "OVER", "line": 60.5, "playerName": "Test Player",
+             "playerId": "p1", "bestOdds": -110}
+        o.update(over)
+        return {"outcome": {k: v for k, v in o.items() if v is not None}}
+
+    def teams(rows: list[Any]) -> Any:
+        return [{"event_id": r.event_id, "team": r.team, "opponent": r.opponent} for r in rows]
+
+    props_cases = {
+        "foreign_team_mia": prop(teamId="MIA"),
+        "string_team_id_for_numeric": prop(teamId="12"),
+        "numeric_team_id": prop(teamId=2),
+        "id_only_team_object": prop(teamId=None, team={"teamId": 12}),
+        "no_event_id_outcome_id_only": prop(eventId=None, id="ev-buf-kc"),
+    }
+    out: dict[str, Any] = {"props": {k: _try(lambda v=v: teams(extract_player_props(
+        {"props": [v]}, index))) for k, v in props_cases.items()}}
+
+    d = work / "data" / "NFL" / "math" / "a12"
+    games = _write_csv(d / "games.csv", A12_GAMES)
+    same_name = [_a12_stat("Josh Allen", "00-A1", "BUF", "80"),
+                 _a12_stat("Josh Allen", "00-A2", "KC", "30")]
+    stats = _write_csv(d / "same_name.csv", same_name)
+
+    def box() -> Any:
+        ev = boxscore_nflverse.load_nflverse_events(season=2026, week=1, stats_csv=stats,
+                                                    games_csv=games, cache_dir=d)
+        res = boxscore.resolve_player_stats(ev[0], "Josh Allen")
+        return {"player_keys": sorted(ev[0].players),
+                "resolve_josh_allen": {"stats": res[0], "reason": res[1]}}
+
+    out["boxscore_same_name"] = _try(box)
+
+    proj_rows = same_name + [_a12_stat("Josh Allen", "00-A1", "BUF", "70", week="2",
+                                       gid="2026_02_BUF_MIA"),
+                             _a12_stat("Traded Guy", "00-T1", "NYJ", "40", week="1",
+                                       gid="2026_01_NYJ_NE"),
+                             _a12_stat("Traded Guy", "00-T1", "KC", "55", week="2",
+                                       gid="2026_02_KC_LV")]
+    proj = _write_csv(d / "proj.csv", proj_rows)
+
+    def proj_index() -> Any:
+        idx = projection.load_week_stats_index(proj, before_week=3)
+        res: dict[str, Any] = {}
+        for name, team in (("Josh Allen", "BUF"), ("Josh Allen", "KC"), ("Traded Guy", "KC")):
+            rec = {"player_name": name, "team": team, "market": "REC_YDS", "line": 50.5,
+                   "position": "OVER"}
+            hit = _try(lambda rec=rec: projection.attach_projection_model_p_record(
+                dict(rec), week_index=idx, overwrite=True))
+            res[f"{name}|{team}"] = (
+                {k: v for k, v in sorted(hit.items()) if k not in rec}
+                if isinstance(hit, dict) and "error" not in hit else hit)
+        return {"rows_per_key": {k: len(v) for k, v in sorted(idx.items())},
+                "attach": res}
+
+    out["projection_index"] = _try(proj_index)
+    dest = work / "data" / "NFL" / "math" / "identity_joins.json"
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
+def _run_schema_step(work: Path) -> str | None:
+    from outlier_nfl import boxscore_nflverse, schema, tape_nflverse
+
+    def team_row(team: str, opp: str, rush: str, gid: str = "2026_01_BUF_KC") -> dict[str, str]:
+        return {"game_id": gid, "season": "2026", "week": "1", "season_type": "REG",
+                "team": team, "opponent_team": opp, "rushing_yards": rush,
+                "passing_yards": "200", "def_sacks": "2", "attempts": "30",
+                "sacks_suffered": "2"}
+
+    def tape(rows: list[dict[str, str]]) -> Any:
+        pg = tape_nflverse.build_per_game(rows, A12_GAMES, 2026)
+        return {t: [(g["opponent"], g["rush_yards"], g["opp_rush_yards_allowed"]) for g in v]
+                for t, v in sorted(pg.items())}
+
+    kc, buf = team_row("KC", "BUF", "120"), team_row("BUF", "KC", "90")
+    out: dict[str, Any] = {"tape": {
+        "clean": _try(lambda: tape([kc, buf])),
+        "identical_duplicate_kc": _try(lambda: tape([kc, dict(kc), buf])),
+        "conflicting_duplicate_kc": _try(lambda: tape([kc, team_row("KC", "BUF", "150"), buf])),
+        "missing_opponent_row": _try(lambda: tape([kc])),
+    }}
+    d = work / "data" / "NFL" / "math" / "a13"
+    games = _write_csv(d / "games.csv", A12_GAMES)
+    no_gid = [{k: v for k, v in _a12_stat("Travis Kelce", "00-K", "KC", "70").items()
+               if k != "game_id"}]
+    dup = [_a12_stat("Travis Kelce", "00-K", "KC", "70")] * 2
+    conflict = [_a12_stat("Travis Kelce", "00-K", "KC", "70"),
+                _a12_stat("Travis Kelce", "00-K", "KC", "95")]
+
+    def box(rows: list[dict[str, str]], name: str) -> Any:
+        ev = boxscore_nflverse.load_nflverse_events(
+            season=2026, week=1, stats_csv=_write_csv(d / name, rows), games_csv=games,
+            cache_dir=d)
+        return [{"id": e.provider_event_id, "players": e.players} for e in ev]
+
+    out["boxscore"] = {
+        "stats_without_game_id": _try(lambda: box(no_gid, "nogid.csv")),
+        "identical_duplicate_player": _try(lambda: box(dup, "dup.csv")),
+        "conflicting_duplicate_player": _try(lambda: box(conflict, "conflict.csv")),
+    }
+
+    def nprop(odds: int, team: str = "KC", matchup: str = "BUF @ KC") -> dict[str, Any]:
+        return {"event_id": "ev1", "player_name": "Travis Kelce", "player_id": "p-k",
+                "market": "REC_YDS", "line": 60.5, "position": "OVER", "team": team,
+                "opponent": "BUF", "matchup": matchup, "implied_probability": 52.4,
+                "books": [{"book": "DRAFTKINGS", "odds": odds}], "best_odds": odds}
+
+    out["normalized"] = {
+        "identical_duplicate": schema.validate_normalized_dataset(
+            [nprop(-110), nprop(-110)], dataset_type="props"),
+        "conflicting_duplicate": schema.validate_normalized_dataset(
+            [nprop(-110), nprop(120)], dataset_type="props"),
+        "team_not_in_matchup": schema.validate_normalized_dataset(
+            [nprop(-110, team="MIA")], dataset_type="props"),
+    }
+    dest = work / "data" / "NFL" / "math" / "schema_integrity.json"
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
@@ -727,6 +907,10 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
         return _run_tape_step(work)
     if step["kind"] == "roster":
         return _run_roster_step(work)
+    if step["kind"] == "identity":
+        return _run_identity_step(work)
+    if step["kind"] == "schema":
+        return _run_schema_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"
@@ -822,6 +1006,27 @@ def _extra_props(props: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _identity_props(props: dict[str, Any]) -> list[dict[str, Any]]:
+    """B12 props cloned from Mahomes' passing-yards OVER (F17/F26).
+
+    (A prop with no eventId is already refused by the raw props schema, which
+    fails the whole stage, so it is exercised in A12 instead.)"""
+    base = next(p for p in props["props"] if p["outcome"]["proposition"] == "PASSING_YARDS"
+                and p["outcome"]["position"] == "OVER")
+    foreign = copy.deepcopy(base)
+    foreign["outcome"].update({"marketId": "m-foreign-py", "outcomeId": "o-foreign-py-o",
+                               "teamId": "mia-dolphins", "playerId": "p-foreign-1",
+                               "playerName": "Foreign Passer",
+                               "marketLabel": "Foreign Passer - Passing Yards"})
+    identical = copy.deepcopy(base)
+    conflicting = copy.deepcopy(base)
+    conflicting["outcome"]["bookOdds"] = {"DRAFTKINGS": {"odds": 120, "american": 120,
+                                                         "decimal": 2.2}}
+    conflicting["outcome"]["bestOdds"] = 120
+    conflicting["outcome"]["books"] = ["DRAFTKINGS"]
+    return [foreign, identical, conflicting]
+
+
 class FrozenOutlierClient:
     """In-memory stand-in for ``OutlierNflApiClient`` serving the shifted fixtures.
 
@@ -832,7 +1037,8 @@ class FrozenOutlierClient:
 
     def __init__(self, fixtures_dir: Path, shift_days: int = SHIFT_DAYS, week: int = 4,
                  fail_props_page: int | None = None, fail_markets: bool = False,
-                 empty_props: bool = False, market_extras: bool = False) -> None:
+                 empty_props: bool = False, market_extras: bool = False,
+                 identity_extras: bool = False) -> None:
         sched = json.loads((fixtures_dir / "schedule.json").read_text(encoding="utf-8"))
         for ev in sched.get("events", []):
             for key in ("scheduledTime", "startTime"):
@@ -851,6 +1057,9 @@ class FrozenOutlierClient:
             self._markets = {**self._markets,
                              "markets": self._markets["markets"] + _extra_markets()}
             self._props = {**self._props, "props": self._props["props"] + _extra_props(self._props)}
+        if identity_extras:
+            self._props = {**self._props,
+                           "props": self._props["props"] + _identity_props(self._props)}
 
     def fetch_schedule(self, *_a: Any, **_k: Any) -> dict[str, Any]:
         return copy.deepcopy(self._schedule)
@@ -1046,6 +1255,7 @@ def run_slate(slate: str, work: Path, out: Path, repo: Path, *, future_rows: boo
                 fail_markets=bool(step.get("fail_markets")),
                 empty_props=bool(step.get("empty_props")),
                 market_extras=bool(step.get("market_extras")),
+                identity_extras=bool(step.get("identity_extras")),
             )
             pipeline = pipeline_mod.NflPipeline(client=client, **init)
         if "as_of_utc" in run_params:

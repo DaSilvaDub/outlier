@@ -6,6 +6,7 @@ adjustments, and orchestrates extraction of game lines and player propositions.
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
 from typing import Any
 
@@ -113,8 +114,9 @@ def build_schedule_index(schedule_payload: dict[str, Any]) -> dict[str, dict[str
             "away_team": away_code,
             "home_name": home_name or (get_team_display_name(home_code) if home_code else ""),
             "away_name": away_name or (get_team_display_name(away_code) if away_code else ""),
-            "home_team_id": home.get("teamId"),
-            "away_team_id": away.get("teamId"),
+            # Provider IDs are kept as strings so 12 and "12" are the same team (F17).
+            "home_team_id": None if home.get("teamId") is None else str(home.get("teamId")),
+            "away_team_id": None if away.get("teamId") is None else str(away.get("teamId")),
             "matchup": matchup,
             "venue": event.get("venue"),
             "status": event.get("status"),
@@ -134,14 +136,16 @@ def normalize_game_markets(
     event: dict[str, Any],
     event_markets_payload: dict[str, Any] | list[Any],
     team_index: dict[str, str],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflGameLine]:
     """Normalize raw game markets payload into NflGameLine records."""
-    return extract_game_lines(event, event_markets_payload, team_index)
+    return extract_game_lines(event, event_markets_payload, team_index, drop_counts)
 
 
 def normalize_player_props(
     player_props_payload: dict[str, Any] | list[Any],
     schedule_index: dict[str, dict[str, Any]],
+    drop_counts: Counter[str] | None = None,
 ) -> list[NflPlayerProp]:
     """Normalize raw bulk player props payload into NflPlayerProp records."""
-    return extract_player_props(player_props_payload, schedule_index)
+    return extract_player_props(player_props_payload, schedule_index, drop_counts)

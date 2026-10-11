@@ -340,6 +340,34 @@ def project_hit_probability_v2(
     )
 
 
+def player_rows(
+    week_index: Mapping[str, Sequence[Mapping[str, Any]]],
+    player_name: Any,
+    team: Any = None,
+) -> list[Mapping[str, Any]]:
+    """Prior-week rows of the one player this name (and team) identifies (F17).
+
+    The index is keyed by name token; rows carry ``player_id``. When the name
+    belongs to more than one player ID, only the ID whose most recent row is
+    on ``team`` is used, and none when that does not single one out. A single
+    ID keeps all its rows, including those from before a trade.
+    """
+    rows = list(week_index.get(_token(player_name or "")) or [])
+    by_id: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_id[str(row.get("player_id") or "").strip()].append(row)
+    if len(by_id) <= 1:
+        return rows
+    team_code = str(team or "").strip().upper()
+
+    def latest_team(id_rows: Sequence[Mapping[str, Any]]) -> str:
+        last = max(id_rows, key=lambda r: (str(r.get("season") or ""), _f(r, "week")))
+        return str(last.get("team") or last.get("recent_team") or "").strip().upper()
+
+    owned = [r for r in by_id.values() if team_code and latest_team(r) == team_code]
+    return list(owned[0]) if len(owned) == 1 else []
+
+
 def attach_projection_model_p_record(
     record: MutableMapping[str, Any],
     *,
@@ -357,8 +385,7 @@ def attach_projection_model_p_record(
         record["model_p"] = record.get("p_model")
     if record.get("model_p") is not None and not overwrite:
         return record
-    key = _token(record.get("player_name") or "")
-    rows = week_index.get(key) or []
+    rows = player_rows(week_index, record.get("player_name"), record.get("team"))
     try:
         line = float(record["line"])
     except (KeyError, TypeError, ValueError):

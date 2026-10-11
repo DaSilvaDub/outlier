@@ -100,6 +100,9 @@ class NflPlayerProp:
     # Never copy book implied_probability into model_p.
     model_p: float | None = None
     model_p_source: str | None = None  # e.g. empirical_hit_rate | external
+    # The event's normalized team codes, for quote-ownership checks (F26).
+    home_team: str | None = None
+    away_team: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.books, list):

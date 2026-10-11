@@ -528,16 +528,22 @@ def _player_stats_from_week_row(row: Mapping[str, Any]) -> dict[str, float]:
     return bucket
 
 
-def _merge_player_buckets(
-    left: dict[str, float], right: dict[str, float]
-) -> dict[str, float]:
-    out = dict(left)
-    for key, value in right.items():
-        # Sum numeric counting stats when a player appears twice (rare).
-        if key in out and key.endswith(("YDS", "TD", "REC", "ATT", "CAR", "CMP", "COMP", "INT", "TOT", "TKL", "SACK", "SK", "AST", "ASSISTS", "SOLO", "FG", "XP", "PTS", "TGT", "TACKLESASSISTS")):
-            out[key] = out[key] + value
-        else:
-            out[key] = value
+def _player_keys(
+    by_id: Mapping[str, tuple[str, str, dict[str, float]]],
+) -> dict[str, dict[str, float]]:
+    """Name-token keys settle can resolve; a shared name gets ``TOKEN#TEAM#ID`` keys.
+
+    A name used by one player in the game keeps the plain token. When two
+    players share it, neither gets the plain token, so a name-only lookup is
+    ambiguous and only a team-scoped lookup can pick one (F17).
+    """
+    per_token: dict[str, int] = {}
+    for token, _team, _stats in by_id.values():
+        per_token[token] = per_token.get(token, 0) + 1
+    out: dict[str, dict[str, float]] = {}
+    for pid, (token, team, stats) in sorted(by_id.items()):
+        key = token if per_token[token] == 1 else f"{token}#{_token(team)}#{_token(pid)}"
+        out[key] = stats
     return out
 
 
@@ -567,6 +573,13 @@ def load_nflverse_events(
         else ensure_games_csv(cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink)
     )
 
+    # Headers are checked on every load, not only after a download (F26): a
+    # stats file without ``game_id`` would otherwise yield games with no players.
+    _validate_csv_bytes(games_path.read_bytes(), label=games_path.name,
+                        required=GAMES_REQUIRED_COLUMNS)
+    _validate_csv_bytes(stats_path.read_bytes(), label=stats_path.name,
+                        required=WEEK_STATS_REQUIRED_COLUMNS, any_of=WEEK_STATS_NAME_COLUMNS)
+
     games_by_id: dict[str, dict[str, str]] = {}
     with games_path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
@@ -584,7 +597,16 @@ def load_nflverse_events(
     if not games_by_id:
         return []
 
-    players_by_game: dict[str, dict[str, dict[str, float]]] = {gid: {} for gid in games_by_id}
+    # Players are keyed by provider player ID (F17): two players sharing a name
+    # are two entries, never one summed bucket. Name is only the fallback key.
+    players_by_game: dict[str, dict[str, tuple[str, str, dict[str, float]]]] = {
+        gid: {} for gid in games_by_id
+    }
+    # One row per player-game (F26): identical repeats count once, conflicting
+    # versions drop that player from that game.
+    seen_rows: dict[tuple[str, str], tuple[tuple[str, Any], ...]] = {}
+    conflicting: set[tuple[str, str]] = set()
+    repeats = 0
     with stats_path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             gid = str(row.get("game_id") or "").strip()
@@ -596,13 +618,24 @@ def load_nflverse_events(
             stats = _player_stats_from_week_row(row)
             if not stats:
                 continue
-            key = _token(name)
+            token = _token(name)
+            pid = str(row.get("player_id") or "").strip() or f"name:{token}"
+            team = str(row.get("team") or row.get("recent_team") or "").strip().upper()
             bucket = players_by_game[gid]
-            if key in bucket:
-                bucket[key] = _merge_player_buckets(bucket[key], stats)
-            else:
-                bucket[key] = stats
-            # Also keep a display-name key path via token only (settle resolves by token).
+            fingerprint = tuple(sorted(row.items()))
+            if (gid, pid) in seen_rows:
+                if seen_rows[(gid, pid)] == fingerprint:
+                    repeats += 1
+                else:
+                    conflicting.add((gid, pid))
+                continue
+            seen_rows[(gid, pid)] = fingerprint
+            bucket[pid] = (token, team, stats)
+    for gid, pid in sorted(conflicting):
+        logger.warning("Dropping %s from %s: conflicting duplicate stat rows", pid, gid)
+        players_by_game[gid].pop(pid, None)
+    if repeats:
+        logger.warning("Ignored %d identical duplicate player-game stat row(s)", repeats)
 
     events: list[NflBoxScoreEvent] = []
     for gid, grow in sorted(games_by_id.items()):
@@ -613,16 +646,7 @@ def load_nflverse_events(
         gameday = str(grow.get("gameday") or "")[:10]
         if not away or not home or away_score is None or home_score is None or len(gameday) < 10:
             continue
-        # Re-key players with original display names for resolve_player_stats token matching.
-        # We stored token keys; rebuild with synthetic display from token is lossy — keep tokens.
-        # settle.resolve_player_stats tokenizes the prediction name, so token keys are correct.
-        # But parse_simplified expects display names then tokenizes — either works if keys are tokens.
-        # Use a reverse map: store under a placeholder display equal to the token for stability.
-        raw_players = players_by_game.get(gid) or {}
-        # Prefer restoring readable names from week rows by re-scan is expensive; token keys OK.
-        display_players: dict[str, dict[str, float]] = {}
-        for token_key, stats in raw_players.items():
-            display_players[token_key] = stats
+        display_players = _player_keys(players_by_game.get(gid) or {})
         events.append(
             NflBoxScoreEvent(
                 provider_event_id=gid,

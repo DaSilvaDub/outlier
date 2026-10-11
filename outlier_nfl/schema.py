@@ -6,10 +6,104 @@ data integrity before persistence or downstream consumption.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Mapping, MutableMapping
+import json
+import logging
 import math
-from typing import Any
+from typing import Any, TypeVar
 
+from outlier_nfl.config import normalize_team
 from outlier_nfl.models import NflGameLine, NflPlayerProp
+
+logger = logging.getLogger("outlier_nfl.schema")
+T = TypeVar("T")
+
+
+def _as_mapping(rec: Any) -> Mapping[str, Any]:
+    if isinstance(rec, Mapping):
+        return rec
+    to_dict = getattr(rec, "to_dict", None)
+    out = to_dict() if callable(to_dict) else None
+    return out if isinstance(out, Mapping) else {}
+
+
+def _norm_name(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def player_prop_key(rec: Any) -> tuple[Any, ...]:
+    """Primary key of a normalized player prop quote (F26)."""
+    d = _as_mapping(rec)
+    who = str(d.get("player_id") or "").strip() or _norm_name(d.get("player_name"))
+    return (str(d.get("event_id") or ""), who, d.get("market"), d.get("line"),
+            d.get("position"), d.get("scope") or "full_game")
+
+
+def game_line_key(rec: Any) -> tuple[Any, ...]:
+    """Primary key of a normalized game line quote (F26)."""
+    d = _as_mapping(rec)
+    return (str(d.get("event_id") or ""), d.get("market"), d.get("scope") or "full_game",
+            d.get("team"), d.get("position"), d.get("line"))
+
+
+def _economics(rec: Any) -> str:
+    """What makes two copies of one quote the same bet: line, side and prices.
+
+    Listing metadata (``market_raw``, ``market_id``, ``outcome_id``, the
+    consensus flag) is ignored, so a prop listed under a main and an alt market
+    at the same line and price is one quote, not a conflict.
+    """
+    d = _as_mapping(rec)
+    books = sorted(
+        (str(_as_mapping(b).get("book") or ""), _as_mapping(b).get("odds"))
+        for b in (d.get("books") or ())
+    )
+    return json.dumps([d.get("line"), d.get("position"), d.get("best_odds"), books],
+                      sort_keys=True, default=str)
+
+
+def dedupe_quotes(
+    records: Iterable[T],
+    key: Callable[[Any], tuple[Any, ...]],
+    label: str,
+    drop_counts: MutableMapping[str, int] | None = None,
+) -> list[T]:
+    """Drop identical duplicate quotes; drop every version of a conflicting one (F26).
+
+    Copies with the same key and the same economics (line, side, prices) are one
+    quote: the copy flagged ``is_consensus_line`` is kept, else the first.
+    Copies that share a key but disagree on price cannot be resolved here, so
+    all of them are dropped. Both counts are logged and, when ``drop_counts``
+    is given, added to it as ``identical_<label>`` / ``conflicting_<label>``.
+    """
+    groups: dict[tuple[Any, ...], list[T]] = defaultdict(list)
+    order: list[tuple[Any, ...]] = []
+    for rec in records:
+        k = key(rec)
+        if k not in groups:
+            order.append(k)
+        groups[k].append(rec)
+    out: list[T] = []
+    identical = conflicting = 0
+    for k in order:
+        versions = groups[k]
+        if len({_economics(v) for v in versions}) > 1:
+            conflicting += len(versions)
+            logger.warning("Dropping %d conflicting %s quotes for %s", len(versions), label, k)
+            continue
+        identical += len(versions) - 1
+        flagged = [v for v in versions if _as_mapping(v).get("is_consensus_line")]
+        out.append(flagged[0] if flagged else versions[0])
+    if identical or conflicting:
+        logger.warning("%s dedupe: %d identical duplicate(s) dropped, %d conflicting quote(s) "
+                       "dropped (%d in, %d out)", label, identical, conflicting,
+                       sum(len(v) for v in groups.values()), len(out))
+    if drop_counts is not None:
+        drop_counts[f"identical_{label}"] = drop_counts.get(f"identical_{label}", 0) + identical
+        drop_counts[f"conflicting_{label}"] = (
+            drop_counts.get(f"conflicting_{label}", 0) + conflicting)
+    return out
 
 
 def validate_schedule_payload(payload: Any) -> list[str]:
@@ -266,10 +360,55 @@ def validate_normalized_dataset(
     if not isinstance(records, list):
         return [f"Dataset must be a list of records, got {type(records).__name__}"]
 
-    validator = validate_game_line_record if dataset_type == "games" else validate_player_prop_record
+    games = dataset_type == "games"
+    validator = validate_game_line_record if games else validate_player_prop_record
+    key = game_line_key if games else player_prop_key
+    first_at: dict[tuple[Any, ...], int] = {}
     for idx, rec in enumerate(records):
         errs = validator(rec)
         for err in errs:
             all_errors.append(f"Record {idx}: {err}")
+        if not isinstance(rec, Mapping):
+            continue
+        # Primary-key uniqueness (F26): dedupe runs before validation, so a
+        # repeat here means a stage produced the same quote twice.
+        k = key(rec)
+        if k in first_at:
+            all_errors.append(f"Record {idx}: duplicate key {k} (first at record {first_at[k]})")
+        else:
+            first_at[k] = idx
+        # Quote ownership (F26): a quote's team must be one of its event's teams.
+        team = rec.get("team")
+        if team:
+            members = _event_teams(rec)
+            if members and normalize_team_code(team) not in members:
+                all_errors.append(f"Record {idx}: team '{team}' is not in event "
+                                  f"{rec.get('event_id')} ({rec.get('matchup')})")
 
     return all_errors
+
+
+def normalize_team_code(value: Any) -> str | None:
+    return normalize_team(value) or (str(value) if value else None)
+
+
+def _event_teams(rec: Mapping[str, Any]) -> set[str]:
+    """The event's two normalized team codes, or an empty set when unknown.
+
+    Uses the record's ``home_team`` / ``away_team`` when present, else both
+    sides of ``AWAY @ HOME`` through ``normalize_team`` (full names, slugs and
+    aliases all resolve). If a side does not resolve, the check is skipped for
+    that record (logged), never failed.
+    """
+    sides = [rec.get("home_team"), rec.get("away_team")]
+    if not all(sides):
+        text = str(rec.get("matchup") or "")
+        if "@" not in text:
+            return set()
+        sides = [part.strip() for part in text.split("@", 1)]
+    codes = {normalize_team(s) for s in sides}
+    if None in codes or len(codes) != 2:
+        logger.info("Ownership check skipped for %s: teams %r not resolvable",
+                    rec.get("event_id"), sides)
+        return set()
+    return {c for c in codes if c}

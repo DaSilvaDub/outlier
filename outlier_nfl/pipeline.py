@@ -7,6 +7,8 @@ and persists normalized datasets to disk atomically.
 
 from __future__ import annotations
 
+from collections import Counter
+
 import argparse
 from collections.abc import Callable
 from dataclasses import asdict
@@ -65,6 +67,7 @@ from outlier_nfl.run_writer import RunWriter
 from outlier_nfl.season_phase import season_phase_receipt, slate_season_type
 from outlier_nfl.stage_receipts import (
     props_admission_check,
+    quote_integrity_receipt,
     StageReceipt,
     failing,
     gate_reason,
@@ -178,6 +181,7 @@ class NflPipeline:
         errors: list[str] = []
         # Required-stage receipts; any one not OK/EMPTY blocks publication (F03).
         receipts: list[StageReceipt] = []
+        drop_counts: Counter[str] = Counter()
 
         # =====================================================================
         # 1. Ingestion Phase
@@ -215,7 +219,7 @@ class NflPipeline:
                 slate_events = events
 
             for event in slate_events:
-                lines = normalize_game_markets(event, event_markets_raw, team_index)
+                lines = normalize_game_markets(event, event_markets_raw, team_index, drop_counts)
                 all_game_lines.extend(lines)
             mkt_errs = validate_event_markets_payload(event_markets_raw) if slate_events else []
             receipts.append(
@@ -225,7 +229,7 @@ class NflPipeline:
             prop_payload_errs = validate_player_props_payload(player_props_raw)
             receipts.append(validation_receipt("player_props", prop_payload_errs))
 
-            props = normalize_player_props(player_props_raw, schedule_index)
+            props = normalize_player_props(player_props_raw, schedule_index, drop_counts)
             slate_event_ids = {str(e.get("eventId") or e.get("id")) for e in slate_events}
             if slate_event_ids:
                 all_player_props = [
@@ -297,7 +301,7 @@ class NflPipeline:
                         event_markets.extend(mkt_payload["markets"])
 
                 raw_markets[event_id] = event_markets
-                lines = normalize_game_markets(event, {"markets": event_markets}, team_index)
+                lines = normalize_game_markets(event, {"markets": event_markets}, team_index, drop_counts)
                 all_game_lines.extend(lines)
 
             if not slate_events:
@@ -343,7 +347,7 @@ class NflPipeline:
                     player_props_raw = {"props": []}
                 raw_props = player_props_raw
 
-                props = normalize_player_props(player_props_raw, schedule_index)
+                props = normalize_player_props(player_props_raw, schedule_index, drop_counts)
                 slate_event_ids = {str(e.get("eventId") or e.get("id")) for e in slate_events}
                 all_player_props = [p for p in props if p.event_id in slate_event_ids]
             else:
@@ -586,6 +590,8 @@ class NflPipeline:
             publish, publish_latest = False, False
             publication_reason = gate_reason(receipts)
             logger.warning("Bundle-only run (%s)", publication_reason)
+        # Informational (never required, always OK): what normalization dropped (F26).
+        receipts.append(quote_integrity_receipt(drop_counts))
 
         # =====================================================================
         # 3. Persistence Phase
