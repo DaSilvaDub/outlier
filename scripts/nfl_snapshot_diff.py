@@ -60,6 +60,10 @@ kicked off, an inactive RB, one name in two events, only a DFS book, an
 unresolved team and no injury report. A18 runs the extra-pack export for a
 missing requested date (another latest present), corrupt JSON, a valid empty
 slate, a mismatched payload date and a valid one-row slate.
+A19 builds usage profiles with expected stats for only some games ([100,100,0]
+actual vs two expected weeks), expected rows from another season, a traded
+player and a duplicated player-game. A20 smooths hit rates with and without a
+games-played count and enriches rows whose model_p is exactly 0 or 1.
 A13 runs the schema checks: identical and conflicting
 duplicate team-game rows, a missing opponent row, a week-stats file without
 ``game_id``, and duplicate normalized props. B12 adds ``identity_extras`` to the
@@ -93,7 +97,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 11
+HARNESS_VERSION = 12
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -141,6 +145,10 @@ STEPS: dict[str, list[dict[str, Any]]] = {
          "kind": "alt_floors"},
         {"name": "A18_export_explicit_date", "clock": "2026-09-14T13:05:00+00:00",
          "kind": "export_pack"},
+        # Phase 7b (#229): usage pairing, degenerate model_p, games-played smoothing.
+        {"name": "A19_usage_pairing", "clock": "2026-09-14T13:10:00+00:00", "kind": "usage"},
+        {"name": "A20_model_p_smoothing", "clock": "2026-09-14T13:15:00+00:00",
+         "kind": "model_p"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -1242,6 +1250,106 @@ def _run_export_pack_step(work: Path, repo: Path) -> str | None:
     return None
 
 
+def _pw(pid: str, week: int, team: str, rec_yds: float, targets: float = 5,
+        carries: float = 0, season: int = 2026, name: str = "") -> dict[str, str]:
+    """One nflverse stats_player_week row (real 2026 column names)."""
+    return {"player_id": pid, "player_display_name": name or pid, "position": "WR",
+            "season": str(season), "week": str(week), "season_type": "REG",
+            "game_id": f"{season}_{week:02d}_{team}", "team": team,
+            "receiving_yards": str(rec_yds), "targets": str(targets),
+            "target_share": "0.25", "carries": str(carries), "rushing_yards": "0"}
+
+
+def _ep(pid: str, week: int, team: str, exp: float, season: int = 2026) -> dict[str, str]:
+    """One ffopportunity ep_weekly row (real columns: season, posteam, week, game_id)."""
+    return {"season": str(season), "posteam": team, "week": str(week),
+            "game_id": f"{season}_{week:02d}_{team}", "player_id": pid,
+            "rec_yards_gained_exp": str(exp), "rush_yards_gained_exp": "0"}
+
+
+def usage_cases() -> dict[str, tuple[list[dict[str, str]], list[dict[str, str]]]]:
+    """A19: (player weeks, expected rows) per case; before_week is 4."""
+    return {
+        "partial_expected": (
+            [_pw("P1", 1, "KC", 100), _pw("P1", 2, "KC", 100), _pw("P1", 3, "KC", 0)],
+            [_ep("P1", 1, "KC", 100), _ep("P1", 2, "KC", 100)]),
+        "expected_from_other_season": (
+            [_pw("P2", 1, "KC", 60), _pw("P2", 2, "KC", 60)],
+            [_ep("P2", 1, "KC", 120, season=2025), _ep("P2", 2, "KC", 120, season=2025)]),
+        "traded_player": (
+            [_pw("P3", 1, "NYJ", 40, targets=10), _pw("P3", 2, "NYJ", 40, targets=10),
+             _pw("P3", 3, "KC", 40, targets=2)],
+            []),
+        "duplicate_player_game": (
+            [_pw("P4", 1, "KC", 50), _pw("P4", 2, "KC", 50), _pw("P4", 2, "KC", 50)],
+            [_ep("P4", 1, "KC", 50), _ep("P4", 2, "KC", 50)]),
+    }
+
+
+def _run_usage_step(work: Path) -> str | None:
+    """A19 (F22): actual vs expected on the same games; current-team samples."""
+    from outlier_nfl import usage
+
+    def run(players: list[dict[str, str]], expected: list[dict[str, str]]) -> Any:
+        profiles = usage.build_profiles(players, expected, before_week=4)
+        teams = sorted({p.team for p in profiles.values()})
+        signals = usage.usage_signals(profiles, {}, {t: f"e-{t}" for t in teams})
+        return {"profiles": {k: v.to_dict() for k, v in sorted(profiles.items())},
+                "signals": [(s.player_name, s.market, s.tag) for s in signals]}
+
+    out: dict[str, Any] = {}
+    for case, (players, expected) in usage_cases().items():
+        out[case] = _try(functools.partial(run, players, expected))
+    dest = work / "data" / "NFL" / "math" / "usage_pairing.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
+def _run_model_p_step(work: Path) -> str | None:
+    """A20 (deferred a/b): games-played Laplace n and degenerate model_p."""
+    import inspect
+
+    from outlier_nfl import calibration, enrich_close
+
+    out: dict[str, Any] = {"laplace": {}, "enrich": {}}
+    accepted = set(inspect.signature(calibration.compute_shrunk_empirical_model_p).parameters)
+    for case, (l10, season, games) in {
+        "l10_100pct_10_games": (1.0, None, 10),
+        "l10_100pct_2_games": (1.0, None, 2),
+        "season_100pct_3_games": (None, 1.0, 3),
+        "l10_100pct_no_games_count": (1.0, None, None),
+    }.items():
+        kw = {"l10_hit_rate": l10, "season_hit_rate": season, "method": "laplace",
+              "games_played": games}
+        out["laplace"][case] = _try(functools.partial(
+            calibration.compute_shrunk_empirical_model_p,
+            **{k: v for k, v in kw.items() if k in accepted}))
+    base = {"player_name": "Patrick Mahomes", "team": "KC", "market": "PASS_YDS",
+            "position": "OVER", "line": 250.5, "matchup": "BAL @ KC", "event_id": "e1",
+            "best_odds": -110, "implied_probability": 52.38}
+    rows = [
+        {**base, "harness_case": "supplied_model_p_one", "model_p": 1.0,
+         "model_p_source": "external"},
+        {**base, "harness_case": "supplied_model_p_zero", "model_p": 0.0,
+         "model_p_source": "external"},
+        {**base, "harness_case": "raw_empirical_l10_one", "l10_hit_rate": 1.0},
+        {**base, "harness_case": "normal_model_p", "model_p": 0.61, "model_p_source": "external"},
+    ]
+    for mode in ("pass", "empirical_hit_rate"):
+        payload = enrich_close.enrich_prediction_payload(
+            {"records": [dict(r) for r in rows]}, mode="explicit", attach_model_p=mode)
+        out["enrich"][mode] = {
+            "rows": {r["harness_case"]: {k: r.get(k) for k in (
+                "model_p", "model_p_source", "model_p_guard")} for r in payload["records"]},
+            "n_degenerate_model_p": payload["model_p_enrichment"].get("n_degenerate_model_p"),
+        }
+    dest = work / "data" / "NFL" / "math" / "model_p_smoothing.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
@@ -1263,6 +1371,10 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
         return _run_alt_floor_step(work)
     if step["kind"] == "export_pack":
         return _run_export_pack_step(work, repo)
+    if step["kind"] == "usage":
+        return _run_usage_step(work)
+    if step["kind"] == "model_p":
+        return _run_model_p_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"

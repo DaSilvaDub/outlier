@@ -271,6 +271,13 @@ def compute_empirical_model_p(
     return round(selected[0], 6)
 
 
+def effective_trials(window_n: int, games_played: int | None) -> int:
+    """Smoothing n: the window size, capped by real games played when known."""
+    if games_played is None or games_played <= 0:
+        return window_n
+    return min(window_n, int(games_played))
+
+
 def compute_shrunk_empirical_model_p(
     *,
     l5_hit_rate: float | None = None,
@@ -282,8 +289,14 @@ def compute_shrunk_empirical_model_p(
     method: str = "laplace",
     market_prior: float | None = None,
     kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
+    games_played: int | None = None,
 ) -> tuple[float, str] | None:
     """Shrunk empirical P(hit) and source stamp, or None if no usable rate.
+
+    ``games_played`` is the player's real game count behind the rate (from an
+    nflverse week index; Outlier ships rates only). When given, the smoothing
+    n is ``min(window size, games_played)`` so a 2-game "L10" is shrunk as two
+    trials, not ten. Without it the assumed window size is used.
 
     method:
       - laplace: β=α (symmetric shrink toward 0.5)
@@ -302,6 +315,7 @@ def compute_shrunk_empirical_model_p(
     if selected is None:
         return None
     p, n, _window = selected
+    n = effective_trials(n, games_played)
     if method == "laplace":
         shrunk = shrink_hit_rate(p, n, alpha=alpha, beta=None)
         source = MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_LAPLACE
@@ -444,8 +458,12 @@ def attach_empirical_model_p_record(
     market_prior: float | None = None,
     kappa: float = DEFAULT_MARKET_PRIOR_KAPPA,
     attach_sportsbook: bool = True,
+    games_played: int | None = None,
 ) -> MutableMapping[str, Any]:
     """Mutate/return a prop dict with empirical ``model_p`` when missing.
+
+    ``games_played`` (shrink methods only) caps the smoothing n; the n used is
+    stamped as ``model_p_n_games`` with ``model_p_n_source``.
 
     Same contract as :func:`attach_empirical_model_p` for JSON artifacts
     (historical packs / enrich_close). Never copies implied_probability into
@@ -491,11 +509,22 @@ def attach_empirical_model_p_record(
             method=method,
             market_prior=prior,
             kappa=kappa,
+            games_played=games_played,
         )
         if shrunk is None:
             model_p, source = None, None
         else:
             model_p, source = shrunk
+            if games_played is not None and games_played > 0:
+                selected = select_empirical_hit_rate(
+                    l5_hit_rate=record.get("l5_hit_rate"),
+                    l10_hit_rate=record.get("l10_hit_rate"),
+                    l20_hit_rate=record.get("l20_hit_rate"),
+                    season_hit_rate=record.get("season_hit_rate"),
+                )
+                if selected is not None:
+                    record["model_p_n_games"] = effective_trials(selected[1], games_played)
+                    record["model_p_n_source"] = "nflverse_games_played"
     if model_p is None:
         record.setdefault("model_p", None)
         record.setdefault("model_p_source", None)

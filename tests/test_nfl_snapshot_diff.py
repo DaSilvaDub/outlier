@@ -207,7 +207,7 @@ def test_phase6_steps_follow_a13(tmp_path):
 
 
 def test_phase7a_steps_follow_a16(tmp_path):
-    assert snap.HARNESS_VERSION == 11
+    assert snap.HARNESS_VERSION >= 11
     a = [s["name"] for s in snap.STEPS["A"]]
     i = a.index("A16_settle_clv")
     assert a[i + 1:i + 3] == ["A17_alt_floor_eligibility", "A18_export_explicit_date"]
@@ -216,3 +216,14 @@ def test_phase7a_steps_follow_a16(tmp_path):
     math = tmp_path / "data" / "NFL" / "math"
     assert (math / "alt_floor_eligibility.json").exists()
     assert (math / "export_explicit_date.json").exists()
+
+
+def test_phase7b_steps_follow_a18(tmp_path):
+    assert snap.HARNESS_VERSION == 12
+    a = [s["name"] for s in snap.STEPS["A"]]
+    i = a.index("A18_export_explicit_date")
+    assert a[i + 1:i + 3] == ["A19_usage_pairing", "A20_model_p_smoothing"]
+    assert snap._run_usage_step(tmp_path) is None
+    assert snap._run_model_p_step(tmp_path) is None
+    math = tmp_path / "data" / "NFL" / "math"
+    assert (math / "usage_pairing.json").exists() and (math / "model_p_smoothing.json").exists()
