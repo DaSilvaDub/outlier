@@ -270,7 +270,9 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
         result.missing.append(f"{run_dir / 'manifest.json'}: {exc}")
         return result
     ctx = manifest.get("context") or {}
-    slate_key = slate or ctx.get("slate_date")
+    # Key by the pointer's slate name (e.g. 2026-10-04_early), the same key check uses.
+    pointer_slates = [k for k, v in pointed_runs(root).items() if v == run_id]
+    slate_key = slate or (pointer_slates[0] if pointer_slates else ctx.get("slate_date"))
     captured = ctx.get("run_started_utc") or manifest.get("created_utc")
     season = ctx.get("season")
     sealed = {a.get("name"): a.get("sha256") for a in manifest.get("artifacts") or []}

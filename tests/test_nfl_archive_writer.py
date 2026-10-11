@@ -236,3 +236,17 @@ def test_archived_sidecar_is_the_exact_bytes_that_were_checked(tmp_path, monkeyp
     result = ar.record_nflverse(nfl, cache, [2025])
     [entry] = [e for e in result.recorded if e.path.endswith("stats_player_week_2025.csv.meta.json")]
     assert (nfl / entry.path).read_bytes() == checked
+
+
+def test_record_run_id_keys_by_the_pointer_slate_name(tmp_path):
+    summary = NflPipeline(data_dir=tmp_path).run(
+        date=SLATE, window="early", offline_fixtures_dir=FIXTURES_DIR,
+        reports_dir=tmp_path / "reports")
+    nfl = tmp_path / "NFL"
+    pointers = ar.pointed_runs(nfl)
+    [(suffix, run_id)] = pointers.items()
+    assert run_id == summary["run_id"] and suffix != SLATE  # e.g. 2026-09-13_early
+    assert nfl_archive.main(["record", "--nfl-dir", str(nfl), "--run-id", run_id]) == 0
+    entries, _ = ar.read_manifest(ar.manifest_path(nfl))
+    assert {e.slate for e in entries} == {suffix}
+    assert ar.check_archive(nfl).gaps == []
