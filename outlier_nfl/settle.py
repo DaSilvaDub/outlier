@@ -19,6 +19,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
+import sys
 from typing import Any, Mapping, Sequence
 
 from outlier_nfl.boxscore import (
@@ -778,6 +779,10 @@ def _load_events_from_args(args: argparse.Namespace) -> list[NflBoxScoreEvent]:
     raise SystemExit("Provide --boxscores and/or --provider nflverse")
 
 
+# Exit code when an --out-* path already exists and --overwrite was not given.
+EXIT_OUTPUT_EXISTS = 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Shadow-settle NFL Tier-1 / matchup prediction snapshots against box scores."
@@ -834,7 +839,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="When using --provider, also write the simplified box-score bundle to this path.",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing --out-json / --out-md / --write-boxscores files "
+        "(refused by default so a rerun never silently replaces a graded report).",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    existing = [
+        str(p) for p in (args.out_json, args.out_md, args.write_boxscores)
+        if p is not None and Path(p).exists()
+    ]
+    if existing and not args.overwrite:
+        # No-clobber (F27 output safety): refuse before any work, keep the files.
+        print(
+            "error: output already exists: " + ", ".join(existing)
+            + "\nRerun with --overwrite to replace it, or choose a new --out-* path.",
+            file=sys.stderr,
+        )
+        return EXIT_OUTPUT_EXISTS
 
     predictions = load_prediction_snapshot(
         args.predictions,
