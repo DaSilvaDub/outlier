@@ -70,7 +70,8 @@ def test_archived_live_original_is_admissible(archived):
     nfl, run_id = archived
     [v] = rb.admissibility(nfl)
     assert (v.slate, v.admissible, v.run_id, v.reasons) == (SLATE, True, run_id, [])
-    assert {e.role for e in v.entries} == set(ar.REQUIRED_SLATE_ROLES)
+    # The four required roles plus the tape the run admitted (archived since #258).
+    assert {e.role for e in v.entries} == {*ar.REQUIRED_SLATE_ROLES, ar.TAPE_ROLE}
 
 
 def test_unarchived_slate_is_not_admissible(tmp_path):
@@ -108,7 +109,7 @@ def test_rebuild_is_replay_versioned_and_touches_no_original(archived):
     assert (m["rebuilt_mode"], m["rebuilt_replay"], m["publication"]) == (
         "retrospective", True, "bundle_only")
     assert m["source_run_id"] == run_id and m["as_of_utc"] == PREGAME
-    assert {i["role"] for i in m["inputs"]} == set(ar.REQUIRED_SLATE_ROLES)
+    assert {i["role"] for i in m["inputs"]} == {*ar.REQUIRED_SLATE_ROLES, ar.TAPE_ROLE}
     assert all(len(i["sha256"]) == 64 for i in m["inputs"])
     assert json.loads((out / "rebuild_manifest.json").read_text("utf-8")) == m
     assert (out / m["rebuilt_run_dir"] / "nfl_best_bets.json").is_file()
