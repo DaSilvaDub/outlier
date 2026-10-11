@@ -24,6 +24,10 @@ Fields (every one is validated by :func:`parse_entry`):
 - ``fetched_at``: ``nflverse_boxscore`` only, and required there. It comes from the
   ``<file>.meta.json`` sidecar that #252 writes (``url, fetched_at, sha256,
   size, rows``).
+- ``original_path`` / ``mtime``: legacy roles only, and required there. Where the
+  legacy file sat and its modified time (ISO-8601 UTC) when it was recorded; the
+  entry's ``path`` is the write-once copy under ``archive/legacy/<sha256>/``.
+  ``run_id`` is ``null`` for legacy roles: those slates predate run bundles.
 
 Shapes checked against real code: run bundles ``runs/<run_id>/raw/{schedule,
 event_markets,player_props}.json`` plus ``manifest.json`` with
@@ -54,11 +58,16 @@ PREGAME_ROLES = {
 }
 NFLVERSE_ROLE = "nflverse_boxscore"
 TAPE_ROLE = "tape"
+# Slates from before the phase 1 run bundles (see ``archive_legacy``).
+LEGACY_ROLE = "legacy_original"
+# Output of the untracked helper scripts (report section 12). Never pipeline output.
+HELPER_ROLE = "untracked_helper_output"
+LEGACY_ROLES = (LEGACY_ROLE, HELPER_ROLE)
 # Optional per run: runs archived before the tape role landed have none, and a run
 # whose tape bytes are gone (prior_week.json rewritten since) gets none either.
-ROLES = (*PREGAME_ROLES, NFLVERSE_ROLE, TAPE_ROLE)
+ROLES = (*PREGAME_ROLES, NFLVERSE_ROLE, TAPE_ROLE, *LEGACY_ROLES)
 REQUIRED_SLATE_ROLES = tuple(PREGAME_ROLES)
-SOURCES = ("outlier_api", "run_writer", "nflverse", "tape")
+SOURCES = ("outlier_api", "run_writer", "nflverse", "tape", "legacy_disk")
 
 _SLATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_[A-Za-z0-9_-]+)?$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -84,6 +93,8 @@ class ArchiveEntry:
     season: int
     run_id: str | None = None
     fetched_at: str | None = None
+    original_path: str | None = None
+    mtime: str | None = None
 
     def key(self) -> tuple[str, str]:
         return (self.role, self.path)
@@ -137,7 +148,7 @@ def parse_entry(raw: Any) -> ArchiveEntry:
     if source not in SOURCES:
         raise ArchiveError(f"source must be one of {list(SOURCES)}, got {source!r}")
     run_id = raw.get("run_id")
-    if role != NFLVERSE_ROLE and not (isinstance(run_id, str) and run_id):
+    if role not in (NFLVERSE_ROLE, *LEGACY_ROLES) and not (isinstance(run_id, str) and run_id):
         raise ArchiveError(f"run_id is required for {role}")
     if run_id is not None and not isinstance(run_id, str):
         raise ArchiveError("run_id must be a string")
@@ -146,10 +157,18 @@ def parse_entry(raw: Any) -> ArchiveEntry:
         fetched_at = _aware(fetched_at, "fetched_at")
     elif fetched_at is not None:
         raise ArchiveError(f"fetched_at is only for {NFLVERSE_ROLE}")
+    original_path, mtime = raw.get("original_path"), raw.get("mtime")
+    if role in LEGACY_ROLES:
+        if not isinstance(original_path, str) or not original_path or "\\" in original_path:
+            raise ArchiveError(f"original_path must be a non-empty POSIX path: {original_path!r}")
+        mtime = _aware(mtime, "mtime")
+    elif original_path is not None or mtime is not None:
+        raise ArchiveError("original_path and mtime are only for legacy roles")
     return ArchiveEntry(
         slate=slate, role=role, path=path, sha256=sha, size=size,
         captured_at=_aware(raw.get("captured_at"), "captured_at"), source=source,
         season=season, run_id=run_id, fetched_at=fetched_at,
+        original_path=original_path, mtime=mtime,
     )
 
 
@@ -208,6 +227,7 @@ def _rel(nfl_dir: Path, path: Path) -> str:
 def record_file(
     nfl_dir: Path | str, path: Path | str, *, role: str, slate: str | None, source: str,
     season: Any, captured_at: Any, run_id: str | None = None, fetched_at: str | None = None,
+    original_path: str | None = None, mtime: str | None = None,
 ) -> tuple[ArchiveEntry, bool]:
     """Append one entry for ``path``. Returns ``(entry, newly_recorded)``.
 
@@ -226,6 +246,7 @@ def record_file(
         "slate": slate, "role": role, "path": _rel(root, src), "sha256": sha256_file(src),
         "size": src.stat().st_size, "captured_at": captured_at, "source": source,
         "season": season, "run_id": run_id, "fetched_at": fetched_at,
+        "original_path": original_path, "mtime": mtime,
     })
     mpath = manifest_path(root)
     mpath.parent.mkdir(parents=True, exist_ok=True)
@@ -548,7 +569,8 @@ class CheckReport:
 
 
 def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
-                  seasons: list[int] | None = None) -> CheckReport:
+                  seasons: list[int] | None = None,
+                  legacy_slates: tuple[str, ...] = ()) -> CheckReport:
     """Compare the manifest with the expected slates and the files on disk.
 
     The expected slates are every dated run pointer plus ``slates``. This only
@@ -568,6 +590,11 @@ def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
     for slate in expected:
         have = by_slate.get(slate, [])
         roles = {e.role for e in have}
+        if slate in legacy_slates:  # no run bundle; archive_legacy gives the status
+            if LEGACY_ROLE not in roles:
+                gaps.append(Gap(slate, LEGACY_ROLE, "legacy_not_recorded",
+                                "no legacy_original files recorded"))
+            continue
         for role in REQUIRED_SLATE_ROLES:
             if role not in roles:
                 gaps.append(Gap(slate, role, "missing_role", f"no {role} archived"))
