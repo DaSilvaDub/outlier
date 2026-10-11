@@ -75,6 +75,7 @@ import argparse
 import base64
 import copy
 import datetime as _dt
+import functools
 import hashlib
 import json
 import os
@@ -965,20 +966,20 @@ def _run_close_join_step(work: Path) -> str | None:
         "same_player_other_week": _a14_pred("BAL @ KC", "2026-09-20T13:00:00-04:00",
                                             "outlier-bal-kc-w2"),
     }
-    out: dict[str, Any] = {}
-    for case, pred in preds.items():
-        def run(pred: dict[str, Any] = pred) -> Any:
-            aligned = fetch_odds_close.build_close_feed_from_event_odds(
-                ev, predictions={"records": [pred]})
-            row = aligned[0]
-            idx = enrich_close.index_book_close_records(
-                fetch_odds_close.build_close_feed_from_event_odds(ev))
-            hit = enrich_close.lookup_book_close_row(idx, pred)
-            return {"aligned": row.get("aligned_to_predictions"),
-                    "aligned_event_id": row.get("event_id"),
-                    "alignment_skipped": row.get("alignment_skipped"),
-                    "lookup_close_odds": None if hit is None else hit.get("close_odds")}
-        out[case] = _try(run)
+    def run(pred: dict[str, Any]) -> Any:
+        aligned = fetch_odds_close.build_close_feed_from_event_odds(
+            ev, predictions={"records": [pred]})
+        row = aligned[0]
+        idx = enrich_close.index_book_close_records(
+            fetch_odds_close.build_close_feed_from_event_odds(ev))
+        hit = enrich_close.lookup_book_close_row(idx, pred)
+        return {"aligned": row.get("aligned_to_predictions"),
+                "aligned_event_id": row.get("event_id"),
+                "alignment_skipped": row.get("alignment_skipped"),
+                "lookup_close_odds": None if hit is None else hit.get("close_odds")}
+
+    out: dict[str, Any] = {case: _try(functools.partial(run, pred))
+                           for case, pred in preds.items()}
 
     def same_name() -> Any:
         a = _a14_pred("BAL @ KC", "2026-09-13T13:00:00-04:00", "outlier-bal-kc",
