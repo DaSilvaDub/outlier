@@ -49,7 +49,13 @@ quotes, team without props, trade/offseason-move identity, inactive starter).
 A12 runs the entity joins on library inputs: a prop whose team is not in its
 event, numeric vs string team IDs, an ID-only team object, an outcome with no
 eventId, two same-name players in one box score and in the projection index,
-and a traded player. A13 runs the schema checks: identical and conflicting
+and a traded player. A14 joins Odds-API closes to predictions across a different provider ID for
+the same game, a different game, and a different week, plus two same-name
+players in one game. A15 maps quotes with verified, early, after-kickoff and
+unknown timing, and enriches with supplied feeds labeled as snapshot,
+synthetic, unlabeled and book close. A16 settles closes at the bet's own line,
+at a moved line (87.5 vs 187.5), in fraction units, and with no close line.
+A13 runs the schema checks: identical and conflicting
 duplicate team-game rows, a missing opponent row, a week-stats file without
 ``game_id``, and duplicate normalized props. B12 adds ``identity_extras`` to the
 replay feed: a foreign-team prop and an identical and a conflicting duplicate of Mahomes' passing-yards OVER.
@@ -81,7 +87,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 9
+HARNESS_VERSION = 10
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -118,6 +124,12 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "A11_roster_provenance", "clock": "2026-09-14T12:30:00+00:00", "kind": "roster"},
         {"name": "A12_identity_joins", "clock": "2026-09-14T12:35:00+00:00", "kind": "identity"},
         {"name": "A13_schema_integrity", "clock": "2026-09-14T12:40:00+00:00", "kind": "schema"},
+        # Phase 6 (#228): close ownership/timing and same-threshold CLV.
+        {"name": "A14_close_ownership", "clock": "2026-09-14T12:45:00+00:00", "kind": "close_join"},
+        {"name": "A15_close_provenance", "clock": "2026-09-14T12:50:00+00:00",
+         "kind": "close_provenance"},
+        {"name": "A16_settle_clv", "clock": "2026-09-14T12:55:00+00:00", "kind": "settle",
+         "case": "clv"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -419,6 +431,20 @@ _SETTLE_ROWS = {
         ("first_half_row", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 40.5, {"scope": "first_half"}),
         ("full_game_row", "Travis Kelce", "KC", "REC", "OVER", 4.5, {"scope": "full_game"}),
         ("no_scope_field", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 60.5, {}),
+    ),
+    # A16 (F13): price CLV only at the bet's own line; units mixed on purpose.
+    "clv": (
+        ("same_line_pct", "Travis Kelce", "KC", "REC_YDS", "OVER", 60.5,
+         {"close_line": 60.5, "close_odds": -125, "close_implied": 55.56,
+          "close_source": "book_close"}),
+        ("moved_line_87_5_vs_187_5", "Derrick Henry", "BAL", "RUSH_YDS", "OVER", 87.5,
+         {"close_line": 187.5, "close_odds": -150, "close_implied": 59.77,
+          "close_source": "book_close"}),
+        ("fraction_units", "Lamar Jackson", "BAL", "PASS_YDS", "OVER", 200.5,
+         {"close_line": 200.5, "close_odds": -120, "close_implied": 0.5455,
+          "close_source": "book_close"}),
+        ("close_line_unknown", "Patrick Mahomes", "KC", "PASS_YDS", "OVER", 250.5,
+         {"close_odds": -115, "close_implied": 53.49, "close_source": "book_close"}),
     ),
     "nonfinite": (
         ("nan_line", "Travis Kelce", "KC", "REC_YDS", "OVER", float("nan"), {}),
@@ -898,6 +924,135 @@ def _run_schema_step(work: Path) -> str | None:
     return None
 
 
+KICKOFF_A14 = "2026-09-13T17:00:00Z"
+
+
+def _odds_event(home: str, away: str, commence: str, books: list[dict[str, Any]],
+                eid: str = "oddsapi-bal-kc") -> dict[str, Any]:
+    return {"id": eid, "commence_time": commence, "home_team": home, "away_team": away,
+            "bookmakers": books}
+
+
+def _odds_book(key: str, price: int, last_update: str | None, player: str = "Patrick Mahomes",
+               point: float = 250.5, market: str = "player_pass_yds") -> dict[str, Any]:
+    mkt: dict[str, Any] = {"key": market, "outcomes": [
+        {"name": "Over", "description": player, "price": price, "point": point}]}
+    book: dict[str, Any] = {"key": key, "title": key, "markets": [mkt]}
+    if last_update is not None:
+        mkt["last_update"] = last_update
+        book["last_update"] = last_update
+    return book
+
+
+def _a14_pred(matchup: str, starts: str, event_id: str, team: str = "KC",
+              player_id: str = "") -> dict[str, Any]:
+    return {"player_name": "Patrick Mahomes", "market": "PASS_YDS", "line": 250.5,
+            "position": "OVER", "matchup": matchup, "event_id": event_id,
+            "event_starts_at": starts, "team": team, "player_id": player_id}
+
+
+def _run_close_join_step(work: Path) -> str | None:
+    """A14 (F12): close rows must not cross a known game/date owner."""
+    from outlier_nfl import enrich_close, fetch_odds_close
+
+    ev = _odds_event("Kansas City Chiefs", "Baltimore Ravens", KICKOFF_A14,
+                     [_odds_book("draftkings", -110, "2026-09-13T16:55:00Z")])
+    preds = {
+        "different_provider_ids_same_game": _a14_pred("BAL @ KC", "2026-09-13T13:00:00-04:00",
+                                                      "outlier-bal-kc"),
+        "single_incompatible_game": _a14_pred("LAR @ SF", "2026-09-13T16:05:00-04:00",
+                                              "outlier-lar-sf", team="SF"),
+        "same_player_other_week": _a14_pred("BAL @ KC", "2026-09-20T13:00:00-04:00",
+                                            "outlier-bal-kc-w2"),
+    }
+    out: dict[str, Any] = {}
+    for case, pred in preds.items():
+        def run(pred: dict[str, Any] = pred) -> Any:
+            aligned = fetch_odds_close.build_close_feed_from_event_odds(
+                ev, predictions={"records": [pred]})
+            row = aligned[0]
+            idx = enrich_close.index_book_close_records(
+                fetch_odds_close.build_close_feed_from_event_odds(ev))
+            hit = enrich_close.lookup_book_close_row(idx, pred)
+            return {"aligned": row.get("aligned_to_predictions"),
+                    "aligned_event_id": row.get("event_id"),
+                    "alignment_skipped": row.get("alignment_skipped"),
+                    "lookup_close_odds": None if hit is None else hit.get("close_odds")}
+        out[case] = _try(run)
+
+    def same_name() -> Any:
+        a = _a14_pred("BAL @ KC", "2026-09-13T13:00:00-04:00", "outlier-bal-kc",
+                      player_id="p-1")
+        b = {**a, "team": "BAL", "player_id": "p-2"}
+        aligned = fetch_odds_close.build_close_feed_from_event_odds(
+            ev, predictions={"records": [a, b]})
+        return {"aligned": aligned[0].get("aligned_to_predictions"),
+                "alignment_skipped": aligned[0].get("alignment_skipped")}
+
+    out["two_same_name_players_one_game"] = _try(same_name)
+    dest = work / "data" / "NFL" / "math" / "close_ownership.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
+def _run_close_provenance_step(work: Path) -> str | None:
+    """A15 (F13): only a verified pre-kickoff quote is ``book_close``."""
+    from outlier_nfl import close_feed, enrich_close, fetch_odds_close
+
+    timing = {
+        "verified_5min_before": "2026-09-13T16:55:00Z",
+        "early_quote_6h_before": "2026-09-13T11:00:00Z",
+        "after_kickoff_quote": "2026-09-13T17:10:00Z",
+        "unknown_timing": None,
+    }
+    out: dict[str, Any] = {"mapper": {}}
+    for case, stamp in timing.items():
+        rows = fetch_odds_close.map_event_odds_to_close_records(_odds_event(
+            "Kansas City Chiefs", "Baltimore Ravens", KICKOFF_A14,
+            [_odds_book("draftkings", -110, stamp)]))
+        out["mapper"][case] = [{k: r.get(k) for k in ("close_source", "close_status",
+                                                     "close_odds", "quote_time")} for r in rows]
+    mixed = fetch_odds_close.map_event_odds_to_close_records(_odds_event(
+        "Kansas City Chiefs", "Baltimore Ravens", KICKOFF_A14,
+        [_odds_book("draftkings", -110, "2026-09-13T16:55:00Z"),
+         _odds_book("fanduel", 150, "2026-09-13T17:10:00Z")]))
+    out["mapper"]["verified_book_vs_better_live_price"] = [
+        {k: r.get(k) for k in ("close_source", "close_status", "close_odds", "bookmaker")}
+        for r in mixed]
+
+    pred = _a14_pred("BAL @ KC", "2026-09-13T13:00:00-04:00", "outlier-bal-kc")
+    pred.update({"best_odds": -110, "implied_probability": 52.38})
+    feeds = {
+        "supplied_snapshot_source": "pregame_snapshot_best_odds",
+        "supplied_synthetic_source": "synthetic_moved_close",
+        "supplied_without_source": None,
+        "supplied_book_close": "book_close",
+    }
+    out["enrich_book_close"] = {}
+    for case, src in feeds.items():
+        feed_row = {k: pred[k] for k in ("player_name", "market", "line", "position", "matchup",
+                                         "event_id")}
+        feed_row.update({"close_line": 250.5, "close_odds": -125, "close_implied": 55.56})
+        if src is not None:
+            feed_row["close_source"] = src
+        enriched = enrich_close.enrich_prediction_payload(
+            {"records": [dict(pred)]}, mode="book_close", attach_model_p="pass",
+            book_close_index=enrich_close.index_book_close_records([feed_row]))
+        rec = enriched["records"][0]
+        out["enrich_book_close"][case] = {k: rec.get(k) for k in (
+            "close_source", "close_odds", "close_skip_reason")}
+    d = work / "data" / "NFL" / "math" / "a15"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "preds.json").write_text(json.dumps({"records": [pred]}), encoding="utf-8")
+    out["synthetic_moved_feed_source"] = sorted({
+        str(r.get("close_source")) for r in close_feed.snapshot_rows_to_moved_close_feed(
+            d / "preds.json")})
+    dest = work / "data" / "NFL" / "math" / "close_provenance.json"
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
@@ -911,6 +1066,10 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
         return _run_identity_step(work)
     if step["kind"] == "schema":
         return _run_schema_step(work)
+    if step["kind"] == "close_join":
+        return _run_close_join_step(work)
+    if step["kind"] == "close_provenance":
+        return _run_close_provenance_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"

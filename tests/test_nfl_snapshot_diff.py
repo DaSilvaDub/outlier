@@ -169,7 +169,7 @@ def test_tape_and_roster_steps_write_their_reports(tmp_path):
 
 
 def test_phase4b_steps_follow_a11_and_b11():
-    assert snap.HARNESS_VERSION == 9
+    assert snap.HARNESS_VERSION >= 9
     a = [s["name"] for s in snap.STEPS["A"]]
     b = [s["name"] for s in snap.STEPS["B"]]
     assert a.index("A12_identity_joins") == a.index("A11_roster_provenance") + 1
@@ -192,3 +192,15 @@ def test_identity_extras_add_foreign_and_duplicate_props():
     client = snap.FrozenOutlierClient(REPO / "tests" / "fixtures" / "nfl", identity_extras=True)
     base = snap.FrozenOutlierClient(REPO / "tests" / "fixtures" / "nfl")
     assert len(client._props["props"]) == len(base._props["props"]) + 3
+
+
+def test_phase6_steps_follow_a13(tmp_path):
+    assert snap.HARNESS_VERSION == 10
+    a = [s["name"] for s in snap.STEPS["A"]]
+    i = a.index("A13_schema_integrity")
+    assert a[i + 1:i + 4] == ["A14_close_ownership", "A15_close_provenance", "A16_settle_clv"]
+    assert snap._run_close_join_step(tmp_path) is None
+    assert snap._run_close_provenance_step(tmp_path) is None
+    math = tmp_path / "data" / "NFL" / "math"
+    assert (math / "close_ownership.json").exists() and (math / "close_provenance.json").exists()
+    assert len(snap._SETTLE_ROWS["clv"]) == 4
