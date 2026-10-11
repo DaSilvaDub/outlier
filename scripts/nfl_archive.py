@@ -44,6 +44,8 @@ def _record(args: argparse.Namespace) -> int:
         print(f"CONFLICT {line}")
     for line in result.missing:
         print(f"MISSING  {line}")
+    for line in result.notes:
+        print(f"NOTE     {line}")
     return 1 if result.conflicts else 0
 
 
