@@ -14,6 +14,7 @@ from outlier_nfl.alt_floors import (
     american_to_implied,
     discover_alt_floor_candidates,
     export_alt_floors,
+    generate_alt_floors_pipeline,
     rank_alt_floors,
     render_alt_floors_markdown,
 )
@@ -40,14 +41,14 @@ def test_extract_book_quote():
     assert name == "HARDROCK"
     assert odds == -225
 
-    # Alias target match (HARDROCK_R)
+    # Hardrock R is a separate book, not the target (#229 review): retail order wins
     books_alias = [
         {"book": "DRAFTKINGS", "odds": -200},
         {"book": "HARDROCK_R", "odds": -230},
     ]
     name_alias, odds_alias = _extract_book_quote(books_alias, target_book="HARDROCK")
-    assert name_alias == "HARDROCK"
-    assert odds_alias == -230
+    assert name_alias == "DRAFTKINGS"
+    assert odds_alias == -200
 
     # Fallback when target book is absent
     books_no_hr = [
@@ -724,3 +725,44 @@ def test_export_lists_inventory_apart_from_ranked_floors(tmp_path):
     assert payload["inventory"][0]["inventory_reason"] == "inactive_player"
     md = (tmp_path / "r" / "2026-09-13_Alt_Floors.md").read_text(encoding="utf-8")
     assert "Non-actionable inventory" in md and "`inactive_player`" in md
+
+
+@pytest.mark.parametrize("raw,canonical", [
+    ("Hard Rock", "HARDROCK"), ("hardrock", "HARDROCK"), ("HARD_ROCK", "HARDROCK")])
+def test_display_name_matches_the_target(raw, canonical):
+    assert _extract_book_quote([{"book": raw, "odds": -300}]) == (canonical, -300)
+
+
+@pytest.mark.parametrize("raw,canonical", [
+    ("DraftKings", "DRAFTKINGS"), ("ESPN Bet", "ESPNBET"), ("Hardrock R", "HARDROCK_R")])
+def test_display_names_count_as_retail_not_target(raw, canonical):
+    from outlier_nfl.alt_floors import floor_inventory_reason
+
+    assert _extract_book_quote([{"book": raw, "odds": -300}]) == (canonical, -300)
+    row = {"team": "BAL", "event_id": "e1", "player_name": "x"}
+    assert floor_inventory_reason(row, book=raw, odds=-300, target_book="HARDROCK") is None
+
+
+@pytest.mark.parametrize("case,book", [
+    ("display_name_hard_rock", "HARDROCK"), ("display_name_hardrock_r", "HARDROCK_R"),
+    ("display_name_espn_bet", "ESPNBET")])
+def test_display_name_floor_stays_executable(case, book):
+    props, extra = _snap.alt_floor_cases()[case]
+    _top3, [m], inventory = _scan(props, **extra)
+    assert (m.target_book, m.actionable) == (book, True) and inventory == []
+
+
+def test_dfs_display_name_is_still_inventory():
+    props, extra = _snap.alt_floor_cases()["display_name_prizepicks"]
+    _top3, master, [inv] = _scan(props, **extra)
+    assert master == [] and inv.inventory_reason == "no_sportsbook_quote"
+
+
+def test_all_inventory_without_injury_report_logs_a_warning(tmp_path, caplog):
+    props, _extra = _snap.alt_floor_cases()["no_injury_report"]
+    with caplog.at_level("WARNING", logger="outlier_nfl.alt_floors"):
+        generate_alt_floors_pipeline(
+            props, exports_dir=tmp_path / "x", reports_dir=tmp_path / "r",
+            date_str="2026-09-13", as_of_utc=AS_OF, inactive_by_team=None,
+            require_injury_evidence=True)
+    assert any("injury report was not admitted" in r.getMessage() for r in caplog.records)

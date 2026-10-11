@@ -28,7 +28,20 @@ from outlier_nfl.roster import get_team_depth_chart
 logger = logging.getLogger("outlier_nfl.alt_floors")
 
 DEFAULT_TARGET_BOOK = "HARDROCK"
-TARGET_BOOK_ALIASES = {"HARDROCK", "HARDROCK_R"}
+# Book names are compared compacted to A-Z0-9 ("Hard Rock" == "HARDROCK"), since
+# live feeds may carry display names. "Hardrock R" is a separate book (see
+# outlier_scrapers/alt_player_props.py): never the target, but a named retail book.
+TARGET_BOOK_ALIASES = {"HARDROCK"}
+
+
+def compact_book(name: Any) -> str:
+    """``"Hard Rock"``/``"hardrock"``/``"HARD_ROCK"`` -> ``"HARDROCK"``."""
+    return re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+
+def _target_keys(target_book: str) -> set[str]:
+    key = compact_book(target_book)
+    return set(TARGET_BOOK_ALIASES) if key in TARGET_BOOK_ALIASES else {key}
 
 # Juice cap for standalone straight bets. Lines worse than -250 (e.g. -325, -600, -700)
 # carry extreme negative asymmetry against in-game injuries and must be restricted to
@@ -111,16 +124,15 @@ def _extract_book_quote(
         return ("UNKNOWN", None)
 
     # 1. Check target book aliases
-    aliases = TARGET_BOOK_ALIASES if target_book in TARGET_BOOK_ALIASES else {target_book.upper()}
+    aliases = _target_keys(target_book)
     for b in books:
-        if isinstance(b, dict) and str(b.get("book") or "").upper() in aliases:
+        if isinstance(b, dict) and compact_book(b.get("book")) in aliases:
             return (target_book, b.get("odds"))
 
-    # 2. Fallback: select best regulated retail book
-    retail_preferred = ["DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS", "FANATICS", "ESPNBET"]
-    for pref in retail_preferred:
+    # 2. Fallback: select best regulated retail book (reported under its canonical name)
+    for pref in RETAIL_PREFERRED:
         for b in books:
-            if isinstance(b, dict) and str(b.get("book") or "").upper() == pref:
+            if isinstance(b, dict) and compact_book(b.get("book")) == compact_book(pref):
                 return (pref, b.get("odds"))
 
     # 3. Fallback: first available (reported, but not a sportsbook we can execute at)
@@ -131,9 +143,10 @@ def _extract_book_quote(
     return ("NONE", None)
 
 
-RETAIL_BOOKS = frozenset(
-    {"DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS", "FANATICS", "ESPNBET"}
+RETAIL_PREFERRED = (
+    "DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS", "FANATICS", "ESPNBET", "HARDROCK_R",
 )
+RETAIL_BOOKS = frozenset(compact_book(b) for b in RETAIL_PREFERRED)
 
 
 def _finite_odds(odds: Any) -> float | None:
@@ -181,8 +194,7 @@ def floor_inventory_reason(
         return "no_quote"
     if _finite_odds(odds) is None:
         return "nonfinite_quote"
-    aliases = TARGET_BOOK_ALIASES if target_book in TARGET_BOOK_ALIASES else {target_book.upper()}
-    if book.upper() not in aliases and book.upper() not in RETAIL_BOOKS:
+    if compact_book(book) not in _target_keys(target_book) | RETAIL_BOOKS:
         return "no_sportsbook_quote"
     team = normalize_team(row.get("team"))
     if not str(row.get("event_id") or "").strip() or not team:
@@ -401,9 +413,7 @@ def discover_alt_floor_candidates(
         conf_score = max(0.0, min(1.0, round(base_score, 4)))
 
         # Target book match bonus in tie-breakers
-        is_target_book = b_name.upper() in (
-            TARGET_BOOK_ALIASES if target_book in TARGET_BOOK_ALIASES else {target_book.upper()}
-        )
+        is_target_book = compact_book(b_name) in _target_keys(target_book)
 
         candidates_by_player[(mkt, *pkey)].append(
             {
@@ -782,6 +792,12 @@ def generate_alt_floors_pipeline(
     )
 
     top3, master_pool, inventory = rank_alt_floors(candidates)
+    if require_injury_evidence and inactive_by_team is None and inventory and not master_pool:
+        logger.warning(
+            "Alt floors: all %d floors are non-actionable inventory because the injury "
+            "report was not admitted (refused or missing tape); rerun with --refresh-tape.",
+            len(inventory),
+        )
 
     outputs = export_alt_floors(
         top3,
