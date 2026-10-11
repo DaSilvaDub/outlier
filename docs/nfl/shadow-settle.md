@@ -101,6 +101,8 @@ python -m outlier_nfl.settle \
   --predictions path/to/nfl_high_prob_props_2026-09-20.json \
   --provider nflverse --slate-date 2026-09-20 --season 2026 \
   --out-md /tmp/nfl_settle.md
+# An existing --out-json / --out-md / --write-boxscores file is refused (exit 2,
+# nothing written); add --overwrite to replace it on purpose, or pick a new path.
 
 # Attach Laplace model_p + snapshot close
 python -m outlier_nfl.enrich_close \
