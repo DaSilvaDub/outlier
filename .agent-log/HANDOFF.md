@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
 
-**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `296e99d`
 
 ## Accomplished
 1. **Permanent Pipeline Integration (`outlier_nfl/pipeline.py` Stages 8 & 9)**:
