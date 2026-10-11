@@ -20,7 +20,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -157,8 +157,10 @@ def outcome_to_position(name: str | None, *, market_outlier: str) -> str | None:
     return None
 
 
-# Declared close policy: a quote is a book close only when its own update time
-# is known, at or before kickoff, and no more than this far ahead of it.
+# Declared close policy: a quote is a book close only when we captured it at or
+# before kickoff and no more than this far ahead of it, and the book's own
+# last_update (when present) is not after kickoff. last_update is when the book
+# last moved the market, not when we saw it, so it never stands in for capture.
 CLOSE_POLICY_MAX_LEAD = timedelta(minutes=60)
 CLOSE_SOURCE_ODDS_CAPTURE = "odds_capture"
 
@@ -173,16 +175,29 @@ def _parse_ts(raw: Any) -> datetime | None:
     return ts if ts.tzinfo is not None else None
 
 
-def close_timing_status(quote_time: Any, commence_time: Any) -> str:
-    """``verified`` | ``early_quote`` | ``after_kickoff`` | ``unknown_timing``."""
-    quoted, kickoff = _parse_ts(quote_time), _parse_ts(commence_time)
-    if quoted is None or kickoff is None:
+def close_timing_status(captured_at: Any, last_update: Any, commence_time: Any) -> str:
+    """``verified`` | ``early_quote`` | ``after_kickoff`` | ``unknown_timing``.
+
+    A missing or naive ``captured_at`` is ``unknown_timing``; there is no
+    fallback to ``last_update``.
+    """
+    captured, kickoff = _parse_ts(captured_at), _parse_ts(commence_time)
+    if captured is None or kickoff is None:
         return "unknown_timing"
-    if quoted > kickoff:
+    updated = None
+    if last_update:
+        updated = _parse_ts(last_update)
+        if updated is None:
+            return "unknown_timing"
+    if captured > kickoff or (updated is not None and updated > kickoff):
         return "after_kickoff"
-    if kickoff - quoted > CLOSE_POLICY_MAX_LEAD:
+    if kickoff - captured > CLOSE_POLICY_MAX_LEAD:
         return "early_quote"
     return "verified"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _short_join_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -323,8 +338,9 @@ def map_event_odds_to_close_records(
 ) -> list[dict[str, Any]]:
     """Flatten an Odds-API event-odds payload into close-feed records.
 
-    Only a quote that passes ``close_timing_status`` (update time known, at or
-    before kickoff, within ``CLOSE_POLICY_MAX_LEAD``) is labeled ``book_close``;
+    Only a quote that passes ``close_timing_status`` (captured at or before
+    kickoff within ``CLOSE_POLICY_MAX_LEAD``, book update not after kickoff) is
+    labeled ``book_close``; without a capture time nothing is verified.
     any other quote is ``odds_capture`` with its ``close_status`` and can never
     outrank a verified quote for the same key, whatever its price.
 
@@ -400,7 +416,7 @@ def map_event_odds_to_close_records(
                     continue
 
                 quote_time = market.get("last_update") or book.get("last_update")
-                status = close_timing_status(quote_time, commence)
+                status = close_timing_status(captured_at, quote_time, commence)
                 row = {
                     "player_name": player,
                     "market": outlier_mkt,
@@ -516,9 +532,10 @@ def build_close_feed_from_event_odds(
     *,
     predictions: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     bookmaker_filter: Sequence[str] | None = None,
+    captured_at: str | None = None,
 ) -> list[dict[str, Any]]:
     records = map_event_odds_to_close_records(
-        event_payload, bookmaker_filter=bookmaker_filter
+        event_payload, bookmaker_filter=bookmaker_filter, captured_at=captured_at
     )
     if predictions is not None:
         records = align_close_records_to_predictions(records, predictions)
@@ -693,6 +710,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     all_records: list[dict[str, Any]] = []
     raw_bundle: list[Any] = []
     for eid in event_ids:
+        # Live fetches are stamped now; historical ones use the envelope timestamp.
+        fetched_at = None if args.historical_date else _utc_now_iso()
         payload = fetch_event_odds(
             api_key=key,
             event_id=eid,
@@ -707,6 +726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload,
                 predictions=predictions,
                 bookmaker_filter=book_filter,
+                captured_at=fetched_at,
             )
         )
 

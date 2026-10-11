@@ -27,23 +27,29 @@ def _event(*books: dict, **extra) -> dict:
             "away_team": "Baltimore Ravens", "bookmakers": list(books), **extra}
 
 
-@pytest.mark.parametrize("stamp,status", [
-    ("2026-09-13T16:55:00Z", "verified"),
-    ("2026-09-13T11:00:00Z", "early_quote"),
-    ("2026-09-13T17:10:00Z", "after_kickoff"),
-    (None, "unknown_timing"),
+@pytest.mark.parametrize("captured,updated,status", [
+    ("2026-09-13T16:55:00Z", "2026-09-13T15:00:00Z", "verified"),  # T-5, 2h-old market
+    ("2026-09-13T15:30:00Z", "2026-09-13T15:00:00Z", "early_quote"),  # T-90
+    ("2026-09-13T17:05:00Z", "2026-09-13T16:50:00Z", "after_kickoff"),  # captured after
+    ("2026-09-13T16:55:00Z", "2026-09-13T17:10:00Z", "after_kickoff"),  # moved after
+    (None, "2026-09-13T16:58:00Z", "unknown_timing"),  # no capture: no last_update fallback
+    ("2026-09-13T16:55:00", "2026-09-13T16:50:00Z", "unknown_timing"),  # naive capture
+    ("2026-09-13T16:55:00Z", None, "verified"),  # no last_update is fine
 ])
-def test_only_a_verified_pre_kickoff_quote_is_book_close(stamp, status):
-    [row] = map_event_odds_to_close_records(_event(_book("dk", -110, stamp)))
+def test_only_a_verified_capture_is_book_close(captured, updated, status):
+    [row] = map_event_odds_to_close_records(_event(_book("dk", -110, updated)),
+                                            captured_at=captured)
     assert row["close_status"] == status
-    assert row["quote_time"] == stamp
+    assert row["captured_at"] == captured
     assert (row["close_source"] == "book_close") is (status == "verified")
-    assert close_timing_status(stamp, KICKOFF) == status
+    assert close_timing_status(captured, updated, KICKOFF) == status
 
 
 def test_a_better_live_price_cannot_outrank_the_verified_close():
-    [row] = map_event_odds_to_close_records(_event(
-        _book("dk", -110, "2026-09-13T16:55:00Z"), _book("fd", 150, "2026-09-13T17:10:00Z")))
+    rows = map_event_odds_to_close_records(_event(
+        _book("dk", -110, "2026-09-13T16:50:00Z"), _book("fd", 150, "2026-09-13T17:10:00Z")),
+        captured_at="2026-09-13T16:55:00Z")
+    [row] = rows
     assert (row["bookmaker"], row["close_odds"], row["close_source"]) == ("dk", -110, "book_close")
 
 
@@ -52,6 +58,7 @@ def test_historical_snapshot_time_is_kept_as_capture_time():
         _book("dk", -110, "2026-09-13T16:55:00Z"),
         _historical_meta={"timestamp": "2026-09-13T16:58:00Z"}))
     assert row["captured_at"] == "2026-09-13T16:58:00Z"
+    assert row["close_status"] == "verified"
 
 
 PRED = {"player_name": "Patrick Mahomes", "market": "PASS_YDS", "line": 250.5,

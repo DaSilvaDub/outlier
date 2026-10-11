@@ -44,16 +44,11 @@ def test_map_sanitized_fixture_to_close_records():
         build_close_feed_from_event_odds,
     )
     from outlier_nfl.enrich_close import (
-        enrich_prediction_payload,
-        load_book_close_feed,
         CLOSE_SOURCE_BOOK,
-        CLOSE_SOURCE_SNAPSHOT,
-        lookup_book_close_row,
     )
-    from outlier_nfl.close_feed import write_close_feed
 
     raw = _load("odds_api_event_props_sanitized.json")
-    recs = map_event_odds_to_close_records(raw)
+    recs = map_event_odds_to_close_records(raw, captured_at="2026-09-18T00:12:00Z")
     assert len(recs) >= 6
     # FanDuel -102 beats DraftKings -105 for Gibbs OVER
     gibbs_over = next(
@@ -87,7 +82,9 @@ def test_short_key_join_enriches_pack_without_outlier_event_id(tmp_path: Path):
 
     raw_api = _load("odds_api_event_props_sanitized.json")
     # Do NOT align — leave Odds-API matchup/event_id (proves short-key join)
-    close_recs = build_close_feed_from_event_odds(raw_api, predictions=None)
+    close_recs = build_close_feed_from_event_odds(
+        raw_api, predictions=None, captured_at="2026-09-18T00:12:00Z"
+    )
     feed_path = tmp_path / "closes.json"
     write_close_feed(feed_path, close_recs, note="fixture odds-api mapped")
 
@@ -233,7 +230,16 @@ def test_try_load_live_wires_odds_api_join(tmp_path: Path):
     def fake_urlopen(req, timeout=30):  # noqa: ARG001
         return _Resp()
 
-    with patch("urllib.request.urlopen", fake_urlopen):
+    from datetime import datetime, timezone
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):  # capture 3 min before the fixture's kickoff
+            return datetime(2026, 9, 18, 0, 12, tzinfo=timezone.utc)
+
+    with patch("urllib.request.urlopen", fake_urlopen), patch(
+        "outlier_nfl.close_feed.datetime", _Clock
+    ):
         with patch.dict("os.environ", {"ODDS_API_KEY": "test-key-not-real"}, clear=False):
             index, note = try_load_live_or_file_close_index(
                 None, allow_odds_api=True, event_ids=["evt123"]

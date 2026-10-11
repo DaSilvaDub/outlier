@@ -14,6 +14,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -264,9 +265,12 @@ def try_load_live_or_file_close_index(
     errors: list[str] = []
     for eid in ids:
         try:
+            fetched_at = datetime.now(timezone.utc).isoformat()
             payload = fetch_event_odds(api_key=key, event_id=eid)
             records.extend(
-                build_close_feed_from_event_odds(payload, predictions=pred_payload)
+                build_close_feed_from_event_odds(
+                    payload, predictions=pred_payload, captured_at=fetched_at
+                )
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{eid}:{exc}")
