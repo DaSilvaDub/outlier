@@ -2,6 +2,14 @@
 
     python -m scripts.nfl_archive record --nfl-dir data/NFL [--nflverse-cache DIR --season 2025]
 
+    python -m scripts.nfl_archive check  --nfl-dir data/NFL [--slate 2026-10-04 --season 2025]
+
+``check`` is read-only. It lists every expected slate (each dated run pointer
+plus any ``--slate``) whose roles are missing, every archived file that is gone
+or whose sha256/size no longer matches, and any missing nflverse box-score
+input for each ``--season``. Exit codes: 0 complete, 1 gaps found, 2 the
+manifest has invalid lines.
+
 ``record`` only reads the archived files and appends to
 ``<nfl-dir>/archive/manifest.jsonl``. Exit codes: 0 when nothing conflicted,
 1 when an entry or file conflicted (the existing entry is kept).
@@ -10,6 +18,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
+import json
 from pathlib import Path
 import sys
 
@@ -37,6 +47,23 @@ def _record(args: argparse.Namespace) -> int:
     return 1 if result.conflicts else 0
 
 
+def _check(args: argparse.Namespace) -> int:
+    report = ar.check_archive(Path(args.nfl_dir), args.slate, args.season)
+    if args.json:
+        print(json.dumps({"slates": report.slates, "complete": report.complete_slates,
+                          "seasons": report.seasons, "entries": report.entries,
+                          "gaps": [asdict(g) for g in report.gaps]}, indent=2))
+    else:
+        for g in report.gaps:
+            where = g.slate or (g.role or "manifest")
+            print(f"GAP {where:<22} {g.kind:<25} {g.detail}")
+        print(f"slates {len(report.slates)}, complete {len(report.complete_slates)}, "
+              f"entries {report.entries}, gaps {len(report.gaps)}")
+    if any(g.kind == "invalid_line" for g in report.gaps):
+        return 2
+    return 1 if report.gaps else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="nfl_archive", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -48,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--nflverse-cache", help="folder holding stats_player_week_<season>.csv")
     rec.add_argument("--season", type=int, action="append", help="nflverse season (repeatable)")
     rec.set_defaults(func=_record)
+    chk = sub.add_parser("check", help="read-only completeness check")
+    chk.add_argument("--nfl-dir", default="data/NFL")
+    chk.add_argument("--slate", action="append", help="also expect this slate (repeatable)")
+    chk.add_argument("--season", type=int, action="append",
+                     help="require nflverse box-score inputs for this season (repeatable)")
+    chk.add_argument("--json", action="store_true")
+    chk.set_defaults(func=_check)
     return p
 
 

@@ -357,3 +357,83 @@ def record_nflverse(nfl_dir: Path | str, cache_dir: Path | str, seasons: list[in
                     continue
                 (result.recorded if new else result.already).append(entry)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Completeness checker (read-only)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Gap:
+    slate: str | None
+    role: str | None
+    kind: str  # missing_role | pointer_run_not_archived | file_missing | sha_mismatch
+    #           | size_mismatch | invalid_line | missing_nflverse
+    detail: str
+
+
+@dataclass
+class CheckReport:
+    slates: list[str]
+    seasons: list[int]
+    entries: int
+    gaps: list[Gap]
+
+    @property
+    def complete_slates(self) -> list[str]:
+        bad = {g.slate for g in self.gaps}
+        return [s for s in self.slates if s not in bad]
+
+
+def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
+                  seasons: list[int] | None = None) -> CheckReport:
+    """Compare the manifest with the expected slates and the files on disk.
+
+    The expected slates are every dated run pointer plus ``slates``. This only
+    reads files.
+    """
+    root = Path(nfl_dir)
+    entries, problems = read_manifest(manifest_path(root))
+    pointers = pointed_runs(root)
+    expected = sorted(set(pointers) | set(slates or []))
+    gaps = [Gap(None, None, "invalid_line", f"manifest line {p.line}: {p.reason}")
+            for p in problems]
+
+    by_slate: dict[str, list[ArchiveEntry]] = {}
+    for e in entries:
+        if e.slate is not None:
+            by_slate.setdefault(e.slate, []).append(e)
+    for slate in expected:
+        have = by_slate.get(slate, [])
+        roles = {e.role for e in have}
+        for role in REQUIRED_SLATE_ROLES:
+            if role not in roles:
+                gaps.append(Gap(slate, role, "missing_role", f"no {role} archived"))
+        run_id = pointers.get(slate)
+        if run_id and have and run_id not in {e.run_id for e in have}:
+            gaps.append(Gap(slate, None, "pointer_run_not_archived",
+                            f"pointer names run {run_id}; archived runs: "
+                            f"{sorted({e.run_id or '' for e in have})}"))
+
+    for season in seasons or []:
+        nv = [e for e in entries if e.role == NFLVERSE_ROLE]
+        names_this_season = {Path(e.path).name for e in nv if e.season == season}
+        names_any = {Path(e.path).name for e in nv}
+        need = {f"stats_player_week_{season}.csv": names_this_season,
+                f"stats_player_week_{season}.csv.meta.json": names_this_season,
+                "games.csv": names_any, "games.csv.meta.json": names_any}
+        for name, pool in need.items():
+            if name not in pool:
+                gaps.append(Gap(None, NFLVERSE_ROLE, "missing_nflverse",
+                                f"season {season}: {name} not archived"))
+
+    for e in entries:
+        f = resolve_path(root, e.path)
+        if not f.is_file():
+            gaps.append(Gap(e.slate, e.role, "file_missing", e.path))
+        elif f.stat().st_size != e.size:
+            gaps.append(Gap(e.slate, e.role, "size_mismatch",
+                            f"{e.path}: {f.stat().st_size} bytes, archived {e.size}"))
+        elif sha256_file(f) != e.sha256:
+            gaps.append(Gap(e.slate, e.role, "sha_mismatch", e.path))
+    return CheckReport(expected, sorted(seasons or []), len(entries), gaps)
