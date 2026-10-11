@@ -9,8 +9,10 @@ Fields (every one is validated by :func:`parse_entry`):
 - ``slate``: slate key (``YYYY-MM-DD``, or the pipeline's ``YYYY-MM-DD_<window>``
   suffix). ``null`` only for ``nflverse_boxscore``, which is per season.
 - ``role``: one of :data:`ROLES`.
-- ``path``: POSIX path relative to ``nfl_dir``, or absolute when the file lives
-  outside it (the nflverse cache is ``~/.cache/outlier_nflverse`` by default).
+- ``path``: POSIX path relative to ``nfl_dir`` (absolute only for a file outside
+  it). Run bundles are recorded in place, since ``runs/`` is immutable. nflverse
+  inputs are copied once to ``archive/nflverse/<csv sha256>/<name>``, because the
+  cache replaces them at the same path on refresh.
 - ``sha256`` / ``size``: the bytes on disk when the file was recorded.
 - ``captured_at``: ISO-8601 UTC with an offset. This is when the data was
   captured: the run's ``run_started_utc`` for pregame feeds, and the sidecar's
