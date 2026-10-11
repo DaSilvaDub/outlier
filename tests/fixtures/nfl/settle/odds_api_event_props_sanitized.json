@@ -2,18 +2,18 @@
   "id": "oddsapi-det-buf-fixture",
   "sport_key": "americanfootball_nfl",
   "sport_title": "NFL",
-  "commence_time": "2026-09-20T17:00:00Z",
+  "commence_time": "2026-09-18T00:15:00Z",
   "home_team": "Buffalo Bills",
   "away_team": "Detroit Lions",
   "bookmakers": [
     {
       "key": "draftkings",
       "title": "DraftKings",
-      "last_update": "2026-09-20T16:55:00Z",
+      "last_update": "2026-09-18T00:10:00Z",
       "markets": [
         {
           "key": "player_rush_yds",
-          "last_update": "2026-09-20T16:55:00Z",
+          "last_update": "2026-09-18T00:10:00Z",
           "outcomes": [
             {"name": "Over", "description": "Jahmyr Gibbs", "price": -105, "point": 87.5},
             {"name": "Under", "description": "Jahmyr Gibbs", "price": -115, "point": 87.5},
@@ -23,7 +23,7 @@
         },
         {
           "key": "player_reception_yds",
-          "last_update": "2026-09-20T16:55:00Z",
+          "last_update": "2026-09-18T00:10:00Z",
           "outcomes": [
             {"name": "Over", "description": "Amon-Ra St. Brown", "price": -108, "point": 79.5},
             {"name": "Under", "description": "Amon-Ra St. Brown", "price": -112, "point": 79.5},
@@ -33,7 +33,7 @@
         },
         {
           "key": "player_receptions",
-          "last_update": "2026-09-20T16:55:00Z",
+          "last_update": "2026-09-18T00:10:00Z",
           "outcomes": [
             {"name": "Over", "description": "Khalil Shakir", "price": -120, "point": 3.5},
             {"name": "Under", "description": "Khalil Shakir", "price": 100, "point": 3.5}
@@ -41,7 +41,7 @@
         },
         {
           "key": "player_anytime_td",
-          "last_update": "2026-09-20T16:55:00Z",
+          "last_update": "2026-09-18T00:10:00Z",
           "outcomes": [
             {"name": "Yes", "description": "Jahmyr Gibbs", "price": -140},
             {"name": "No", "description": "Jahmyr Gibbs", "price": 110}
@@ -52,11 +52,11 @@
     {
       "key": "fanduel",
       "title": "FanDuel",
-      "last_update": "2026-09-20T16:56:00Z",
+      "last_update": "2026-09-18T00:11:00Z",
       "markets": [
         {
           "key": "player_rush_yds",
-          "last_update": "2026-09-20T16:56:00Z",
+          "last_update": "2026-09-18T00:11:00Z",
           "outcomes": [
             {"name": "Over", "description": "Jahmyr Gibbs", "price": -102, "point": 87.5},
             {"name": "Under", "description": "Jahmyr Gibbs", "price": -118, "point": 87.5}

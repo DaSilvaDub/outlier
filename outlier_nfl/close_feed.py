@@ -14,6 +14,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -106,6 +107,9 @@ def write_close_feed(
     return payload
 
 
+CLOSE_SOURCE_SYNTHETIC = "synthetic_moved_close"
+
+
 def snapshot_rows_to_moved_close_feed(
     predictions_path: Path | str,
     *,
@@ -151,7 +155,7 @@ def snapshot_rows_to_moved_close_feed(
                 "close_line": line,
                 "close_odds": close_odds,
                 "close_implied": close_implied,
-                "close_source": CLOSE_SOURCE_BOOK,
+                "close_source": CLOSE_SOURCE_SYNTHETIC,
             }
         )
         if limit is not None and len(out) >= limit:
@@ -261,9 +265,12 @@ def try_load_live_or_file_close_index(
     errors: list[str] = []
     for eid in ids:
         try:
+            fetched_at = datetime.now(timezone.utc).isoformat()
             payload = fetch_event_odds(api_key=key, event_id=eid)
             records.extend(
-                build_close_feed_from_event_odds(payload, predictions=pred_payload)
+                build_close_feed_from_event_odds(
+                    payload, predictions=pred_payload, captured_at=fetched_at
+                )
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{eid}:{exc}")

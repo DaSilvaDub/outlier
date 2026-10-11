@@ -90,6 +90,7 @@ class PredictionSnap:
     close_odds: int | None = None
     close_implied: float | None = None
     close_source: str | None = None
+    close_status: str | None = None  # "verified" when the close passed the timing policy
     model_p: float | None = None
     scope: str | None = None  # None: the artifact predates scope (treated as full game)
 
@@ -118,6 +119,7 @@ class SettleRow:
     brier_model: float | None = None
     logloss_model: float | None = None
     clv_implied_pts: float | None = None
+    close_line_move: float | None = None  # close_line - line, reported apart from CLV
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -283,6 +285,7 @@ def load_prediction_snapshot(
                 close_odds=_optional_int(raw.get("close_odds")),
                 close_implied=_optional_float(raw.get("close_implied")),
                 close_source=str(raw["close_source"]) if raw.get("close_source") else None,
+                close_status=str(raw["close_status"]) if raw.get("close_status") else None,
                 model_p=_optional_float(model_raw),
                 scope=str(raw["scope"]) if raw.get("scope") else None,
             )
@@ -374,9 +377,21 @@ def settle_predictions(
             else BLOCKERS["clv"],
             "n": 0,
             "mean_clv_implied_pts": None,
+            "n_excluded_line_mismatch": 0,
+            "n_excluded_close_line_unknown": 0,
+            "n_line_moved": 0,
+            "mean_line_move": None,
+            # book_close rows carrying no timing at all: trusted at their label.
+            "n_untimed_supplied_close": sum(
+                1
+                for p in predictions
+                if p.close_source == "book_close" and p.close_status is None
+            ),
             "note": (
-                "CLV implied pts = close_implied - bet implied_probability "
-                "(same percent units). Positive ⇒ close was a worse price than the bet. "
+                "CLV implied pts = close_implied - bet implied_probability, both "
+                "converted to percent, only when close_line equals the bet line "
+                "(same market/side/scope row); a moved line is reported as "
+                "close_line_move, not as price CLV. Positive ⇒ close was a worse price than the bet. "
                 "Interpret close_source: pregame_snapshot_best_odds is NOT book close."
             ),
         },
@@ -388,6 +403,7 @@ def settle_predictions(
     model_briers: list[float] = []
     model_loglosses: list[float] = []
     clv_vals: list[float] = []
+    line_moves: list[float] = []
     tier_buckets: dict[str, dict[str, int]] = {}
     source_buckets: dict[str, dict[str, int]] = {}
     model_p_buckets: dict[str, dict[str, Any]] = {}
@@ -502,9 +518,21 @@ def settle_predictions(
                 model_loglosses.append(logloss_m)
 
         clv_pts = None
-        if snap.close_implied is not None and snap.implied_probability is not None:
-            clv_pts = float(snap.close_implied) - float(snap.implied_probability)
-            clv_vals.append(clv_pts)
+        line_move = None
+        if snap.close_line is not None:
+            line_move = float(snap.close_line) - float(snap.line)
+            if line_move != 0.0:
+                line_moves.append(line_move)
+        close_p = _prob_01(snap.close_implied)
+        if close_p is not None and market_prob is not None:
+            # Price CLV only at the bet's own threshold; 87.5 vs 187.5 is not a price move.
+            if snap.close_line is None:
+                report.clv["n_excluded_close_line_unknown"] += 1
+            elif line_move != 0.0:
+                report.clv["n_excluded_line_mismatch"] += 1
+            else:
+                clv_pts = (close_p - market_prob) * 100.0
+                clv_vals.append(clv_pts)
 
         row = SettleRow(
             prediction=snap,
@@ -520,6 +548,7 @@ def settle_predictions(
             brier_model=brier_m,
             logloss_model=logloss_m,
             clv_implied_pts=clv_pts,
+            close_line_move=line_move,
         )
         rows.append(row)
         _bump(tier_buckets, snap.confidence_tier or "UNKNOWN", "n")
@@ -574,6 +603,9 @@ def settle_predictions(
     report.logloss_model = (
         (sum(model_loglosses) / len(model_loglosses)) if model_loglosses else None
     )
+    if line_moves:
+        report.clv["n_line_moved"] = len(line_moves)
+        report.clv["mean_line_move"] = sum(line_moves) / len(line_moves)
     if clv_vals:
         report.clv["status"] = "ok"
         report.clv["n"] = len(clv_vals)
@@ -640,7 +672,11 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
     if clv_status == "ok":
         clv_line += (
             f" — n={report.clv.get('n')} mean_implied_pts={clv_mean} "
-            f"sources={report.clv.get('close_sources')}"
+            f"sources={report.clv.get('close_sources')} "
+            f"excluded_line_mismatch={report.clv.get('n_excluded_line_mismatch')} "
+            f"excluded_close_line_unknown={report.clv.get('n_excluded_close_line_unknown')} "
+            f"line_moved={report.clv.get('n_line_moved')} "
+            f"untimed_supplied_close={report.clv.get('n_untimed_supplied_close')}"
         )
     else:
         clv_line += f" — {report.clv.get('reason')}"

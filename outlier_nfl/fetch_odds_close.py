@@ -20,6 +20,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -33,8 +34,10 @@ from outlier_nfl.enrich_close import (
     CLOSE_SOURCE_BOOK,
     identities_conflict,
     merge_identities,
+    owners_conflict,
     row_identity,
 )
+from outlier_nfl.config import normalize_team
 from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.utils import safe_read_json
 
@@ -152,6 +155,49 @@ def outcome_to_position(name: str | None, *, market_outlier: str) -> str | None:
     if market_outlier == "ANYTIME_TD" and raw not in {"", "OVER", "UNDER"}:
         return "OVER"
     return None
+
+
+# Declared close policy: a quote is a book close only when we captured it at or
+# before kickoff and no more than this far ahead of it, and the book's own
+# last_update (when present) is not after kickoff. last_update is when the book
+# last moved the market, not when we saw it, so it never stands in for capture.
+CLOSE_POLICY_MAX_LEAD = timedelta(minutes=60)
+CLOSE_SOURCE_ODDS_CAPTURE = "odds_capture"
+
+
+def _parse_ts(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else None
+
+
+def close_timing_status(captured_at: Any, last_update: Any, commence_time: Any) -> str:
+    """``verified`` | ``early_quote`` | ``after_kickoff`` | ``unknown_timing``.
+
+    A missing or naive ``captured_at`` is ``unknown_timing``; there is no
+    fallback to ``last_update``.
+    """
+    captured, kickoff = _parse_ts(captured_at), _parse_ts(commence_time)
+    if captured is None or kickoff is None:
+        return "unknown_timing"
+    updated = None
+    if last_update:
+        updated = _parse_ts(last_update)
+        if updated is None:
+            return "unknown_timing"
+    if captured > kickoff or (updated is not None and updated > kickoff):
+        return "after_kickoff"
+    if kickoff - captured > CLOSE_POLICY_MAX_LEAD:
+        return "early_quote"
+    return "verified"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _short_join_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -288,8 +334,15 @@ def map_event_odds_to_close_records(
     event_payload: Mapping[str, Any],
     *,
     bookmaker_filter: Sequence[str] | None = None,
+    captured_at: str | None = None,
 ) -> list[dict[str, Any]]:
     """Flatten an Odds-API event-odds payload into close-feed records.
+
+    Only a quote that passes ``close_timing_status`` (captured at or before
+    kickoff within ``CLOSE_POLICY_MAX_LEAD``, book update not after kickoff) is
+    labeled ``book_close``; without a capture time nothing is verified.
+    any other quote is ``odds_capture`` with its ``close_status`` and can never
+    outrank a verified quote for the same key, whatever its price.
 
     For each (player, outlier_market, line, position) keeps the **best** American
     price across bookmakers (Outlier ``best_odds`` convention). ``close_implied``
@@ -304,6 +357,10 @@ def map_event_odds_to_close_records(
     matchup = f"{away} @ {home}" if away and home else None
     odds_event_id = str(event_payload.get("id") or "").strip() or None
     commence = event_payload.get("commence_time")
+    if captured_at is None:
+        meta = event_payload.get("_historical_meta")
+        if isinstance(meta, Mapping) and meta.get("timestamp"):
+            captured_at = str(meta["timestamp"])  # historical snapshot time
 
     # Accumulate best price per short join key.
     best: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -358,25 +415,37 @@ def map_event_odds_to_close_records(
                 except (TypeError, ValueError):
                     continue
 
+                quote_time = market.get("last_update") or book.get("last_update")
+                status = close_timing_status(captured_at, quote_time, commence)
                 row = {
                     "player_name": player,
                     "market": outlier_mkt,
                     "line": line,
                     "position": position,
                     "matchup": matchup,
+                    "home_team": normalize_team(home),
+                    "away_team": normalize_team(away),
                     "event_id": odds_event_id,
                     "commence_time": commence,
                     "close_line": line,
                     "close_odds": price,
                     "close_implied": american_to_implied_probability(price),
-                    "close_source": CLOSE_SOURCE_BOOK,
+                    "close_source": (
+                        CLOSE_SOURCE_BOOK if status == "verified" else CLOSE_SOURCE_ODDS_CAPTURE
+                    ),
+                    "close_status": status,
+                    "quote_time": quote_time,
+                    "captured_at": captured_at,
                     "bookmaker": book_key or book.get("title"),
                     "odds_api_market": market.get("key"),
                 }
                 key = _short_join_key(row)
                 prev = best.get(key)
-                if prev is None:
+                verified = status == "verified"
+                if prev is None or (verified and prev["close_status"] != "verified"):
                     best[key] = row
+                elif not verified and prev["close_status"] == "verified":
+                    pass
                 else:
                     chosen = better_american_odds(prev["close_odds"], price)
                     if chosen == price and price != prev["close_odds"]:
@@ -440,7 +509,11 @@ def align_close_records_to_predictions(
         row = dict(raw)
         short_key = _short_join_key(row)
         hit = None if short_key in ambiguous else by_short.get(short_key)
-        if hit is not None:
+        if hit is not None and owners_conflict(row, hit):
+            # Known different game or date: never stamp its event id here.
+            row["aligned_to_predictions"] = False
+            row["alignment_skipped"] = "incompatible_owner"
+        elif hit is not None:
             if hit.get("matchup"):
                 row["matchup"] = hit.get("matchup")
             if hit.get("event_id"):
@@ -459,9 +532,10 @@ def build_close_feed_from_event_odds(
     *,
     predictions: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     bookmaker_filter: Sequence[str] | None = None,
+    captured_at: str | None = None,
 ) -> list[dict[str, Any]]:
     records = map_event_odds_to_close_records(
-        event_payload, bookmaker_filter=bookmaker_filter
+        event_payload, bookmaker_filter=bookmaker_filter, captured_at=captured_at
     )
     if predictions is not None:
         records = align_close_records_to_predictions(records, predictions)
@@ -636,6 +710,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     all_records: list[dict[str, Any]] = []
     raw_bundle: list[Any] = []
     for eid in event_ids:
+        # Live fetches are stamped now; historical ones use the envelope timestamp.
+        fetched_at = None if args.historical_date else _utc_now_iso()
         payload = fetch_event_odds(
             api_key=key,
             event_id=eid,
@@ -650,6 +726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload,
                 predictions=predictions,
                 bookmaker_filter=book_filter,
+                captured_at=fetched_at,
             )
         )
 
