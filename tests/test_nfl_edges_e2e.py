@@ -287,11 +287,12 @@ def test_empty_confirmed_slate_publishes_an_empty_card(tmp_path):
 
 # --- Category 5 (reviewer ask): two OS processes writing at once -------------------
 
-def _writer_process(root: str, worker: int, n: int) -> None:
+def _writer_process(root: str, worker: int, n: int, start: Any) -> None:
     from outlier_nfl import scorecard
     from outlier_nfl.snapshots import append_snapshot
 
     base = Path(root)
+    start.wait(60)  # both interpreters are up and imported: release them together
     for i in range(n):
         prop = {"is_consensus_line": True, "scope": "full_game", "event_id": f"w{worker}-e{i}",
                 "player_name": f"Player {worker}-{i}", "market": "REC", "position": "OVER",
@@ -308,7 +309,9 @@ def _writer_process(root: str, worker: int, n: int) -> None:
 def test_two_os_processes_lose_no_snapshot_or_ledger_rows(tmp_path):
     ctx = mp.get_context("spawn")  # real separate interpreters, same as two scheduled jobs
     n = 15
-    procs = [ctx.Process(target=_writer_process, args=(str(tmp_path), w, n)) for w in (0, 1)]
+    start = ctx.Barrier(2)  # shared start signal, so both writers are guaranteed to overlap
+    procs = [ctx.Process(target=_writer_process, args=(str(tmp_path), w, n, start))
+             for w in (0, 1)]
     for p in procs:
         p.start()
     for p in procs:
