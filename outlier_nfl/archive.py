@@ -37,6 +37,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -328,30 +329,83 @@ def nflverse_files(cache_dir: Path | str, season: int) -> list[Path]:
     return [p for f in files for p in (f, f.with_name(f.name + ".meta.json"))]
 
 
-def record_nflverse(nfl_dir: Path | str, cache_dir: Path | str, seasons: list[int]) -> RecordResult:
-    """Record the nflverse box-score inputs and their #252 sidecars.
+NFLVERSE_ARCHIVE_DIR = "archive/nflverse"
 
-    A CSV is archived only when its sidecar's sha256 matches the bytes on disk
-    (the validated copy). ``fetched_at`` and ``captured_at`` come from the sidecar.
+
+def _write_once(dest: Path, data: bytes) -> bool:
+    """Create ``dest`` from the in-memory ``data`` once. True if written, False if identical.
+
+    Raises :class:`ArchiveConflict` when ``dest`` already exists with other bytes.
+    The buffer goes to a unique temp file and is renamed into place with
+    ``os.replace``, so a crash never leaves a half-written copy. The rename only
+    happens when ``dest`` didn't exist, and the folder name is the content's
+    sha256, so any other writer racing for the same path is writing the same bytes.
     """
-    from outlier_nfl.boxscore_nflverse import read_cache_meta
+    from outlier_nfl.utils import unique_temp_path
 
+    if dest.exists():
+        if dest.read_bytes() == data:
+            return False
+        raise ArchiveConflict(f"{dest} already exists with different bytes; it is kept")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = unique_temp_path(dest)
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
+def record_nflverse(nfl_dir: Path | str, cache_dir: Path | str, seasons: list[int]) -> RecordResult:
+    """Copy the nflverse box-score inputs and their #252 sidecars into the archive.
+
+    The cache swaps in new bytes at the same path on every refresh, so each
+    validated CSV and its sidecar are copied to
+    ``<nfl_dir>/archive/nflverse/<csv sha256>/<name>``, written once and never
+    replaced. The entry records that copy. A CSV is archived only when its bytes
+    match its sidecar's ``sha256`` exactly. A match on ``previous_sha256`` alone means
+    a refresh is in progress, and that CSV is refused. ``fetched_at`` and ``captured_at`` come from the
+    sidecar.
+    """
+    root = Path(nfl_dir)
     result = _empty_result()
     for season in seasons:
         files = nflverse_files(cache_dir, season)
         for csv_path, side in ((files[0], files[1]), (files[2], files[3])):
-            meta = read_cache_meta(csv_path)
-            if not csv_path.is_file() or meta is None:
+            # Read each file exactly once; hash, check and copy those same buffers.
+            try:
+                side_data = side.read_bytes()
+                data = csv_path.read_bytes()
+            except OSError:
                 result.missing.append(f"{csv_path} (and its .meta.json sidecar)")
                 continue
-            if meta.sha256 != sha256_file(csv_path):
-                result.conflicts.append(f"{csv_path}: bytes differ from its sidecar sha256")
+            try:
+                meta = json.loads(side_data)
+                want, fetched_at = str(meta["sha256"]), str(meta["fetched_at"])
+            except (ValueError, KeyError, TypeError):
+                result.conflicts.append(f"{side}: unreadable sidecar; not archived")
                 continue
-            for f in (csv_path, side):
+            got = hashlib.sha256(data).hexdigest()
+            if got != want:
+                # Since #236 a refresh writes the sidecar first, so a CSV matching only
+                # previous_sha256 is an in-progress refresh: never archive it.
+                mid = got == meta.get("previous_sha256")
+                result.conflicts.append(
+                    f"{csv_path}: bytes do not match its sidecar sha256"
+                    + (" (a refresh is in progress: the sidecar is new, the CSV is the "
+                       "previous copy)" if mid else "")
+                    + "; not archived, retry after the refresh finishes")
+                continue
+            meta_sha = want
+            folder = root / NFLVERSE_ARCHIVE_DIR / meta_sha
+            for name, payload in ((csv_path.name, data), (side.name, side_data)):
+                dest = folder / name
                 try:
+                    _write_once(dest, payload)
                     entry, new = record_file(
-                        nfl_dir, f, role=NFLVERSE_ROLE, slate=None, source="nflverse",
-                        season=season, captured_at=meta.fetched_at, fetched_at=meta.fetched_at)
+                        root, dest, role=NFLVERSE_ROLE, slate=None, source="nflverse",
+                        season=season, captured_at=fetched_at, fetched_at=fetched_at)
                 except ArchiveConflict as exc:
                     result.conflicts.append(str(exc))
                     continue
