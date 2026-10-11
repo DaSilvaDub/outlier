@@ -9,7 +9,8 @@ original is only read. Nothing is fetched again.
 
 ``legacy_status`` (read-only) gives each legacy slate one status:
 
-- ``legacy_regradable``: original prediction rows with a line and a price exist
+- ``legacy_regradable``: original prediction rows with a line, a price and a
+  probability (finite ``model_p`` / ``p_model``, or a ``*_hit_rate`` field) exist
   (``nfl_high_prob_props_`` / ``nfl_calibrated_props_`` / ``nfl_matchup_props_``)
   for at least one game.
 - ``unrecoverable``: they don't.
@@ -32,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -203,9 +205,28 @@ def _covered(nfl_dir: Path, e: ar.ArchiveEntry, kick: dict[str, datetime],
     return set(kick)
 
 
-def _has_price_and_line(r: dict[str, Any]) -> bool:
+# What best_bets reads as a probability: ``best_bets._empirical`` (the
+# ``{l5,l10,l20,season}_hit_rate`` fields it shrinks into model_p), plus a stored
+# model_p / p_model (the name settle reads).
+HIT_RATE_FIELDS = ("l5_hit_rate", "l10_hit_rate", "l20_hit_rate", "season_hit_rate")
+
+
+def _finite(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _regradable_row(r: dict[str, Any]) -> bool:
+    """A line, a price and a probability: without all three a row can't be regraded."""
     price = r.get("sportsbook_best_odds", r.get("best_odds"))
-    return r.get("line") is not None and (price is not None or bool(r.get("books")))
+    has_price = price is not None or bool(r.get("books"))
+    has_p = _finite(r.get("model_p")) or _finite(r.get("p_model")) \
+        or any(_finite(r.get(k)) for k in HIT_RATE_FIELDS)
+    return _finite(r.get("line")) and has_price and has_p
 
 
 def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
@@ -243,7 +264,7 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
         if e.role == ar.LEGACY_ROLE and name.startswith(PREDICTION_PREFIXES) and orig:
             ok = set(orig)
             regradable |= {str(r.get("event_id")) for r in _records(_load(root, e))
-                           if str(r.get("event_id")) in ok and _has_price_and_line(r)}
+                           if str(r.get("event_id")) in ok and _regradable_row(r)}
         if name.startswith(CARD_PREFIX) and e.role == ar.LEGACY_ROLE:
             card[name.rsplit(".", 1)[-1]] = v.verdict
     # The weekly snapshot file is shared by every slate in its week and only grows,

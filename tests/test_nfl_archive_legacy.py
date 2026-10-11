@@ -57,6 +57,7 @@ def _prop(eid: str, kick: str, *, line=24.5, odds=-110) -> dict:
             "market": "RECEIVING_YARDS", "position": "OVER", "line": line,
             "best_odds": odds, "sportsbook_best_odds": odds, "implied_probability": 52.4,
             "books": [{"book": "hardrock", "odds": odds, "odds_raw": str(odds)}],
+            "model_p": 0.61, "l10_hit_rate": 70.0,
             "confidence_tier": "TIER_1_ANCHOR", "calibration_tags": []}
 
 
@@ -280,3 +281,26 @@ def test_unrecorded_legacy_slate_is_a_gap(tree):
     gaps = ar.check_archive(nfl, slates=["2026-10-04"], legacy_slates=al.LEGACY_SLATES).gaps
     assert [(g.slate, g.kind) for g in gaps] == [("2026-10-04", "legacy_not_recorded")]
     assert not ar.manifest_path(nfl).exists()
+
+
+def test_rows_without_a_probability_are_unrecoverable(tree):
+    nfl, reports = tree
+    rows = [{k: v for k, v in _prop("E104A", "2026-10-04T17:00:00Z").items()
+             if k not in ("model_p", "l10_hit_rate")} | {"model_p": float("nan")}]
+    for pre in al.PREDICTION_PREFIXES:
+        _put(nfl / "normalized" / f"{pre}2026-10-04.json", _payload("2026-10-04", rows),
+             BEFORE["2026-10-04"])
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    assert (st.status, st.regradable_events) == ("unrecoverable", [])
+
+
+def test_a_hit_rate_alone_is_a_probability(tree):
+    nfl, reports = tree
+    rows = [{k: v for k, v in _prop("E104A", "2026-10-04T17:00:00Z").items()
+             if k not in ("model_p", "l10_hit_rate")} | {"season_hit_rate": 55.0}]
+    for pre in al.PREDICTION_PREFIXES:
+        _put(nfl / "normalized" / f"{pre}2026-10-04.json", _payload("2026-10-04", rows),
+             BEFORE["2026-10-04"])
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    assert al.legacy_status(nfl, "2026-10-04").status == "legacy_regradable"
