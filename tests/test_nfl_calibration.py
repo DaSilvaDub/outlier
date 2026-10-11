@@ -966,3 +966,21 @@ def test_missing_identity_rows_stay_singleton_primary():
     assert all(r["correlation_role"] == CORRELATION_ROLE_PRIMARY for r in tagged)
     assert all(r["actionable"] is True for r in tagged)
 
+
+def test_primary_spread_preserves_signed_favorite_regardless_of_line_order():
+    """primary_spread must not overwrite home negative spread with away positive spread."""
+    from outlier_nfl.calibration import primary_spread
+
+    lines_away_last = [
+        _make_game_line("SPREAD", -3.0, team="PIT"),
+        _make_game_line("SPREAD", +3.0, team="IND"),
+    ]
+    lines_home_last = [
+        _make_game_line("SPREAD", +3.0, team="IND"),
+        _make_game_line("SPREAD", -3.0, team="PIT"),
+    ]
+    assert primary_spread(lines_away_last, "IND", "PIT") == +3.0
+    assert primary_spread(lines_home_last, "IND", "PIT") == +3.0
+    assert primary_spread(lines_away_last, "PIT", "IND") == -3.0
+
+

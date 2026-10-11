@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 import math
+import time
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
@@ -97,7 +98,14 @@ class GameWeather:
 
 
 def _fetch_json(url: str) -> Mapping[str, Any]:
-    return json.loads(fetch_bytes(url, timeout=30.0).decode("utf-8"))
+    for attempt in range(3):
+        try:
+            return json.loads(fetch_bytes(url, timeout=30.0).decode("utf-8"))
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(1.0)
+    raise RuntimeError(f"Failed to fetch JSON from {url}")
 
 
 def forecast_url(lat: float, lon: float, kickoff: datetime) -> str:
@@ -378,7 +386,7 @@ def apply_weather(
     weathers: Mapping[str, GameWeather],
     tapes: Mapping[str, Mapping[str, Any]],
 ) -> list[MatchupScript]:
-    """Append weather signals and a weather note to each script with a forecast."""
+    """Append weather signals, adjust score for pass haircuts, and append a weather note."""
     out: list[MatchupScript] = []
     for script in scripts:
         weather = weathers.get(script.event_id)
@@ -387,9 +395,21 @@ def apply_weather(
             continue
         signals = weather_signals(weather, tapes)
         note = weather_note(weather)
+        home_score = script.home_score
+        away_score = script.away_score
+        total_lean = script.total_lean
+        if weather.pass_adjustment < 0:
+            haircut = float(max(1, round(abs(weather.pass_adjustment) * 20.0)))
+            home_score = max(0.0, home_score - haircut)
+            away_score = max(0.0, away_score - haircut)
+            if home_score + away_score < script.total:
+                total_lean = "UNDER"
         out.append(
             replace(
                 script,
+                home_score=home_score,
+                away_score=away_score,
+                total_lean=total_lean,
                 prop_signals=script.prop_signals + tuple(signals),
                 notes=script.notes + ((note,) if note else ()),
             )

@@ -313,6 +313,8 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
             return TEAM_ROWS
         if "injuries_2026" in url:
             return INJURIES
+        if "roster_weekly_2026" in url:
+            return []
         if "depth_charts_2026" in url:
             return DEPTH
         if "advstats_week_def" in url:
@@ -334,10 +336,46 @@ def test_refresh_uses_fetch_and_rejects_empty(tmp_path: Path, monkeypatch: pytes
     assert "qb_grade" not in written["teams"]["NYG"]  # no listed starter -> ungraded
     assert "pass_rush" not in written["teams"]["LAR"]  # fixture rows carry no dropbacks
     assert written["grades_source"].startswith("pfr_advstats")
-    assert len(calls) == 6
+    assert len(calls) == 7
 
     with pytest.raises(ValueError):
         tape.refresh_prior_week_tape(tmp_path, 2026, before=date(2026, 9, 1))
+
+
+def test_weekly_rosters_ir_and_dev_merged_into_inactives(monkeypatch: pytest.MonkeyPatch) -> None:
+    roster_rows = [
+        {"season": "2026", "game_type": "REG", "week": "2", "team": "PHI",
+         "full_name": "Tank Bigsby", "gsis_id": "00-BIGSBY", "status": "ACT", "position": "RB"},
+        {"season": "2026", "game_type": "REG", "week": "3", "team": "PHI",
+         "full_name": "Tank Bigsby", "gsis_id": "00-BIGSBY", "status": "RES", "position": "RB"},
+        {"season": "2026", "game_type": "REG", "week": "3", "team": "PHI",
+         "full_name": "Zach Ertz", "gsis_id": "00-ERTZ", "status": "DEV", "position": "TE"},
+        {"season": "2026", "game_type": "REG", "week": "3", "team": "PHI",
+         "full_name": "Dallas Goedert", "gsis_id": "00-GOEDERT", "status": "ACT", "position": "TE"},
+        {"season": "2026", "game_type": "REG", "week": "3", "team": "LA",
+         "full_name": "Puka Nacua", "gsis_id": "00-NACUA", "status": "RES", "position": "WR"},
+        {"season": "2026", "game_type": "REG", "week": "4", "team": "PHI",
+         "full_name": "Future IR Player", "gsis_id": "00-FUT", "status": "RES", "position": "WR"},
+    ]
+    out = tape.inactive_roster_players(roster_rows, week=3, season=2026)
+    assert sorted(p["name"] for p in out["PHI"]) == ["Tank Bigsby", "Zach Ertz"]
+    assert [p["name"] for p in out["LAR"]] == ["Puka Nacua"]
+
+    def fake_fetch(url: str, timeout: float = 60.0) -> list[dict[str, str]]:
+        if "injuries_2026" in url:
+            return INJURIES
+        if "roster_weekly_2026" in url:
+            return roster_rows
+        if "depth_charts_2026" in url:
+            return DEPTH
+        return []
+
+    monkeypatch.setattr(tape, "fetch_csv", fake_fetch)
+    payload = tape.build_tape_payload(
+        2026, before=date(2026, 9, 27), team_rows=TEAM_ROWS, game_rows=GAMES, advanced=False
+    )
+    assert payload["inactive"]["LAR"] == ["Puka Nacua"]  # deduplicated across injury + roster
+    assert payload["inactive"]["PHI"] == ["Tank Bigsby", "Zach Ertz"]
 
 
 def test_pipeline_refresh_failure_keeps_existing_tape(

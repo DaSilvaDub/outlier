@@ -59,6 +59,7 @@ TEAM_WEEK_URL = NFLVERSE_RELEASES + "/stats_team/stats_team_week_{season}.csv"
 SCHEDULES_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 DEPTH_CHART_URL = NFLVERSE_RELEASES + "/depth_charts/depth_charts_{season}.csv"
 INJURIES_URL = NFLVERSE_RELEASES + "/injuries/injuries_{season}.csv"
+WEEKLY_ROSTER_URL = NFLVERSE_RELEASES + "/weekly_rosters/roster_weekly_{season}.csv"
 PFR_DEF_URL = NFLVERSE_RELEASES + "/pfr_advstats/advstats_week_def_{season}.csv"
 QBR_URL = NFLVERSE_RELEASES + "/espn_data/qbr_week_level.csv"
 
@@ -67,6 +68,7 @@ QB_GRADE_BASE, QB_GRADE_PER_SD = 70.0, 12.0
 MIN_QB_PLAYS = 20
 
 INACTIVE_STATUSES: tuple[str, ...] = ("Out", "Doubtful")
+ACTIVE_ROSTER_STATUSES: frozenset[str] = frozenset({"ACT"})
 # nflverse depth-chart pos_slot values for wide receivers: 1/2 outside (X/Z), 8 slot.
 OUTSIDE_WR_SLOTS = {"1", "2"}
 SLOT_WR_SLOTS = {"8"}
@@ -377,6 +379,89 @@ def inactive_players(
     return dict(out)
 
 
+def inactive_roster_players(
+    roster_rows: Iterable[Mapping[str, str]],
+    week: int | None,
+    season: int | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    """Players on Injured Reserve (RES), Practice Squad (DEV), Inactive (INA), PUP, or Cut.
+
+    Once an NFL player is placed on Injured Reserve (``status == "RES"``) or the
+    practice squad (``status == "DEV"``), teams drop them from the weekly practice
+    injury report (``injuries_{season}.csv``). Reading each player's latest weekly
+    roster entry at or before ``week`` catches every non-active roster status so
+    IR/DEV/INA players never leak into depth-chart roles, usage signals, best bets,
+    or alternate floor rankings.
+    """
+    rows = [
+        r for r in roster_rows
+        if r.get("game_type", "REG") in ("REG", "")
+        and (season is None or not r.get("season") or str(r.get("season")) == str(season))
+    ]
+    if not rows:
+        return {}
+    if week is None:
+        reported = [int(_num(r.get("week"))) for r in rows if r.get("week")]
+        week = max(reported) if reported else None
+    latest: dict[tuple[str, str], tuple[int, Mapping[str, str]]] = {}
+    for r in rows:
+        w = int(_num(r.get("week")))
+        if week is not None and w > week:
+            continue
+        team = _team(r.get("team"))
+        name = str(r.get("full_name") or r.get("player_name") or "").strip()
+        if not team or not name:
+            continue
+        pid = str(r.get("gsis_id") or "").strip() or _name_key(name)
+        key = (team, pid)
+        prev = latest.get(key)
+        if prev is None or w >= prev[0]:
+            latest[key] = (w, r)
+
+    out: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for (team, _pid), (_w, r) in latest.items():
+        st = str(r.get("status") or "").strip().upper()
+        if not st or st in ACTIVE_ROSTER_STATUSES:
+            continue
+        out[team].append(
+            {
+                "name": str(r.get("full_name") or r.get("player_name") or ""),
+                "gsis_id": str(r.get("gsis_id") or ""),
+                "status": st,
+                "position": str(r.get("position") or ""),
+            }
+        )
+    return dict(out)
+
+
+def merge_inactives(
+    *sources: Mapping[str, list[dict[str, str]]] | None,
+) -> dict[str, list[dict[str, str]]]:
+    """Deduplicate inactive player dicts per team by gsis_id and normalized name key."""
+    merged: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen_ids: dict[str, set[str]] = defaultdict(set)
+    seen_names: dict[str, set[str]] = defaultdict(set)
+    for src in sources:
+        if not src:
+            continue
+        for raw_team, players in src.items():
+            team = _team(raw_team)
+            for p in players:
+                name = str(p.get("name") or "").strip()
+                if not name:
+                    continue
+                gsis = str(p.get("gsis_id") or "").strip()
+                nkey = _name_key(name)
+                if (gsis and gsis in seen_ids[team]) or (nkey and nkey in seen_names[team]):
+                    continue
+                if gsis:
+                    seen_ids[team].add(gsis)
+                if nkey:
+                    seen_names[team].add(nkey)
+                merged[team].append(dict(p))
+    return dict(merged)
+
+
 _EASTERN = ZoneInfo("America/New_York")
 
 
@@ -659,6 +744,33 @@ def _advanced_grades(
     return dict(grades)
 
 
+def _filter_chronic_defensive_inactives(
+    weekly_injuries: Mapping[str, list[dict[str, str]]],
+    injury_rows: Iterable[Mapping[str, str]],
+    week: int | None,
+    season: int | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    """Exclude defenders already Out/Doubtful in both week-1 and week-2.
+
+    A defender who has already missed two or more consecutive prior weeks is
+    already reflected in the team's recent defensive tape and market total, so
+    counting him again in ``defensive_starters_out`` double-counts his absence.
+    """
+    if week is None or week <= 2:
+        return {t: list(ps) for t, ps in weekly_injuries.items()}
+    prev1 = inactive_players(injury_rows, week - 1, season=season)
+    prev2 = inactive_players(injury_rows, week - 2, season=season)
+    filtered: dict[str, list[dict[str, str]]] = {}
+    for team, players in weekly_injuries.items():
+        p1_keys = {_name_key(p["name"]) for p in prev1.get(team, [])}
+        p2_keys = {_name_key(p["name"]) for p in prev2.get(team, [])}
+        chronic = p1_keys & p2_keys
+        kept = [p for p in players if _name_key(p["name"]) not in chronic]
+        if kept:
+            filtered[team] = kept
+    return filtered
+
+
 def _auto_roles(
     season: int,
     before: date | None,
@@ -667,39 +779,62 @@ def _auto_roles(
     run_mode: str | None = None,
 ) -> tuple[
     dict[str, dict[str, str]], dict[str, list[dict[str, str]]] | None, dict[str, list[str]],
-    str | None,
+    str | None, dict[str, list[dict[str, str]]] | None,
 ]:
-    """Depth-chart roles, inactives, defensive starters out and injury report status.
+    """Depth-chart roles, inactives, defensive starters out, injury status, and questionables.
 
     Inactives are None when the injury report could not be fetched, so callers
-    never mistake a failed fetch for a report with nobody out. Roles and
-    defensive starters out are empty on any depth-chart failure. Depth snapshots
-    are cut at ``as_of_utc`` (full timestamp) when given, else at ``before``.
+    never mistake a failed fetch for a report with nobody out. When the injury
+    report is admitted, non-active weekly roster entries (``RES`` Injured Reserve,
+    ``DEV`` Practice Squad, ``INA`` Inactive, ``PUP``, ``CUT``) up to ``week``
+    are merged into ``injuries`` so players removed from the 53-man active roster
+    cannot leak into roles, usage signals, best bets, or alternate floors.
+    ``defensive_starters_out`` uses only the weekly injury report excluding
+    defenders already Out/Doubtful for 2+ prior weeks so season-long IR/practice-squad
+    entries do not inflate ``DIDF_SCORE_BOOST``.
     """
     status: str | None = None
+    week = slate_week(game_rows, season, before)
+    def_injuries: dict[str, list[dict[str, str]]] = {}
+    questionable: dict[str, list[dict[str, str]]] | None = None
     try:
         injury_rows = fetch_csv(INJURIES_URL.format(season=season))
-        week = slate_week(game_rows, season, before)
         injuries: dict[str, list[dict[str, str]]] | None = inactive_players(
             injury_rows, week, season=season
+        )
+        questionable = inactive_players(
+            injury_rows, week, statuses=("Questionable",), season=season
         )
         status = injury_report_status(injury_rows, season, week, as_of_utc, run_mode)
         if status not in ADMISSIBLE_INJURY_STATUSES:
             # Not the report as it stood at as_of: treat as not loaded (F02).
             logger.warning("Injury report not point-in-time (%s); not used", status)
             injuries = None
+            questionable = None
+        elif injuries is not None:
+            def_injuries = _filter_chronic_defensive_inactives(
+                injuries, injury_rows, week, season=season
+            )
     except Exception as exc:  # the trace reports the injury pillar as MISSING
         logger.warning("Injury report unavailable: %s", exc)
         injuries = None
+        questionable = None
+    if injuries is not None:
+        try:
+            roster_rows = fetch_csv(WEEKLY_ROSTER_URL.format(season=season))
+            roster_inactive = inactive_roster_players(roster_rows, week, season=season)
+            injuries = merge_inactives(injuries, roster_inactive)
+        except Exception as exc:
+            logger.warning("Weekly roster status unavailable, keeping injury report only: %s", exc)
     try:
         depth_rows = fetch_csv(DEPTH_CHART_URL.format(season=season))
         cutoff: date | datetime | None = as_of_utc or before
         roles = depth_chart_roles(depth_rows, injuries or {}, as_of=cutoff)
-        defensive_out = defensive_starters_out(depth_rows, injuries or {}, as_of=cutoff)
+        defensive_out = defensive_starters_out(depth_rows, def_injuries, as_of=cutoff)
     except Exception as exc:  # roles are an enhancement; keep the tape build alive
         logger.warning("Auto roles unavailable, keeping existing roles: %s", exc)
         roles, defensive_out = {}, {}
-    return roles, injuries, defensive_out, status
+    return roles, injuries, defensive_out, status, questionable
 
 
 def build_tape_payload(
@@ -717,6 +852,7 @@ def build_tape_payload(
     defensive_out: Mapping[str, list[str]] | None = None,
     as_of_utc: datetime | None = None,
     run_mode: str | None = None,
+    questionable: Mapping[str, list[dict[str, str]]] | None = None,
 ) -> dict[str, Any]:
     """Fetch (unless rows are supplied) and assemble the tape JSON payload.
 
@@ -734,7 +870,7 @@ def build_tape_payload(
         game_rows = fetch_csv(SCHEDULES_URL)
     injury_status: str | None = None
     if auto_roles and depth_roles is None and inactive is None:
-        depth_roles, inactive, defensive_out, injury_status = _auto_roles(
+        depth_roles, inactive, defensive_out, injury_status, questionable = _auto_roles(
             season, before, game_rows, as_of_utc, run_mode
         )
     # Only an injury report that was actually fetched (or supplied) counts as loaded.
@@ -764,6 +900,9 @@ def build_tape_payload(
         "roles_source": "nflverse depth_charts + injuries" if depth_roles else "existing tape",
         "grades_source": "pfr_advstats pressures + espn qbr" if grades else None,
         "inactive": {t: sorted(p["name"] for p in ps) for t, ps in sorted((inactive or {}).items())},
+        "questionable": {
+            t: sorted(p["name"] for p in ps) for t, ps in sorted((questionable or {}).items())
+        },
         "injury_report_loaded": injury_report_loaded,
         "injury_report_status": injury_status,
         "run_mode": run_mode,

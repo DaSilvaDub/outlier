@@ -1,3 +1,95 @@
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+
+## Accomplished
+1. **Permanent Pipeline Integration (`outlier_nfl/pipeline.py` Stages 8 & 9)**:
+   - Permanently registered Matchup Advantage Rankings calculation and report generation as mandatory stages directly within `NflPipeline.run()`.
+   - Executed in exact dependency order: schedule -> rosters -> injuries -> usage -> defensive matchups -> weather -> projections -> **Matchup Advantage Rankings (Stages 8 & 9)** -> validation -> assembly -> publication.
+   - Enforced fail-closed behavior: `StageReceipt("matchup_rankings", ...)` appends `OK` on success, `EMPTY` if slate empty, and `FAILED` with captured errors if calculation fails. Any failure marks `run_status` as `FAILED`, invokes `writer.withhold_publication()`, suppresses public pointers (`nfl_run_pointer_latest.json`), and logs stage-level diagnostics.
+2. **Matchup Rankings Engine (`outlier_nfl/matchup_rankings.py`)**:
+   - `norm_cdf()` and `calc_prob_exceeds()` via `math.erf` for deterministic tail probabilities.
+   - Composite `calc_advantage_score()` combining boost magnitude (35%), exceedance probability (35%), volume/role opportunity (15%), and opponent vulnerability (15%).
+   - `MatchupRankingsEngine` screening all slate participants across QB, RB, WR, TE.
+   - Strict inactive and IR exclusion against `tape.injury_report()` and weekly injury reports.
+   - Renderers for Positional Top 5 markdown reports, Top 10 Overall, and `Matchup_Boost_Rankings.csv`.
+   - Atomic staging via `RunWriter.staged_path("reports")`.
+3. **Automated Synchronization & Publishing (`scripts/refresh_nfl_pack.ps1`)**:
+   - Added automated synchronization for dated and rolling matchup markdown reports (`*Matchups.md`) and rankings CSV (`Matchup_Boost_Rankings.csv`) into Google Drive (`G:\My Drive\today\extra_packs...`) and Desktop.
+4. **Verification & Quality Assurance**:
+   - `tests/test_nfl_matchup_rankings.py`: 4 automated test cases covering math helpers, inactive filtering, report/CSV generation, and receipt failure behavior.
+   - All 107 NFL test cases passing (`pytest --basetemp=.pytest_temp`).
+   - `mypy outlier_nfl`: 0 issues found in all 44 source files.
+   - `ruff check`: all checks passed.
+   - Full live pipeline executed for 2026-10-11 (`python -m outlier_nfl.pipeline --date 2026-10-11 --generate-game-script --target-alt-book HARDROCK`), cleanly generating all 12 report artifacts and exiting with status `OK`.
+
+---
+
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, NFL Positional Matchup Boosts & Top 10 Overall)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+
+## Accomplished
+1. **Quantitative Matchup Boost Engine (`run_boost_engine.py`)**:
+   - Developed and executed an offline, deterministic projection and boost engine calculating Season Avg entering Week 5, Neutral-Opponent Projection, Matchup-Adjusted Projection, Absolute Increase, Boost %, Matchup-Specific Boost, and Tail Probability $P(X > \text{Season Avg})$.
+   - Formulated standardized composite `MATCHUP_ADVANTAGE_SCORE` (0–100) weighting boost magnitude (35%), exceedance probability (35%), volume/role stability (15%), and opponent defensive vulnerability (15%).
+2. **Positional Top 5 Selections & Profiles**:
+   - **QB**: Bo Nix (67.1), Brock Purdy (66.1), Drake Maye (65.7), Trevor Lawrence (65.7), Joe Burrow (64.3).
+   - **RB**: Will Shipley (96.6), Jaylen Warren (83.7), Tyler Allgeier (80.1), D'Andre Swift (78.3), Derrick Henry (74.5).
+   - **WR**: Xavier Hutchinson (91.5), Jerry Jeudy (86.5), DeMario Douglas (78.7), Tee Higgins (77.0), Brian Thomas Jr. (75.6).
+   - **TE**: Cole Kmet (87.0), Tyler Warren (82.8), Pat Freiermuth (75.5), Hunter Henry (75.2), Brock Bowers (73.7).
+3. **Final Top 10 Overall Ranking (Position-Neutral)**:
+   - Evaluated all 20 finalists without positional quotas:
+     1. Will Shipley (RB, 96.6)
+     2. Xavier Hutchinson (WR, 91.5)
+     3. Cole Kmet (TE, 87.0)
+     4. Jerry Jeudy (WR, 86.5)
+     5. Jaylen Warren (RB, 83.7)
+     6. Tyler Warren (TE, 82.8)
+     7. Tyler Allgeier (RB, 80.1)
+     8. DeMario Douglas (WR, 78.7)
+     9. D'Andre Swift (RB, 78.3)
+     10. Tee Higgins (WR, 77.0)
+4. **Generated Reports & CSV Exports**:
+   - `reports/NFL/Top_5_QB_Matchups.md`
+   - `reports/NFL/Top_5_RB_Matchups.md`
+   - `reports/NFL/Top_5_WR_Matchups.md`
+   - `reports/NFL/Top_5_TE_Matchups.md`
+   - `reports/NFL/Top_10_Overall_Matchups.md`
+   - `reports/NFL/Matchup_Boost_Rankings.csv`
+5. **Testing & Integrity**:
+   - All 103 test cases passing in 6.70s (`pytest --basetemp=.pytest_temp`).
+   - Zero live paid reasoning calls invoked (strict house rule obedience).
+
+---
+
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, NFL Forensic Audit, Quality Gates & Full Slate Refresh)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+
+## Accomplished
+1. **Spread Direction & Primary Line Fix (`outlier_nfl/calibration.py`)**:
+   - Rewrote `primary_spread()` to index quotes by signed `(team, line)` and match complementary pairs `(away_team, away_line)` with `(home_team, -away_line)` minimizing deviation from 50% implied probability. Eliminates the `-0.0` / `NEUTRAL` spread collapse across all 13 games.
+2. **Weekly Roster IR & Practice Squad Status Merging (`outlier_nfl/tape_nflverse.py`)**:
+   - Ingests `nflverse` `roster_weekly_{season}.csv` and merges all non-`ACT` designations (`RES` Injured Reserve, `DEV` Practice Squad, `INA`, `PUP`, `CUT`) into `inactive`. Prevents players on IR omitted from weekly practice injury reports (`Tank Bigsby`, `Trey Benson`, `James Conner`) from leaking into active depth charts and props.
+   - Added `_filter_chronic_defensive_inactives()`: defenders out for `>= 2` prior weeks (e.g. `Nick Bosa` on IR since Week 3) are excluded from `defensive_starters_out` so chronic injuries already baked into tape do not inflate `DIDF_SCORE_BOOST`.
+3. **`INJURY_CONFIDENCE_GATE` & Questionable Quarantine (`outlier_nfl/tape_nflverse.py`, `pipeline.py`, `best_bets.py`)**:
+   - Ingests `Questionable` players from weekly injury reports. Any candidate prop for a `Questionable` player (`Ladd McConkey`, `Ashton Jeanty`, `Rhamondre Stevenson`, `Caleb Williams`) is capped at `injury_weather: ESTIMATED` (`PROVISIONAL`, `stake = 0.0`) until confirmed active 90 min before kickoff.
+4. **`MODEL_DIRECTION_CONSISTENCY_GATE` & Score Realignment (`outlier_nfl/matchup.py`, `weather.py`)**:
+   - Enforces mathematical consistency between projected scores, game lines, and betting leans: `home_score + away_score` and `home_score - away_score` strictly match `total_lean` and `spread_lean`.
+   - Updated `apply_weather()` to apply pass volume haircuts (`-0.05` to `-0.06`) directly as point reductions to `home_score` and `away_score`, reconciling `total_lean = "UNDER"`.
+5. **Cross-Market Signal Matching & Laplace Smoothing Fix (`outlier_nfl/best_bets.py`)**:
+   - `_signal_matches_market()` propagates `RUSH_YDS` volume/matchup signals to `RUSH_REC_YDS` and `LONG_RUSH` (blocking `Will Shipley RUSH_REC_YDS UNDER` when `Saquon Barkley` is Out).
+   - Replaced uncalibrated Laplace smoothing on skewed/TD lines with `method="market_prior"` Beta shrinkage, rejected candidates with `max(rates) < 0.50`, and capped longshots `> +250` at `CONTRADICTS`.
+   - Capped DFS pick'em synthetic quotes (`Underdog`, `PrizePicks`, `Sleeper`, `Dabble`) at `ESTIMATED` (`PROVISIONAL`).
+   - Enforced the Same-Player Correlation Guard: maximum 1 `VALIDATED` pick per player per game.
+6. **Execution & Full Refresh (`2026-10-11`)**:
+   - Re-ran complete live pipeline: 13 scheduled games, 13 matchup scripts, 95 `VALIDATED` picks (from 113), 9 Hard Rock alternate floors.
+   - All 162 unit tests passing in 11.95s (`pytest --basetemp=.pytest_temp`).
+   - Synced regenerated outputs to `Desktop/today` and `G:\My Drive\today`.
+
+---
+
 # HANDOFF — 2026-10-10 (Antigravity/Gemini, WNBA Postgame Audit Upgrades: Assist Barrier, Rebound Defense Conflict & Scoring Priority)
 
 **Branch**: `feat/wnba-postgame-upgrades` · **Last commit**: `4a4d5f3`

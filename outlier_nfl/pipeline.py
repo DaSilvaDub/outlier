@@ -780,6 +780,51 @@ class NflPipeline:
         except Exception as exc:
             logger.warning("Failed generating alt floor props: %s", exc)
 
+        # =====================================================================
+        # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
+        # =====================================================================
+        matchup_rankings_summary: dict[str, Any] = {}
+        try:
+            from outlier_nfl.matchup_rankings import generate_matchup_rankings_pipeline
+
+            matchup_rankings_summary = generate_matchup_rankings_pipeline(
+                props=all_player_props,
+                matchup_scripts=matchup_scripts,
+                usage_players=usage_players,
+                rosters=rosters,
+                tapes=tapes,
+                weather_records=weather_records,
+                inactives_by_team=tape.injury_report(),
+                staged_reports_dir=writer.staged_path("reports"),
+                date_str=target_date,
+                suffix=suffix,
+            )
+            if len(slate_events) == 0:
+                receipts.append(receipt("matchup_rankings", "EMPTY", received=0))
+            else:
+                receipts.append(
+                    receipt(
+                        "matchup_rankings",
+                        "OK",
+                        received=matchup_rankings_summary.get("count", 0),
+                    )
+                )
+            logger.info(
+                "Matchup Advantage Rankings generated: %d finalists (Top 10 ranked)",
+                matchup_rankings_summary.get("count", 0),
+            )
+        except Exception as exc:
+            logger.error("Failed calculating Matchup Advantage Rankings: %s", exc)
+            receipts.append(
+                receipt(
+                    "matchup_rankings",
+                    "FAILED",
+                    reason=f"matchup rankings failed: {exc}",
+                    errors=[str(exc)],
+                )
+            )
+            errors.append(f"matchup rankings failed: {exc}")
+
         status = run_status(receipts)
         summary: dict[str, Any] = {
             "status": status,
@@ -815,6 +860,8 @@ class NflPipeline:
             "best_bets_error": best_bets.get("error"),
             "alt_floors": alt_floors_summary,
             "alt_floors_count": alt_floors_summary.get("count", 0),
+            "matchup_rankings": matchup_rankings_summary,
+            "matchup_rankings_count": matchup_rankings_summary.get("count", 0),
             "errors": errors + ([best_bets["error"]] if best_bets.get("error") else []),
         }
 
@@ -860,6 +907,10 @@ class NflPipeline:
         outputs = alt_floors_summary.get("outputs")
         if isinstance(outputs, dict):
             alt_floors_summary["outputs"] = {k: writer.resolve(v) for k, v in outputs.items()}
+        if isinstance(matchup_rankings_summary.get("written_files"), list):
+            matchup_rankings_summary["written_files"] = [
+                writer.resolve(f) for f in matchup_rankings_summary["written_files"]
+            ]
         if "game_script_files" in summary:
             summary["game_script_files"] = [writer.resolve(f) for f in summary["game_script_files"]]
             summary["game_script_file"] = summary["game_script_files"][0]
@@ -932,6 +983,7 @@ class NflPipeline:
                     usage_players=usage_players,
                     weather=weather_records,
                     inactive_by_team=tape.injury_report(),
+                    questionable_by_team=tape.team_lists("questionable"),
                     tapes=tape.teams,
                     movement=movement,
                     as_of_utc=as_of_utc.isoformat(),
@@ -1212,6 +1264,22 @@ def main() -> int:
                     f"  TOP OVERALL CONFIDENCE PLAY: #{top1.get('master_rank')} {top1.get('player_name')} "
                     f"({top1.get('team')}) - OVER {top1.get('line')} {top1.get('market_display')} "
                     f"(Score: {top1.get('confidence_score'):.3f})"
+                )
+        rankings_data = summary.get("matchup_rankings") or {}
+        if rankings_data.get("count"):
+            print("-" * 60)
+            print("MATCHUP ADVANTAGE RANKINGS (MANDATORY REPORTING STAGE):")
+            top10 = rankings_data.get("top_10") or []
+            print(f"  Top 10 Overall Matchup Advantages ({len(top10)} ranked):")
+            for idx, p in enumerate(top10, start=1):
+                p_stat = p.get("primary_stat")
+                s_avg = p.get("season_avg")
+                m_proj = p.get("matchup_proj")
+                b_pct = p.get("boost_pct")
+                score = p.get("advantage_score")
+                print(
+                    f"    #{idx:<2} {p.get('player'):<20} ({p.get('position')}, {p.get('team')} vs {p.get('opponent')}): "
+                    f"{p_stat} {s_avg} -> {m_proj} (+{b_pct}%) | Score: {score}/100"
                 )
         print("=" * 60)
         if summary.get("status") != "OK":

@@ -512,3 +512,108 @@ def test_schedule_confirmed_indoor_venue_verifies_without_a_forecast():
            "forecast_status": "not_needed", "venue_source": "schedule"}
     payload = build_best_bets(_inputs(weather=[rec]))
     assert _pick(payload)["pillars"]["injury_weather"]["status"] == VERIFIED
+
+
+def test_player_team_identity_gate_quarantines_missing_identity():
+    props = [_prop(player_id=""), _prop("UNDER", player_id="")]
+    pick = _pick(build_best_bets(_inputs(props=props)))
+    assert pick["pillars"]["injury_weather"]["evidence"]["player_team_identity_gate"] == "QUARANTINED"
+    assert pick["pillars"]["injury_weather"]["status"] == MISSING
+    assert pick["verdict"] == PROVISIONAL
+
+
+def test_questionable_player_is_quarantined_as_provisional():
+    payload = build_best_bets(_inputs(questionable_by_team={"PHI": ["A.J. Brown"]}))
+    pick = _pick(payload)
+    assert pick["pillars"]["injury_weather"]["status"] == ESTIMATED
+    assert pick["pillars"]["injury_weather"]["evidence"]["injury_confidence_gate"] == "QUARANTINED_QUESTIONABLE"
+    assert pick["verdict"] == PROVISIONAL
+    assert pick["stake_fraction"] == 0.0
+
+
+def test_vacated_carries_blocks_combo_and_long_rush_unders():
+    shipley_under = _prop(
+        player_name="Will Shipley",
+        player_id="p_shipley",
+        market="RUSH_REC_YDS",
+        position="UNDER",
+        line=52.5,
+    )
+    shipley_over = _prop(
+        player_name="Will Shipley",
+        player_id="p_shipley",
+        market="RUSH_REC_YDS",
+        position="OVER",
+        line=52.5,
+    )
+    scripts = [{
+        "event_id": "E1", "home_team": "PHI", "away_team": "DAL",
+        "prop_signals": [{
+            "event_id": "E1", "player_name": "Will Shipley", "team": "PHI",
+            "market": "RUSH_YDS", "side": "OVER", "tag": "VACATED_CARRIES",
+            "reason": "Saquon Barkley Out", "confidence": "HIGH", "volume_adjustment": 0.25,
+        }],
+    }]
+    payload = build_best_bets(_inputs(props=[shipley_under, shipley_over], scripts=scripts))
+    under_pick = _pick(payload, "UNDER")
+    assert under_pick["pillars"]["opportunity"]["status"] == CONTRADICTS
+    assert under_pick["verdict"] == REJECTED
+
+
+def test_zero_hit_rate_longshot_td_is_rejected_not_validated():
+    td_over = _prop(
+        market="ANYTIME_TD",
+        position="OVER",
+        line=0.5,
+        odds=750,
+        implied=11.76,
+        l5_hit_rate=0.0,
+        l10_hit_rate=0.0,
+        season_hit_rate=0.0,
+    )
+    td_under = _prop(
+        market="ANYTIME_TD",
+        position="UNDER",
+        line=0.5,
+        odds=-1200,
+        implied=92.31,
+        l5_hit_rate=1.0,
+        l10_hit_rate=1.0,
+        season_hit_rate=1.0,
+    )
+    payload = build_best_bets(_inputs(props=[td_over, td_under]))
+    over_pick = _pick(payload, "OVER")
+    assert over_pick["pillars"]["historical"]["status"] == CONTRADICTS
+    assert over_pick["pillars"]["price"]["status"] == CONTRADICTS
+    assert over_pick["verdict"] == REJECTED
+
+
+def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
+    from outlier_nfl.snapshots import prop_key
+
+    p1_over = _prop(market="REC_YDS", line=70.5, odds=-110, implied=52.381)
+    p1_under = _prop("UNDER", market="REC_YDS", line=70.5, odds=-110, implied=52.381)
+    p2_over = _prop(market="REC", line=5.5, odds=-110, implied=52.381)
+    p2_under = _prop("UNDER", market="REC", line=5.5, odds=-110, implied=52.381)
+    movement = {
+        prop_key(p1_over): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 69.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 72.5, "last_odds": -110, "last_implied": 52.4,
+        },
+        prop_key(p2_over): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 4.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 5.5, "last_odds": -110, "last_implied": 52.4,
+        },
+    }
+    payload = build_best_bets(_inputs(props=[p1_over, p1_under, p2_over, p2_under], movement=movement))
+    validated = [p for p in payload["picks"] if p["verdict"] == VALIDATED]
+    assert len(validated) == 1
+    provisional_same = [
+        p for p in payload["picks"]
+        if p["position"] == "OVER" and p["verdict"] == PROVISIONAL
+    ]
+    assert len(provisional_same) == 1
+    assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
+
