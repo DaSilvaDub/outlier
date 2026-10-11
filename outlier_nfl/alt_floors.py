@@ -14,11 +14,15 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
+import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from outlier_nfl.config import normalize_team
 from outlier_nfl.roster import get_team_depth_chart
 
 logger = logging.getLogger("outlier_nfl.alt_floors")
@@ -61,7 +65,7 @@ class AltFloorProp:
     cushion_pct: float
     target_book: str
     target_odds: int | float | None
-    implied_probability: float
+    implied_probability: float | None  # None when there is no usable quote (F23)
     l5_hit_rate: float
     l10_hit_rate: float
     season_hit_rate: float
@@ -73,6 +77,11 @@ class AltFloorProp:
     event_id: str = ""
     event_starts_at: str = ""
     scope: str = "full_game"
+    player_id: str = ""
+    # F23: only actionable rows are ranked or recommended. Inventory rows keep
+    # the reason they are not executable and are listed separately.
+    actionable: bool = True
+    inventory_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -114,12 +123,93 @@ def _extract_book_quote(
             if isinstance(b, dict) and str(b.get("book") or "").upper() == pref:
                 return (pref, b.get("odds"))
 
-    # 3. Fallback: first available
+    # 3. Fallback: first available (reported, but not a sportsbook we can execute at)
     for b in books:
         if isinstance(b, dict) and b.get("odds") is not None:
             return (str(b.get("book") or "RETAIL"), b.get("odds"))
 
-    return ("CONSENSUS", None)
+    return ("NONE", None)
+
+
+RETAIL_BOOKS = frozenset(
+    {"DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS", "FANATICS", "ESPNBET"}
+)
+
+
+def _finite_odds(odds: Any) -> float | None:
+    try:
+        val = float(odds)
+    except (TypeError, ValueError):
+        return None
+    return val if math.isfinite(val) and val != 0 else None
+
+
+def _name_key(name: Any) -> str:
+    return re.sub(r"[^a-z]", "", str(name or "").lower())
+
+
+def _parse_utc(raw: Any) -> datetime | None:
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else None
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else None
+
+
+def floor_inventory_reason(
+    row: dict[str, Any],
+    *,
+    book: str,
+    odds: Any,
+    target_book: str,
+    as_of_utc: Any = None,
+    inactive_by_team: dict[str, list[str]] | None = None,
+    require_injury_evidence: bool = False,
+) -> str | None:
+    """Why this floor is not executable, or None when it is (F23).
+
+    Executable needs a finite quote from the target book or a named retail
+    sportsbook, an event id plus a resolved team, a kickoff still ahead of
+    ``as_of_utc``, and (when required) an admitted injury report that does not
+    list the player.
+    """
+    if odds is None:
+        return "no_quote"
+    if _finite_odds(odds) is None:
+        return "nonfinite_quote"
+    aliases = TARGET_BOOK_ALIASES if target_book in TARGET_BOOK_ALIASES else {target_book.upper()}
+    if book.upper() not in aliases and book.upper() not in RETAIL_BOOKS:
+        return "no_sportsbook_quote"
+    team = normalize_team(row.get("team"))
+    if not str(row.get("event_id") or "").strip() or not team:
+        return "missing_identity"
+    if as_of_utc is not None:
+        as_of = _parse_utc(as_of_utc)
+        kickoff = _parse_utc(row.get("event_starts_at"))
+        if as_of is None or kickoff is None:
+            return "unknown_kickoff"
+        if kickoff <= as_of:
+            return "stale_quote"
+    if require_injury_evidence and inactive_by_team is None:
+        return "injury_unverified"
+    out = {_name_key(n) for n in (inactive_by_team or {}).get(team, [])}
+    if _name_key(row.get("player_name")) in out:
+        return "inactive_player"
+    return None
+
+
+def _player_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Event + player identity: one name in two games is two players."""
+    pid = str(row.get("player_id") or "").strip()
+    return (
+        str(row.get("event_id") or "").strip(),
+        pid or str(row.get("player_name") or "").strip(),
+        str(row.get("team") or "").strip().upper(),
+    )
 
 
 def _floor_depth_chart(
@@ -151,11 +241,16 @@ def discover_alt_floor_candidates(
     weather_by_event: dict[str, dict[str, Any]] | None = None,
     tapes: dict[str, dict[str, Any]] | None = None,
     static_depth: bool = False,
+    as_of_utc: Any = None,
+    inactive_by_team: dict[str, list[str]] | None = None,
+    require_injury_evidence: bool = False,
 ) -> dict[str, list[AltFloorProp]]:
     """Discover and evaluate all candidate alternate floor props.
 
-    Groups props by player and selects each player's optimal floor line based
-    on hit rate stability, safety cushion, book pricing, and situational context.
+    Groups props by event + player + market (full game only) and selects each
+    player's optimal floor line based on hit rate stability, safety cushion,
+    book pricing, and situational context. A row that fails
+    ``floor_inventory_reason`` stays as non-actionable inventory (F23).
     """
     thresholds = min_lines or DEFAULT_MIN_LINES
     # A supplied (even empty) starter set restricts PASS_YDS: no evidenced
@@ -163,20 +258,21 @@ def discover_alt_floor_candidates(
     active_qbs = set(starting_qbs) if starting_qbs is not None else None
 
     # 1. Build consensus map if not passed
-    cons_map: dict[tuple[str, str], float] = dict(consensus_map or {})
-    if not cons_map:
+    # A supplied map is keyed (player_name, market); a built one by event+player.
+    legacy_map: dict[tuple[str, str], float] = dict(consensus_map or {})
+    cons_map: dict[tuple[Any, ...], float] = {}
+    if not legacy_map:
         for p in props:
             row = p if isinstance(p, dict) else p.to_dict()
             if row.get("is_consensus_line") and row.get("scope") in (None, "", "full_game"):
-                pname = str(row.get("player_name") or "").strip()
                 mkt = str(row.get("market") or "").strip()
                 try:
-                    cons_map[(pname, mkt)] = float(row.get("line") or 0.0)
+                    cons_map[(*_player_key(row), mkt)] = float(row.get("line") or 0.0)
                 except (ValueError, TypeError):
                     pass
 
-    # 2. Collect candidate lines per (market, player)
-    candidates_by_player: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    # 2. Collect candidate lines per (market, event, player)
+    candidates_by_player: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
 
     for p in props:
         row = p if isinstance(p, dict) else p.to_dict()
@@ -204,12 +300,28 @@ def discover_alt_floor_candidates(
         if line < thresholds[mkt]:
             continue
 
-        cons_line = cons_map.get((player, mkt))
+        pkey = _player_key(row)
+        cons_line = (
+            legacy_map.get((player, mkt)) if legacy_map else cons_map.get((*pkey, mkt))
+        )
         if cons_line is None or line >= cons_line:
             continue
 
         books = row.get("books") or []
         b_name, b_odds = _extract_book_quote(books, target_book=target_book)
+
+        finite = _finite_odds(b_odds)
+        reason = floor_inventory_reason(
+            row,
+            book=b_name,
+            odds=b_odds,
+            target_book=target_book,
+            as_of_utc=as_of_utc,
+            inactive_by_team=inactive_by_team,
+            require_injury_evidence=require_injury_evidence,
+        )
+        if finite is None:
+            b_odds = None  # never carry NaN/inf into scores or JSON
 
         # Must have favored odds or heavy juice indicating a legitimate floor
         if b_odds is not None and b_odds > 0:
@@ -222,7 +334,8 @@ def discover_alt_floor_candidates(
         l5 = float(row.get("l5_hit_rate") or 0.0)
         l10 = float(row.get("l10_hit_rate") or 0.0)
         season = float(row.get("season_hit_rate") or 0.0)
-        implied_p = american_to_implied(b_odds)
+        # No quote is no price evidence: never an invented 0.50 (F23).
+        implied_p = american_to_implied(b_odds) if b_odds is not None else None
         play_type = (
             PLAY_TYPE_PARLAY
             if (b_odds is not None and b_odds < MAX_STRAIGHT_ODDS)
@@ -282,7 +395,7 @@ def discover_alt_floor_candidates(
             + (l5 * 0.30)
             + (season * 0.15)
             + (cushion_ratio * 0.10)
-            + (implied_p * 0.10)
+            + ((implied_p or 0.0) * 0.10)
             + situational_adj
         )
         conf_score = max(0.0, min(1.0, round(base_score, 4)))
@@ -292,7 +405,7 @@ def discover_alt_floor_candidates(
             TARGET_BOOK_ALIASES if target_book in TARGET_BOOK_ALIASES else {target_book.upper()}
         )
 
-        candidates_by_player[(mkt, player)].append(
+        candidates_by_player[(mkt, *pkey)].append(
             {
                 "prop_dict": row,
                 "player": player,
@@ -308,7 +421,7 @@ def discover_alt_floor_candidates(
                 "cushion_pct": round(cushion_pct, 1),
                 "target_book": b_name,
                 "target_odds": b_odds,
-                "implied_probability": round(implied_p, 4),
+                "implied_probability": None if implied_p is None else round(implied_p, 4),
                 "play_type": play_type,
                 "l5_hit_rate": round(l5, 2),
                 "l10_hit_rate": round(l10, 2),
@@ -317,18 +430,22 @@ def discover_alt_floor_candidates(
                 "is_target_book": is_target_book,
                 "event_id": event_id,
                 "event_starts_at": str(row.get("event_starts_at") or ""),
+                "player_id": str(row.get("player_id") or ""),
+                "inventory_reason": reason,
             }
         )
 
     # 3. For each player and market, select their optimal floor line
     optimal_by_category: dict[str, list[AltFloorProp]] = defaultdict(list)
 
-    for (mkt, player), lines in candidates_by_player.items():
+    for (mkt, *_ident), lines in candidates_by_player.items():
         if not lines:
             continue
-        # Sort lines: prefer target book, highest confidence score, then deepest cushion
+        # Sort lines: executable first, then target book, highest confidence
+        # score, then deepest cushion
         lines.sort(
             key=lambda x: (
+                x["inventory_reason"] is None,
                 x["is_target_book"],
                 x["confidence_score"],
                 x["cushion_pct"],
@@ -364,6 +481,9 @@ def discover_alt_floor_candidates(
             event_id=best["event_id"],
             event_starts_at=best["event_starts_at"],
             scope="full_game",
+            player_id=best["player_id"],
+            actionable=best["inventory_reason"] is None,
+            inventory_reason=best["inventory_reason"],
         )
         optimal_by_category[mkt].append(prop_obj)
 
@@ -372,13 +492,19 @@ def discover_alt_floor_candidates(
 
 def rank_alt_floors(
     candidates_by_category: dict[str, list[AltFloorProp]],
-) -> tuple[dict[str, list[AltFloorProp]], list[AltFloorProp]]:
-    """Rank candidates to produce Top 3 in each category and Master Top 9."""
+) -> tuple[dict[str, list[AltFloorProp]], list[AltFloorProp], list[AltFloorProp]]:
+    """Rank actionable candidates into Top 3 per category and Master Top 9.
+
+    Third element: non-actionable inventory (F23), never ranked.
+    """
     top3_by_category: dict[str, list[AltFloorProp]] = {}
     master_pool: list[AltFloorProp] = []
+    inventory: list[AltFloorProp] = []
 
     for mkt in ["PASS_YDS", "RUSH_YDS", "REC_YDS"]:
-        pool = candidates_by_category.get(mkt, [])
+        everything = candidates_by_category.get(mkt, [])
+        inventory.extend(p for p in everything if not p.actionable)
+        pool = [p for p in everything if p.actionable]
         # Sort by confidence score desc, then cushion desc
         pool.sort(key=lambda x: (x.confidence_score, x.cushion_pct), reverse=True)
         top3 = pool[:3]
@@ -403,7 +529,8 @@ def rank_alt_floors(
     for m_idx, prop in enumerate(master_pool, 1):
         prop.master_rank = m_idx
 
-    return top3_by_category, master_pool
+    inventory.sort(key=lambda x: (x.market, x.event_id, x.player_name))
+    return top3_by_category, master_pool, inventory
 
 
 def render_alt_floors_markdown(
@@ -411,6 +538,7 @@ def render_alt_floors_markdown(
     master_pool: list[AltFloorProp],
     date_str: str,
     target_book: str = DEFAULT_TARGET_BOOK,
+    inventory: list[AltFloorProp] | None = None,
 ) -> str:
     """Render executive-ready markdown report for Alt Floor Props."""
     lines: list[str] = [
@@ -459,7 +587,7 @@ def render_alt_floors_markdown(
                 f"- **#{p.category_rank} {p.player_name} ({p.team} vs {p.opponent}) — OVER {p.line} {p.market_display}**"
             )
             lines.append(
-                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {p.implied_probability * 100:.1f}%) | **Play Type**: `{p.play_type}`"
+                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {(p.implied_probability or 0.0) * 100:.1f}%) | **Play Type**: `{p.play_type}`"
             )
             lines.append(
                 f"  - **Safety Cushion**: +{p.cushion:.1f} yards below consensus line of {p.consensus_line} ({p.cushion_pct:.1f}% discount)"
@@ -471,6 +599,25 @@ def render_alt_floors_markdown(
             )
             lines.append(f"  - **Confidence Score**: `{p.confidence_score:.3f}` (Master Rank: #{p.master_rank})")
             lines.append("")
+
+    lines.extend([
+        "---",
+        "",
+        "## Non-actionable inventory",
+        "",
+        "Floors listed for reference only: no executable quote, identity or injury "
+        "evidence. Never ranked or recommended.",
+        "",
+    ])
+    if inventory:
+        for p in inventory:
+            lines.append(
+                f"- {p.player_name} ({p.team or '?'}) — OVER {p.line} {p.market_display} "
+                f"[{p.event_id or 'no event'}]: `{p.inventory_reason}`"
+            )
+    else:
+        lines.append("- None")
+    lines.append("")
 
     lines.extend([
         "---",
@@ -495,8 +642,13 @@ def export_alt_floors(
     date_str: str,
     target_book: str = DEFAULT_TARGET_BOOK,
     write_latest: bool = True,
+    inventory: list[AltFloorProp] | None = None,
 ) -> dict[str, str]:
-    """Export Alt Floors to JSON, CSV, and Markdown files."""
+    """Export Alt Floors to JSON, CSV, and Markdown files.
+
+    CSV and ranked records carry actionable floors only; inventory is listed
+    separately in JSON and markdown.
+    """
     exports_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -510,6 +662,8 @@ def export_alt_floors(
             for mkt, props in top3_by_category.items()
         },
         "records": records,
+        "inventory_count": len(inventory or []),
+        "inventory": [p.to_dict() for p in (inventory or [])],
     }
 
     # 1. JSON Exports
@@ -546,6 +700,10 @@ def export_alt_floors(
         "season_hit_rate",
         "confidence_score",
         "rationale",
+        "event_id",
+        "player_id",
+        "actionable",
+        "inventory_reason",
     ]
     csv_dated = exports_dir / f"nfl_alt_floors_{date_str}.csv"
     with open(csv_dated, "w", encoding="utf-8", newline="") as f:
@@ -567,7 +725,8 @@ def export_alt_floors(
 
     # 3. Markdown Report
     md_content = render_alt_floors_markdown(
-        top3_by_category, master_pool, date_str=date_str, target_book=target_book
+        top3_by_category, master_pool, date_str=date_str, target_book=target_book,
+        inventory=inventory,
     )
     md_dated = reports_dir / f"{date_str}_Alt_Floors.md"
     md_dated.write_text(md_content, encoding="utf-8")
@@ -597,6 +756,9 @@ def generate_alt_floors_pipeline(
     tapes: dict[str, dict[str, Any]] | None = None,
     write_latest: bool = True,
     static_depth: bool = False,
+    as_of_utc: Any = None,
+    inactive_by_team: dict[str, list[str]] | None = None,
+    require_injury_evidence: bool = False,
 ) -> dict[str, Any]:
     """Complete pipeline orchestration for Alt Floor Props extraction and reporting."""
     weather_by_event: dict[str, dict[str, Any]] = {}
@@ -614,9 +776,12 @@ def generate_alt_floors_pipeline(
         weather_by_event=weather_by_event,
         tapes=tapes,
         static_depth=static_depth,
+        as_of_utc=as_of_utc,
+        inactive_by_team=inactive_by_team,
+        require_injury_evidence=require_injury_evidence,
     )
 
-    top3, master_pool = rank_alt_floors(candidates)
+    top3, master_pool, inventory = rank_alt_floors(candidates)
 
     outputs = export_alt_floors(
         top3,
@@ -626,10 +791,12 @@ def generate_alt_floors_pipeline(
         date_str=date_str,
         target_book=target_book,
         write_latest=write_latest,
+        inventory=inventory,
     )
 
     return {
         "count": len(master_pool),
+        "inventory_count": len(inventory),
         "top3_by_category": {mkt: [p.to_dict() for p in props] for mkt, props in top3.items()},
         "master_pool": [p.to_dict() for p in master_pool],
         "outputs": outputs,
