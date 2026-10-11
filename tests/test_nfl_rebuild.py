@@ -88,11 +88,20 @@ def _archive_nflverse(tmp_path: Path, nfl: Path, fetched_at: str = "2026-10-04T1
     assert not ar.record_nflverse(nfl, cache, [2026]).conflicts
 
 
+TAPE_STAMP = "2026-10-04T12:00:00+00:00"
+
+
+def stamped_tape() -> dict[str, Any]:
+    """The frozen tape as a real refresh writes it: stamped ``fetched_at_utc``
+    (``tape_nflverse``), so its date is in its own hash-verified bytes."""
+    return {**snap.frozen_tape(FIXTURES_DIR), "fetched_at_utc": TAPE_STAMP}
+
+
 def _tape(nfl: Path) -> Path:
     tape = nfl / "tape" / "prior_week.json"
     if not tape.exists():  # a test may plant its own tape first
         tape.parent.mkdir(parents=True, exist_ok=True)
-        tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+        tape.write_text(json.dumps(stamped_tape()), encoding="utf-8")
     return tape
 
 
@@ -355,7 +364,7 @@ def test_rebuild_without_archived_tape_labels_injury(tmp_path):
     # The original's tape lists Mahomes Out, so his picks' injury pillar CONTRADICTS.
     # The tape is then rewritten, so it can't be archived; the rebuild has no tape
     # and the pillar becomes MISSING. That is a real difference, labelled injury.
-    tape_body = snap.frozen_tape(FIXTURES_DIR)
+    tape_body = stamped_tape()
     tape_body["inactive"] = {"KC": ["Patrick Mahomes"]}
     tape = tmp_path / "NFL" / "tape" / "prior_week.json"
     tape.parent.mkdir(parents=True)
@@ -454,3 +463,108 @@ def test_rebuild_opens_no_socket(archived):
     nfl, _ = archived
     rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
     assert NETWORK_CALLS == []
+
+
+# --- the tape's date in the point-in-time check -------------------------------------
+
+def _set_mtime_now(path: Path) -> None:
+    import os
+    import time
+
+    os.utime(path, (time.time(), time.time()))  # as a copy or git checkout would
+
+
+def _archived_tape(nfl: Path) -> Path:
+    [e] = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE]
+    return nfl / e.path
+
+
+def test_archived_tape_with_mtime_reset_is_accepted_and_byte_identical(archived):
+    nfl, _ = archived
+    _set_mtime_now(_archived_tape(nfl))
+    m1 = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    _set_mtime_now(_archived_tape(nfl))
+    m2 = rb.rebuild_slate(nfl, SLATE, rebuild_id="r2", clock=lambda: NOW)
+    assert _tape_source(nfl, m1)["status"] == _tape_source(nfl, m2)["status"] == "AVAILABLE"
+    a = _normalized_tree(nfl / "versions" / "r1")
+    b = _normalized_tree(nfl / "versions" / "r2")
+    assert [k for k in a if a[k] != b[k]] == []
+
+
+def test_record_days_after_the_run_keeps_the_tapes_own_date(tmp_path):
+    import os
+
+    nfl, run_id = live_original(tmp_path)
+    # record runs three days later; the shared tape's mtime moves on with a re-copy
+    later = parse_utc("2026-10-07T09:00:00+00:00").timestamp()
+    os.utime(nfl / "tape" / "prior_week.json", (later, later))
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    tape = next(e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE)
+    run = json.loads((nfl / "runs" / run_id / "manifest.json").read_text("utf-8"))
+    assert tape.captured_at == run["context"]["run_started_utc"]  # not record time
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert _tape_source(nfl, m)["status"] == "AVAILABLE"  # dated by its fetched_at_utc
+    # captured_at is never used as the tape's date: the run read the tape after it
+    assert rb._tape_known_at(run, tape) == {}
+
+
+def test_tape_date_comes_only_from_the_run_manifest():
+    entry = ar.ArchiveEntry(role=ar.TAPE_ROLE, path="archive/tape/abc/prior_week.json",
+                            sha256="abc", captured_at="2026-10-04T15:00:00+00:00",
+                            slate=SLATE, size=1, source="tape", season=2026)
+    ctx = {"as_of_utc": "2026-10-04T15:00:00+00:00"}
+
+    def manifest(**src: Any) -> dict[str, Any]:
+        return {"context": ctx, "sources": [{"name": "tape", "status": "AVAILABLE",
+                                             "sha256": "abc", **src}]}
+
+    assert rb._tape_known_at(manifest(), entry) == {}  # no read time recorded: none
+    stamp = "2026-10-04T11:00:00+00:00"
+    assert rb._tape_known_at(manifest(written_at_utc=stamp), entry) == {"abc": parse_utc(stamp)}
+    # recorded after the run's as_of: not proof of a point-in-time read, refused
+    assert rb._tape_known_at(manifest(written_at_utc="2026-10-04T15:00:01+00:00"), entry) == {}
+    # recorded for another tape: refused
+    other = {"context": ctx, "sources": [{"name": "tape", "status": "AVAILABLE",
+                                          "sha256": "zzz", "written_at_utc": stamp}]}
+    assert rb._tape_known_at(other, entry) == {}
+
+
+def test_unstamped_archived_tape_with_a_fresh_copy_is_refused_and_labelled(tmp_path):
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    nfl, _ = live_original(tmp_path)
+    ar.record_pointed_runs(nfl)
+    _archive_nflverse(tmp_path, nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    src = _tape_source(nfl, m)
+    assert src["status"] == "REFUSED" and "after as_of" in src["reason"]
+
+
+def _ctx_replay() -> Any:
+    from outlier_nfl.run_context import make_run_context
+
+    return make_run_context(slate_date=SLATE, window=None, as_of_utc=parse_utc(PREGAME),
+                            fixture=False, run_started_utc=NOW)
+
+
+def test_known_at_applies_only_to_a_tape_matching_the_manifest_hash(tmp_path):
+    """A vouched-for sha256 dates only those bytes; any other tape keeps the mtime check."""
+    import hashlib
+
+    from outlier_nfl.matchup import load_tape_envelope
+
+    nfl = tmp_path / "NFL"
+    tape = nfl / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    body = json.dumps(snap.frozen_tape(FIXTURES_DIR)).encode()
+    tape.write_bytes(body)  # unstamped, mtime now (after as_of)
+    ctx = _ctx_replay()
+    assert ctx.historical
+    early = {hashlib.sha256(body).hexdigest(): parse_utc("2026-10-04T11:00:00+00:00")}
+    assert load_tape_envelope(nfl, ctx, early).source.status == "AVAILABLE"
+    assert load_tape_envelope(nfl, ctx).source.status == "REFUSED"
+    tape.write_bytes(body + b" ")  # different bytes, same vouched-for map
+    refused = load_tape_envelope(nfl, ctx, early).source
+    assert refused.status == "REFUSED" and "after as_of" in (refused.reason or "")

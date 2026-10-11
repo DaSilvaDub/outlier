@@ -462,7 +462,9 @@ class NflPipeline:
         # =====================================================================
         # One validated, point-in-time tape read feeds scripts, inactives and the
         # injury pillar; a refused tape disables all of them together (F02).
-        tape = load_tape_envelope(tape_root, ctx)
+        tape = load_tape_envelope(
+            tape_root, ctx,
+            self.inputs.tape_known_at if self.inputs is not None else None)
         sources.append(tape.source)
         if not tape.admitted:
             logger.warning("Matchup tape %s: %s", tape.source.status, tape.source.reason)

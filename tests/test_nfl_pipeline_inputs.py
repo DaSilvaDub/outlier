@@ -27,6 +27,7 @@ def real_loaders(monkeypatch) -> None:
 class _Inputs:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.tape_known_at: dict[str, Any] = {}
 
     def external_client(self) -> _Inputs:
         return self

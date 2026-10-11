@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 import uuid
 from typing import Any
@@ -209,8 +208,10 @@ class PinnedInputs:
     """
 
     def __init__(self, csv_by_url: dict[str, bytes],
-                 weather_records: list[dict[str, Any]] | None) -> None:
+                 weather_records: list[dict[str, Any]] | None,
+                 tape_known_at: dict[str, datetime] | None = None) -> None:
         self._csv = csv_by_url
+        self.tape_known_at = tape_known_at or {}
         self._weather = weather_records
         self.served: list[str] = []
         self.refused: list[str] = []
@@ -286,6 +287,35 @@ def _stage_nflverse(root: Path, out: Path, season: int,
     if "games.csv" in names:
         ensure_games_csv(cache_dir=dest_dir, pinned=True)
     return used
+
+
+TAPE_KNOWN_AT_FIELD = "written_at_utc"
+
+
+def _tape_known_at(run_manifest: dict[str, Any],
+                   tape_entry: ar.ArchiveEntry | None) -> dict[str, datetime]:
+    """When the original run's manifest shows its admitted tape was knowable.
+
+    The date comes from the run manifest only, never from the archive entry:
+    ``captured_at`` there is the run's ``run_started_utc``, and the tape is read
+    after it, so it proves nothing about the tape. The manifest's tape source would
+    have to carry the tape's knowable time (``written_at_utc``); no pipeline writes
+    that field yet, so today this returns {} and an unstamped tape gets the normal
+    mtime check, which refuses a fresh copy (the pillar is MISSING, labelled
+    ``evidence_changed:injury``). A tape stamped with ``as_of_utc`` /
+    ``fetched_at_utc`` is dated by those hash-verified bytes and needs nothing here.
+    """
+    if tape_entry is None:
+        return {}
+    src = next((s for s in run_manifest.get("sources") or []
+                if isinstance(s, dict) and s.get("name") == "tape"), None)
+    if not src or src.get("status") != "AVAILABLE" or src.get("sha256") != tape_entry.sha256:
+        return {}
+    stamp = _parse(src.get(TAPE_KNOWN_AT_FIELD))
+    as_of = _parse((run_manifest.get("context") or {}).get("as_of_utc"))
+    if stamp is None or as_of is None or stamp > as_of:
+        return {}
+    return {tape_entry.sha256: stamp}
 
 
 def _archived_weather(root: Path, run_id: str,
@@ -374,14 +404,9 @@ def rebuild_slate(
         dest = work / "NFL" / "tape" / "prior_week.json"
         dest.parent.mkdir(parents=True)
         dest.write_bytes(_verified_bytes(root, tape_entry))
-        # An unstamped tape's knowable time is its mtime (matchup._tape_written_at).
-        # The copy gets the time the original run read it (the entry's captured_at,
-        # the run start), so the point-in-time gate judges the tape and not the copy.
-        read_at = _parse(tape_entry.captured_at)
-        if read_at is not None:
-            os.utime(dest, (read_at.timestamp(), read_at.timestamp()))
     weather = _archived_weather(root, run_id, original_manifest)
-    inputs = PinnedInputs(csv_by_url, weather)
+    inputs = PinnedInputs(csv_by_url, weather,
+                          _tape_known_at(original_manifest, tape_entry))
     client = ArchivedOutlierClient(raw["pregame_schedule"], raw["pregame_event_markets"],
                                    raw["pregame_player_props"])
     summary = NflPipeline(client=client, data_dir=work, clock=lambda: now,  # type: ignore[arg-type]
