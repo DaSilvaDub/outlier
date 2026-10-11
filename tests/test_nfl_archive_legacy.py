@@ -327,3 +327,15 @@ def test_probability_source_is_counted_per_slate(tree, capsys):
     nfl_archive.main(check + ["--json"])
     assert json.loads(capsys.readouterr().out)["legacy"][0]["probability_sources"] == {
         "original_model_p": 2, "recomputed_from_hit_rates": 1}
+
+
+def test_a_pre_kickoff_twin_from_another_slate_does_not_vouch(tree):
+    nfl, reports = tree
+    norm = nfl / "normalized"
+    oct4 = (norm / "nfl_rosters_2026-10-04.json").read_bytes()  # written before Oct 5 games
+    late = norm / "nfl_rosters_2026-10-05.json"
+    late.write_bytes(oct4)
+    os.utime(late, (_epoch("2026-10-06T12:00:00Z"),) * 2)  # after every Oct 5 kickoff
+    al.record_legacy(nfl, reports_dir=reports)
+    v = _verdicts(al.legacy_status(nfl, "2026-10-05"))["nfl_rosters_2026-10-05.json"]
+    assert v.verdict == "post_slate" and not v.via_pre_kickoff_copy

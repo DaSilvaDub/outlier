@@ -17,7 +17,8 @@ original is only read. Nothing is fetched again.
 
 Original vs ``post_slate`` is decided per game, not per day. A file counts as an
 original for a game only when its modified time is before that game's kickoff,
-or when its bytes hash the same as a recorded copy whose modified time is.
+or when its bytes hash the same as a recorded copy of the same slate and role
+whose modified time is.
 Kickoffs come from the saved ``nfl_games_<date>.json`` (``records[].event_id`` /
 ``event_starts_at``), falling back to the rows' own ``event_starts_at``. Snapshot
 rows (``nfl_prop_snapshots_<week>.jsonl`` keeps being appended to) are judged one
@@ -246,12 +247,13 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
     legacy = [e for e in entries if e.role in ar.LEGACY_ROLES]
     have = [e for e in legacy if e.slate == slate]
     kick, teams, source = _kickoffs(root, have)
-    # Earliest recorded modified time of each content hash, across every legacy entry.
-    first_seen: dict[str, datetime] = {}
-    for e in legacy:
-        t = _ts(e.mtime)
-        if t and (e.sha256 not in first_seen or t < first_seen[e.sha256]):
-            first_seen[e.sha256] = t
+    # Earliest recorded modified time of each content hash, within this slate and
+    # role only: a copy from another slate or role never vouches for this one.
+    first_seen: dict[tuple[str, str], datetime] = {}
+    for e in have:
+        t, k = _ts(e.mtime), (e.role, e.sha256)
+        if t and (k not in first_seen or t < first_seen[k]):
+            first_seen[k] = t
     files: list[FileVerdict] = []
     regradable: set[str] = set()
     card: dict[str, str] = {}
@@ -265,7 +267,7 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
         if (e.original_path or "").startswith("snapshots/"):
             continue  # judged row by row below
         covered = set() if e.role == ar.HELPER_ROLE else _covered(root, e, kick, teams)
-        best = min(mt, first_seen.get(e.sha256, mt))
+        best = min(mt, first_seen.get((e.role, e.sha256), mt))
         orig = sorted(g for g in covered if best < kick[g])
         late = sorted(g for g in covered if best >= kick[g])
         v = FileVerdict(e.original_path or e.path, e.role, e.mtime or "", e.sha256,
