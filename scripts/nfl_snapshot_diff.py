@@ -1290,16 +1290,16 @@ def _run_usage_step(work: Path) -> str | None:
     """A19 (F22): actual vs expected on the same games; current-team samples."""
     from outlier_nfl import usage
 
+    def run(players: list[dict[str, str]], expected: list[dict[str, str]]) -> Any:
+        profiles = usage.build_profiles(players, expected, before_week=4)
+        teams = sorted({p.team for p in profiles.values()})
+        signals = usage.usage_signals(profiles, {}, {t: f"e-{t}" for t in teams})
+        return {"profiles": {k: v.to_dict() for k, v in sorted(profiles.items())},
+                "signals": [(s.player_name, s.market, s.tag) for s in signals]}
+
     out: dict[str, Any] = {}
     for case, (players, expected) in usage_cases().items():
-        def run(players: list[dict[str, str]] = players,
-                expected: list[dict[str, str]] = expected) -> Any:
-            profiles = usage.build_profiles(players, expected, before_week=4)
-            teams = sorted({p.team for p in profiles.values()})
-            signals = usage.usage_signals(profiles, {}, {t: f"e-{t}" for t in teams})
-            return {"profiles": {k: v.to_dict() for k, v in sorted(profiles.items())},
-                    "signals": [(s.player_name, s.market, s.tag) for s in signals]}
-        out[case] = _try(run)
+        out[case] = _try(functools.partial(run, players, expected))
     dest = work / "data" / "NFL" / "math" / "usage_pairing.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -1322,7 +1322,8 @@ def _run_model_p_step(work: Path) -> str | None:
     }.items():
         kw = {"l10_hit_rate": l10, "season_hit_rate": season, "method": "laplace",
               "games_played": games}
-        out["laplace"][case] = _try(lambda kw=kw: calibration.compute_shrunk_empirical_model_p(
+        out["laplace"][case] = _try(functools.partial(
+            calibration.compute_shrunk_empirical_model_p,
             **{k: v for k, v in kw.items() if k in accepted}))
     base = {"player_name": "Patrick Mahomes", "team": "KC", "market": "PASS_YDS",
             "position": "OVER", "line": 250.5, "matchup": "BAL @ KC", "event_id": "e1",
