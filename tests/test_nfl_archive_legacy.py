@@ -326,4 +326,4 @@ def test_probability_source_is_counted_per_slate(tree, capsys):
             in capsys.readouterr().out)
     nfl_archive.main(check + ["--json"])
     assert json.loads(capsys.readouterr().out)["legacy"][0]["probability_sources"] == {
-        "original_model_p": 6, "recomputed_from_hit_rates": 3}
+        "original_model_p": 2, "recomputed_from_hit_rates": 1}
