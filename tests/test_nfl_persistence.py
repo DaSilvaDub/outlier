@@ -364,3 +364,43 @@ def test_snapshot_lock_timeout_withdraws_card_and_names_the_lock(tmp_path, caplo
             suffix="2026-09-13", publish=False, publish_latest=False, writer=type("W", (), {"run_id": "RUN-1"})())
     assert "error" in out
     assert str(lock) in caplog.text and "delete" in caplog.text
+
+
+# --- Windows PermissionError on lock creation ---------------------------------
+
+def _deny_open(monkeypatch, utils, times):
+    real_open = os.open
+    calls = {"n": 0}
+
+    def fake(path, flags, *a):
+        if str(path).endswith(".lock") and flags & os.O_EXCL and calls["n"] < times:
+            calls["n"] += 1
+            raise PermissionError(13, "Access is denied")
+        return real_open(path, flags, *a)
+
+    monkeypatch.setattr(utils.os, "open", fake)
+    return calls
+
+
+def test_permission_error_on_lock_create_is_retried(tmp_path, monkeypatch):
+    from outlier_nfl import utils
+
+    monkeypatch.setattr(utils, "_sleep", lambda s: None)
+    calls = _deny_open(monkeypatch, utils, 3)
+    target = tmp_path / "ledger.jsonl"
+    with utils.file_lock(target, timeout=5):
+        assert (tmp_path / "ledger.jsonl.lock").exists()
+    assert calls["n"] == 3
+
+
+def test_permanent_permission_error_times_out_by_the_deadline(tmp_path, monkeypatch):
+    from outlier_nfl import utils
+
+    clock = _Clock()
+    monkeypatch.setattr(utils, "_clock", clock)
+    monkeypatch.setattr(utils, "_sleep", lambda s: None)
+    _deny_open(monkeypatch, utils, 10**9)
+    with pytest.raises(utils.LockTimeout):
+        with utils.file_lock(tmp_path / "ledger.jsonl", timeout=1.0):
+            pass
+    assert clock.t < 1.2

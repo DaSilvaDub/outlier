@@ -174,6 +174,12 @@ def file_lock(
                 continue  # this waiter cleared it; try to create at once
             _sleep(poll)
             continue
+        except PermissionError:
+            # Windows: the previous holder's lock is still pending delete (or a
+            # scanner has it open), so creation is denied rather than "exists".
+            # Wait and retry like a held lock; the deadline above still bounds it.
+            _sleep(poll)
+            continue
         try:
             os.write(fd, f"{os.getpid()} {datetime.now(timezone.utc).isoformat()}\n".encode())
         finally:
