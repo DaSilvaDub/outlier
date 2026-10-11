@@ -15,7 +15,8 @@ import os
 from pathlib import Path
 import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 import uuid
 import zoneinfo
 
@@ -127,6 +128,61 @@ def _replace_with_retry(
                         _unlink_with_retry(backup)
                         return
             raise
+
+
+class LockTimeout(TimeoutError):
+    """A shared writer lock stayed held past its bounded wait (F27)."""
+
+
+LOCK_TIMEOUT_SECONDS = 30.0
+LOCK_STALE_SECONDS = 600.0
+
+
+@contextmanager
+def file_lock(
+    path: Path | str,
+    timeout: float = LOCK_TIMEOUT_SECONDS,
+    stale_after: float = LOCK_STALE_SECONDS,
+    poll: float = 0.05,
+) -> Iterator[Path]:
+    """Serialize writers of ``path`` through ``<path>.lock`` (F27).
+
+    The lock file is created exclusively (works on Windows and POSIX). A lock
+    older than ``stale_after`` seconds is treated as left by a crashed job and
+    removed; age is used rather than the holder's PID because PID liveness is
+    not portable to Windows. Waiting longer than ``timeout`` raises
+    :class:`LockTimeout` instead of hanging a scheduled run.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock = target.with_name(target.name + ".lock")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - lock.stat().st_mtime
+            except OSError:
+                continue  # released between open and stat; retry at once
+            if age > stale_after:
+                logger.warning("Removing stale lock %s (%.0fs old)", lock, age)
+                _unlink_with_retry(lock)
+                continue
+            if time.monotonic() >= deadline:
+                raise LockTimeout(f"{lock} held for more than {timeout:.0f}s; "
+                                  "another run is writing, or delete it if none is") from None
+            time.sleep(poll)
+            continue
+        try:
+            os.write(fd, f"{os.getpid()} {datetime.now(timezone.utc).isoformat()}\n".encode())
+        finally:
+            os.close(fd)
+        break
+    try:
+        yield lock
+    finally:
+        _unlink_with_retry(lock)
 
 
 def unique_temp_path(target: Path) -> Path:

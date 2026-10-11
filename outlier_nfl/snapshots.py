@@ -21,6 +21,7 @@ from typing import Any, Iterable, Mapping
 
 from outlier_nfl.run_context import try_parse_utc
 from outlier_nfl.tape_nflverse import _name_key
+from outlier_nfl.utils import file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ def append_snapshot(
         row["books"] = _books(rec)
         lines.append(json.dumps(row, sort_keys=True))
     if lines:
-        with open(path, "a", encoding="utf-8") as handle:
+        with file_lock(path), open(path, "a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
             handle.flush()
             os.fsync(handle.fileno())

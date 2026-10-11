@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.request import Request, urlopen
 
-from outlier_nfl.utils import atomic_write_bytes, atomic_write_text
+from outlier_nfl.utils import atomic_write_bytes, atomic_write_text, file_lock
 from zoneinfo import ZoneInfo
 
 from outlier_nfl.config import normalize_team
@@ -806,10 +806,11 @@ def write_tape(path: Path, payload: Mapping[str, Any]) -> Path | None:
     """Atomically write ``payload``; keep the previous file as ``<name>.prev.json``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     backup: Path | None = None
-    if path.exists():
-        backup = path.with_name(path.stem + ".prev" + path.suffix)
-        atomic_write_bytes(backup, path.read_bytes())
-    atomic_write_text(path, json.dumps(payload, indent=2))  # unique temp name (F27)
+    with file_lock(path):  # backup + replace as one step per writer (F27)
+        if path.exists():
+            backup = path.with_name(path.stem + ".prev" + path.suffix)
+            atomic_write_bytes(backup, path.read_bytes())
+        atomic_write_text(path, json.dumps(payload, indent=2))  # unique temp name (F27)
     return backup
 
 

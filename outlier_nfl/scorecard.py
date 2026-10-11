@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 
 from outlier_nfl.config import PROP_PASS_YARDS, PROP_TIMES_SACKED
 from outlier_nfl.tape_nflverse import _name_key, _team
-from outlier_nfl.utils import atomic_write_text
+from outlier_nfl.utils import atomic_write_text, file_lock
 
 # Signal market -> nflverse stats_player_week column.
 MARKET_COLUMNS: dict[str, str] = {
@@ -303,6 +303,13 @@ def update_ledger(
     """
     scope = {str(e) for e in event_ids} if event_ids is not None else {g.event_id for g in graded}
     path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(path):  # read-modify-write is serialized across jobs (F27)
+        return _update_ledger_locked(path, graded, date, scope)
+
+
+def _update_ledger_locked(
+    path: Path, graded: list[GradedSignal], date: str, scope: set[str]
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
