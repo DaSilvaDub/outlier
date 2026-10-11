@@ -78,6 +78,18 @@ class PlayerUsage:
     rush_yds_exp_pg: float | None = None
     last_week: int = 0
     team_last_week: int = 0
+    # F22: games with expected stats paired on the same season/week/game, the
+    # share of games that had them, and the current-team segment size. The
+    # shares/per-game volume above are current-team; *_all keep full history.
+    expected_games: int = 0
+    expected_coverage: float = 0.0
+    team_games: int = 0
+    target_share_all: float = 0.0
+    carry_share_all: float = 0.0
+    targets_pg_all: float = 0.0
+    carries_pg_all: float = 0.0
+    rec_yds_paired_pg: float | None = None
+    rush_yds_paired_pg: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -90,6 +102,34 @@ def _f(value: Any) -> float:
         return 0.0
 
 
+def _game_key(pid: str, r: Mapping[str, str]) -> tuple[str, str, int, str]:
+    return (pid, str(r.get("season") or ""), int(_f(r.get("week"))), str(r.get("game_id") or ""))
+
+
+def _expected_by_game(
+    expected_rows: Iterable[Mapping[str, str]],
+) -> dict[tuple[str, str, int, str], Mapping[str, str]]:
+    """Expected rows keyed by player/season/week/game (ffopportunity columns).
+
+    Conflicting duplicates for one player-game drop that game from pairing;
+    identical duplicates count once (F22).
+    """
+    out: dict[tuple[str, str, int, str], Mapping[str, str]] = {}
+    conflicted: set[tuple[str, str, int, str]] = set()
+    for e in expected_rows:
+        pid = str(e.get("player_id") or "")
+        if not pid:
+            continue
+        key = _game_key(pid, e)
+        prior = out.get(key)
+        if prior is not None and dict(prior) != dict(e):
+            conflicted.add(key)
+        out.setdefault(key, e)
+    for key in conflicted:
+        out.pop(key, None)
+    return out
+
+
 def build_profiles(
     player_rows: Iterable[Mapping[str, str]],
     expected_rows: Iterable[Mapping[str, str]] = (),
@@ -98,65 +138,91 @@ def build_profiles(
     """Usage per player id from regular-season games before ``before_week``.
 
     Carry share is the player's carries over all of his team's carries that
-    week; players need ``MIN_GAMES`` games. Team is the latest team played for.
+    week; players need ``MIN_GAMES`` games. Team is the latest team played for;
+    shares and per-game volume cover games with that team only (F22), with full
+    history in the ``*_all`` fields. Expected yards are compared with actual
+    yards over the same season/week/game only.
     """
-    rows = [
-        r
-        for r in player_rows
-        if r.get("season_type") == "REG"
-        and (before_week is None or int(_f(r.get("week"))) < before_week)
-    ]
-    team_carries: dict[tuple[str, int], float] = defaultdict(float)
+    rows: list[Mapping[str, str]] = []
+    seen_games: set[tuple[str, str, int]] = set()
+    for r in player_rows:
+        if r.get("season_type") != "REG":
+            continue
+        week = int(_f(r.get("week")))
+        if before_week is not None and week >= before_week:
+            continue
+        # One row per player-game: a duplicated player-week counts once (F22).
+        key = (str(r.get("player_id") or ""), str(r.get("season") or ""), week)
+        if key[0] and key in seen_games:
+            continue
+        seen_games.add(key)
+        rows.append(r)
+    team_carries: dict[tuple[str, str, int], float] = defaultdict(float)
     team_last: dict[str, int] = defaultdict(int)
     for r in rows:
         team, week = _team(r.get("team")), int(_f(r.get("week")))
-        team_carries[(team, week)] += _f(r.get("carries"))
+        team_carries[(team, str(r.get("season") or ""), week)] += _f(r.get("carries"))
         team_last[team] = max(team_last[team], week)
-    expected = {
-        (str(r.get("player_id")), int(_f(r.get("week")))): r for r in expected_rows
-    }
+    expected = _expected_by_game(expected_rows)
 
     games: dict[str, list[Mapping[str, str]]] = defaultdict(list)
     for r in rows:
         if r.get("position") in SKILL_POSITIONS and r.get("player_id"):
             games[str(r["player_id"])].append(r)
 
+    def share(r: Mapping[str, str]) -> float:
+        total = team_carries[(_team(r.get("team")), str(r.get("season") or ""),
+                              int(_f(r.get("week"))))]
+        return _f(r.get("carries")) / total if total else 0.0
+
+    def mean(values: list[float], digits: int) -> float:
+        return round(sum(values) / len(values), digits) if values else 0.0
+
     out: dict[str, PlayerUsage] = {}
     for pid, g in games.items():
         if len(g) < MIN_GAMES:
             continue
-        g.sort(key=lambda r: int(_f(r.get("week"))))
+        g.sort(key=lambda r: (str(r.get("season") or ""), int(_f(r.get("week")))))
         n = len(g)
         latest = g[-1]
         team = _team(latest.get("team"))
-        shares = []
-        for r in g:
-            total = team_carries[(_team(r.get("team")), int(_f(r.get("week"))))]
-            shares.append(_f(r.get("carries")) / total if total else 0.0)
-        exp = [expected.get((pid, int(_f(r.get("week"))))) for r in g]
-        exp_rows = [e for e in exp if e]
+        # Current-team segment: a traded player's old-team volume is not his
+        # role now (F22). Full history is kept separately in the *_all fields.
+        seg = [r for r in g if _team(r.get("team")) == team]
+        # Actual and expected over the same games only (F22).
+        paired = [(r, expected[k]) for r in g if (k := _game_key(pid, r)) in expected]
+        rec_exp = rush_exp = None
+        rec_act = rush_act = 0.0
+        if len(paired) >= MIN_GAMES:
+            rec_exp = mean([_f(e.get("rec_yards_gained_exp")) for _, e in paired], 1)
+            rush_exp = mean([_f(e.get("rush_yards_gained_exp")) for _, e in paired], 1)
+            rec_act = mean([_f(r.get("receiving_yards")) for r, _ in paired], 1)
+            rush_act = mean([_f(r.get("rushing_yards")) for r, _ in paired], 1)
         out[pid] = PlayerUsage(
             player=str(latest.get("player_display_name") or latest.get("player_name") or pid),
             player_id=pid,
             team=team,
             position=str(latest.get("position") or ""),
             games=n,
-            target_share=round(sum(_f(r.get("target_share")) for r in g) / n, 4),
-            carry_share=round(sum(shares) / n, 4),
-            targets_pg=round(sum(_f(r.get("targets")) for r in g) / n, 2),
-            carries_pg=round(sum(_f(r.get("carries")) for r in g) / n, 2),
-            rec_yds_pg=round(sum(_f(r.get("receiving_yards")) for r in g) / n, 1),
-            rush_yds_pg=round(sum(_f(r.get("rushing_yards")) for r in g) / n, 1),
-            rec_yds_exp_pg=(
-                round(sum(_f(e.get("rec_yards_gained_exp")) for e in exp_rows) / len(exp_rows), 1)
-                if len(exp_rows) >= MIN_GAMES else None
-            ),
-            rush_yds_exp_pg=(
-                round(sum(_f(e.get("rush_yards_gained_exp")) for e in exp_rows) / len(exp_rows), 1)
-                if len(exp_rows) >= MIN_GAMES else None
-            ),
+            target_share=mean([_f(r.get("target_share")) for r in seg], 4),
+            carry_share=mean([share(r) for r in seg], 4),
+            targets_pg=mean([_f(r.get("targets")) for r in seg], 2),
+            carries_pg=mean([_f(r.get("carries")) for r in seg], 2),
+            rec_yds_pg=mean([_f(r.get("receiving_yards")) for r in g], 1),
+            rush_yds_pg=mean([_f(r.get("rushing_yards")) for r in g], 1),
+            rec_yds_exp_pg=rec_exp,
+            rush_yds_exp_pg=rush_exp,
             last_week=int(_f(latest.get("week"))),
             team_last_week=team_last[team],
+            expected_games=len(paired),
+            expected_coverage=round(len(paired) / n, 4),
+            team_games=len(seg),
+            target_share_all=mean([_f(r.get("target_share")) for r in g], 4),
+            carry_share_all=mean([share(r) for r in g], 4),
+            targets_pg_all=mean([_f(r.get("targets")) for r in g], 2),
+            carries_pg_all=mean([_f(r.get("carries")) for r in g], 2),
+            rec_yds_paired_pg=rec_act if rec_exp is not None else None,
+            rush_yds_paired_pg=rush_act if rush_exp is not None else None,
         )
     return out
 
@@ -190,13 +256,16 @@ def usage_signals(
         out = [
             p for p in players
             if _name_key(p.player) in out_names and p.last_week == p.team_last_week
+            and p.team_games >= MIN_GAMES
         ]
         active = [p for p in players if _name_key(p.player) not in out_names]
+        # Shares from fewer than MIN_GAMES games with this team aren't a role (F22).
+        role = [p for p in active if p.team_games >= MIN_GAMES]
 
         lost_targets = [p for p in out if p.target_share >= VACATED_TARGET_SHARE]
         if lost_targets:
             who = ", ".join(f"{p.player} {p.target_share:.0%}" for p in lost_targets)
-            for p in active:
+            for p in role:
                 if p.target_share >= TARGET_BENEFICIARY_SHARE:
                     for market in TARGET_MARKETS:
                         signals.append(_signal(
@@ -207,7 +276,7 @@ def usage_signals(
         lost_carries = [p for p in out if p.position == "RB" and p.carry_share >= VACATED_CARRY_SHARE]
         if lost_carries:
             who = ", ".join(f"{p.player} {p.carry_share:.0%}" for p in lost_carries)
-            for p in active:
+            for p in role:
                 if p.position == "RB" and p.carry_share >= CARRY_BENEFICIARY_SHARE:
                     for market in CARRY_MARKETS:
                         signals.append(_signal(
@@ -218,10 +287,10 @@ def usage_signals(
 
         for p in active:
             for market, actual, exp, floor in (
-                ("REC_YDS", p.rec_yds_pg, p.rec_yds_exp_pg, MIN_EXPECTED_REC_YDS),
-                ("RUSH_YDS", p.rush_yds_pg, p.rush_yds_exp_pg, MIN_EXPECTED_RUSH_YDS),
+                ("REC_YDS", p.rec_yds_paired_pg, p.rec_yds_exp_pg, MIN_EXPECTED_REC_YDS),
+                ("RUSH_YDS", p.rush_yds_paired_pg, p.rush_yds_exp_pg, MIN_EXPECTED_RUSH_YDS),
             ):
-                if exp is None or exp < floor:
+                if actual is None or exp is None or exp < floor:
                     continue
                 gap = actual / exp - 1
                 if gap > EFFICIENCY_GAP:

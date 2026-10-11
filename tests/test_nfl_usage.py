@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from outlier_nfl import usage
@@ -181,3 +183,68 @@ def test_fetch_player_weeks_validates_season() -> None:
     for bad in (1900, 3000):
         with pytest.raises(ValueError):
             usage.fetch_player_weeks(bad, lambda url: [])
+
+
+# --- F22: paired actual/expected, current-team samples (#229) ---------------
+
+def _pw(pid, week, team, rec, targets=5, season=2026, game=None):
+    return {"player_id": pid, "player_display_name": pid, "position": "WR",
+            "season": str(season), "week": str(week), "season_type": "REG",
+            "game_id": game or f"{season}_{week:02d}_{team}", "team": team,
+            "receiving_yards": str(rec), "targets": str(targets),
+            "target_share": "0.25", "carries": "0", "rushing_yards": "0"}
+
+
+def _ep(pid, week, team, exp, season=2026):
+    # ffopportunity ep_weekly has no season_type; keys are season/week/game_id/player_id.
+    return {"season": str(season), "posteam": team, "week": str(week),
+            "game_id": f"{season}_{week:02d}_{team}", "player_id": pid,
+            "rec_yards_gained_exp": str(exp), "rush_yards_gained_exp": "0"}
+
+
+def test_partial_expected_compares_the_same_games_only():
+    from outlier_nfl.usage import build_profiles, usage_signals
+
+    p = build_profiles(
+        [_pw("P1", 1, "KC", 100), _pw("P1", 2, "KC", 100), _pw("P1", 3, "KC", 0)],
+        [_ep("P1", 1, "KC", 100), _ep("P1", 2, "KC", 100)], before_week=4)["P1"]
+    assert p.rec_yds_pg == 66.7  # full history kept
+    assert (p.rec_yds_paired_pg, p.rec_yds_exp_pg) == (100.0, 100.0)
+    assert p.expected_games == 2 and p.expected_coverage == 0.6667
+    assert usage_signals({"P1": p}, {}, {"KC": "e"}) == []
+
+
+def test_expected_rows_from_another_season_do_not_pair():
+    from outlier_nfl.usage import build_profiles
+
+    p = build_profiles(
+        [_pw("P2", 1, "KC", 60), _pw("P2", 2, "KC", 60)],
+        [_ep("P2", 1, "KC", 120, season=2025), _ep("P2", 2, "KC", 120, season=2025)],
+        before_week=4)["P2"]
+    assert p.rec_yds_exp_pg is None and p.expected_games == 0
+
+
+def test_duplicate_player_game_counts_once_and_conflicting_expected_drops():
+    from outlier_nfl.usage import build_profiles
+
+    p = build_profiles(
+        [_pw("P4", 1, "KC", 50), _pw("P4", 2, "KC", 50), _pw("P4", 2, "KC", 50),
+         _pw("P4", 3, "KC", 50)],
+        [_ep("P4", 1, "KC", 50), _ep("P4", 2, "KC", 50), _ep("P4", 3, "KC", 50),
+         _ep("P4", 3, "KC", 90)], before_week=4)["P4"]
+    assert p.games == 3 and p.expected_games == 2
+
+
+def test_traded_player_role_is_current_team_only():
+    from outlier_nfl.usage import build_profiles, usage_signals
+
+    rows = [_pw("P3", 1, "NYJ", 40, targets=10), _pw("P3", 2, "NYJ", 40, targets=10),
+            _pw("P3", 3, "KC", 40, targets=2)]
+    p = build_profiles(rows, before_week=4)["P3"]
+    assert (p.team, p.team_games, p.targets_pg, p.targets_pg_all) == ("KC", 1, 2.0, 7.33)
+    # One KC game is not a KC role: not a vacated-volume source.
+    star = replace(p, player="Star", target_share=0.3, team_games=1)
+    mate = replace(p, player="Mate", player_id="M", target_share=0.2, team_games=5)
+    assert usage_signals({"s": star, "m": mate}, {"KC": ["Star"]}, {"KC": "e"}) == []
+    star_ok = replace(star, team_games=2)
+    assert usage_signals({"s": star_ok, "m": mate}, {"KC": ["Star"]}, {"KC": "e"})
