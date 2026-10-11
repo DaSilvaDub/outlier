@@ -227,3 +227,103 @@ def test_cli(archived, capsys):
     assert "wrote" in capsys.readouterr().out
     assert nfl_rebuild.main(["rebuild", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 2
     assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 1
+
+
+# --- pinned nflverse, offline usage/weather ------------------------------------------
+
+def test_nflverse_is_pinned_from_the_archive_with_original_names(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    staged = nfl / "versions" / "r1" / "nflverse"
+    assert sorted(p.name for p in staged.iterdir()) == [
+        "games.csv", "games.csv.meta.json", "stats_player_week_2026.csv",
+        "stats_player_week_2026.csv.meta.json"]
+    entries = {e.path: e for e in ar.read_manifest(ar.manifest_path(nfl))[0]}
+    for f in m["nflverse_files"]:
+        e = entries[f["archive_path"]]
+        assert (f["sha256"], f["fetched_at"]) == (e.sha256, e.fetched_at)
+        assert ar.sha256_file(staged / f["name"]) == e.sha256
+    assert m["evidence_sources"]["nflverse"] == "pinned"
+    assert NETWORK_CALLS == []
+
+
+def test_damaged_archive_copy_is_refused_before_use(archived):
+    nfl, _ = archived
+    [stats] = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0]
+               if e.path.endswith("stats_player_week_2026.csv")]
+    (nfl / stats.path).write_bytes(STATS_CSV.replace(b"70", b"71"))
+    with pytest.raises(rb.RebuildRefused):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+
+
+def test_newest_archived_nflverse_copy_is_used(archived, tmp_path):
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    nfl, _ = archived
+    newer = STATS_CSV + b"P2,Rashee Rice,WR,2026,3,REG,2026_03_BAL_KC,KC,6,0.2,0,50,0\n"
+    cache = tmp_path / "nflverse_cache"
+    (cache / "stats_player_week_2026.csv").write_bytes(newer)
+    _write_meta(cache / "stats_player_week_2026.csv", CacheMeta(
+        url="https://x/s", fetched_at="2026-10-05T12:00:00+00:00",
+        sha256=hashlib.sha256(newer).hexdigest(), size=len(newer), rows=4))
+    ar.record_nflverse(nfl, cache, [2026])
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    [f] = [f for f in m["nflverse_files"] if f["name"] == "stats_player_week_2026.csv"]
+    assert f["sha256"] == hashlib.sha256(newer).hexdigest()
+
+
+def _rebuilt_sources(nfl: Path, m: dict[str, Any]) -> dict[str, str]:
+    run = json.loads((nfl / "versions" / m["rebuild_id"] / m["rebuilt_run_dir"] / "manifest.json")
+                     .read_text("utf-8"))
+    return {s["name"]: s["status"] for s in run["sources"]}
+
+
+def test_usage_comes_only_from_the_pinned_weekly_file(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    sources = _rebuilt_sources(nfl, m)
+    assert sources["external:schedule"] == "AVAILABLE" and sources["usage"] == "AVAILABLE"
+    assert all(v == "UNAVAILABLE" for k, v in sources.items()
+               if k.startswith("external:") and k != "external:schedule")
+    assert any("ffopportunity" in u for u in m["refused_sources"])
+    assert NETWORK_CALLS == []
+
+
+def test_without_archived_nflverse_usage_is_unavailable(tmp_path):
+    nfl, _ = live_original(tmp_path)
+    ar.record_pointed_runs(nfl)
+    NETWORK_CALLS.clear()
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    sources = _rebuilt_sources(nfl, m)
+    assert sources["external:schedule"] == "UNAVAILABLE"
+    assert sources["usage"] == "UNAVAILABLE"
+    assert m["evidence_sources"]["nflverse"] == "unavailable" and NETWORK_CALLS == []
+
+
+def test_weather_is_never_fetched_only_archived(archived, monkeypatch):
+    nfl, run_id = archived
+    from outlier_nfl import weather
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("weather fetched during a rebuild")
+
+    monkeypatch.setattr(weather, "_fetch_json", boom)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", boom)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert m["evidence_sources"]["weather"] == "archived" and NETWORK_CALLS == []
+    out = nfl / "versions" / "r1" / m["rebuilt_run_dir"] / "nfl_weather.json"
+    original = nfl / "runs" / run_id / "nfl_weather.json"
+    assert (json.loads(out.read_text("utf-8"))["records"]
+            == json.loads(original.read_text("utf-8"))["records"])
+
+
+def test_missing_archived_weather_is_missing_and_labelled():
+    labels = rb.context_labels({"nflverse": "pinned", "weather": "unavailable", "tape": "archived"})
+    assert labels["evidence_changed:injury_weather"] == ["evidence_changed:weather"]
+    assert labels["probability_changed"] == ["evidence_changed:nflverse"]
+    inputs = rb.PinnedInputs({}, None)
+    with pytest.raises(rb.UnavailableInRebuild):
+        inputs.weather([])
+    assert inputs.refused == ["weather"]
