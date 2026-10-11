@@ -17,7 +17,9 @@ A rebuild replays one archived slate through today's pipeline:
 - **Versioned and write-once.** Everything the rebuild writes lives under
   ``<nfl_dir>/versions/<rebuild_id>/``: the replay's own data dir (``work/``),
   ``rebuild_manifest.json`` (with the sha256 of every archived input used) and
-  the comparison report. The folder must not exist beforehand. Original
+  the comparison report. nflverse inputs are pinned copies in ``nflverse/``,
+  weather comes only from the original bundle, and the tape only from the
+  archived tape role; nothing is fetched. The folder must not exist beforehand. Original
   predictions, ledgers, calibration, snapshots and the archive are only read.
 """
 
@@ -29,7 +31,6 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-import shutil
 import uuid
 from typing import Any
 
@@ -167,12 +168,147 @@ def new_rebuild_id(slate: str, now: datetime) -> str:
     return f"{slate}-rebuild-{now:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
 
 
+class UnavailableInRebuild(RuntimeError):
+    """A source the rebuild has no archived copy of; the caller treats it as missing."""
+
+
+class PinnedInputs:
+    """External metrics, usage and weather for a rebuild, offline only.
+
+    - nflverse: only the pinned copies in ``versions/<rebuild_id>/nflverse/``
+      (``games.csv`` for the schedule cutoff, ``stats_player_week_<season>.csv``
+      for usage). Every other URL (NGS, PBP, ffopportunity, ...) raises
+      :class:`UnavailableInRebuild` and is recorded in :attr:`refused`.
+    - weather: only the original run bundle's ``nfl_weather.json`` records, and
+      never a fresh forecast. Without them, weather raises, so the pillar is MISSING.
+    """
+
+    def __init__(self, csv_by_url: dict[str, bytes],
+                 weather_records: list[dict[str, Any]] | None) -> None:
+        self._csv = csv_by_url
+        self._weather = weather_records
+        self.served: list[str] = []
+        self.refused: list[str] = []
+
+    def fetch_rows(self, url: str, *_a: Any, **_k: Any) -> list[dict[str, str]]:
+        from outlier_nfl.tape_nflverse import parse_csv_bytes
+
+        if url not in self._csv:
+            self.refused.append(url)
+            raise UnavailableInRebuild(f"no pinned copy of {url}")
+        self.served.append(url)
+        return parse_csv_bytes(self._csv[url])
+
+    def external_client(self) -> PinnedInputs:
+        return self
+
+    def fetch_csv(self, url: str, *_a: Any, **_k: Any) -> list[dict[str, str]]:
+        return self.fetch_rows(url)
+
+    def weather(self, *_a: Any, **_k: Any) -> dict[str, Any]:
+        from dataclasses import fields
+
+        from outlier_nfl.weather import GameWeather
+
+        if self._weather is None:
+            self.refused.append("weather")
+            raise UnavailableInRebuild("no weather archived in the original run bundle")
+        names = {f.name for f in fields(GameWeather)}
+        out: dict[str, Any] = {}
+        for rec in self._weather:
+            kw = {k: v for k, v in rec.items() if k in names}
+            kw["tags"] = tuple(kw.get("tags") or ())
+            w = GameWeather(**kw)
+            out[w.event_id] = w
+        return out
+
+
+def _stage_nflverse(root: Path, out: Path, season: int,
+                    entries: list[ar.ArchiveEntry]) -> list[dict[str, Any]]:
+    """Copy the season's archived nflverse files into ``out/nflverse/`` under their names.
+
+    For each CSV, the newest archived copy (by ``fetched_at``) is chosen, together
+    with the sidecar from the same ``<sha256>`` folder. Each copy is checked against
+    its manifest entry. #252's pinned loaders then verify that folder (sidecar hash
+    and schema). ``archive/nflverse/`` itself and the default cache are never passed.
+    """
+    from outlier_nfl.boxscore_nflverse import ensure_games_csv, ensure_week_stats_csv
+
+    dest_dir = out / "nflverse"
+    used: list[dict[str, Any]] = []
+    for name, by_season in ((f"stats_player_week_{season}.csv", True), ("games.csv", False)):
+        csvs = [e for e in entries if e.role == ar.NFLVERSE_ROLE and Path(e.path).name == name
+                and (e.season == season or not by_season)]
+        if not csvs:
+            continue
+        csv = max(csvs, key=lambda e: (e.fetched_at or "", e.path))
+        folder = Path(csv.path).parent.as_posix()
+        side = next((e for e in entries if e.role == ar.NFLVERSE_ROLE
+                     and e.path == f"{folder}/{name}.meta.json"), None)
+        if side is None:
+            continue
+        for e in (csv, side):
+            data = _verified_bytes(root, e)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / Path(e.path).name).write_bytes(data)
+            if hashlib.sha256((dest_dir / Path(e.path).name).read_bytes()).hexdigest() != e.sha256:
+                raise RebuildRefused(f"staged copy of {e.path} does not match its entry")
+            used.append({"name": Path(e.path).name, "archive_path": e.path,
+                         "sha256": e.sha256, "fetched_at": e.fetched_at})
+    names = {u["name"] for u in used}
+    if f"stats_player_week_{season}.csv" in names:
+        ensure_week_stats_csv(season, cache_dir=dest_dir, pinned=True)
+    if "games.csv" in names:
+        ensure_games_csv(cache_dir=dest_dir, pinned=True)
+    return used
+
+
+def _archived_weather(root: Path, run_id: str,
+                      run_manifest: dict[str, Any]) -> list[Any] | None:
+    path = root / "runs" / run_id / "nfl_weather.json"
+    sealed = {a.get("name"): a.get("sha256") for a in run_manifest.get("artifacts") or []}
+    if "nfl_weather.json" not in sealed or not path.is_file():
+        return None
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != sealed["nfl_weather.json"]:
+        raise RebuildRefused(f"{path} does not match the sha256 sealed in its run manifest")
+    records = json.loads(data).get("records")
+    return records if isinstance(records, list) else None
+
+
+def context_labels(sources: dict[str, str]) -> dict[str, list[str]]:
+    """Extra cause labels for differences the rebuild's evidence sources explain.
+
+    nflverse data (usage, NGS, PBP and the schedule cutoff) can differ upstream
+    from what the original run fetched, so ``evidence_changed:nflverse`` goes on
+    every opportunity, matchup or probability difference. Weather and the tape
+    (injuries) feed the ``injury_weather`` pillar. They are labelled when the
+    rebuild had no archived copy.
+    """
+    out: dict[str, list[str]] = {
+        "evidence_changed:opportunity": ["evidence_changed:nflverse"],
+        "evidence_changed:matchup": ["evidence_changed:nflverse"],
+        "probability_changed": ["evidence_changed:nflverse"],
+    }
+    iw: list[str] = []
+    if sources.get("weather") != "archived":
+        iw.append("evidence_changed:weather")
+    if sources.get("tape") != "archived":
+        iw.append("evidence_changed:injury")
+    if iw:
+        out["evidence_changed:injury_weather"] = iw
+    return out
+
+
 def rebuild_slate(
     nfl_dir: Path | str, slate: str, *, rebuild_id: str | None = None,
-    tape: Path | str | None = None, clock: Any = None, code_version: str | None = None,
+    clock: Any = None, code_version: str | None = None,
 ) -> dict[str, Any]:
     """Rebuild one admissible slate under ``versions/<rebuild_id>/``; returns its manifest."""
+    from outlier_nfl.external.schedule import SCHEDULE_URL
     from outlier_nfl.pipeline import NflPipeline
+    from outlier_nfl.rebuild_compare import compare_cards, render_markdown
+    from outlier_nfl.usage import PLAYER_WEEK_URL
 
     root = Path(nfl_dir)
     verdict = next((v for v in admissibility(root, [slate]) if v.slate == slate), None)
@@ -194,15 +330,31 @@ def rebuild_slate(
            for role in ("pregame_schedule", "pregame_event_markets", "pregame_player_props")}
     original_manifest = json.loads(_verified_bytes(root, by_role["run_manifest"]))
     ctx = original_manifest["context"]
+    season = int(ctx["season"])
+    run_id = verdict.run_id or ""
+
+    all_entries, _ = ar.read_manifest(ar.manifest_path(root))
+    nflverse_used = _stage_nflverse(root, out, season, all_entries)
+    csv_by_url: dict[str, bytes] = {}
+    for u in nflverse_used:
+        data = (out / "nflverse" / u["name"]).read_bytes()
+        if u["name"] == "games.csv":
+            csv_by_url[SCHEDULE_URL] = data
+        elif u["name"] == f"stats_player_week_{season}.csv":
+            csv_by_url[PLAYER_WEEK_URL.format(season=season)] = data
 
     work = out / "work"
-    if tape is not None:  # a copy; phase 1's tape envelope gate still decides admission
+    tape_entry = by_role.get(ar.TAPE_ROLE)
+    if tape_entry is not None:  # phase 1's tape envelope gate still decides admission
         dest = work / "NFL" / "tape" / "prior_week.json"
         dest.parent.mkdir(parents=True)
-        shutil.copyfile(tape, dest)
+        dest.write_bytes(_verified_bytes(root, tape_entry))
+    weather = _archived_weather(root, run_id, original_manifest)
+    inputs = PinnedInputs(csv_by_url, weather)
     client = ArchivedOutlierClient(raw["pregame_schedule"], raw["pregame_event_markets"],
                                    raw["pregame_player_props"])
-    summary = NflPipeline(client=client, data_dir=work, clock=lambda: now).run(  # type: ignore[arg-type]
+    summary = NflPipeline(client=client, data_dir=work, clock=lambda: now,  # type: ignore[arg-type]
+                          inputs=inputs).run(
         date=str(ctx["slate_date"]), window=ctx.get("window"), as_of_utc=ctx["as_of_utc"],
         reports_dir=out / "reports")
     rebuilt_run = Path(summary["run_dir"])
@@ -215,27 +367,32 @@ def rebuild_slate(
             f"publication={summary.get('publication')!r}), not a bundle-only replay; outputs "
             f"left in {out} for inspection")
 
-    manifest = {
+    sources = {
+        "nflverse": "pinned" if nflverse_used else "unavailable",
+        "weather": "archived" if weather is not None else "unavailable",
+        "tape": "archived" if tape_entry is not None else "unavailable",
+    }
+    manifest: dict[str, Any] = {
         "rebuild_id": rid,
         "slate": slate,
         "created_utc": now.isoformat(),
         "code_version": code_version,
-        "source_run_id": verdict.run_id,
+        "source_run_id": run_id,
         "as_of_utc": ctx["as_of_utc"],
         "inputs": [asdict(e) for e in verdict.entries],
+        "nflverse_files": nflverse_used,
+        "evidence_sources": sources,
+        "refused_sources": sorted(set(inputs.refused)),
         "rebuilt_run_id": summary["run_id"],
         "rebuilt_run_dir": rebuilt_run.relative_to(out).as_posix(),
         "rebuilt_status": summary["status"],
         "rebuilt_mode": rctx["mode"],
         "rebuilt_replay": bool(rctx.get("replay")),
         "publication": summary.get("publication"),
-        "tape_supplied": tape is not None,
     }
-    original_card = _original_card(root, verdict.run_id or "", original_manifest)
+    original_card = _original_card(root, run_id, original_manifest)
     rebuilt_card = json.loads((rebuilt_run / CARD).read_text(encoding="utf-8"))
-    from outlier_nfl.rebuild_compare import compare_cards, render_markdown
-
-    comparison = compare_cards(original_card, rebuilt_card)
+    comparison = compare_cards(original_card, rebuilt_card, context_labels(sources))
     manifest["comparison"] = {"json": "comparison.json", "markdown": "comparison.md",
                               "differences": len(comparison["differences"]),
                               "cause_counts": comparison["cause_counts"]}

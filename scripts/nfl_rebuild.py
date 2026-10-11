@@ -1,7 +1,7 @@
 """Rebuild archived NFL slates as versioned replays (#232 part a).
 
     python -m scripts.nfl_rebuild admissible --nfl-dir data/NFL [--slate 2026-10-04]
-    python -m scripts.nfl_rebuild rebuild    --nfl-dir data/NFL --slate 2026-10-04 [--tape FILE]
+    python -m scripts.nfl_rebuild rebuild    --nfl-dir data/NFL --slate 2026-10-04
 
 ``admissible`` is read-only. It prints each expected slate's verdict, with the
 reasons for any refusal. Exit 0 when every listed slate is admissible, 1 otherwise.
@@ -45,7 +45,7 @@ def _admissible(args: argparse.Namespace) -> int:
 def _rebuild(args: argparse.Namespace) -> int:
     try:
         m = rb.rebuild_slate(Path(args.nfl_dir), args.slate, rebuild_id=args.rebuild_id,
-                             tape=args.tape, code_version=_code_version())
+                             code_version=_code_version())
     except rb.RebuildRefused as exc:
         print(f"REFUSED {exc}", file=sys.stderr)
         return 2
@@ -69,7 +69,6 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--nfl-dir", default="data/NFL")
     r.add_argument("--slate", required=True)
     r.add_argument("--rebuild-id")
-    r.add_argument("--tape", help="prior_week.json to copy in (point-in-time gated)")
     r.set_defaults(func=_rebuild)
     return p
 

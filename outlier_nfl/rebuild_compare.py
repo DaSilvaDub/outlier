@@ -22,6 +22,8 @@ Cause labels (a difference can carry several):
 - ``verdict_rule``: the verdict changed while none of the above did.
 - ``sportsbook_edge_sign_flip``: the sign of the sportsbook edge flipped.
 - ``not_rebuilt_as_candidate`` / ``new_candidate``: the pick exists on one side only.
+- ``evidence_changed:nflverse`` / ``:weather`` / ``:injury``: added by the rebuild
+  (``context``) to the causes those sources explain.
 """
 
 from __future__ import annotations
@@ -125,7 +127,9 @@ def _view(p: dict[str, Any] | None) -> dict[str, Any] | None:
                                   "ev_per_unit")} | {"sportsbook_edge": sportsbook_edge(p)}
 
 
-def compare_cards(original: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str, Any]:
+def compare_cards(original: dict[str, Any], rebuilt: dict[str, Any],
+                  context: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    """``context`` maps a cause to extra labels that explain it (``rebuild.context_labels``)."""
     diffs: list[dict[str, Any]] = []
     unchanged = 0
     for a, b in _match(list(original.get("picks") or []), list(rebuilt.get("picks") or [])):
@@ -137,6 +141,10 @@ def compare_cards(original: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str
             if not cause and a.get("verdict") == b.get("verdict"):
                 unchanged += 1
                 continue
+        for c in list(cause):
+            for extra in (context or {}).get(c, []):
+                if extra not in cause:
+                    cause.append(extra)
         ref = a or b or {}
         diffs.append({
             "event_id": ref.get("event_id"), "player_name": ref.get("player_name"),
@@ -145,8 +153,7 @@ def compare_cards(original: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str
             "verdict": [a.get("verdict") if a else None, b.get("verdict") if b else None],
             "original": _view(a), "rebuilt": _view(b),
         })
-    cause_counts = Counter(c.split(":")[0] if c.startswith("evidence_changed") else c
-                           for d in diffs for c in d["causes"])
+    cause_counts = Counter(c for d in diffs for c in d["causes"])
     transitions = Counter(f"{d['verdict'][0]}->{d['verdict'][1]}" for d in diffs
                           if d["verdict"][0] != d["verdict"][1])
     neg_validated = [
