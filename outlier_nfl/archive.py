@@ -35,7 +35,7 @@ carry ``run_id``. The nflverse cache files ``stats_player_week_<season>.csv`` an
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import hashlib
 import json
@@ -53,9 +53,12 @@ PREGAME_ROLES = {
     "run_manifest": "manifest.json",
 }
 NFLVERSE_ROLE = "nflverse_boxscore"
-ROLES = (*PREGAME_ROLES, NFLVERSE_ROLE)
+TAPE_ROLE = "tape"
+# Optional per run: runs archived before the tape role landed have none, and a run
+# whose tape bytes are gone (prior_week.json rewritten since) gets none either.
+ROLES = (*PREGAME_ROLES, NFLVERSE_ROLE, TAPE_ROLE)
 REQUIRED_SLATE_ROLES = tuple(PREGAME_ROLES)
-SOURCES = ("outlier_api", "run_writer", "nflverse")
+SOURCES = ("outlier_api", "run_writer", "nflverse", "tape")
 
 _SLATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_[A-Za-z0-9_-]+)?$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -251,6 +254,7 @@ class RecordResult:
     already: list[ArchiveEntry]
     conflicts: list[str]
     missing: list[str]
+    notes: list[str] = field(default_factory=list)
 
 
 def _empty_result() -> RecordResult:
@@ -305,7 +309,53 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
             result.missing.append(f"{run_id}/{name}: {exc}")
             continue
         (result.recorded if new else result.already).append(entry)
+    _record_run_tape(root, run_id, manifest, slate_key, season, captured, result)
     return result
+
+
+TAPE_ARCHIVE_DIR = "archive/tape"
+
+
+def _tape_candidates(root: Path) -> list[Path]:
+    """Every tape a run could have read: shared tapes and run-scoped replay tapes."""
+    tape_dir = root / "tape"
+    shared = [tape_dir / "prior_week.json", tape_dir / "latest.json"]
+    replay = sorted((tape_dir / "replay").rglob("*.json")) if (tape_dir / "replay").is_dir() else []
+    return [p for p in (*shared, *replay) if p.is_file()]
+
+
+def _record_run_tape(root: Path, run_id: str, manifest: dict[str, Any], slate: Any,
+                     season: Any, captured: Any, result: RecordResult) -> None:
+    """Copy the tape this run admitted into ``archive/tape/<sha256>/<name>``.
+
+    The run manifest's ``sources`` holds the admitted tape's sha256
+    (``matchup.load_tape_envelope``), but not its path. The tape is tied to the run
+    only by finding a tape file whose bytes hash to exactly that value. If none is
+    found (the shared tape was rewritten since), or the run admitted no local tape
+    (refused, unavailable, or the packaged fixture tape), nothing is recorded.
+    """
+    tape = next((s for s in manifest.get("sources") or []
+                 if isinstance(s, dict) and s.get("name") == "tape"), None)
+    want = tape.get("sha256") if tape else None
+    if not tape or tape.get("status") != "AVAILABLE" or not isinstance(want, str) \
+            or tape.get("reason") == "packaged fixture tape":
+        return
+    for candidate in _tape_candidates(root):
+        data = candidate.read_bytes()  # read once; hash, check and copy this buffer
+        if hashlib.sha256(data).hexdigest() != want:
+            continue
+        dest = root / TAPE_ARCHIVE_DIR / want / candidate.name
+        try:
+            _write_once(dest, data)
+            entry, new = record_file(root, dest, role=TAPE_ROLE, slate=slate, season=season,
+                                     captured_at=captured, run_id=run_id, source="tape")
+        except ArchiveConflict as exc:
+            result.conflicts.append(str(exc))
+            return
+        (result.recorded if new else result.already).append(entry)
+        return
+    result.notes.append(f"{run_id}: its tape (sha256 {want[:12]}...) is no longer on disk; "
+                        "no tape archived for this run")
 
 
 def _pointer_hashes(nfl_dir: Path, run_id: str) -> list[tuple[Path, str | None]]:
@@ -346,6 +396,7 @@ def record_pointed_runs(nfl_dir: Path | str) -> RecordResult:
         total.already += r.already
         total.conflicts += r.conflicts
         total.missing += r.missing
+        total.notes += r.notes
     return total
 
 
