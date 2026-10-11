@@ -110,8 +110,12 @@ class NflPipeline:
         client: OutlierNflApiClient | None = None,
         data_dir: Path | str = "data",
         clock: Callable[[], datetime] | None = None,
+        inputs: Any = None,
     ) -> None:
         self.client: OutlierNflApiClient | None = client
+        # Offline inputs for a rebuild (``rebuild.PinnedInputs``): when set, external
+        # metrics, usage and weather come only from it, never from the network.
+        self.inputs: Any = inputs
         # Wall clock (injectable for tests and replays); decides publication with as_of.
         self.clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
         self.data_dir: Path = Path(data_dir).resolve()
@@ -400,7 +404,8 @@ class NflPipeline:
                         season_year,
                         slate_date=target_date,
                         as_of_utc=ctx.as_of_utc,
-                        client=ExternalClient(cache_dir=self.nfl_dir / "cache" / "external"),
+                        client=(self.inputs.external_client() if self.inputs is not None
+                                else ExternalClient(cache_dir=self.nfl_dir / "cache" / "external")),
                     )
                     external_metrics = loaded.records
                     phase_records = loaded.phase_records
@@ -497,7 +502,8 @@ class NflPipeline:
         # Game-day weather: open-air forecasts add pass-volume haircut signals.
         if offline_fixtures_dir is None and matchup_scripts:
             try:
-                weathers = load_slate_weather(
+                weathers = (self.inputs.weather if self.inputs is not None
+                            else load_slate_weather)(
                     slate_events,
                     [r for r in external_metrics if r.get("source") == "schedule"],
                 )
@@ -528,7 +534,8 @@ class NflPipeline:
             sources.append(SourceRecord("usage", "UNAVAILABLE", "missing verified cutoff"))
         elif offline_fixtures_dir is None and matchup_scripts and ctx.season is not None:
             try:
-                profiles = load_usage(ctx.season, before_week)
+                profiles = (load_usage(ctx.season, before_week, self.inputs.fetch_rows)
+                            if self.inputs is not None else load_usage(ctx.season, before_week))
                 event_by_team: dict[str, str] = {}
                 for script in matchup_scripts:
                     event_by_team[script.home_team] = script.event_id
