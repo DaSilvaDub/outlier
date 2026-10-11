@@ -136,6 +136,8 @@ class LockTimeout(TimeoutError):
 
 LOCK_TIMEOUT_SECONDS = 30.0
 LOCK_STALE_SECONDS = 600.0
+_clock = time.monotonic  # module-level so tests can drive the lock deadline
+_sleep = time.sleep
 
 
 @contextmanager
@@ -156,23 +158,21 @@ def file_lock(
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     lock = target.with_name(target.name + ".lock")
-    deadline = time.monotonic() + timeout
+    deadline = _clock() + timeout
     while True:
+        # Checked first on every pass, so no branch below can spin past the
+        # deadline (a stale lock Windows refuses to move included).
+        if _clock() >= deadline:
+            raise LockTimeout(
+                f"Lock file {lock} has been held for more than {timeout:g}s. Another run "
+                f"may be writing; if no other run is, delete {lock} and rerun."
+            )
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            try:
-                age = time.time() - lock.stat().st_mtime
-            except OSError:
-                continue  # released between open and stat; retry at once
-            if age > stale_after:
-                logger.warning("Removing stale lock %s (%.0fs old)", lock, age)
-                _unlink_with_retry(lock)
-                continue
-            if time.monotonic() >= deadline:
-                raise LockTimeout(f"{lock} held for more than {timeout:.0f}s; "
-                                  "another run is writing, or delete it if none is") from None
-            time.sleep(poll)
+            if _steal_if_stale(lock, stale_after):
+                continue  # this waiter cleared it; try to create at once
+            _sleep(poll)
             continue
         try:
             os.write(fd, f"{os.getpid()} {datetime.now(timezone.utc).isoformat()}\n".encode())
@@ -183,6 +183,55 @@ def file_lock(
         yield lock
     finally:
         _unlink_with_retry(lock)
+
+
+def _lock_age(path: Path) -> float | None:
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _steal_if_stale(lock: Path, stale_after: float) -> bool:
+    """Clear a stale ``lock``; True when the caller should retry creating it now.
+
+    The stale file is first renamed to a name unique to this waiter, so of
+    several waiters that saw it stale only the one whose rename succeeds goes
+    on. If the renamed file turns out fresh (another waiter replaced it in
+    between), it is put back and this waiter keeps waiting.
+    """
+    age = _lock_age(lock)
+    if age is None:
+        return True  # released meanwhile; the deadline still bounds retries
+    if age <= stale_after:
+        return False
+    grave = lock.with_name(f"{lock.name}.stale.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        os.replace(lock, grave)
+    except FileNotFoundError:
+        return True  # another waiter moved it first
+    except OSError as exc:
+        logger.warning(
+            "Stale lock file %s could not be removed (%s); if no other run is writing, "
+            "delete it.", lock, exc,
+        )
+        return False
+    grave_age = _lock_age(grave)
+    if grave_age is not None and grave_age <= stale_after:
+        # Not the stale file we judged: hand it back unless someone recreated it.
+        try:
+            os.link(grave, lock)
+        except OSError:
+            pass
+        _unlink_with_retry(grave)
+        return False
+    logger.warning(
+        "Removed stale lock file %s (%.0fs old, limit %.0fs), left by a crashed run.",
+        lock, age, stale_after,
+    )
+    if not _unlink_with_retry(grave):
+        logger.warning("Could not delete moved stale lock %s; it no longer blocks writers.", grave)
+    return True
 
 
 def unique_temp_path(target: Path) -> Path:

@@ -227,3 +227,140 @@ def test_refresh_prior_week_tape_honours_path(tmp_path, monkeypatch):
     got = tape_nflverse.refresh_prior_week_tape(tmp_path, 2026, path=target)
     assert got == target and target.exists()
     assert not (tmp_path / "tape" / "prior_week.json").exists()
+
+
+# --- review round 2: deadline always wins; one stale-lock thief ---------------
+
+class _Clock:
+    def __init__(self, step=0.05):
+        self.t, self.step = 0.0, step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
+def _stale_lock(tmp_path):
+    target = tmp_path / "nfl_prop_snapshots_2026-09-07.jsonl"
+    lock = tmp_path / (target.name + ".lock")
+    lock.write_text("crashed", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    return target, lock
+
+
+def test_stale_lock_that_cannot_be_moved_times_out(tmp_path, monkeypatch):
+    from outlier_nfl import utils
+
+    target, lock = _stale_lock(tmp_path)
+    clock = _Clock()
+    monkeypatch.setattr(utils, "_clock", clock)
+    monkeypatch.setattr(utils, "_sleep", lambda s: None)
+    real_replace = os.replace
+
+    def refuse(src, dst):  # Windows: a scanner holds the stale lock open
+        if Path(src) == lock:
+            raise PermissionError("in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(utils.os, "replace", refuse)
+    with pytest.raises(utils.LockTimeout) as err:
+        with utils.file_lock(target, timeout=1.0, stale_after=60):
+            pass
+    assert clock.t < 1.2  # gave up at the deadline, no real sleeping
+    assert str(lock) in str(err.value) and "delete" in str(err.value)
+    assert lock.exists()
+
+
+def test_failed_delete_of_moved_stale_lock_still_proceeds(tmp_path, monkeypatch):
+    from outlier_nfl import utils
+
+    target, lock = _stale_lock(tmp_path)
+    monkeypatch.setattr(utils, "_unlink_with_retry", lambda p, **k: False)
+    monkeypatch.setattr(utils, "_sleep", lambda s: None)
+    with utils.file_lock(target, timeout=1.0, stale_after=60):
+        assert lock.read_text("utf-8") != "crashed"
+
+
+def test_stale_lock_warning_names_the_file(tmp_path, caplog):
+    from outlier_nfl import utils
+
+    target, lock = _stale_lock(tmp_path)
+    with caplog.at_level("WARNING"), utils.file_lock(target, timeout=1.0, stale_after=60):
+        pass
+    assert str(lock) in caplog.text and "stale" in caplog.text
+
+
+def test_lock_refreshed_between_stat_and_rename_is_handed_back(tmp_path, monkeypatch):
+    from outlier_nfl import utils
+
+    _, lock = _stale_lock(tmp_path)
+    real_replace = os.replace
+
+    def other_waiter_won(src, dst):
+        if Path(src) == lock:
+            lock.write_text("waiter B", encoding="utf-8")  # B replaced it with a fresh lock
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(utils.os, "replace", other_waiter_won)
+    assert utils._steal_if_stale(lock, 60) is False
+    assert lock.read_text("utf-8") == "waiter B"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [lock.name]
+
+
+def test_only_one_of_two_waiters_steals_a_stale_lock(tmp_path):
+    from outlier_nfl import utils
+
+    _, lock = _stale_lock(tmp_path)
+    assert utils._steal_if_stale(lock, 60) is True  # waiter A moved it
+    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # and took the lock
+    os.close(fd)
+    # Waiter B also saw the old file as stale, but now finds A's fresh lock.
+    assert utils._steal_if_stale(lock, 60) is False
+    assert lock.exists()
+
+
+def test_two_threads_on_a_stale_lock_never_overlap(tmp_path):
+    from outlier_nfl import utils
+
+    target, _ = _stale_lock(tmp_path)
+    inside: list[int] = []
+    overlap: list[bool] = []
+
+    def worker():
+        with utils.file_lock(target, timeout=5, stale_after=60, poll=0.01):
+            inside.append(1)
+            overlap.append(len(inside) > 1)
+            time.sleep(0.05)
+            inside.pop()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert overlap == [False, False]
+
+
+def test_snapshot_lock_timeout_withdraws_card_and_names_the_lock(tmp_path, caplog, monkeypatch):
+    from outlier_nfl import pipeline, utils
+
+    lock = tmp_path / "x.jsonl.lock"
+
+    def blocked(*a, **k):
+        raise utils.LockTimeout(
+            f"Lock file {lock} has been held for more than 30s. Another run may be writing; "
+            f"if no other run is, delete {lock} and rerun.")
+
+    monkeypatch.setattr(pipeline, "append_snapshot", blocked)
+    nfl = pipeline.NflPipeline.__new__(pipeline.NflPipeline)
+    nfl.nfl_dir = tmp_path
+    nfl.normalized_dir = tmp_path
+    with caplog.at_level("ERROR"):
+        out = nfl._trace_best_bets(
+            target_date="2026-09-13", window=None, now_utc="2026-09-13T15:00:00+00:00",
+            as_of_utc=None, before_week=None, props_dict=[], scripts_records=[],
+            external_metrics=[], usage_players=[], weather_records=[], tape=None,
+            suffix="2026-09-13", publish=False, publish_latest=False, writer=type("W", (), {"run_id": "RUN-1"})())
+    assert "error" in out
+    assert str(lock) in caplog.text and "delete" in caplog.text
