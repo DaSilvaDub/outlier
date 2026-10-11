@@ -33,8 +33,10 @@ from outlier_nfl.enrich_close import (
     CLOSE_SOURCE_BOOK,
     identities_conflict,
     merge_identities,
+    owners_conflict,
     row_identity,
 )
+from outlier_nfl.config import normalize_team
 from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.utils import safe_read_json
 
@@ -364,6 +366,8 @@ def map_event_odds_to_close_records(
                     "line": line,
                     "position": position,
                     "matchup": matchup,
+                    "home_team": normalize_team(home),
+                    "away_team": normalize_team(away),
                     "event_id": odds_event_id,
                     "commence_time": commence,
                     "close_line": line,
@@ -440,7 +444,11 @@ def align_close_records_to_predictions(
         row = dict(raw)
         short_key = _short_join_key(row)
         hit = None if short_key in ambiguous else by_short.get(short_key)
-        if hit is not None:
+        if hit is not None and owners_conflict(row, hit):
+            # Known different game or date: never stamp its event id here.
+            row["aligned_to_predictions"] = False
+            row["alignment_skipped"] = "incompatible_owner"
+        elif hit is not None:
             if hit.get("matchup"):
                 row["matchup"] = hit.get("matchup")
             if hit.get("event_id"):

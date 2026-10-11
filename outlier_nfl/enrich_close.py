@@ -18,7 +18,9 @@ Honest contract:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from outlier_nfl.calibration import (
@@ -37,6 +39,7 @@ from outlier_nfl.projection import (
     attach_projection_model_p_record,
     load_week_stats_index,
 )
+from outlier_nfl.config import normalize_team
 from outlier_nfl.utils import safe_read_json, safe_write_json
 
 CLOSE_SOURCE_SNAPSHOT = "pregame_snapshot_best_odds"
@@ -107,6 +110,54 @@ def row_identity(row: Mapping[str, Any]) -> tuple[str, str]:
     )
 
 
+_ET = ZoneInfo("America/New_York")
+# Fields a close row keeps so a later join can check which game it belongs to.
+OWNER_FIELDS = ("home_team", "away_team", "commence_time", "event_starts_at", "matchup")
+
+
+def row_owner(row: Mapping[str, Any]) -> tuple[frozenset[str] | None, str | None]:
+    """``(team pair, ET game date)`` the row is known to belong to; ``None`` = unknown.
+
+    Teams come from ``home_team``/``away_team`` when both normalize, otherwise
+    from the two sides of ``matchup`` ("BAL @ KC" or "Baltimore Ravens @ Kansas
+    City Chiefs"). The date is the kickoff's America/New_York calendar day from
+    ``commence_time`` or ``event_starts_at``. Provider event ids are not owners:
+    Odds-API and Outlier ids differ for the same game.
+    """
+    home = normalize_team(row.get("home_team"))
+    away = normalize_team(row.get("away_team"))
+    teams: frozenset[str] | None = None
+    if home and away:
+        teams = frozenset((home, away))
+    else:
+        parts = str(row.get("matchup") or "").split("@")
+        if len(parts) == 2:
+            a, b = normalize_team(parts[0].strip()), normalize_team(parts[1].strip())
+            if a and b:
+                teams = frozenset((a, b))
+    day: str | None = None
+    raw = row.get("commence_time") or row.get("event_starts_at")
+    if raw:
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
+                day = ts.astimezone(_ET).date().isoformat()
+        except ValueError:
+            day = None
+    return teams, day
+
+
+def owners_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Whether two rows are *known* to belong to different games.
+
+    Unknown on either side is not a conflict; a known different team pair or a
+    known different kickoff date is.
+    """
+    lt, ld = row_owner(left)
+    rt, rd = row_owner(right)
+    return bool((lt and rt and lt != rt) or (ld and rd and ld != rd))
+
+
 def identities_conflict(left: tuple[str, str], right: tuple[str, str]) -> bool:
     """Whether two rows under one key are *known* to be different players.
 
@@ -162,6 +213,8 @@ def index_book_close_records(
             "close_implied": close_implied,
             "close_source": CLOSE_SOURCE_BOOK,
         }
+        # Keep the owner so lookup can refuse a close from another game/date.
+        payload.update({k: raw.get(k) for k in OWNER_FIELDS if raw.get(k) is not None})
         identity = row_identity(raw)
         full_key = _row_match_key(raw)
         short_key = _row_match_key_short(raw)
@@ -200,11 +253,18 @@ def lookup_book_close_row(
     book_close_index: Mapping[tuple[Any, ...], Mapping[str, Any]],
     record: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
-    """Prefer full key, then short key (player, market, line, position)."""
+    """Prefer full key, then short key (player, market, line, position).
+
+    A hit whose known game (team pair or kickoff date) contradicts the record's
+    is refused: the short key carries no game, so without this a lone KC@BAL
+    close would attach to a same-named SF@LAR prop or another week's.
+    """
     hit = book_close_index.get(_row_match_key(record))
-    if hit is not None:
-        return hit
-    return book_close_index.get(_row_match_key_short(record))
+    if hit is None:
+        hit = book_close_index.get(_row_match_key_short(record))
+    if hit is not None and owners_conflict(hit, record):
+        return None
+    return hit
 
 
 def load_book_close_feed(path: Path) -> dict[tuple[Any, ...], dict[str, Any]]:
