@@ -195,7 +195,7 @@ def test_identity_extras_add_foreign_and_duplicate_props():
 
 
 def test_phase6_steps_follow_a13(tmp_path):
-    assert snap.HARNESS_VERSION == 10
+    assert snap.HARNESS_VERSION >= 10
     a = [s["name"] for s in snap.STEPS["A"]]
     i = a.index("A13_schema_integrity")
     assert a[i + 1:i + 4] == ["A14_close_ownership", "A15_close_provenance", "A16_settle_clv"]
@@ -204,3 +204,15 @@ def test_phase6_steps_follow_a13(tmp_path):
     math = tmp_path / "data" / "NFL" / "math"
     assert (math / "close_ownership.json").exists() and (math / "close_provenance.json").exists()
     assert len(snap._SETTLE_ROWS["clv"]) == 4
+
+
+def test_phase7a_steps_follow_a16(tmp_path):
+    assert snap.HARNESS_VERSION == 11
+    a = [s["name"] for s in snap.STEPS["A"]]
+    i = a.index("A16_settle_clv")
+    assert a[i + 1:i + 3] == ["A17_alt_floor_eligibility", "A18_export_explicit_date"]
+    assert snap._run_alt_floor_step(tmp_path) is None
+    assert snap._run_export_pack_step(tmp_path, Path(snap.__file__).resolve().parents[1]) is None
+    math = tmp_path / "data" / "NFL" / "math"
+    assert (math / "alt_floor_eligibility.json").exists()
+    assert (math / "export_explicit_date.json").exists()

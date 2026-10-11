@@ -628,6 +628,7 @@ class NflPipeline:
         anchors_payload = {
             "date": target_date,
             "window": window,
+            "run_id": run_id,  # F25: the export carries the run that produced it
             "updated_at": now_utc,
             "count": len(anchors),
             "actionable_count": len(actionable_anchors),
@@ -759,6 +760,11 @@ class NflPipeline:
                 tapes=tapes,
                 write_latest=publish_latest,
                 static_depth=ctx.mode == "fixture",
+                # F23: executable floors need a pre-kickoff quote and an admitted
+                # injury report that does not list the player.
+                as_of_utc=ctx.as_of_utc,
+                inactive_by_team=tape.injury_report(),
+                require_injury_evidence=True,
             )
             if publish:
                 writer.stage_tree("exports", self.data_dir / "NFL" / "exports")

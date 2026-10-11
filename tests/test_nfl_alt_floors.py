@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -42,14 +41,14 @@ def test_extract_book_quote():
     assert name == "HARDROCK"
     assert odds == -225
 
-    # Alias target match (HARDROCK_R)
+    # Hardrock R is a separate book, not the target (#229 review): retail order wins
     books_alias = [
         {"book": "DRAFTKINGS", "odds": -200},
         {"book": "HARDROCK_R", "odds": -230},
     ]
     name_alias, odds_alias = _extract_book_quote(books_alias, target_book="HARDROCK")
-    assert name_alias == "HARDROCK"
-    assert odds_alias == -230
+    assert name_alias == "DRAFTKINGS"
+    assert odds_alias == -200
 
     # Fallback when target book is absent
     books_no_hr = [
@@ -70,6 +69,7 @@ def test_discover_alt_floors_dynamic_lines():
             "team": "CIN",
             "opponent": "JAX",
             "matchup": "CIN vs JAX",
+            "event_id": "evt-cinvsjax",
             "market": "PASS_YDS",
             "position": "OVER",
             "line": 274.5,
@@ -84,6 +84,7 @@ def test_discover_alt_floors_dynamic_lines():
             "team": "CIN",
             "opponent": "JAX",
             "matchup": "CIN vs JAX",
+            "event_id": "evt-cinvsjax",
             "market": "PASS_YDS",
             "position": "OVER",
             "line": 224.5,
@@ -100,6 +101,7 @@ def test_discover_alt_floors_dynamic_lines():
             "team": "BAL",
             "opponent": "TEN",
             "matchup": "BAL vs TEN",
+            "event_id": "evt-balvsten",
             "market": "RUSH_YDS",
             "position": "OVER",
             "line": 99.5,
@@ -114,6 +116,7 @@ def test_discover_alt_floors_dynamic_lines():
             "team": "BAL",
             "opponent": "TEN",
             "matchup": "BAL vs TEN",
+            "event_id": "evt-balvsten",
             "market": "RUSH_YDS",
             "position": "OVER",
             "line": 64.5,
@@ -130,6 +133,7 @@ def test_discover_alt_floors_dynamic_lines():
             "team": "BAL",
             "opponent": "TEN",
             "matchup": "BAL vs TEN",
+            "event_id": "evt-balvsten",
             "market": "RUSH_YDS",
             "position": "OVER",
             "line": 34.5,
@@ -211,7 +215,7 @@ def test_ranking_top3_and_master_top9():
         ],
     }
 
-    top3, master = rank_alt_floors(candidates)
+    top3, master, _inventory = rank_alt_floors(candidates)
 
     # Top 3 per category
     assert len(top3["PASS_YDS"]) == 3
@@ -362,6 +366,7 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
             "team": "JAX",
             "opponent": "CIN",
             "matchup": "JAX @ CIN",
+            "event_id": "evt-jaxcin",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 49.5,
@@ -376,6 +381,7 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
             "team": "JAX",
             "opponent": "CIN",
             "matchup": "JAX @ CIN",
+            "event_id": "evt-jaxcin",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 79.5,
@@ -389,6 +395,7 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
             "team": "JAX",
             "opponent": "CIN",
             "matchup": "JAX @ CIN",
+            "event_id": "evt-jaxcin",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 49.5,
@@ -403,6 +410,7 @@ def test_depth_chart_wr_hierarchy_and_road_rush_penalty():
             "team": "JAX",
             "opponent": "CIN",
             "matchup": "JAX @ CIN",
+            "event_id": "evt-jaxcin",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 79.5,
@@ -495,7 +503,7 @@ def test_windowed_run_does_not_clobber_the_undated_csv():
 
 def test_alt_floors_juice_cap_and_play_type():
     """Verify that odds worse than -250 are restricted to PARLAY_ONLY while >= -250 are STRAIGHT."""
-    from outlier_nfl.alt_floors import MAX_STRAIGHT_ODDS, PLAY_TYPE_PARLAY, PLAY_TYPE_STRAIGHT
+    from outlier_nfl.alt_floors import PLAY_TYPE_PARLAY, PLAY_TYPE_STRAIGHT
 
     props = [
         # Bucky Irving: Hard Rock -325 (worse than -250 -> PARLAY_ONLY)
@@ -504,6 +512,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "TB",
             "opponent": "DAL",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "RUSH_YDS",
             "position": "OVER",
             "line": 39.5,
@@ -519,6 +528,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "TB",
             "opponent": "DAL",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "RUSH_YDS",
             "position": "OVER",
             "line": 49.5,
@@ -532,6 +542,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "DAL",
             "opponent": "TB",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 49.5,
@@ -547,6 +558,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "DAL",
             "opponent": "TB",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "REC_YDS",
             "position": "OVER",
             "line": 89.5,
@@ -560,6 +572,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "DAL",
             "opponent": "TB",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "PASS_YDS",
             "position": "OVER",
             "line": 214.5,
@@ -575,6 +588,7 @@ def test_alt_floors_juice_cap_and_play_type():
             "team": "DAL",
             "opponent": "TB",
             "matchup": "TB @ DAL",
+            "event_id": "evt-tbdal",
             "market": "PASS_YDS",
             "position": "OVER",
             "line": 249.5,
@@ -599,7 +613,7 @@ def test_alt_floors_juice_cap_and_play_type():
     assert pass_prop.play_type == PLAY_TYPE_STRAIGHT
 
     # Verify Markdown rendering incorporates play_type badges
-    top3, master = rank_alt_floors(candidates)
+    top3, master, _inventory = rank_alt_floors(candidates)
     md = render_alt_floors_markdown(top3, master, date_str="2026-10-08")
     assert "| `PARLAY_ONLY` |" in md
     assert "| `STRAIGHT` |" in md
@@ -628,3 +642,127 @@ def test_empty_evidenced_starter_set_blocks_qb_floors() -> None:
               "books": [{"book": "HARDROCK", "odds": -200}]}]
     assert len(discover_alt_floor_candidates(props).get("PASS_YDS", [])) == 1  # unrestricted
     assert discover_alt_floor_candidates(props, starting_qbs=set()).get("PASS_YDS", []) == []
+
+
+# --- F23 (#229): executable floors need a real quote, identity and injury evidence ---
+
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+import nfl_snapshot_diff as _snap  # noqa: E402
+
+AS_OF = "2026-09-13T15:00:00+00:00"
+OK = {"BAL": [], "KC": []}
+
+
+def _scan(props, **kw):
+    kw.setdefault("inactive_by_team", OK)
+    cands = discover_alt_floor_candidates(
+        props, as_of_utc=AS_OF, require_injury_evidence=True, **kw)
+    return rank_alt_floors(cands)
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("missing_odds", "no_quote"),
+    ("nan_odds", "nonfinite_quote"),
+    ("stale_quote_after_kickoff", "stale_quote"),
+    ("inactive_rb", "inactive_player"),
+    ("target_book_absent_dfs_only", "no_sportsbook_quote"),
+    ("unresolved_team", "missing_identity"),
+    ("no_injury_report", "injury_unverified"),
+])
+def test_ineligible_floor_is_inventory_never_ranked(case, reason):
+    props, extra = _snap.alt_floor_cases()[case]
+    top3, master, inventory = _scan(props, **extra)
+    assert master == [] and all(not v for v in top3.values())
+    assert [(i.player_name, i.inventory_reason, i.actionable) for i in inventory] == [
+        ("Derrick Henry", reason, False)]
+
+
+def test_no_quote_has_no_invented_implied_probability():
+    props, extra = _snap.alt_floor_cases()["missing_odds"]
+    _top3, _master, [inv] = _scan(props, **extra)
+    assert inv.implied_probability is None and inv.target_odds is None
+
+
+def test_nan_odds_never_reach_the_record():
+    props, extra = _snap.alt_floor_cases()["nan_odds"]
+    _top3, _master, [inv] = _scan(props, **extra)
+    assert inv.target_odds is None
+
+
+def test_same_name_in_two_events_is_two_players():
+    props, extra = _snap.alt_floor_cases()["same_name_two_events"]
+    _top3, master, inventory = _scan(props, **extra)
+    assert sorted((m.event_id, m.team) for m in master) == [("e-bal-kc", "BAL"), ("e-other", "KC")]
+    assert inventory == []
+
+
+def test_retail_fallback_book_stays_executable_and_named():
+    props, extra = _snap.alt_floor_cases()["target_book_absent_retail"]
+    _top3, [m], _inv = _scan(props, **extra)
+    assert (m.target_book, m.target_odds, m.actionable) == ("DRAFTKINGS", -350, True)
+
+
+def test_unresolved_team_row_does_not_abort_the_scan_and_is_inventory():
+    """#214's regression, plus F23: the unattributed back is inventory only."""
+    props = _snap._floor_pair(team=None, player_id="00-UNK", player="Unattributed Back") + (
+        _snap._floor_pair())
+    _top3, master, inventory = _scan(props)
+    assert [m.player_name for m in master] == ["Derrick Henry"]
+    assert [(i.player_name, i.inventory_reason) for i in inventory] == [
+        ("Unattributed Back", "missing_identity")]
+
+
+def test_export_lists_inventory_apart_from_ranked_floors(tmp_path):
+    props, extra = _snap.alt_floor_cases()["inactive_rb"]
+    top3, master, inventory = _scan(props, **extra)
+    export_alt_floors(top3, master, tmp_path / "x", tmp_path / "r", "2026-09-13",
+                      inventory=inventory)
+    payload = json.loads((tmp_path / "x" / "nfl_alt_floors_2026-09-13.json").read_text())
+    assert payload["count"] == 0 and payload["inventory_count"] == 1
+    assert payload["inventory"][0]["inventory_reason"] == "inactive_player"
+    md = (tmp_path / "r" / "2026-09-13_Alt_Floors.md").read_text(encoding="utf-8")
+    assert "Non-actionable inventory" in md and "`inactive_player`" in md
+
+
+@pytest.mark.parametrize("raw,canonical", [
+    ("Hard Rock", "HARDROCK"), ("hardrock", "HARDROCK"), ("HARD_ROCK", "HARDROCK")])
+def test_display_name_matches_the_target(raw, canonical):
+    assert _extract_book_quote([{"book": raw, "odds": -300}]) == (canonical, -300)
+
+
+@pytest.mark.parametrize("raw,canonical", [
+    ("DraftKings", "DRAFTKINGS"), ("ESPN Bet", "ESPNBET"), ("Hardrock R", "HARDROCK_R")])
+def test_display_names_count_as_retail_not_target(raw, canonical):
+    from outlier_nfl.alt_floors import floor_inventory_reason
+
+    assert _extract_book_quote([{"book": raw, "odds": -300}]) == (canonical, -300)
+    row = {"team": "BAL", "event_id": "e1", "player_name": "x"}
+    assert floor_inventory_reason(row, book=raw, odds=-300, target_book="HARDROCK") is None
+
+
+@pytest.mark.parametrize("case,book", [
+    ("display_name_hard_rock", "HARDROCK"), ("display_name_hardrock_r", "HARDROCK_R"),
+    ("display_name_espn_bet", "ESPNBET")])
+def test_display_name_floor_stays_executable(case, book):
+    props, extra = _snap.alt_floor_cases()[case]
+    _top3, [m], inventory = _scan(props, **extra)
+    assert (m.target_book, m.actionable) == (book, True) and inventory == []
+
+
+def test_dfs_display_name_is_still_inventory():
+    props, extra = _snap.alt_floor_cases()["display_name_prizepicks"]
+    _top3, master, [inv] = _scan(props, **extra)
+    assert master == [] and inv.inventory_reason == "no_sportsbook_quote"
+
+
+def test_all_inventory_without_injury_report_logs_a_warning(tmp_path, caplog):
+    props, _extra = _snap.alt_floor_cases()["no_injury_report"]
+    with caplog.at_level("WARNING", logger="outlier_nfl.alt_floors"):
+        generate_alt_floors_pipeline(
+            props, exports_dir=tmp_path / "x", reports_dir=tmp_path / "r",
+            date_str="2026-09-13", as_of_utc=AS_OF, inactive_by_team=None,
+            require_injury_evidence=True)
+    assert any("injury report was not admitted" in r.getMessage() for r in caplog.records)
