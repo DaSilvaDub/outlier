@@ -64,6 +64,9 @@ A19 builds usage profiles with expected stats for only some games ([100,100,0]
 actual vs two expected weeks), expected rows from another season, a traded
 player and a duplicated player-game. A20 smooths hit rates with and without a
 games-played count and enriches rows whose model_p is exactly 0 or 1.
+A21 exercises persistence: writers whose fixed ``.tmp`` name is already taken,
+a held and a stale writer lock, the same run ID appending snapshots twice, a
+replay ``--refresh-tape`` next to a shared tape, and settle onto existing outputs.
 A13 runs the schema checks: identical and conflicting
 duplicate team-game rows, a missing opponent row, a week-stats file without
 ``game_id``, and duplicate normalized props. B12 adds ``identity_extras`` to the
@@ -82,22 +85,25 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import copy
 import datetime as _dt
 import functools
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess  # nosec B404 - runs only git and this script, never shell input
 import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-HARNESS_VERSION = 12
+HARNESS_VERSION = 13
 SLATES = ("A", "B")
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "nfl_snapshot_work"
 SHIFT_DAYS = 21
@@ -149,6 +155,9 @@ STEPS: dict[str, list[dict[str, Any]]] = {
         {"name": "A19_usage_pairing", "clock": "2026-09-14T13:10:00+00:00", "kind": "usage"},
         {"name": "A20_model_p_smoothing", "clock": "2026-09-14T13:15:00+00:00",
          "kind": "model_p"},
+        # Phase 8 (#230): persistence serialization and output safety.
+        {"name": "A21_persistence", "clock": "2026-09-14T13:20:00+00:00",
+         "kind": "persistence"},
     ],
     "B": [
         {"name": "B1_full", "clock": "2026-10-04T16:00:00+00:00"},
@@ -1350,6 +1359,167 @@ def _run_model_p_step(work: Path) -> str | None:
     return None
 
 
+def _occupy(path: Path) -> None:
+    """Take a writer's fixed temp name with a directory, as a crashed/overlapping job would."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _persistence_cases(root: Path) -> dict[str, Any]:
+    """A21 (F27 + settle no-clobber + replay tape). Each case runs in its own dir."""
+    import importlib
+
+    from outlier_nfl import scorecard, snapshots, tape_nflverse, utils
+    from outlier_nfl.external import common as ext_common
+
+    def d(name: str) -> Path:
+        out = root / name
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    def ledger_tmp_taken() -> Any:
+        path = d("ledger") / "ledger.jsonl"
+        _occupy(path.with_suffix(path.suffix + ".tmp"))
+        rows = scorecard.update_ledger(path, [], "2026-09-13", event_ids=[])
+        return {"rows": len(rows), "written": path.exists()}
+
+    def tape_tmp_taken() -> Any:
+        path = d("tape") / "prior_week.json"
+        _occupy(path.with_name(path.name + ".tmp"))
+        tape_nflverse.write_tape(path, {"season": 2026, "teams": {}})
+        return {"written": json.loads(path.read_text("utf-8"))["season"]}
+
+    def cache_tmp_taken() -> Any:
+        client = ext_common.Client(cache_dir=d("cache"), ttl=0)
+        url = "https://example.invalid/x.csv"
+        _occupy(client._cache_path(url).with_suffix(".tmp"))
+        real = ext_common.fetch_bytes
+        ext_common.fetch_bytes = lambda u, t=120.0: b"a,b\n1,2\n"  # type: ignore[assignment]
+        try:
+            return {"rows": client.fetch_csv(url)}
+        finally:
+            ext_common.fetch_bytes = real  # type: ignore[assignment]
+
+    def lock_api() -> Any:
+        return {"file_lock": hasattr(utils, "file_lock"),
+                "LockTimeout": hasattr(utils, "LockTimeout")}
+
+    def held_lock_times_out() -> Any:
+        path = d("held") / "ledger.jsonl"
+        lock = path.with_name(path.name + ".lock")
+        lock.write_text("holder", encoding="utf-8")
+        with utils.file_lock(path, timeout=0.3):  # type: ignore[attr-defined]
+            return "acquired a held lock"
+
+    def stale_lock_recovered() -> Any:
+        path = d("stale") / "ledger.jsonl"
+        lock = path.with_name(path.name + ".lock")
+        lock.write_text("crashed holder", encoding="utf-8")
+        old = time.time() - 3600
+        os.utime(lock, (old, old))
+        with utils.file_lock(path, timeout=0.3, stale_after=60):  # type: ignore[attr-defined]
+            held = lock.exists()
+        return {"acquired": True, "lock_held_inside": held, "lock_left": lock.exists()}
+
+    def snapshot_same_run_twice() -> Any:
+        nfl = d("snap")
+        prop = {"is_consensus_line": True, "scope": "full_game", "event_id": "e1",
+                "player_name": "Patrick Mahomes", "market": "PASS_YDS", "position": "OVER",
+                "line": 255.5, "best_odds": -110, "books": [{"book": "fanduel", "odds": -110}]}
+        for run, taken in (("RUN-1", "2026-09-13T15:00:00+00:00"),
+                           ("RUN-1", "2026-09-13T15:00:00+00:00"),
+                           ("RUN-2", "2026-09-13T16:00:00+00:00")):
+            path = snapshots.append_snapshot(nfl, "2026-09-13", [prop], taken, run_id=run)
+        rows = [json.loads(x) for x in path.read_text("utf-8").splitlines() if x.strip()]
+        return {"rows": len(rows), "runs": [r.get("run_id") for r in rows]}
+
+    def ledger_same_run_twice() -> Any:
+        path = d("ledger2") / "ledger.jsonl"
+        g = scorecard.GradedSignal(
+            date="2026-09-13", week=1, event_id="e1", tag="SCRIPT", player="Patrick Mahomes",
+            team="KC", market="PASS_YDS", side="OVER", prior_avg=250.0, actual=270.0,
+            hit_vs_avg=True, line=255.5, hit_vs_line=True, run_id="RUN-1")
+        for _ in range(2):
+            rows = scorecard.update_ledger(path, [g], "2026-09-13")
+        return {"rows": len(rows)}
+
+    def replay_refresh_tape() -> Any:
+        from outlier_nfl import pipeline as pl
+
+        nfl = d("replay_tape")
+        shared = nfl / "tape" / "prior_week.json"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text(json.dumps({"season": 2026, "who": "live tape"}), encoding="utf-8")
+        writes: list[str] = []
+        real = pl.refresh_prior_week_tape
+
+        def fake(nfl_dir: Any, season: int, **kw: Any) -> Path:
+            target = Path(kw.get("path") or Path(nfl_dir) / "tape" / "prior_week.json")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps({"season": season, "who": "replay"}), encoding="utf-8")
+            writes.append(target.relative_to(nfl).as_posix())
+            return target
+
+        pl.refresh_prior_week_tape = fake  # type: ignore[assignment]
+        try:
+            got = pl._refresh_tape(nfl, "2026-10-04", None, "2026-10-04T16:00:00+00:00",
+                                   "replay")
+        finally:
+            pl.refresh_prior_week_tape = real  # type: ignore[assignment]
+        return {"shared_tape": json.loads(shared.read_text("utf-8"))["who"],
+                "written": [w.split("/")[0] + "/..." if w.startswith("runs/") else w
+                            for w in writes],
+                "returned_root_is_shared": (got is None or Path(got) == nfl)}
+
+    def settle_onto_existing() -> Any:
+        from outlier_nfl import settle
+
+        work = d("settle")
+        (work / "predictions.json").write_text(
+            json.dumps(settle_predictions_payload("main"), sort_keys=True), encoding="utf-8")
+        (work / "box.json").write_text(json.dumps({"events": [FROZEN_BOX_EVENT]}),
+                                       encoding="utf-8")
+        out = work / "settle.json"
+        out.write_text('{"keep": "previous"}', encoding="utf-8")
+        args = ["--predictions", str(work / "predictions.json"), "--boxscores",
+                str(work / "box.json"), "--source", "calibrated", "--all-calibrated",
+                "--out-json", str(out)]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            try:
+                code: Any = settle.main(args)
+            except SystemExit as exc:
+                code = exc.code
+        return {"exit": code, "previous_kept": out.read_text("utf-8") == '{"keep": "previous"}'}
+
+    importlib.invalidate_caches()
+    cases = {
+        "ledger_fixed_tmp_taken": ledger_tmp_taken,
+        "tape_fixed_tmp_taken": tape_tmp_taken,
+        "cache_fixed_tmp_taken": cache_tmp_taken,
+        "lock_api": lock_api,
+        "held_lock_times_out": held_lock_times_out,
+        "stale_lock_recovered": stale_lock_recovered,
+        "snapshot_same_run_twice": snapshot_same_run_twice,
+        "ledger_same_run_twice": ledger_same_run_twice,
+        "replay_refresh_tape": replay_refresh_tape,
+        "settle_onto_existing_out_json": settle_onto_existing,
+    }
+    out = {name: _try(fn) for name, fn in cases.items()}
+    # Error messages may carry the scratch path; keep the snapshot independent of it.
+    return json.loads(json.dumps(out, default=str).replace(str(root), "<scratch>"))
+
+
+def _run_persistence_step(work: Path) -> str | None:
+    """A21: F27 persistence and output safety, at library level."""
+    scratch = work / "data" / "NFL" / "persistence_scratch"
+    out = _persistence_cases(scratch)
+    shutil.rmtree(scratch, ignore_errors=True)
+    dest = work / "data" / "NFL" / "math" / "persistence.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return None
+
+
 def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
     """A3/A4: run the pricing-math tools on A1's outputs. Returns an error or None."""
     norm = work / "data" / "NFL" / "normalized"
@@ -1375,6 +1545,8 @@ def _run_math_step(step: dict[str, Any], work: Path, repo: Path) -> str | None:
         return _run_usage_step(work)
     if step["kind"] == "model_p":
         return _run_model_p_step(work)
+    if step["kind"] == "persistence":
+        return _run_persistence_step(work)
     if step["kind"] in ("settle", "scorecard"):
         return _run_settle_step(step, work)
     out_dir = work / "data" / "NFL" / "math"
