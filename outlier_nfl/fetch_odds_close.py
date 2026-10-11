@@ -20,6 +20,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -156,6 +157,34 @@ def outcome_to_position(name: str | None, *, market_outlier: str) -> str | None:
     return None
 
 
+# Declared close policy: a quote is a book close only when its own update time
+# is known, at or before kickoff, and no more than this far ahead of it.
+CLOSE_POLICY_MAX_LEAD = timedelta(minutes=60)
+CLOSE_SOURCE_ODDS_CAPTURE = "odds_capture"
+
+
+def _parse_ts(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else None
+
+
+def close_timing_status(quote_time: Any, commence_time: Any) -> str:
+    """``verified`` | ``early_quote`` | ``after_kickoff`` | ``unknown_timing``."""
+    quoted, kickoff = _parse_ts(quote_time), _parse_ts(commence_time)
+    if quoted is None or kickoff is None:
+        return "unknown_timing"
+    if quoted > kickoff:
+        return "after_kickoff"
+    if kickoff - quoted > CLOSE_POLICY_MAX_LEAD:
+        return "early_quote"
+    return "verified"
+
+
 def _short_join_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
     try:
         line = float(row["line"]) if row.get("line") is not None else None
@@ -290,8 +319,14 @@ def map_event_odds_to_close_records(
     event_payload: Mapping[str, Any],
     *,
     bookmaker_filter: Sequence[str] | None = None,
+    captured_at: str | None = None,
 ) -> list[dict[str, Any]]:
     """Flatten an Odds-API event-odds payload into close-feed records.
+
+    Only a quote that passes ``close_timing_status`` (update time known, at or
+    before kickoff, within ``CLOSE_POLICY_MAX_LEAD``) is labeled ``book_close``;
+    any other quote is ``odds_capture`` with its ``close_status`` and can never
+    outrank a verified quote for the same key, whatever its price.
 
     For each (player, outlier_market, line, position) keeps the **best** American
     price across bookmakers (Outlier ``best_odds`` convention). ``close_implied``
@@ -306,6 +341,10 @@ def map_event_odds_to_close_records(
     matchup = f"{away} @ {home}" if away and home else None
     odds_event_id = str(event_payload.get("id") or "").strip() or None
     commence = event_payload.get("commence_time")
+    if captured_at is None:
+        meta = event_payload.get("_historical_meta")
+        if isinstance(meta, Mapping) and meta.get("timestamp"):
+            captured_at = str(meta["timestamp"])  # historical snapshot time
 
     # Accumulate best price per short join key.
     best: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -360,6 +399,8 @@ def map_event_odds_to_close_records(
                 except (TypeError, ValueError):
                     continue
 
+                quote_time = market.get("last_update") or book.get("last_update")
+                status = close_timing_status(quote_time, commence)
                 row = {
                     "player_name": player,
                     "market": outlier_mkt,
@@ -373,14 +414,22 @@ def map_event_odds_to_close_records(
                     "close_line": line,
                     "close_odds": price,
                     "close_implied": american_to_implied_probability(price),
-                    "close_source": CLOSE_SOURCE_BOOK,
+                    "close_source": (
+                        CLOSE_SOURCE_BOOK if status == "verified" else CLOSE_SOURCE_ODDS_CAPTURE
+                    ),
+                    "close_status": status,
+                    "quote_time": quote_time,
+                    "captured_at": captured_at,
                     "bookmaker": book_key or book.get("title"),
                     "odds_api_market": market.get("key"),
                 }
                 key = _short_join_key(row)
                 prev = best.get(key)
-                if prev is None:
+                verified = status == "verified"
+                if prev is None or (verified and prev["close_status"] != "verified"):
                     best[key] = row
+                elif not verified and prev["close_status"] == "verified":
+                    pass
                 else:
                     chosen = better_american_odds(prev["close_odds"], price)
                     if chosen == price and price != prev["close_odds"]:

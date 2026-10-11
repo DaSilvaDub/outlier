@@ -211,8 +211,12 @@ def index_book_close_records(
             "close_line": close_line,
             "close_odds": close_odds,
             "close_implied": close_implied,
-            "close_source": CLOSE_SOURCE_BOOK,
+            # Preserve the feed's own label; never promote it to book_close here.
+            "close_source": raw.get("close_source") or None,
         }
+        payload.update(
+            {k: raw.get(k) for k in ("close_status", "quote_time") if raw.get(k) is not None}
+        )
         # Keep the owner so lookup can refuse a close from another game/date.
         payload.update({k: raw.get(k) for k in OWNER_FIELDS if raw.get(k) is not None})
         identity = row_identity(raw)
@@ -344,7 +348,14 @@ def attach_close_fields(
                 "snapshot odds as book_close."
             )
         feed_row = lookup_book_close_row(book_close_index, record)
-        if feed_row:
+        if feed_row and feed_row.get("close_source") != CLOSE_SOURCE_BOOK:
+            # A snapshot, synthetic, unverified or unlabeled close is not a book close.
+            record["close_line"] = None
+            record["close_odds"] = None
+            record["close_implied"] = None
+            record["close_source"] = None
+            record["close_skip_reason"] = "unverified_close_source"
+        elif feed_row:
             record["close_line"] = feed_row.get("close_line")
             record["close_odds"] = feed_row.get("close_odds")
             record["close_implied"] = feed_row.get("close_implied")
@@ -502,6 +513,7 @@ def enrich_prediction_payload(
     records_out: list[dict[str, Any]] = []
     n_model = 0
     n_book = 0
+    n_unverified = 0
     sources: dict[str, int] = {}
     for raw in records_in:
         if not isinstance(raw, Mapping):
@@ -524,6 +536,8 @@ def enrich_prediction_payload(
             sources[src] = sources.get(src, 0) + 1
         if row.get("close_source") == CLOSE_SOURCE_BOOK:
             n_book += 1
+        if row.get("close_skip_reason") == "unverified_close_source":
+            n_unverified += 1
         records_out.append(row)
     out = dict(payload)
     out["records"] = records_out
@@ -542,6 +556,7 @@ def enrich_prediction_payload(
     out["close_enrichment"] = {
         "mode": mode,
         "n_book_close": n_book,
+        "n_unverified_close_source": n_unverified,
         "note": close_note,
     }
     out["model_p_enrichment"] = {

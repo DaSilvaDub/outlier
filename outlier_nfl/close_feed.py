@@ -106,6 +106,9 @@ def write_close_feed(
     return payload
 
 
+CLOSE_SOURCE_SYNTHETIC = "synthetic_moved_close"
+
+
 def snapshot_rows_to_moved_close_feed(
     predictions_path: Path | str,
     *,
@@ -151,7 +154,7 @@ def snapshot_rows_to_moved_close_feed(
                 "close_line": line,
                 "close_odds": close_odds,
                 "close_implied": close_implied,
-                "close_source": CLOSE_SOURCE_BOOK,
+                "close_source": CLOSE_SOURCE_SYNTHETIC,
             }
         )
         if limit is not None and len(out) >= limit:

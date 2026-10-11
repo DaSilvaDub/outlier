@@ -374,6 +374,7 @@ def test_book_close_feed_stamps_source(tmp_path: Path):
                 "close_line": row["line"],
                 "close_odds": -115,
                 "close_implied": 53.488,
+                "close_source": "book_close",
             }
         ]
     }
@@ -464,14 +465,28 @@ def test_book_close_feed_produces_nonzero_clv_when_prices_moved(tmp_path: Path):
     write_close_feed(feed_path, moved, note="fixture synthetic move for CLV proof")
     index = load_book_close_feed(feed_path)
 
-    enriched = enrich_prediction_payload(
+    # F13: a synthetic feed keeps its own label and is never attached as book_close.
+    assert {r["close_source"] for r in moved} == {"synthetic_moved_close"}
+    refused = enrich_prediction_payload(
         raw,
         mode="book_close",
         attach_model_p="pass",
         book_close_index=index,
     )
+    assert refused["records"][0]["close_source"] is None
+    assert refused["records"][0]["close_skip_reason"] == "unverified_close_source"
+    assert refused["close_enrichment"]["n_book_close"] == 0
+
+    # The CLV proof still works with the honest label carried explicitly.
+    by_key = {(m["player_name"], m["market"], m["line"], m["position"]): m for m in moved}
+    for r in raw["records"]:
+        m = by_key.get((r["player_name"], r["market"], float(r["line"]), r["position"]))
+        if m:
+            r.update({k: m[k] for k in ("close_line", "close_odds", "close_implied",
+                                         "close_source")})
+    enriched = enrich_prediction_payload(raw, mode="explicit", attach_model_p="pass")
     row0 = enriched["records"][0]
-    assert row0["close_source"] == CLOSE_SOURCE_BOOK
+    assert row0["close_source"] == "synthetic_moved_close"
     assert row0["close_source"] != CLOSE_SOURCE_SNAPSHOT
     assert row0["close_implied"] != row0["implied_probability"]
 
@@ -484,7 +499,8 @@ def test_book_close_feed_produces_nonzero_clv_when_prices_moved(tmp_path: Path):
     assert report.clv["status"] == "ok"
     assert report.clv["n"] >= 1
     assert report.clv["mean_clv_implied_pts"] != 0.0
-    assert CLOSE_SOURCE_BOOK in (report.clv.get("close_sources") or [])
+    assert report.clv.get("close_sources") == ["synthetic_moved_close"]
+    assert CLOSE_SOURCE_BOOK not in (report.clv.get("close_sources") or [])
 
 
 def test_book_close_mode_refuses_without_feed():
