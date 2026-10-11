@@ -1021,6 +1021,22 @@ def _run_close_provenance_step(work: Path) -> str | None:
     out["mapper"]["verified_book_vs_better_live_price"] = [
         {k: r.get(k) for k in ("close_source", "close_status", "close_odds", "bookmaker")}
         for r in mixed]
+    # (captured_at, last_update): capture time is what the close policy must judge.
+    captured = {
+        "t5_capture_2h_old_update": ("2026-09-13T16:55:00Z", "2026-09-13T15:00:00Z"),
+        "t90_capture": ("2026-09-13T15:30:00Z", "2026-09-13T15:00:00Z"),
+        "capture_after_kickoff": ("2026-09-13T17:05:00Z", "2026-09-13T16:50:00Z"),
+        "t5_capture_update_after_kickoff": ("2026-09-13T16:55:00Z", "2026-09-13T17:10:00Z"),
+        "no_capture_fresh_update": (None, "2026-09-13T16:58:00Z"),
+        "naive_capture": ("2026-09-13T16:55:00", "2026-09-13T16:50:00Z"),
+    }
+    out["mapper_captured"] = {}
+    for case, (cap, upd) in captured.items():
+        rows = fetch_odds_close.map_event_odds_to_close_records(_odds_event(
+            "Kansas City Chiefs", "Baltimore Ravens", KICKOFF_A14,
+            [_odds_book("draftkings", -110, upd)]), captured_at=cap)
+        out["mapper_captured"][case] = [{k: r.get(k) for k in (
+            "close_source", "close_status", "captured_at", "quote_time")} for r in rows]
 
     pred = _a14_pred("BAL @ KC", "2026-09-13T13:00:00-04:00", "outlier-bal-kc")
     pred.update({"best_odds": -110, "implied_probability": 52.38})
@@ -1029,6 +1045,8 @@ def _run_close_provenance_step(work: Path) -> str | None:
         "supplied_synthetic_source": "synthetic_moved_close",
         "supplied_without_source": None,
         "supplied_book_close": "book_close",
+        "supplied_book_close_timed_no_status": "book_close",
+        "supplied_book_close_timed_verified": "book_close",
     }
     out["enrich_book_close"] = {}
     for case, src in feeds.items():
@@ -1037,6 +1055,10 @@ def _run_close_provenance_step(work: Path) -> str | None:
         feed_row.update({"close_line": 250.5, "close_odds": -125, "close_implied": 55.56})
         if src is not None:
             feed_row["close_source"] = src
+        if case.startswith("supplied_book_close_timed"):
+            feed_row["captured_at"] = "2026-09-13T16:55:00Z"
+        if case.endswith("_verified"):
+            feed_row["close_status"] = "verified"
         enriched = enrich_close.enrich_prediction_payload(
             {"records": [dict(pred)]}, mode="book_close", attach_model_p="pass",
             book_close_index=enrich_close.index_book_close_records([feed_row]))
