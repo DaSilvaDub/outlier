@@ -103,11 +103,35 @@ def append_snapshot(
         row["books"] = _books(rec)
         lines.append(json.dumps(row, sort_keys=True))
     if lines:
-        with file_lock(path), open(path, "a", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        with file_lock(path):
+            if run_id is not None:
+                # The same run never records the same prop twice (F27): a
+                # retried or re-published run ID appends only what is new.
+                seen = _run_keys(path, run_id)
+                lines = [x for x in lines if prop_key(json.loads(x)) not in seen]
+            if lines:
+                with open(path, "a", encoding="utf-8") as handle:
+                    handle.write("\n".join(lines) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
     return path
+
+
+def _run_keys(path: Path, run_id: str) -> set[tuple[str, str, str, str, str]]:
+    """prop keys already in ``path`` for ``run_id`` (torn lines skipped)."""
+    keys: set[tuple[str, str, str, str, str]] = set()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return keys
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("run_id") == run_id:
+            keys.add(prop_key(row))
+    return keys
 
 
 def load_snapshots(path: Path | str, as_of_utc: datetime | None = None) -> list[dict[str, Any]]:

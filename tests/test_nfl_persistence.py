@@ -122,3 +122,52 @@ def test_concurrent_ledger_writers_lose_no_dates(tmp_path):
         scorecard.atomic_write_text = real
     kept = sorted(json.loads(x)["date"] for x in path.read_text("utf-8").splitlines())
     assert kept == dates
+
+
+# --- same run ID is one observation -----------------------------------------
+
+def _prop(line=255.5, player="Patrick Mahomes"):
+    return {"is_consensus_line": True, "scope": "full_game", "event_id": "e1",
+            "player_name": player, "market": "PASS_YDS", "position": "OVER", "line": line,
+            "best_odds": -110, "books": [{"book": "fanduel", "odds": -110}]}
+
+
+def _rows(path):
+    return [json.loads(x) for x in path.read_text("utf-8").splitlines() if x.strip()]
+
+
+def test_same_run_id_never_duplicates_snapshot_rows(tmp_path):
+    from outlier_nfl.snapshots import append_snapshot
+
+    t = "2026-09-13T15:00:00+00:00"
+    path = append_snapshot(tmp_path, "2026-09-13", [_prop()], t, run_id="RUN-1")
+    append_snapshot(tmp_path, "2026-09-13", [_prop(), _prop(player="Josh Allen")], t,
+                    run_id="RUN-1")
+    assert [(r["run_id"], r["player_name"]) for r in _rows(path)] == [
+        ("RUN-1", "Patrick Mahomes"), ("RUN-1", "Josh Allen")]
+
+
+def test_changed_run_id_adds_one_observation(tmp_path):
+    from outlier_nfl.snapshots import append_snapshot
+
+    path = append_snapshot(tmp_path, "2026-09-13", [_prop()], "2026-09-13T15:00:00+00:00",
+                           run_id="RUN-1")
+    append_snapshot(tmp_path, "2026-09-13", [_prop(256.5)], "2026-09-13T16:00:00+00:00",
+                    run_id="RUN-2")
+    assert [(r["run_id"], r["line"]) for r in _rows(path)] == [("RUN-1", 255.5),
+                                                               ("RUN-2", 256.5)]
+
+
+def test_rows_without_run_id_keep_appending(tmp_path):
+    from outlier_nfl.snapshots import append_snapshot
+
+    for _ in range(2):
+        path = append_snapshot(tmp_path, "2026-09-13", [_prop()], "2026-09-13T15:00:00+00:00")
+    assert len(_rows(path)) == 2
+
+
+def test_same_run_id_ledger_rows_are_replaced_not_duplicated(tmp_path):
+    path = tmp_path / "ledger.jsonl"
+    for _ in range(2):
+        rows = scorecard.update_ledger(path, [_graded("2026-09-13", "e1")], "2026-09-13")
+    assert len(rows) == 1 and len(path.read_text("utf-8").splitlines()) == 1
