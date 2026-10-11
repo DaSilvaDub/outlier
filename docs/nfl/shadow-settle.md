@@ -95,6 +95,13 @@ bounded retries, checked for truncation, schema and row count, and swapped in
 atomically. A failed or shrinking refresh keeps the last validated copy and logs
 a warning. Pre-sidecar caches are refreshed on first use.
 
+Reproducible regrades: `--nflverse-pinned --nflverse-cache DIR` settles from
+exactly the files in `DIR` with no network and no refresh. Every file needs a
+sidecar whose sha256 matches, or settle fails. The JSON report's
+`nflverse_cache` block records each file's sha256 (status `pinned`), so a
+versioned regrade can name the box-score bytes it used. The default user cache
+can't be pinned; copy the files into the regrade's own folder first.
+
 ```bash
 # Settle vs nflverse (or cached box JSON)
 python -m outlier_nfl.settle \

@@ -109,6 +109,7 @@ def _record(dest: Path, status: str, *, reason: str | None = None) -> None:
             "status": status,
             "fetched_at": meta.fetched_at if meta else None,
             "rows": meta.rows if meta else None,
+            "sha256": meta.sha256 if meta else None,
             "reason": reason,
         }
     )
@@ -320,13 +321,20 @@ def _refresh_csv(
     require_fresh: bool = False,
     max_age: timedelta | None = None,
     allow_shrink: bool | None = None,
+    pinned: bool = False,
 ) -> Path:
     """Return a validated cached CSV at ``dest``, re-downloading when stale.
+
+    ``pinned`` settles from exactly the bytes already at ``dest``: no network,
+    no TTL, no fallback. The file must have a sidecar whose sha256 matches and
+    must pass schema validation, so a regrade is reproducible byte for byte.
 
     A refresh with fewer rows than the cached copy is rejected unless
     ``allow_shrink`` (or ``OUTLIER_NFLVERSE_ALLOW_SHRINK=1``) is set, for the
     rare upstream correction that legitimately removes rows.
     """
+    if pinned:
+        return _verify_pinned(dest, label=label, required=required, any_of=any_of)
     now = _utcnow()
     age = max_age if max_age is not None else max_age_from_env()
     shrink_ok = allow_shrink if allow_shrink is not None else allow_shrink_from_env()
@@ -387,6 +395,25 @@ def _refresh_csv(
     return dest
 
 
+def _verify_pinned(
+    dest: Path, *, label: str, required: Sequence[str], any_of: Sequence[str]
+) -> Path:
+    meta = read_cache_meta(dest)
+    if not dest.exists():
+        raise BoxScoreError(f"{label}: pinned cache file missing: {dest}")
+    if meta is None:
+        raise BoxScoreError(f"{label}: pinned cache file has no fetch metadata sidecar: {dest}")
+    data = dest.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != meta.sha256:
+        raise BoxScoreError(
+            f"{label}: pinned cache file {dest} sha256 {digest} does not match its sidecar {meta.sha256}"
+        )
+    _validate_csv_bytes(data, label=label, required=required, any_of=any_of)
+    _record(dest, "pinned")
+    return dest
+
+
 def _usable_existing(
     dest: Path, *, label: str, required: Sequence[str], any_of: Sequence[str]
 ) -> Path | None:
@@ -426,6 +453,7 @@ def ensure_week_stats_csv(
     require_fresh: bool = False,
     max_age: timedelta | None = None,
     allow_shrink: bool | None = None,
+    pinned: bool = False,
 ) -> Path:
     """Return path to a validated, decompressed week-stats CSV for a season."""
     cache = cache_dir or default_cache_dir()
@@ -440,6 +468,7 @@ def ensure_week_stats_csv(
         require_fresh=require_fresh,
         max_age=max_age,
         allow_shrink=allow_shrink,
+        pinned=pinned,
     )
 
 
@@ -450,6 +479,7 @@ def ensure_games_csv(
     require_fresh: bool = False,
     max_age: timedelta | None = None,
     allow_shrink: bool | None = None,
+    pinned: bool = False,
 ) -> Path:
     """Return path to a validated nflverse ``games.csv`` schedule/results file."""
     cache = cache_dir or default_cache_dir()
@@ -462,6 +492,7 @@ def ensure_games_csv(
         require_fresh=require_fresh,
         max_age=max_age,
         allow_shrink=allow_shrink,
+        pinned=pinned,
     )
 
 
@@ -557,6 +588,7 @@ def load_nflverse_events(
     games_csv: Path | str | None = None,
     refresh: bool = False,
     allow_shrink: bool | None = None,
+    pinned: bool = False,
 ) -> list[NflBoxScoreEvent]:
     """Build simplified box-score events for a season week and/or slate date."""
     cache = cache_dir or default_cache_dir()
@@ -564,13 +596,15 @@ def load_nflverse_events(
         Path(stats_csv)
         if stats_csv
         else ensure_week_stats_csv(
-            season, cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink
+            season, cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink, pinned=pinned
         )
     )
     games_path = (
         Path(games_csv)
         if games_csv
-        else ensure_games_csv(cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink)
+        else ensure_games_csv(
+            cache_dir=cache, refresh=refresh, allow_shrink=allow_shrink, pinned=pinned
+        )
     )
 
     # Headers are checked on every load, not only after a download (F26): a
@@ -688,6 +722,7 @@ def fetch_nflverse_boxscores_for_date(
     cache_dir: Path | None = None,
     refresh: bool = False,
     allow_shrink: bool | None = None,
+    pinned: bool = False,
 ) -> list[NflBoxScoreEvent]:
     """Convenience: load all completed games on an Eastern slate date."""
     # A season is labelled by the calendar year of its September Week 1 and runs
@@ -703,6 +738,7 @@ def fetch_nflverse_boxscores_for_date(
         cache_dir=cache_dir,
         refresh=refresh,
         allow_shrink=allow_shrink,
+        pinned=pinned,
     )
 
 

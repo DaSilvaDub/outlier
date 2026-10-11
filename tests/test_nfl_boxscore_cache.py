@@ -379,3 +379,97 @@ def test_crash_replacing_legacy_cache_keeps_it_as_fallback(tmp_path, net, clock,
     _crash_mid_refresh(tmp_path, monkeypatch, net, _games(WEEK1_GAME, WEEK2_GAME))
     net.serve(GAMES_URL, *[URLError("down")] * nv.DEFAULT_RETRIES)
     assert nv.ensure_games_csv(cache_dir=tmp_path).read_bytes() == _games(WEEK1_GAME)
+
+
+def _seed_cache(cache: Path, net: FakeNet) -> None:
+    net.serve(GAMES_URL, _games(WEEK1_GAME))
+    net.serve(STATS_URL, gzip.compress(_stats(WEEK1_STAT)))
+    nv.ensure_games_csv(cache_dir=cache)
+    nv.ensure_week_stats_csv(2026, cache_dir=cache)
+    nv.drain_cache_events()
+    net.calls.clear()
+    net.queue.clear()
+
+
+def test_pinned_cache_never_touches_network_even_when_stale(tmp_path, net, clock):
+    _seed_cache(tmp_path, net)
+    clock.now += timedelta(days=30)
+    events = _load_week(tmp_path, pinned=True)
+    assert net.calls == []
+    assert events[0].players["DESHAUNWATSON"]["PASSING:YDS"] == 250.0
+    drained = nv.drain_cache_events()
+    assert {e["status"] for e in drained} == {"pinned"}
+    games = next(e for e in drained if e["file"] == "games.csv")
+    assert games["sha256"] == hashlib.sha256(_games(WEEK1_GAME)).hexdigest()
+
+
+def test_pinned_cache_refuses_file_without_sidecar(tmp_path, net, clock):
+    (tmp_path / "games.csv").write_bytes(_games(WEEK1_GAME))
+    with pytest.raises(BoxScoreError, match="no fetch metadata"):
+        nv.ensure_games_csv(cache_dir=tmp_path, pinned=True)
+    assert net.calls == []
+
+
+def test_pinned_cache_refuses_hash_mismatch(tmp_path, net, clock):
+    _seed_cache(tmp_path, net)
+    (tmp_path / "games.csv").write_bytes(_games(WEEK1_GAME, WEEK2_GAME))
+    with pytest.raises(BoxScoreError, match="does not match its sidecar"):
+        nv.ensure_games_csv(cache_dir=tmp_path, pinned=True)
+    assert net.calls == []
+
+
+def test_pinned_cache_refuses_missing_file(tmp_path, net, clock):
+    with pytest.raises(BoxScoreError, match="pinned cache file missing"):
+        nv.ensure_week_stats_csv(2026, cache_dir=tmp_path, pinned=True)
+    assert net.calls == []
+
+
+def _settle_pinned(tmp_path: Path, cache: Path, out: Path, *extra: str) -> int:
+    from outlier_nfl import settle
+
+    preds = Path(__file__).parent / "fixtures" / "nfl" / "settle" / "predictions_tier1.json"
+    return settle.main(
+        [
+            "--predictions", str(preds),
+            "--provider", "nflverse",
+            "--season", "2026",
+            "--week", "1",
+            *extra,
+            "--out-json", str(out),
+        ]
+    )
+
+
+def test_settle_cli_pinned_regrade_is_reproducible(tmp_path, net, clock):
+    cache = tmp_path / "cache"
+    _seed_cache(cache, net)
+    before = {p.name: p.read_bytes() for p in cache.iterdir()}
+    outs = []
+    for i in range(2):
+        clock.now += timedelta(days=10)
+        out = tmp_path / f"settle{i}.json"
+        assert _settle_pinned(tmp_path, cache, out, "--nflverse-cache", str(cache), "--nflverse-pinned") == 0
+        payload = json.loads(out.read_text())
+        payload.pop("generated_at", None)
+        outs.append(payload)
+    assert net.calls == []
+    assert outs[0] == outs[1]
+    assert {e["status"] for e in outs[0]["nflverse_cache"]} == {"pinned"}
+    assert {p.name: p.read_bytes() for p in cache.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--nflverse-pinned",),
+        ("--nflverse-cache", "CACHE", "--nflverse-pinned", "--nflverse-refresh"),
+        ("--nflverse-cache", "CACHE", "--nflverse-pinned", "--nflverse-allow-shrink"),
+    ],
+)
+def test_settle_cli_pinned_rejects_unpinnable_combinations(tmp_path, net, clock, extra):
+    cache = tmp_path / "cache"
+    _seed_cache(cache, net)
+    args = tuple(str(cache) if a == "CACHE" else a for a in extra)
+    with pytest.raises(SystemExit, match="nflverse-pinned"):
+        _settle_pinned(tmp_path, cache, tmp_path / "out.json", *args)
+    assert net.calls == []
