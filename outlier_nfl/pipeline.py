@@ -628,6 +628,7 @@ class NflPipeline:
         anchors_payload = {
             "date": target_date,
             "window": window,
+            "run_id": run_id,  # F25: the export carries the run that produced it
             "updated_at": now_utc,
             "count": len(anchors),
             "actionable_count": len(actionable_anchors),

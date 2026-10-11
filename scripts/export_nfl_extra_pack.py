@@ -1,8 +1,14 @@
 """Export NFL high-prob props JSON into a thin nfl_only.csv extra pack.
 
-Reads data/NFL/normalized/nfl_high_prob_props_{date}.json when --date is given
-and the file exists, otherwise nfl_high_prob_props_latest.json. Always writes a
-header even when there are zero rows.
+With --date (and optional --window) reads exactly
+data/NFL/normalized/nfl_high_prob_props_{date}[_{window}].json and refuses
+anything else (F25). Without --date reads nfl_high_prob_props_latest.json.
+
+Exit codes (the CSV is not written on any nonzero exit):
+  0  exported (a valid empty slate writes a header-only CSV and says so)
+  2  the requested dated file does not exist (latest is never substituted)
+  3  the source is unreadable, not JSON, or has no records list
+  4  the payload's date/window does not match the request
 """
 
 from __future__ import annotations
@@ -42,7 +48,23 @@ FIELDNAMES = [
     "scope",
     "is_consensus_line",
     "calibration_tags",
+    # F25: immutable identity and explicit status (appended; earlier columns unchanged).
+    "run_id",
+    "event_id",
+    "player_id",
+    "approval_status",
 ]
+
+EXIT_OK = 0
+EXIT_MISSING = 2
+EXIT_CORRUPT = 3
+EXIT_MISMATCH = 4
+
+
+class ExportError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _best_book(rec: dict[str, Any]) -> str:
@@ -85,13 +107,45 @@ def _tags(rec: dict[str, Any]) -> str:
     return str(tags)
 
 
-def resolve_source(date: str | None) -> Path:
+def resolve_source(date: str | None, window: str | None = None) -> Path:
+    """The exact file for ``date`` (and ``window``); latest only without a date."""
     if date:
-        dated = NORMALIZED / f"nfl_high_prob_props_{date}.json"
-        if dated.exists():
-            return dated
-    latest = NORMALIZED / "nfl_high_prob_props_latest.json"
-    return latest
+        suffix = f"{date}_{window}" if window else date
+        return NORMALIZED / f"nfl_high_prob_props_{suffix}.json"
+    return NORMALIZED / "nfl_high_prob_props_latest.json"
+
+
+def _approval_status(rec: dict[str, Any]) -> str:
+    """From the correlation guard's ``actionable`` flag, never from the tier."""
+    flag = rec.get("actionable")
+    if flag is True:
+        return "actionable"
+    if flag is False:
+        return "inventory"
+    return "unlabeled"
+
+
+def load_validated_payload(
+    src: Path, date: str | None, window: str | None = None
+) -> dict[str, Any]:
+    if not src.exists():
+        raise ExportError(EXIT_MISSING, f"ERROR: source JSON missing: {src}")
+    try:
+        payload = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExportError(EXIT_CORRUPT, f"ERROR: could not read {src}: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
+        raise ExportError(EXIT_CORRUPT, f"ERROR: {src} has no records list")
+    if date is not None:
+        got_date = str(payload.get("date") or "")
+        got_window = payload.get("window") or None
+        if got_date != date or got_window != (window or None):
+            raise ExportError(
+                EXIT_MISMATCH,
+                f"ERROR: {src} is date={got_date or '?'} window={got_window}, "
+                f"requested date={date} window={window}",
+            )
+    return payload
 
 
 def records_from_payload(payload: Any) -> list[dict[str, Any]]:
@@ -139,33 +193,36 @@ def row_from_record(rec: dict[str, Any]) -> dict[str, Any]:
             else ""
         ),
         "calibration_tags": _tags(rec),
+        "run_id": rec.get("run_id") or "",
+        "event_id": rec.get("event_id") or "",
+        "player_id": rec.get("player_id") or "",
+        "approval_status": _approval_status(rec),
     }
 
 
-def export_nfl_only(date: str | None = None, out_path: Path | None = None) -> tuple[Path, int]:
-    src = resolve_source(date)
+def export_nfl_only(
+    date: str | None = None, out_path: Path | None = None, window: str | None = None
+) -> tuple[Path, int]:
+    """Write the CSV; raises ``ExportError`` (nothing written) on bad input."""
+    src = resolve_source(date, window)
     out = out_path or OUT_CSV
+    payload = load_validated_payload(src, date, window)
+    run_id = payload.get("run_id") or ""
+    recs = [
+        {**r, "run_id": run_id}
+        for r in records_from_payload(payload)
+        if r.get("scope") in (None, "", "full_game")
+    ]
+    rows = [row_from_record(r) for r in recs]
+
     out.parent.mkdir(parents=True, exist_ok=True)
-
-    rows: list[dict[str, Any]] = []
-    if src.exists():
-        try:
-            payload = json.loads(src.read_text(encoding="utf-8"))
-            recs = [
-                r for r in records_from_payload(payload)
-                if r.get("scope") in (None, "", "full_game")
-            ]
-            rows = [row_from_record(r) for r in recs]
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"WARNING: could not read {src}: {exc}", file=sys.stderr)
-    else:
-        print(f"WARNING: source JSON missing: {src}", file=sys.stderr)
-
     with open(out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
+    if not rows:
+        print(f"NOTE: {src} is a valid empty slate (0 rows)", file=sys.stderr)
     print(f"{out} ({len(rows)} rows)")
     return out, len(rows)
 
@@ -175,7 +232,12 @@ def main() -> int:
     parser.add_argument(
         "--date",
         default=None,
-        help="Prefer nfl_high_prob_props_{date}.json when present; else latest",
+        help="Export exactly nfl_high_prob_props_{date}.json; never falls back to latest",
+    )
+    parser.add_argument(
+        "--window",
+        default=None,
+        help="With --date, export the windowed file nfl_high_prob_props_{date}_{window}.json",
     )
     parser.add_argument(
         "--out",
@@ -184,8 +246,14 @@ def main() -> int:
     )
     args = parser.parse_args()
     out = Path(args.out) if args.out else None
-    export_nfl_only(date=args.date, out_path=out)
-    return 0
+    if args.window and not args.date:
+        parser.error("--window requires --date")
+    try:
+        export_nfl_only(date=args.date, out_path=out, window=args.window)
+    except ExportError as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.code
+    return EXIT_OK
 
 
 if __name__ == "__main__":
