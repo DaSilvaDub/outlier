@@ -40,7 +40,7 @@ import re
 from typing import Any
 
 from outlier_nfl import archive as ar
-from outlier_nfl.snapshots import snapshot_path
+from outlier_nfl.snapshots import prop_key, snapshot_path
 
 LEGACY_SLATES = ("2026-09-27", "2026-10-04", "2026-10-05")
 LEGACY_ARCHIVE_DIR = "archive/legacy"
@@ -137,7 +137,7 @@ class FileVerdict:
 @dataclass
 class LegacyStatus:
     slate: str
-    status: str                    # legacy_regradable | unrecoverable
+    status: str                    # legacy_regradable | unrecoverable | refused
     first_kickoff: str | None
     kickoff_source: str            # nfl_games | prediction_rows | none
     regradable_events: list[str]
@@ -147,6 +147,7 @@ class LegacyStatus:
     # regradable rows by probability source: original_model_p (a saved model_p,
     # original pre-repair) | recomputed_from_hit_rates (today's code would compute it)
     probability_sources: dict[str, int] = field(default_factory=dict)
+    refused_reason: str | None = None  # set when status is "refused"
 
 
 def _load(nfl_dir: Path, e: ar.ArchiveEntry) -> Any:
@@ -285,39 +286,66 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
                                           str(r.get("line"))), probability_source(r))
         if name.startswith(CARD_PREFIX) and e.role == ar.LEGACY_ROLE:
             card[name.rsplit(".", 1)[-1]] = v.verdict
-    # The weekly snapshot file is shared by every slate in its week and only grows,
-    # so take its largest recorded copy (from any slate) and keep this slate's rows.
+    # The weekly snapshot file is shared by every slate in its week and may have
+    # been rewritten between records, so read every recorded copy (from any slate),
+    # take the union of this slate's rows and refuse the slate if copies disagree.
     snap_name = snapshot_path(root, slate).name
     snaps = [e for e in legacy if Path(e.original_path or "").name == snap_name
              and (e.original_path or "").startswith("snapshots/")]
+    refused: str | None = None
     if snaps:
-        biggest = max(snaps, key=lambda e: e.size)
-        snap_rows.update(pre_kickoff=0, post_slate=0, with_run_id=0, no_kickoff=0)
-        _judge_snapshot_rows(root, biggest, slate, kick, snap_rows)
-        files.append(FileVerdict(biggest.original_path or biggest.path, biggest.role,
-                                 biggest.mtime or "", biggest.sha256, 0, [], []))
+        rows, refused = _snapshot_union(root, snaps, slate)
+        snap_rows.update(_judge_snapshot_rows(rows, kick))
+        snap_rows["copies"] = len(snaps)
+        for e in snaps:
+            files.append(FileVerdict(e.original_path or e.path, e.role, e.mtime or "",
+                                     e.sha256, 0, [], []))
     prob_sources = {k: sum(1 for v in seen_rows.values() if v == k)
                     for k in ("original_model_p", "recomputed_from_hit_rates")}
     first = min(kick.values()).isoformat() if kick else None
-    return LegacyStatus(slate, "legacy_regradable" if regradable else "unrecoverable",
-                        first, source, sorted(regradable), card, files, snap_rows,
-                        prob_sources)
+    status = "refused" if refused else (
+        "legacy_regradable" if regradable else "unrecoverable")
+    return LegacyStatus(slate, status, first, source, sorted(regradable), card, files,
+                        snap_rows, prob_sources, refused)
 
 
-def _judge_snapshot_rows(root: Path, e: ar.ArchiveEntry, slate: str,
-                         kick: dict[str, datetime], counts: dict[str, int]) -> None:
-    """Count this slate's snapshot rows by their own ``taken_at`` and ``run_id``."""
-    try:
-        lines = ar.resolve_path(root, e.path).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return
-    for line in lines:
+def _snapshot_key(row: dict[str, Any]) -> tuple[str, ...]:
+    return (*prop_key(row), str(row.get("taken_at") or ""), str(row.get("run_id") or ""))
+
+
+def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
+                    ) -> tuple[list[dict[str, Any]], str | None]:
+    """This slate's rows across every recorded copy, identical rows once.
+
+    The second value is the refusal reason when two copies disagree on a row key
+    (same prop, ``taken_at`` and ``run_id``, different values).
+    """
+    seen: dict[tuple[str, ...], tuple[dict[str, Any], str]] = {}
+    for e in snaps:
         try:
-            row = json.loads(line)
-        except ValueError:
-            continue  # torn line
-        if not isinstance(row, dict) or row.get("slate_date") != slate:
+            lines = ar.resolve_path(root, e.path).read_text(encoding="utf-8").splitlines()
+        except OSError:
             continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # torn line
+            if not isinstance(row, dict) or row.get("slate_date") != slate:
+                continue
+            k = _snapshot_key(row)
+            if k in seen and seen[k][0] != row:
+                return [], (f"snapshot copies disagree on row {k}: "
+                            f"{seen[k][1]} vs {e.path}")
+            seen.setdefault(k, (row, e.path))
+    return [r for r, _ in seen.values()], None
+
+
+def _judge_snapshot_rows(rows: list[dict[str, Any]], kick: dict[str, datetime]
+                         ) -> dict[str, int]:
+    """Count rows by their own ``taken_at`` and ``run_id``, never the file's mtime."""
+    counts = {"pre_kickoff": 0, "post_slate": 0, "with_run_id": 0, "no_kickoff": 0}
+    for row in rows:
         if row.get("run_id"):
             counts["with_run_id"] += 1  # belongs to a run bundle, not to the legacy slate
             continue
@@ -329,3 +357,4 @@ def _judge_snapshot_rows(root: Path, e: ar.ArchiveEntry, slate: str,
             counts["pre_kickoff"] += 1
         else:
             counts["post_slate"] += 1
+    return counts

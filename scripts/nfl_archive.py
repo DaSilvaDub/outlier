@@ -90,6 +90,8 @@ def _check(args: argparse.Namespace) -> int:
                      f", rows: original_model_p {st.probability_sources['original_model_p']} "
                      "(original, pre-repair), recomputed_from_hit_rates "
                      f"{st.probability_sources['recomputed_from_hit_rates']}"))
+            if st.refused_reason:
+                print(f"  REFUSED {st.refused_reason}")
             for f in st.files:
                 print(f"  {f.verdict:<24} {f.original_path}"
                       + (f" (original for {len(f.original_for)}/{f.games} games)"
@@ -97,7 +99,8 @@ def _check(args: argparse.Namespace) -> int:
                       + (" (same bytes as a pre-kickoff copy)" if f.via_pre_kickoff_copy else ""))
             if st.snapshot_rows:
                 r = st.snapshot_rows
-                print(f"  snapshot rows: pre_kickoff {r['pre_kickoff']}, post_slate "
+                print(f"  snapshot rows ({r['copies']} copies): pre_kickoff "
+                      f"{r['pre_kickoff']}, post_slate "
                       f"{r['post_slate']}, with_run_id {r['with_run_id']}, "
                       f"no_kickoff {r['no_kickoff']}")
 
@@ -108,7 +111,7 @@ def _check(args: argparse.Namespace) -> int:
               f"entries {report.entries}, gaps {len(report.gaps)}")
     if any(g.kind == "invalid_line" for g in report.gaps):
         return 2
-    return 1 if report.gaps else 0
+    return 1 if report.gaps or any(st.status == "refused" for st in statuses) else 0
 
 
 def build_parser() -> argparse.ArgumentParser:

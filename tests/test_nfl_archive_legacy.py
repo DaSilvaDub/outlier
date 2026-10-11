@@ -220,7 +220,7 @@ def test_snapshot_rows_are_judged_by_their_own_time_and_run_id(tree):
     al.record_legacy(nfl, reports_dir=reports)
     st = al.legacy_status(nfl, "2026-10-05")
     assert st.snapshot_rows == {"pre_kickoff": 1, "post_slate": 2, "with_run_id": 1,
-                                "no_kickoff": 0}
+                                "no_kickoff": 0, "copies": 1}
     # the file was last written Oct 10, but that never decides anything
     assert _verdicts(st)["nfl_prop_snapshots_2026-09-29.jsonl"].verdict == "per_row"
 
@@ -271,7 +271,7 @@ def test_cli_record_and_check(tree, capsys):
 def test_legacy_status_source_has_no_write_calls():
     import inspect
     src = "".join(inspect.getsource(f) for f in (
-        al.legacy_status, al._judge_snapshot_rows, al._kickoffs, al._covered, al._load))
+        al.legacy_status, al._judge_snapshot_rows, al._snapshot_union, al._kickoffs, al._covered, al._load))
     for call in ("write_", "open(", "unlink", "mkdir", "replace(", "record_"):
         assert call not in src, call
 
@@ -339,3 +339,43 @@ def test_a_pre_kickoff_twin_from_another_slate_does_not_vouch(tree):
     al.record_legacy(nfl, reports_dir=reports)
     v = _verdicts(al.legacy_status(nfl, "2026-10-05"))["nfl_rosters_2026-10-05.json"]
     assert v.verdict == "post_slate" and not v.via_pre_kickoff_copy
+
+
+SNAP = "snapshots/nfl_prop_snapshots_2026-09-29.jsonl"
+
+
+def _snap(nfl: Path, rows: list[dict], mtime: str) -> None:
+    _put(nfl / SNAP, "".join(json.dumps(r) + "\n" for r in rows), mtime)
+
+
+def _srow(eid: str, taken: str, **kw) -> dict:
+    return {"slate_date": "2026-10-05", "event_id": eid, "player_name": "P One",
+            "market": "RECEIVING_YARDS", "position": "OVER", "taken_at": taken,
+            "line": 24.5, **kw}
+
+
+def test_snapshot_rows_are_the_union_of_every_recorded_copy(tree):
+    nfl, reports = tree
+    a = _srow("E105B", "2026-10-05T20:00:00Z")
+    b = _srow("E105B", "2026-10-05T21:00:00Z")
+    c = _srow("E105A", "2026-10-05T12:00:00Z")
+    _snap(nfl, [a, b], "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    _snap(nfl, [b, c], "2026-10-07T12:00:00Z")  # rewritten later: a is gone, c is new
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    st = al.legacy_status(nfl, "2026-10-05")
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    assert st.snapshot_rows == {"pre_kickoff": 3, "post_slate": 0, "with_run_id": 0,
+                                "no_kickoff": 0, "copies": 2}  # b counted once
+
+
+def test_snapshot_copies_that_disagree_refuse_the_slate(tree, capsys):
+    nfl, reports = tree
+    _snap(nfl, [_srow("E105B", "2026-10-05T20:00:00Z")], "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    _snap(nfl, [_srow("E105B", "2026-10-05T20:00:00Z", line=30.5)], "2026-10-07T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    st = al.legacy_status(nfl, "2026-10-05")
+    assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
+    assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
