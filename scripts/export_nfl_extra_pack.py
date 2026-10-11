@@ -9,6 +9,9 @@ Exit codes (the CSV is not written on any nonzero exit):
   2  the requested dated file does not exist (latest is never substituted)
   3  the source is unreadable, not JSON, or has no records list
   4  the payload's date/window does not match the request
+
+These are this script's own codes. Exit 3 here (corrupt input) is unrelated to
+the pipeline's exit 3 (a PARTIAL run with a failed required stage).
 """
 
 from __future__ import annotations
