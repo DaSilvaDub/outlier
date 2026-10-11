@@ -215,7 +215,7 @@ def index_book_close_records(
             "close_source": raw.get("close_source") or None,
         }
         payload.update(
-            {k: raw.get(k) for k in ("close_status", "quote_time") if raw.get(k) is not None}
+            {k: raw.get(k) for k in ("close_status", "quote_time", "captured_at") if raw.get(k) is not None}
         )
         # Keep the owner so lookup can refuse a close from another game/date.
         payload.update({k: raw.get(k) for k in OWNER_FIELDS if raw.get(k) is not None})
@@ -348,7 +348,13 @@ def attach_close_fields(
                 "snapshot odds as book_close."
             )
         feed_row = lookup_book_close_row(book_close_index, record)
-        if feed_row and feed_row.get("close_source") != CLOSE_SOURCE_BOOK:
+        timed = bool(feed_row and (feed_row.get("quote_time") or feed_row.get("captured_at")))
+        if feed_row and (
+            feed_row.get("close_source") != CLOSE_SOURCE_BOOK
+            # A timed row must have passed the close policy; an untimed hand
+            # feed is trusted at its label (counted as untimed in settle).
+            or (timed and feed_row.get("close_status") != "verified")
+        ):
             # A snapshot, synthetic, unverified or unlabeled close is not a book close.
             record["close_line"] = None
             record["close_odds"] = None
@@ -360,6 +366,7 @@ def attach_close_fields(
             record["close_odds"] = feed_row.get("close_odds")
             record["close_implied"] = feed_row.get("close_implied")
             record["close_source"] = CLOSE_SOURCE_BOOK
+            record["close_status"] = feed_row.get("close_status")
         else:
             # Do not fall back to snapshot under a book_close label.
             if record.get("close_source") == CLOSE_SOURCE_SNAPSHOT or not has_close:

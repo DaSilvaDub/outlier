@@ -134,3 +134,35 @@ def test_unknown_close_line_gives_no_price_clv():
     report = _settle(_snap(65.5, None, 55.0))
     assert report.rows[0]["clv_implied_pts"] is None
     assert report.clv["n_excluded_close_line_unknown"] == 1
+
+
+def _feed(**timing) -> dict:
+    row = {k: PRED[k] for k in ("player_name", "market", "line", "position", "matchup",
+                                "event_id")}
+    row.update(close_line=250.5, close_odds=-125, close_implied=55.56,
+               close_source="book_close", **timing)
+    return row
+
+
+@pytest.mark.parametrize("timing,attached", [
+    ({"captured_at": "2026-09-13T16:55:00Z"}, False),  # timed, no status
+    ({"quote_time": "2026-09-13T16:55:00Z", "close_status": "early_quote"}, False),
+    ({"captured_at": "2026-09-13T16:55:00Z", "close_status": "verified"}, True),
+    ({}, True),  # no timing at all: trusted at its label
+])
+def test_timed_hand_feed_needs_verified_status(timing, attached):
+    out = enrich_prediction_payload({"records": [dict(PRED)]}, mode="book_close",
+                                    attach_model_p="pass",
+                                    book_close_index=index_book_close_records([_feed(**timing)]))
+    rec = out["records"][0]
+    assert (rec["close_source"] == "book_close") is attached
+    if not attached:
+        assert rec["close_skip_reason"] == "unverified_close_source"
+
+
+def test_untimed_supplied_closes_are_counted_in_the_clv_block():
+    import dataclasses
+
+    timed = dataclasses.replace(_snap(65.5, 65.5, 55.56), close_status="verified")
+    report = _settle(_snap(65.5, 65.5, 55.56), timed)
+    assert report.clv["n_untimed_supplied_close"] == 1

@@ -90,6 +90,7 @@ class PredictionSnap:
     close_odds: int | None = None
     close_implied: float | None = None
     close_source: str | None = None
+    close_status: str | None = None  # "verified" when the close passed the timing policy
     model_p: float | None = None
     scope: str | None = None  # None: the artifact predates scope (treated as full game)
 
@@ -284,6 +285,7 @@ def load_prediction_snapshot(
                 close_odds=_optional_int(raw.get("close_odds")),
                 close_implied=_optional_float(raw.get("close_implied")),
                 close_source=str(raw["close_source"]) if raw.get("close_source") else None,
+                close_status=str(raw["close_status"]) if raw.get("close_status") else None,
                 model_p=_optional_float(model_raw),
                 scope=str(raw["scope"]) if raw.get("scope") else None,
             )
@@ -379,6 +381,12 @@ def settle_predictions(
             "n_excluded_close_line_unknown": 0,
             "n_line_moved": 0,
             "mean_line_move": None,
+            # book_close rows carrying no timing at all: trusted at their label.
+            "n_untimed_supplied_close": sum(
+                1
+                for p in predictions
+                if p.close_source == "book_close" and p.close_status is None
+            ),
             "note": (
                 "CLV implied pts = close_implied - bet implied_probability, both "
                 "converted to percent, only when close_line equals the bet line "
@@ -667,7 +675,8 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
             f"sources={report.clv.get('close_sources')} "
             f"excluded_line_mismatch={report.clv.get('n_excluded_line_mismatch')} "
             f"excluded_close_line_unknown={report.clv.get('n_excluded_close_line_unknown')} "
-            f"line_moved={report.clv.get('n_line_moved')}"
+            f"line_moved={report.clv.get('n_line_moved')} "
+            f"untimed_supplied_close={report.clv.get('n_untimed_supplied_close')}"
         )
     else:
         clv_line += f" — {report.clv.get('reason')}"
