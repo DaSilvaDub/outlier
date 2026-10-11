@@ -422,6 +422,24 @@ def attach_projection_model_p_record(
     return record
 
 
+def games_played(
+    week_index: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+    player_name: Any,
+    team: Any = None,
+) -> int | None:
+    """Distinct prior games for this player in the week index, None if unknown.
+
+    The index holds nflverse stats rows before the slate, so this counts weeks
+    the player recorded a stat line: byes and inactive weeks are not games. A
+    player missing from the index is unknown (None), not zero games.
+    """
+    if week_index is None:
+        return None
+    rows = player_rows(week_index, player_name, team)
+    weeks = {(str(r.get("season") or ""), int(_f(r, "week"))) for r in rows}
+    return len(weeks) or None
+
+
 def attach_model_p_hierarchy_record(
     record: MutableMapping[str, Any],
     *,
@@ -447,6 +465,7 @@ def attach_model_p_hierarchy_record(
         record.pop("model_p_source", None)
         record.pop("p_model", None)
         record.pop("model_p_n_games", None)
+        record.pop("model_p_n_source", None)
 
     if week_index is not None:
         attach_projection_model_p_record(
@@ -468,8 +487,10 @@ def attach_model_p_hierarchy_record(
     record.pop("model_p_n_games", None)
     for key in ("model_p_win", "model_p_push", "model_p_loss"):
         record.pop(key, None)
+    record.pop("model_p_n_source", None)
     attach_empirical_model_p_record(
-        record, overwrite=True, method="laplace", alpha=alpha
+        record, overwrite=True, method="laplace", alpha=alpha,
+        games_played=games_played(week_index, record.get("player_name"), record.get("team")),
     )
     if record.get("model_p") is not None:
         return record

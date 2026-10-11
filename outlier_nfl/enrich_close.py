@@ -37,6 +37,7 @@ from outlier_nfl.projection import (
     MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
     attach_model_p_hierarchy_record,
     attach_projection_model_p_record,
+    games_played,
     load_week_stats_index,
 )
 from outlier_nfl.config import normalize_team
@@ -394,6 +395,8 @@ def attach_close_fields(
             record,
             overwrite=overwrite_model_p,
             method="laplace",
+            games_played=games_played(
+                week_index, record.get("player_name"), record.get("team")),
             alpha=alpha,
             beta=None,
         )
@@ -402,6 +405,8 @@ def attach_close_fields(
             record,
             overwrite=overwrite_model_p,
             method="beta",
+            games_played=games_played(
+                week_index, record.get("player_name"), record.get("team")),
             alpha=alpha,
             beta=beta,
         )
@@ -410,6 +415,8 @@ def attach_close_fields(
             record,
             overwrite=overwrite_model_p,
             method="market_prior",
+            games_played=games_played(
+                week_index, record.get("player_name"), record.get("team")),
             kappa=kappa,
         )
     elif model_mode == "projection_nflverse_rate":
