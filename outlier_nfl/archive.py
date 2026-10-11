@@ -383,6 +383,34 @@ def _write_once(dest: Path, data: bytes) -> bool:
     return True
 
 
+# The #252 sidecar (``boxscore_nflverse.CacheMeta`` / ``_write_meta``) is exactly
+# url, fetched_at, sha256, size, rows and, optionally, previous_sha256.
+# These two describe the download, not the file. Every other field (url, sha256,
+# size, rows, and any field added later) describes the file and must match.
+SIDECAR_DOWNLOAD_FIELDS = frozenset({"fetched_at", "previous_sha256"})
+
+
+def same_sidecar_file(dest: Path, new_bytes: bytes) -> bool:
+    """True when ``dest`` is an archived sidecar describing the same file as ``new_bytes``.
+
+    Fields in :data:`SIDECAR_DOWNLOAD_FIELDS` are ignored; everything else must be
+    equal. Unreadable sidecars never match.
+    """
+    if not dest.is_file():
+        return False
+    try:
+        old, new = json.loads(dest.read_bytes()), json.loads(new_bytes)
+    except ValueError:
+        return False
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+
+    def describing(d: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in d.items() if k not in SIDECAR_DOWNLOAD_FIELDS}
+
+    return describing(old) == describing(new)
+
+
 def record_nflverse(nfl_dir: Path | str, cache_dir: Path | str, seasons: list[int]) -> RecordResult:
     """Copy the nflverse box-score inputs and their #252 sidecars into the archive.
 
@@ -428,7 +456,10 @@ def record_nflverse(nfl_dir: Path | str, cache_dir: Path | str, seasons: list[in
             for name, payload in ((csv_path.name, data), (side.name, side_data)):
                 dest = folder / name
                 try:
-                    _write_once(dest, payload)
+                    if name == side.name and same_sidecar_file(dest, payload):
+                        pass  # identical re-download: keep the first sidecar as it is
+                    else:
+                        _write_once(dest, payload)
                     entry, new = record_file(
                         root, dest, role=NFLVERSE_ROLE, slate=None, source="nflverse",
                         season=season, captured_at=fetched_at, fetched_at=fetched_at)
