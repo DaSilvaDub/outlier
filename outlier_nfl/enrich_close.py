@@ -32,6 +32,7 @@ from outlier_nfl.calibration import (
     MODEL_P_SOURCE_EMPIRICAL_HIT_RATE_MARKET_PRIOR,
     attach_empirical_model_p_record,
     attach_sportsbook_fields_record,
+    probability_to_01,
 )
 from outlier_nfl.projection import (
     MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
@@ -502,6 +503,40 @@ def _model_p_note(
     return "pass-through only; model_p not derived from hit rates."
 
 
+MODEL_P_GUARD_DEGENERATE = "degenerate_model_p"
+_MODEL_P_DETAIL_KEYS = (
+    "model_p_method", "model_p_n_games", "model_p_n_source",
+    "model_p_win", "model_p_push", "model_p_loss",
+)
+
+
+def reject_degenerate_model_p(row: MutableMapping[str, Any]) -> bool:
+    """Clear a model_p of exactly 0 or 1 (or unreadable); True when cleared.
+
+    A certain outcome is never a calibrated probability: it scores log loss as
+    infinite, Kelly-sizes as a lock and turns edge into the whole implied
+    price. The value is kept as ``model_p_rejected`` with ``model_p_guard``
+    so the row stays auditable; downstream treats it as having no model_p.
+    """
+    value = row.get("model_p")
+    if value is None:
+        return False
+    p = probability_to_01(value)
+    if p is not None and 0.0 < p < 1.0:
+        return False
+    row["model_p_rejected"] = value
+    row["model_p_rejected_source"] = row.get("model_p_source")
+    row["model_p_guard"] = MODEL_P_GUARD_DEGENERATE
+    row["model_p"] = None
+    row["model_p_source"] = None
+    row.pop("p_model", None)
+    for key in _MODEL_P_DETAIL_KEYS:
+        row.pop(key, None)
+    if "sportsbook_edge_pts" in row:
+        row["sportsbook_edge_pts"] = None
+    return True
+
+
 def enrich_prediction_payload(
     payload: Mapping[str, Any],
     *,
@@ -528,6 +563,7 @@ def enrich_prediction_payload(
     n_model = 0
     n_book = 0
     n_unverified = 0
+    n_degenerate = 0
     sources: dict[str, int] = {}
     for raw in records_in:
         if not isinstance(raw, Mapping):
@@ -544,6 +580,8 @@ def enrich_prediction_payload(
             book_close_index=book_close_index,
             overwrite_model_p=overwrite_model_p,
         )
+        if reject_degenerate_model_p(row):
+            n_degenerate += 1
         if row.get("model_p") is not None:
             n_model += 1
             src = str(row.get("model_p_source") or "unknown")
@@ -579,6 +617,7 @@ def enrich_prediction_payload(
         "beta": beta,
         "kappa": kappa,
         "n_with_model_p": n_model,
+        "n_degenerate_model_p": n_degenerate,
         "by_source": sources,
         "note": _model_p_note(model_mode, alpha, beta, kappa),
     }
