@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import uuid
 from typing import Any
@@ -85,13 +86,37 @@ def admissibility(nfl_dir: Path | str, slates: list[str] | None = None) -> list[
         reasons = list(manifest_gaps)
         reasons += [f"{g.kind}: {g.detail}" for g in report.gaps if g.slate == slate]
         run_id = pointers.get(slate)
-        mine = [e for e in entries if e.slate == slate and e.run_id == run_id]
+        mine = [e for e in entries if e.slate == slate and e.run_id == run_id
+                and e.role != ar.TAPE_ROLE]
         if run_id is None:
             reasons.append("no dated run pointer names an archived run for this slate")
         else:
             reasons += _original_problems(root, mine)
+            tape = _run_tape_entry(root, mine, entries)
+            if tape is not None:
+                mine.append(tape)
         verdicts.append(SlateVerdict(slate, not reasons, run_id, reasons, mine))
     return verdicts
+
+
+def _run_tape_entry(root: Path, mine: list[ar.ArchiveEntry],
+                    entries: list[ar.ArchiveEntry]) -> ar.ArchiveEntry | None:
+    """The archived tape this run admitted, matched by sha256 and not by run id.
+
+    Runs that read the same shared tape (e.g. two kickoff windows) share one
+    archived copy, whose entry names the first run recorded.
+    """
+    manifest_entry = next((e for e in mine if e.role == "run_manifest"), None)
+    if manifest_entry is None:
+        return None
+    try:
+        body = json.loads(ar.resolve_path(root, manifest_entry.path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    tape = next((s for s in body.get("sources") or []
+                 if isinstance(s, dict) and s.get("name") == "tape"), None)
+    want = tape.get("sha256") if tape and tape.get("status") == "AVAILABLE" else None
+    return next((e for e in entries if e.role == ar.TAPE_ROLE and e.sha256 == want), None)
 
 
 def _original_problems(root: Path, mine: list[ar.ArchiveEntry]) -> list[str]:
@@ -349,6 +374,12 @@ def rebuild_slate(
         dest = work / "NFL" / "tape" / "prior_week.json"
         dest.parent.mkdir(parents=True)
         dest.write_bytes(_verified_bytes(root, tape_entry))
+        # An unstamped tape's knowable time is its mtime (matchup._tape_written_at).
+        # The copy gets the time the original run read it (the entry's captured_at,
+        # the run start), so the point-in-time gate judges the tape and not the copy.
+        read_at = _parse(tape_entry.captured_at)
+        if read_at is not None:
+            os.utime(dest, (read_at.timestamp(), read_at.timestamp()))
     weather = _archived_weather(root, run_id, original_manifest)
     inputs = PinnedInputs(csv_by_url, weather)
     client = ArchivedOutlierClient(raw["pregame_schedule"], raw["pregame_event_markets"],

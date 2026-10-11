@@ -90,17 +90,19 @@ def _archive_nflverse(tmp_path: Path, nfl: Path, fetched_at: str = "2026-10-04T1
 
 def _tape(nfl: Path) -> Path:
     tape = nfl / "tape" / "prior_week.json"
-    tape.parent.mkdir(parents=True, exist_ok=True)
-    tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    if not tape.exists():  # a test may plant its own tape first
+        tape.parent.mkdir(parents=True, exist_ok=True)
+        tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
     return tape
 
 
-def live_original(tmp_path: Path, client: Any = None, clock: str = PREGAME) -> tuple[Path, str]:
+def live_original(tmp_path: Path, client: Any = None, clock: str = PREGAME,
+                  window: str | None = None) -> tuple[Path, str]:
     nfl = tmp_path / "NFL"
     _tape(nfl)
     now = parse_utc(clock)
     s = NflPipeline(client=client or snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path,
-                    clock=lambda: now).run(date=SLATE, as_of_utc=clock,
+                    clock=lambda: now).run(date=SLATE, as_of_utc=clock, window=window,
                                            reports_dir=tmp_path / "reports")
     return nfl, s["run_id"]
 
@@ -327,3 +329,69 @@ def test_missing_archived_weather_is_missing_and_labelled():
     with pytest.raises(rb.UnavailableInRebuild):
         inputs.weather([])
     assert inputs.refused == ["weather"]
+
+
+# --- archived tape role (#258) ----------------------------------------------------------
+
+def _tape_source(nfl: Path, m: dict[str, Any]) -> dict[str, Any]:
+    run = json.loads((nfl / "versions" / m["rebuild_id"] / m["rebuilt_run_dir"] / "manifest.json")
+                     .read_text("utf-8"))
+    return next(s for s in run["sources"] if s["name"] == "tape")
+
+
+def test_archived_tape_is_used_and_matches_the_original(archived):
+    nfl, run_id = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    original = json.loads((nfl / "runs" / run_id / "manifest.json").read_text("utf-8"))
+    orig_tape = next(s for s in original["sources"] if s["name"] == "tape")
+    tape = _tape_source(nfl, m)
+    assert m["evidence_sources"]["tape"] == "archived"
+    assert (tape["status"], tape["sha256"]) == ("AVAILABLE", orig_tape["sha256"])
+    comp = json.loads((nfl / "versions" / "r1" / "comparison.json").read_text("utf-8"))
+    assert not any("evidence_changed:injury" in d["causes"] for d in comp["differences"])
+
+
+def test_rebuild_without_archived_tape_labels_injury(tmp_path):
+    # The original's tape lists Mahomes Out, so his picks' injury pillar CONTRADICTS.
+    # The tape is then rewritten, so it can't be archived; the rebuild has no tape
+    # and the pillar becomes MISSING. That is a real difference, labelled injury.
+    tape_body = snap.frozen_tape(FIXTURES_DIR)
+    tape_body["inactive"] = {"KC": ["Patrick Mahomes"]}
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    tape.write_text(json.dumps(tape_body), encoding="utf-8")
+    nfl, _ = live_original(tmp_path)
+    tape.write_text(tape.read_text("utf-8") + " ", encoding="utf-8")  # rewritten after the run
+    result = ar.record_pointed_runs(nfl)
+    assert result.notes and ar.TAPE_ROLE not in {e.role for e in result.recorded}
+    _archive_nflverse(tmp_path, nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert m["evidence_sources"]["tape"] == "unavailable"
+    assert _tape_source(nfl, m)["status"] != "AVAILABLE"
+    comp = json.loads((nfl / "versions" / "r1" / "comparison.json").read_text("utf-8"))
+    changed = [d for d in comp["differences"] if "evidence_changed:injury_weather" in d["causes"]]
+    assert changed, comp["cause_counts"]  # a real difference: the original had the tape
+    assert all("evidence_changed:injury" in d["causes"] for d in changed)
+
+
+def test_two_windows_sharing_one_tape_both_rebuild_with_it(tmp_path):
+    """The full-day run and the early-window run read the same shared prior_week.json.
+    The archive stores one copy (keyed by sha256, so its entry names the first run
+    recorded), and both slates' rebuilds must use it. The frozen client can't serve a
+    complete late-window props feed (that run is PARTIAL), so the second window is
+    the full day."""
+    nfl, full = live_original(tmp_path, clock=PREGAME)
+    _, early = live_original(tmp_path, window="early", clock="2026-10-04T15:05:00+00:00")
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    tapes = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE]
+    assert len({e.path for e in tapes}) == 1
+    verdicts = {v.slate: v for v in rb.admissibility(nfl)}
+    assert set(verdicts) == {SLATE, f"{SLATE}_early"}
+    for slate, run_id in ((SLATE, full), (f"{SLATE}_early", early)):
+        v = verdicts[slate]
+        assert v.admissible and v.run_id == run_id, v.reasons
+        assert ar.TAPE_ROLE in {e.role for e in v.entries}, slate
+        m = rb.rebuild_slate(nfl, slate, rebuild_id=f"r-{slate}", clock=lambda: NOW)
+        assert m["evidence_sources"]["tape"] == "archived"
+        assert _tape_source(nfl, m)["status"] == "AVAILABLE"
