@@ -40,9 +40,9 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 
 | Item | Status | Tests |
 |---|---|---|
-| Raw provider-shaped market/period/ID payload through all consumers | partial | harness Slate B (B1–B12, frozen live-shaped replay); `test_nfl_market_scope` |
+| Raw provider-shaped market/period/ID payload through all consumers | covered (9b) | `test_nfl_edges_e2e::test_every_consumer_reads_the_committed_run` (live-shaped `FrozenOutlierClient` payload through every published consumer); harness Slate B (B1–B12); `test_nfl_market_scope` |
 | Page-2 failures block publication | covered | `test_nfl_stage_gates::test_props_page_two_failure_is_partial_and_publishes_nothing`; `test_nfl_pagination_completeness::test_page_two_failure_raises_incomplete`; harness B5 |
-| Empty forecast/tape must not validate | partial | `test_nfl_weather::test_game_weather_records_provenance_and_empty_forecast_does_not_verify`; `test_nfl_tape_nflverse::test_inadmissible_tape_disables_injury_pillar`; harness B9 (empty tape-with-no-teams case not named) |
+| Empty forecast/tape must not validate | covered (9b) | `test_nfl_edges_e2e::test_tape_with_no_teams_is_refused`; `test_nfl_weather::test_game_weather_records_provenance_and_empty_forecast_does_not_verify`; `test_nfl_tape_nflverse::test_inadmissible_tape_disables_injury_pillar`; harness B9 |
 | Adding alternates must not change primary context | covered | `test_nfl_market_scope::test_alternates_cannot_move_the_primary_environment`, `::test_matchup_context_ignores_one_sided_alternates` |
 
 ## 4. Historical backfill (9c)
@@ -62,21 +62,21 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 | Same run ID has identical semantic outputs | covered (9a) | RC `::test_repeated_run_on_the_same_inputs_has_identical_semantic_outputs`; `test_nfl_publication::test_run_writer_refuses_reuse`; `test_nfl_boxscore_cache::test_settle_cli_pinned_regrade_is_reproducible` (#252: a pinned re-grade gives identical output); harness determinism (two captures, no diff) |
 | No duplicate ledger/snapshot records | covered | `test_nfl_persistence::test_same_run_id_never_duplicates_snapshot_rows`, `::test_same_run_id_ledger_rows_are_replaced_not_duplicated`; harness A21 |
 | Changed run ID adds an observation with coherent provenance | covered (9a) | `test_nfl_persistence::test_changed_run_id_adds_one_observation`; RC `::test_changed_run_id_replaces_the_ledger_observation_coherently`; `test_nfl_publication::test_snapshot_rows_carry_the_run_id` |
-| Concurrent jobs cannot lose dates | covered (9a) | `test_nfl_persistence::test_concurrent_ledger_writers_lose_no_dates`, `::test_two_threads_on_a_stale_lock_never_overlap`; RC `::test_concurrent_snapshot_appends_lose_no_rows` |
+| Concurrent jobs cannot lose dates | covered (9a) | `test_nfl_persistence::test_concurrent_ledger_writers_lose_no_dates`, `::test_two_threads_on_a_stale_lock_never_overlap`; RC `::test_concurrent_snapshot_appends_lose_no_rows`; `test_nfl_edges_e2e::test_two_os_processes_lose_no_snapshot_or_ledger_rows` (9b: two spawned OS processes) |
 
 ## 6. End-to-end (9b)
 
 | Item | Status | Tests |
 |---|---|---|
 | Offline valid slate | covered | `test_nfl_best_bets::test_pipeline_run_writes_snapshot_and_traced_card`; harness A1 |
-| Empty confirmed slate | partial | `test_nfl_export_extra_pack::test_valid_empty_slate_exits_zero_with_a_header`; harness B8 (pipeline-level empty confirmed slate not named) |
+| Empty confirmed slate | covered (9b) | `test_nfl_edges_e2e::test_empty_confirmed_slate_publishes_an_empty_card`; `test_nfl_export_extra_pack::test_valid_empty_slate_exits_zero_with_a_header`; harness B8 |
 | Partial page | covered | `test_nfl_stage_gates::test_props_page_two_failure_is_partial_and_publishes_nothing`; harness B5 |
 | Unavailable mandatory source | covered | `test_nfl_stage_gates::test_every_event_market_failing_is_failed`; harness B2, B6 |
 | Failure during write | covered | `test_nfl_publication::test_failed_run_publishes_nothing`; `test_nfl_best_bets::test_trace_failure_removes_stale_card_and_weekly_run_fails`; `test_nfl_persistence::test_snapshot_lock_timeout_withdraws_card_and_names_the_lock` |
 | Full → window | covered | `test_nfl_publication::test_window_run_preserves_bare_date_bytes`, `::test_window_run_writes_only_suffixed_files`; harness A2 |
 | After-kickoff run | covered | `test_nfl_publication::test_after_kickoff_run_is_bundle_only`; harness B4 |
-| Recovery | partial | `test_nfl_boxscore_cache::test_refresh_failure_falls_back_to_validated_copy`; `test_nfl_persistence::test_failed_refresh_falls_back_to_the_existing_tape_dir` |
-| All consumers resolve the same committed run manifest | gap | `test_nfl_publication::test_run_bundle_manifest_hashes_match_and_pointer_written_last` checks the manifest, not that every consumer reads it |
+| Recovery | covered (9b) | `test_nfl_edges_e2e::test_recovery_after_a_partial_run_republishes_one_coherent_run`; `test_nfl_boxscore_cache::test_refresh_failure_falls_back_to_validated_copy`; `test_nfl_persistence::test_failed_refresh_falls_back_to_the_existing_tape_dir` |
+| All consumers resolve the same committed run manifest | covered (9b) | `test_nfl_edges_e2e::test_every_consumer_reads_the_committed_run`, `::test_recovery_after_a_partial_run_republishes_one_coherent_run`; `test_nfl_publication::test_run_bundle_manifest_hashes_match_and_pointer_written_last` |
 
 ## 7. Leakage prevention (9a)
 
@@ -92,18 +92,18 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 
 | Item | Status | Tests |
 |---|---|---|
-| January REG | covered | `test_nfl_season_phase::test_january_regular_season_slate_publishes`; `test_nfl_settlement_grading::test_january_february_settlement_uses_the_prior_season` |
-| All POST rounds | partial | `test_nfl_season_phase::test_postseason_slate_is_rejected_before_publication`; harness B7 (not each round) |
-| Bye | gap | — |
-| Reschedule / postponement | gap | — |
-| Neutral / international game | partial | `test_nfl_season_phase::test_schedule_fallback_matches_neutral_site_game_with_swapped_home_away` |
-| DST boundaries | gap | — |
+| January REG | covered | `test_nfl_edges_e2e::test_january_regular_season_game_is_reg_and_publishable`; `test_nfl_season_phase::test_january_regular_season_slate_publishes`; `test_nfl_settlement_grading::test_january_february_settlement_uses_the_prior_season` |
+| All POST rounds | covered (9b) | `test_nfl_edges_e2e::test_every_playoff_round_is_post_by_type_week_and_schedule_and_is_refused` (WC/DIV/CON/SB, real 2025 rows); `test_nfl_season_phase::test_postseason_slate_is_rejected_before_publication`; harness B7 |
+| Bye | covered (9b) | `test_nfl_edges_e2e::test_bye_week_is_not_a_missed_game`; `test_nfl_games_played_smoothing::test_games_played_counts_distinct_weeks_and_unknown_is_none` |
+| Reschedule / postponement | covered (9b) | `test_nfl_edges_e2e::test_rescheduled_game_does_not_inherit_its_stale_schedule_row`, `::test_rescheduled_week_stays_pending_until_its_new_kickoff` |
+| Neutral / international game | covered (9b) | `test_nfl_edges_e2e::test_neutral_international_game_matches_swapped_teams_and_is_never_forecast`; `test_nfl_season_phase::test_schedule_fallback_matches_neutral_site_game_with_swapped_home_away` |
+| DST boundaries | covered (9b) | `test_nfl_edges_e2e::test_eastern_gametime_converts_across_dst`, `::test_dst_boundary_does_not_start_a_game_an_hour_early` |
 | Trade | covered | `test_nfl_usage::test_traded_player_role_is_current_team_only` |
-| IR / PUP | gap | — |
+| IR / PUP | partial (9b) | `test_nfl_edges_e2e::test_injury_report_has_no_ir_or_pup_status`. The real nflverse injury report has no IR/PUP value (players drop off it), and no NFL consumer reads a roster reserve status, so an IR player is caught only by missing from the depth chart. A real IR/PUP source would be new scope, not a test |
 | Inactive starter | covered | `test_nfl_matchup::test_inactive_rb1_falls_back_to_next_healthy_depth_chart_back`; `test_nfl_best_bets::test_inactive_player_rejected` |
 | Backup with more book coverage | covered | `test_nfl_roster::test_backup_with_more_quotes_is_not_promoted` |
 | Name collisions | covered | `test_nfl_alt_floors::test_same_name_in_two_events_is_two_players`; `test_nfl_close_ownership::test_two_same_name_players_stay_ambiguous`; `test_nfl_fetch_odds_close::test_same_game_name_collision_is_rejected_on_both_keys` |
-| Legacy depth schema | gap | (legacy *cache* tests exist in `test_nfl_boxscore_cache`, not legacy depth) |
+| Legacy depth schema | covered (9b) | `test_nfl_edges_e2e::test_pre_2025_legacy_depth_schema_season_is_refused` (pre-2025 seasons are refused before publication) |
 
 ## Release acceptance criteria
 
@@ -123,15 +123,15 @@ Slate B steps B1–B12) is cited where a step exercises the contract end to end.
 |---|---|---|---|---|
 | 1 Unit calculations | 5 | 0 | 0 | 9a |
 | 2 Data integrity | 6 | 0 | 0 | 9a |
-| 3 Integration | 2 | 2 | 0 | 9b |
+| 3 Integration | 4 | 0 | 0 | 9b |
 | 4 Historical backfill | 0 | 3 | 2 | 9c |
 | 5 Incremental/repeated | 4 | 0 | 0 | 9a |
-| 6 End-to-end | 6 | 2 | 1 | 9b |
+| 6 End-to-end | 9 | 0 | 0 | 9b |
 | 7 Leakage prevention | 5 | 0 | 0 | 9a |
-| 8 NFL edges | 6 | 2 | 5 | 9b |
+| 8 NFL edges | 12 | 1 | 0 | 9b |
 | Release criteria | 6 | 1 | 0 | 9c (coverage) |
 
 Before 9a, categories 1/2/5/7 had 1 + 2 + 3 + 1 items short of full coverage
 (offered-price EV; declared counts, two teams per game; same-run semantic
 identity, changed-run ledger provenance, concurrent snapshot appends;
-retrospective close), now filled by `tests/test_nfl_release_contracts.py`.
+retrospective close), now filled by `tests/test_nfl_release_contracts.py`. Phase 9b (#231 part b) fills categories 3, 6 and 8 with `tests/test_nfl_edges_e2e.py`; IR/PUP stays partial because no real source carries that status.
