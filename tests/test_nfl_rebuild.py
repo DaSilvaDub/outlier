@@ -395,3 +395,62 @@ def test_two_windows_sharing_one_tape_both_rebuild_with_it(tmp_path):
         m = rb.rebuild_slate(nfl, slate, rebuild_id=f"r-{slate}", clock=lambda: NOW)
         assert m["evidence_sources"]["tape"] == "archived"
         assert _tape_source(nfl, m)["status"] == "AVAILABLE"
+
+
+# --- determinism, guard, no network --------------------------------------------------
+
+def _normalized_tree(out: Path) -> dict[str, bytes]:
+    m = json.loads((out / "rebuild_manifest.json").read_text("utf-8"))
+    rid, run = m["rebuild_id"], m["rebuilt_run_id"]
+    tree: dict[str, bytes] = {}
+    for p in sorted(out.rglob("*")):
+        if not p.is_file():
+            continue
+        name = p.relative_to(out).as_posix().replace(run, "<run>")
+        data = p.read_bytes().replace(run.encode(), b"<run>").replace(rid.encode(), b"<rid>")
+        if name.endswith("<run>/manifest.json"):
+            body = json.loads(data)
+            for art in body["artifacts"]:
+                art.pop("sha256")  # hashes of files that embed the run id
+            data = json.dumps(body, sort_keys=True).encode()
+        tree[name] = data
+    return tree
+
+
+def test_two_rebuilds_of_the_same_slate_are_byte_identical(archived):
+    """Same archive and clock: every file is identical except for rebuild_id, the
+    rebuilt run id (its random uuid suffix, so also its folder name), and the run
+    manifest's artifact sha256s of the files that embed that id. With a real clock,
+    created_utc, updated_at, timestamp_utc and run_started_utc differ too."""
+    nfl, _ = archived
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r2", clock=lambda: NOW)
+    a = _normalized_tree(nfl / "versions" / "r1")
+    b = _normalized_tree(nfl / "versions" / "r2")
+    assert a.keys() == b.keys()
+    assert [k for k in a if a[k] != b[k]] == []
+
+
+def test_guard_originals_untouched_and_nothing_written_outside_the_version(archived, tmp_path):
+    nfl, _ = archived
+    (nfl / "calibration").mkdir()
+    (nfl / "calibration" / "nfl_calibration.json").write_text('{"k": 1}', encoding="utf-8")
+
+    def tree() -> dict[str, tuple[bytes, int]]:
+        return {p.relative_to(tmp_path).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in sorted(tmp_path.rglob("*")) if p.is_file()
+                and "versions" not in p.relative_to(tmp_path).parts}
+
+    before = tree()
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert tree() == before  # nothing outside versions/r1 created, changed or removed
+    for key in ("NFL/normalized/nfl_run_pointer_latest.json", "NFL/tape/prior_week.json",
+                "NFL/calibration/nfl_calibration.json", "NFL/archive/manifest.jsonl"):
+        assert key in before
+    assert sorted(p.name for p in (nfl / "versions").iterdir()) == ["r1"]
+
+
+def test_rebuild_opens_no_socket(archived):
+    nfl, _ = archived
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert NETWORK_CALLS == []
