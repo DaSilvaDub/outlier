@@ -250,3 +250,15 @@ def test_record_run_id_keys_by_the_pointer_slate_name(tmp_path):
     entries, _ = ar.read_manifest(ar.manifest_path(nfl))
     assert {e.slate for e in entries} == {suffix}
     assert ar.check_archive(nfl).gaps == []
+
+
+def test_manifest_not_matching_the_pointer_hash_is_refused(run):
+    nfl, run_id = run
+    target = nfl / "runs" / run_id / "manifest.json"
+    body = json.loads(target.read_text("utf-8"))
+    body["status"] = "EDITED"
+    target.write_text(json.dumps(body), encoding="utf-8")
+    result = ar.record_run(nfl, run_id)
+    assert not result.recorded and any("manifest_sha256" in c for c in result.conflicts)
+    assert not ar.manifest_path(nfl).exists()
+    assert nfl_archive.main(["record", "--nfl-dir", str(nfl)]) == 1

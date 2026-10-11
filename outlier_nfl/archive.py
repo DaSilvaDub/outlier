@@ -265,10 +265,18 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
     run_dir = root / "runs" / run_id
     result = _empty_result()
     try:
-        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        manifest_bytes = (run_dir / "manifest.json").read_bytes()
+        manifest = json.loads(manifest_bytes)
     except (OSError, ValueError) as exc:
         result.missing.append(f"{run_dir / 'manifest.json'}: {exc}")
         return result
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    for pointer_file, sealed_sha in _pointer_hashes(root, run_id):
+        if sealed_sha != manifest_sha:
+            result.conflicts.append(
+                f"{run_id}/manifest.json: sha256 {manifest_sha} does not match "
+                f"{pointer_file.name} manifest_sha256 {sealed_sha}; run not archived")
+            return result
     ctx = manifest.get("context") or {}
     # Key by the pointer's slate name (e.g. 2026-10-04_early), the same key check uses.
     pointer_slates = [k for k, v in pointed_runs(root).items() if v == run_id]
@@ -296,6 +304,20 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
             continue
         (result.recorded if new else result.already).append(entry)
     return result
+
+
+def _pointer_hashes(nfl_dir: Path, run_id: str) -> list[tuple[Path, str | None]]:
+    """``(pointer file, manifest_sha256)`` for every pointer naming ``run_id``."""
+    out: list[tuple[Path, str | None]] = []
+    for p in sorted((nfl_dir / "normalized").glob("nfl_run_pointer_*.json")):
+        try:
+            body = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(body, dict) and body.get("run_id") == run_id:
+            sha = body.get("manifest_sha256")
+            out.append((p, sha if isinstance(sha, str) else None))
+    return out
 
 
 def pointed_runs(nfl_dir: Path | str) -> dict[str, str]:
