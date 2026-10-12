@@ -1173,7 +1173,9 @@ def _run_alt_floor_step(work: Path) -> str | None:
             return {
                 "candidates": [{
                     "player": c.player_name, "event_id": c.event_id, "book": c.target_book,
-                    "odds": c.target_odds, "actionable": getattr(c, "actionable", True),
+                    "odds": c.target_odds,
+                    "quote_eligible": getattr(c, "quote_eligible", getattr(c, "actionable", False)),
+                    "bet_actionable": getattr(c, "bet_actionable", False),
                     "inventory_reason": getattr(c, "inventory_reason", None)} for c in flat],
                 "master_pool": [(m.player_name, m.event_id) for m in master],
                 "inventory": [(i.player_name, i.inventory_reason)
@@ -1930,7 +1932,11 @@ def _git_head(repo: Path) -> str | None:
 
 
 def _normalize_text(text: str, work: Path, run_ids: dict[str, str]) -> str:
-    text = text.replace(str(work.resolve()), "<WORK>").replace(str(work), "<WORK>")
+    roots = {str(work.resolve()), str(work), work.resolve().as_posix(), work.as_posix()}
+    # JSON doubles Windows backslashes; normalize serialized roots too.
+    roots.update(json.dumps(root, ensure_ascii=False)[1:-1] for root in list(roots))
+    for root in sorted(roots, key=len, reverse=True):
+        text = text.replace(root, "<WORK>")
     for rid, token in sorted(run_ids.items(), key=lambda kv: -len(kv[0])):
         text = text.replace(rid, token)
     return text

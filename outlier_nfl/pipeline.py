@@ -769,6 +769,17 @@ class NflPipeline:
                 as_of_utc=ctx.as_of_utc,
                 inactive_by_team=tape.injury_report(),
                 require_injury_evidence=True,
+                export_context={
+                    "run_id": run_id,
+                    "captured_at": ctx.as_of_iso,
+                    "run_context": ctx.to_dict(),
+                },
+            )
+            receipts.append(
+                receipt(
+                    "alt_floor_capture", "EMPTY" if not slate_events else "OK",
+                    received=alt_floors_summary.get("calibration_count", 0),
+                )
             )
             if publish:
                 writer.stage_tree("exports", self.data_dir / "NFL" / "exports")
@@ -778,7 +789,12 @@ class NflPipeline:
                 target_alt_book,
             )
         except Exception as exc:
-            logger.warning("Failed generating alt floor props: %s", exc)
+            logger.error("Failed generating alt floor props and calibration capture: %s", exc)
+            receipts.append(receipt(
+                "alt_floor_capture", "FAILED",
+                reason=f"alternate floor capture failed: {exc}", errors=[str(exc)],
+            ))
+            errors.append(f"alternate floor capture failed: {exc}")
 
         # =====================================================================
         # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
@@ -798,6 +814,7 @@ class NflPipeline:
                 staged_reports_dir=writer.staged_path("reports"),
                 date_str=target_date,
                 suffix=suffix,
+                write_latest=publish_latest,
             )
             if len(slate_events) == 0:
                 receipts.append(receipt("matchup_rankings", "EMPTY", received=0))
@@ -826,6 +843,11 @@ class NflPipeline:
             errors.append(f"matchup rankings failed: {exc}")
 
         status = run_status(receipts)
+        if status != "OK":
+            # Late required stages must withdraw earlier staged publications too.
+            writer.withhold_publication()
+            publish, publish_latest = False, False
+            publication_reason = gate_reason(receipts)
         summary: dict[str, Any] = {
             "status": status,
             "date": target_date,
@@ -1236,7 +1258,8 @@ def main() -> int:
         alt_data = summary.get("alt_floors") or {}
         if alt_data.get("count"):
             print("-" * 60)
-            print(f"SPORTSBOOK ALTERNATE FLOOR PROPS ({args.target_alt_book.upper()}):")
+            print(f"QUOTED ALTERNATE FLOOR RESEARCH ({args.target_alt_book.upper()}):")
+            print("  Ranking scores are not win probabilities. Uncalibrated floors carry no stake.")
             top3_cat = alt_data.get("top3_by_category") or {}
             for mkt, title in [
                 ("PASS_YDS", "PASSING YARDS"),
@@ -1255,15 +1278,15 @@ def main() -> int:
                         print(
                             f"    #{p.get('category_rank')} {p.get('player_name'):<20} ({p.get('team')}): "
                             f"OVER {p.get('line'):<5} | Odds: {odds_s:<6} | Cons: {p.get('consensus_line'):<5} "
-                            f"(Cush: +{p.get('cushion')} yds) | Score: {p.get('confidence_score'):.3f}"
+                            f"(Cush: +{p.get('cushion')} yds) | Rank score: {p.get('ranking_score'):.3f}"
                         )
             master_list = alt_data.get("master_pool") or []
             if master_list:
                 top1 = master_list[0]
                 print(
-                    f"  TOP OVERALL CONFIDENCE PLAY: #{top1.get('master_rank')} {top1.get('player_name')} "
+                    f"  TOP RANKED QUOTED FLOOR: #{top1.get('master_rank')} {top1.get('player_name')} "
                     f"({top1.get('team')}) - OVER {top1.get('line')} {top1.get('market_display')} "
-                    f"(Score: {top1.get('confidence_score'):.3f})"
+                    f"(Rank score: {top1.get('ranking_score'):.3f})"
                 )
         rankings_data = summary.get("matchup_rankings") or {}
         if rankings_data.get("count"):

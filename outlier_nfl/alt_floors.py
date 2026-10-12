@@ -6,7 +6,8 @@ ladders (e.g. Hard Rock Bet) with consensus fallback.
 
 Eliminates rigid, static thresholds (e.g. fixed 50 rush / 200 pass) and evaluates
 each player's true available floor line, hit rate convergence (L5/L10/Season),
-safety cushion below consensus, game environment, and weather calibration.
+cushion below consensus, game environment, and weather adjustments. Scores
+are research ranks, not calibrated win probabilities.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from pathlib import Path
 from typing import Any
 
 from outlier_nfl.config import normalize_team
+from outlier_nfl.floor_probability import (
+    RANKING_SCORE_VERSION, describe_floor, is_half_point_line, odds_probability,
+)
 from outlier_nfl.roster import get_team_depth_chart
 
 logger = logging.getLogger("outlier_nfl.alt_floors")
@@ -78,10 +82,10 @@ class AltFloorProp:
     cushion_pct: float
     target_book: str
     target_odds: int | float | None
-    implied_probability: float | None  # None when there is no usable quote (F23)
-    l5_hit_rate: float
-    l10_hit_rate: float
-    season_hit_rate: float
+    implied_probability: float | None  # Unconditional quote threshold; no push model -> None.
+    l5_hit_rate: float | None
+    l10_hit_rate: float | None
+    season_hit_rate: float | None
     confidence_score: float
     category_rank: int
     master_rank: int
@@ -91,29 +95,76 @@ class AltFloorProp:
     event_starts_at: str = ""
     scope: str = "full_game"
     player_id: str = ""
-    # F23: only actionable rows are ranked or recommended. Inventory rows keep
-    # the reason they are not executable and are listed separately.
-    actionable: bool = True
+    # Quote eligibility permits research ranking, never a betting recommendation.
+    actionable: bool = False
     inventory_reason: str | None = None
+    quote_eligible: bool = False
+    bet_actionable: bool = False
+    stake_fraction: float = 0.0
+    ranking_score: float | None = None
+    ranking_score_version: str = RANKING_SCORE_VERSION
+    break_even_probability: float | None = None
+    break_even_probability_status: str = "invalid_quote"
+    market_probability: float | None = None
+    market_probability_status: str = "no_exact_same_book_opposite_quote"
+    model_probability: float | None = None
+    calibrated_probability: float | None = None
+    probability_status: str = "insufficient_calibration_history"
+    fair_decimal_odds: float | None = None
+    ev_per_unit: float | None = None
+
+    def __post_init__(self) -> None:
+        # Backward-compatible score name is internal only; never a win probability.
+        if self.ranking_score is None:
+            self.ranking_score = self.confidence_score
+        self.actionable = False
+        self.bet_actionable = False
+        self.stake_fraction = 0.0
+        self.model_probability = None
+        self.calibrated_probability = None
+        self.probability_status = "insufficient_calibration_history"
+        self.fair_decimal_odds = None
+        self.ev_per_unit = None
+        quote_evidence = describe_floor(asdict(self), [])
+        self.break_even_probability = quote_evidence["break_even_probability"]
+        self.break_even_probability_status = quote_evidence["break_even_probability_status"]
+        self.implied_probability = self.break_even_probability
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        # There is no production activation path until calibration is validated.
+        record.update(
+            actionable=False, bet_actionable=False, stake_fraction=0.0,
+            model_probability=None, calibrated_probability=None,
+            probability_status="insufficient_calibration_history",
+            fair_decimal_odds=None, ev_per_unit=None,
+        )
+        if not is_half_point_line(self.line):
+            record.update(
+                implied_probability=None, break_even_probability=None,
+                break_even_probability_status="push_probability_unmodeled",
+                market_probability=None, market_probability_status="push_probability_unmodeled",
+            )
+        return record
 
 
-def american_to_implied(odds: int | float | None) -> float:
-    """Convert American moneyline odds to implied probability [0.0, 1.0]."""
-    if odds is None:
-        return 0.50
+def american_to_implied(odds: Any) -> float | None:
+    """Convert a valid American price; a missing quote stays unavailable."""
+    return odds_probability(odds)
+
+
+def _hit_rate(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
-        val = float(odds)
-        if val < 0:
-            return abs(val) / (abs(val) + 100.0)
-        elif val > 0:
-            return 100.0 / (val + 100.0)
-        else:
-            return 0.50
+        number = float(value)
     except (TypeError, ValueError):
-        return 0.50
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 1 else None
+
+
+def _rate_display(value: float | None) -> str:
+    return "unavailable" if value is None else f"{value * 100:.2f}%"
 
 
 def _extract_book_quote(
@@ -154,7 +205,7 @@ def _finite_odds(odds: Any) -> float | None:
         val = float(odds)
     except (TypeError, ValueError):
         return None
-    return val if math.isfinite(val) and val != 0 else None
+    return val if odds_probability(odds) is not None else None
 
 
 def _name_key(name: Any) -> str:
@@ -265,6 +316,11 @@ def discover_alt_floor_candidates(
     ``floor_inventory_reason`` stays as non-actionable inventory (F23).
     """
     thresholds = min_lines or DEFAULT_MIN_LINES
+    input_rows = [p if isinstance(p, dict) else p.to_dict() for p in props]
+    input_rows = [
+        {**row, "scope": "full_game" if row.get("scope") in (None, "") else row["scope"]}
+        for row in input_rows
+    ]
     # A supplied (even empty) starter set restricts PASS_YDS: no evidenced
     # starter means no QB floor (F18). None keeps the unrestricted default.
     active_qbs = set(starting_qbs) if starting_qbs is not None else None
@@ -309,14 +365,14 @@ def discover_alt_floor_candidates(
         except (ValueError, TypeError):
             continue
 
-        if line < thresholds[mkt]:
+        if not math.isfinite(line) or line < thresholds[mkt]:
             continue
 
         pkey = _player_key(row)
         cons_line = (
             legacy_map.get((player, mkt)) if legacy_map else cons_map.get((*pkey, mkt))
         )
-        if cons_line is None or line >= cons_line:
+        if cons_line is None or not math.isfinite(cons_line) or cons_line <= 0 or line >= cons_line:
             continue
 
         books = row.get("books") or []
@@ -334,6 +390,8 @@ def discover_alt_floor_candidates(
         )
         if finite is None:
             b_odds = None  # never carry NaN/inf into scores or JSON
+        else:
+            b_odds = int(finite) if finite.is_integer() else finite
 
         # Must have favored odds or heavy juice indicating a legitimate floor
         if b_odds is not None and b_odds > 0:
@@ -343,9 +401,9 @@ def discover_alt_floor_candidates(
         cushion_pct = (cushion / cons_line * 100.0) if cons_line > 0 else 0.0
         cushion_ratio = cushion / cons_line if cons_line > 0 else 0.0
 
-        l5 = float(row.get("l5_hit_rate") or 0.0)
-        l10 = float(row.get("l10_hit_rate") or 0.0)
-        season = float(row.get("season_hit_rate") or 0.0)
+        l5 = _hit_rate(row.get("l5_hit_rate"))
+        l10 = _hit_rate(row.get("l10_hit_rate"))
+        season = _hit_rate(row.get("season_hit_rate"))
         # No quote is no price evidence: never an invented 0.50 (F23).
         implied_p = american_to_implied(b_odds) if b_odds is not None else None
         play_type = (
@@ -400,12 +458,12 @@ def discover_alt_floor_candidates(
                 if cushion_pct < 35.0:
                     situational_adj -= 0.04
 
-        # Composite confidence formula:
+        # Composite research ranking formula (unavailable rates contribute 0 only to rank):
         # 35% L10 stability + 30% L5 form + 15% Season + 10% Cushion ratio + 10% Implied + context
         base_score = (
-            (l10 * 0.35)
-            + (l5 * 0.30)
-            + (season * 0.15)
+            ((l10 or 0.0) * 0.35)
+            + ((l5 or 0.0) * 0.30)
+            + ((season or 0.0) * 0.15)
             + (cushion_ratio * 0.10)
             + ((implied_p or 0.0) * 0.10)
             + situational_adj
@@ -433,9 +491,9 @@ def discover_alt_floor_candidates(
                 "target_odds": b_odds,
                 "implied_probability": None if implied_p is None else round(implied_p, 4),
                 "play_type": play_type,
-                "l5_hit_rate": round(l5, 2),
-                "l10_hit_rate": round(l10, 2),
-                "season_hit_rate": round(season, 2),
+                "l5_hit_rate": l5,
+                "l10_hit_rate": l10,
+                "season_hit_rate": season,
                 "confidence_score": conf_score,
                 "is_target_book": is_target_book,
                 "event_id": event_id,
@@ -451,6 +509,10 @@ def discover_alt_floor_candidates(
     for (mkt, *_ident), lines in candidates_by_player.items():
         if not lines:
             continue
+        for candidate in lines:
+            evidence = describe_floor({**candidate, "scope": "full_game"}, input_rows)
+            if evidence["market_probability_status"] == "selected_quote_mismatch_or_conflict":
+                candidate["inventory_reason"] = "conflicting_selected_quotes"
         # Sort lines: executable first, then target book, highest confidence
         # score, then deepest cushion
         lines.sort(
@@ -492,9 +554,16 @@ def discover_alt_floor_candidates(
             event_starts_at=best["event_starts_at"],
             scope="full_game",
             player_id=best["player_id"],
-            actionable=best["inventory_reason"] is None,
+            quote_eligible=best["inventory_reason"] is None,
             inventory_reason=best["inventory_reason"],
         )
+        evidence = describe_floor(prop_obj.to_dict(), input_rows)
+        for field, value in evidence.items():
+            setattr(prop_obj, field, value)
+        if prop_obj.market_probability_status == "selected_quote_mismatch_or_conflict":
+            # A known conflicting selected price cannot support a quoted research row.
+            prop_obj.quote_eligible = False
+            prop_obj.inventory_reason = "conflicting_selected_quotes"
         optimal_by_category[mkt].append(prop_obj)
 
     return optimal_by_category
@@ -503,9 +572,10 @@ def discover_alt_floor_candidates(
 def rank_alt_floors(
     candidates_by_category: dict[str, list[AltFloorProp]],
 ) -> tuple[dict[str, list[AltFloorProp]], list[AltFloorProp], list[AltFloorProp]]:
-    """Rank actionable candidates into Top 3 per category and Master Top 9.
+    """Rank quote-eligible research into Top 3 per category and Master Top 9.
 
-    Third element: non-actionable inventory (F23), never ranked.
+    Third element: unquoted/ineligible inventory, never ranked. Ranking never
+    admits a bet or supplies calibrated probability.
     """
     top3_by_category: dict[str, list[AltFloorProp]] = {}
     master_pool: list[AltFloorProp] = []
@@ -513,8 +583,8 @@ def rank_alt_floors(
 
     for mkt in ["PASS_YDS", "RUSH_YDS", "REC_YDS"]:
         everything = candidates_by_category.get(mkt, [])
-        inventory.extend(p for p in everything if not p.actionable)
-        pool = [p for p in everything if p.actionable]
+        inventory.extend(p for p in everything if not p.quote_eligible)
+        pool = [p for p in everything if p.quote_eligible]
         # Sort by confidence score desc, then cushion desc
         pool.sort(key=lambda x: (x.confidence_score, x.cushion_pct), reverse=True)
         top3 = pool[:3]
@@ -527,8 +597,8 @@ def rank_alt_floors(
             prop.rationale = (
                 f"{prop.player_name} ({prop.team}): OVER {prop.line} {prop.market_display} ({prop.target_book} {odds_str}){play_tag} "
                 f"provides a +{prop.cushion:.1f} yd ({prop.cushion_pct:.1f}%) cushion below consensus ({prop.consensus_line}). "
-                f"Historical convergence: L5 {int(prop.l5_hit_rate * 100)}% ({int(round(prop.l5_hit_rate * 5))}/5), "
-                f"L10 {int(prop.l10_hit_rate * 100)}% ({int(round(prop.l10_hit_rate * 10))}/10)."
+                f"Reported historical rates: L5 {_rate_display(prop.l5_hit_rate)}, "
+                f"L10 {_rate_display(prop.l10_hit_rate)}. Research ranking only."
             )
             master_pool.append(prop)
 
@@ -556,14 +626,15 @@ def render_alt_floors_markdown(
         "",
         f"**Target Book**: `{target_book}` (Dynamic floor ladders with retail consensus fallback)  ",
         "**Methodology**: Replaces static, arbitrary thresholds (fixed 50 rush / 200 pass) with player-specific floor lines. "
-        "Evaluates true hit rate convergence (L5/L10/Season), safety cushion below consensus line, and environmental factors.  ",
+        "Ranks reported hit rates (L5/L10/Season), cushion below consensus line, prices and environmental factors.  ",
+        "**Status**: QUOTED RESEARCH — no approved bets; ranking scores are not calibrated win probabilities.  ",
         "**Juice Cap Policy**: Standalone straight wagers require odds >= -250. Odds worse than -250 (e.g. -325 to -700) are flagged `PARLAY ONLY` due to extreme downside injury asymmetry.",
         "",
         "---",
         "",
-        "## Master Confidence Ranking (Top 1–9 Overall)",
+        "## Quoted Research Ranking (Top 1–9 Overall)",
         "",
-        "| Rank | Player | Team | Market | Alt Line | Consensus | Cushion | Odds | Play Type | L5 Hit | L10 Hit | Confidence |",
+        "| Rank | Player | Team | Market | Alt Line | Consensus | Cushion | Odds | Play Type | L5 Hit | L10 Hit | Ranking Score |",
         "|:---:|:---|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
     ]
 
@@ -572,7 +643,7 @@ def render_alt_floors_markdown(
         lines.append(
             f"| **#{p.master_rank}** | **{p.player_name}** | {p.team} | {p.market_display} | "
             f"**OVER {p.line}** | {p.consensus_line} | +{p.cushion} ({p.cushion_pct}%) | "
-            f"`{p.target_book} {odds_str}` | `{p.play_type}` | {int(p.l5_hit_rate * 100)}% | {int(p.l10_hit_rate * 100)}% | **{p.confidence_score:.3f}** |"
+            f"`{p.target_book} {odds_str}` | `{p.play_type}` | {_rate_display(p.l5_hit_rate)} | {_rate_display(p.l10_hit_rate)} | **{p.confidence_score:.3f}** |"
         )
 
     lines.extend([
@@ -597,17 +668,22 @@ def render_alt_floors_markdown(
                 f"- **#{p.category_rank} {p.player_name} ({p.team} vs {p.opponent}) — OVER {p.line} {p.market_display}**"
             )
             lines.append(
-                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {(p.implied_probability or 0.0) * 100:.1f}%) | **Play Type**: `{p.play_type}`"
+                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` | **Price Restriction**: `{p.play_type}`"
             )
             lines.append(
                 f"  - **Safety Cushion**: +{p.cushion:.1f} yards below consensus line of {p.consensus_line} ({p.cushion_pct:.1f}% discount)"
             )
             lines.append(
-                f"  - **Hit Rates**: L5: {int(p.l5_hit_rate * 100)}% ({int(round(p.l5_hit_rate * 5))}/5) | "
-                f"L10: {int(p.l10_hit_rate * 100)}% ({int(round(p.l10_hit_rate * 10))}/10) | "
-                f"Season: {int(p.season_hit_rate * 100)}%"
+                f"  - **Reported Hit Rates**: L5: {_rate_display(p.l5_hit_rate)} | "
+                f"L10: {_rate_display(p.l10_hit_rate)} | Season: {_rate_display(p.season_hit_rate)}"
             )
-            lines.append(f"  - **Confidence Score**: `{p.confidence_score:.3f}` (Master Rank: #{p.master_rank})")
+            lines.append(f"  - **Ranking Score**: `{p.confidence_score:.3f}` (Master Rank: #{p.master_rank}; not a win probability)")
+            lines.append(
+                f"  - **Break-even Probability**: {_rate_display(p.break_even_probability)} "
+                f"(`{p.break_even_probability_status}`) | **Market Benchmark**: {_rate_display(p.market_probability)} "
+                f"(`{p.market_probability_status}`)"
+            )
+            lines.append(f"  - **Calibrated Probability / EV / Stake**: unavailable / unavailable / 0 (`{p.probability_status}`)")
             lines.append("")
 
     lines.extend([
@@ -630,15 +706,13 @@ def render_alt_floors_markdown(
     lines.append("")
 
     lines.extend([
-        "---",
-        "",
-        "## Parlay Construction Guidelines",
-        "",
-        "1. **Low-Floor Same-Game Parlay (SGP)**: Anchor correlating positive script legs in dome/neutral matchups (e.g. Starting QB Passing Floor + Workhorse RB Rushing Floor).",
-        "2. **Cross-Game High-Confidence Parlay**: Select the top 1 play from each category (Pass #1 + Rush #1 + Rec #1) to capture cross-game diversification with massive statistical floors.",
-        "3. **Alt Floor Side Restriction**: Per pipeline invariants, alternate player props must be parlayed across different games when combining alt lines.",
-        "4. **Juice Cap Enforcement**: Props with odds worse than -250 must NEVER be wagered as straight bets; allocate them exclusively as SGP or cross-game parlay anchors.",
-        "",
+        "---", "", "## Price and probability limits", "",
+        "A ranking score is a formula used to order research candidates, not a win probability. "
+        "A same-book proportional-devig benchmark describes the market; it is not a calibrated forecast.",
+        "Calibrated probability, fair odds, expected value and stakes remain unavailable until "
+        "verified outcomes and independent validation support publication. No floor is an approved bet.",
+        "Integer lines with possible pushes withhold unconditional break-even probabilities.",
+        "`PARLAY_ONLY` is a price restriction; it does not establish value or justify combining legs.", "",
     ])
 
     return "\n".join(lines)
@@ -653,16 +727,27 @@ def export_alt_floors(
     target_book: str = DEFAULT_TARGET_BOOK,
     write_latest: bool = True,
     inventory: list[AltFloorProp] | None = None,
+    *,
+    calibration_candidates: list[AltFloorProp] | None = None,
+    export_context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Export Alt Floors to JSON, CSV, and Markdown files.
 
-    CSV and ranked records carry actionable floors only; inventory is listed
+    CSV and ranked records carry quote-eligible research only; inventory is listed
     separately in JSON and markdown.
     """
     exports_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     records = [p.to_dict() for p in master_pool]
+    calibration_records = [p.to_dict() for p in (
+        calibration_candidates if calibration_candidates is not None
+        else [*master_pool, *(inventory or [])]
+    )]
+    context = export_context or {}
+    provenance = {key: context.get(key) for key in ("run_id", "captured_at", "run_context")}
+    for record in calibration_records:
+        record.update(provenance)
     payload = {
         "date": date_str,
         "target_book": target_book,
@@ -672,6 +757,12 @@ def export_alt_floors(
             for mkt, props in top3_by_category.items()
         },
         "records": records,
+        "status": "QUOTED_RESEARCH",
+        "actionable_count": 0,
+        "ranking_score_version": RANKING_SCORE_VERSION,
+        "calibration_records": calibration_records,
+        "calibration_record_count": len(calibration_records),
+        **provenance,
         "inventory_count": len(inventory or []),
         "inventory": [p.to_dict() for p in (inventory or [])],
     }
@@ -679,12 +770,12 @@ def export_alt_floors(
     # 1. JSON Exports
     json_dated = exports_dir / f"nfl_alt_floors_{date_str}.json"
     with open(json_dated, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(payload, f, indent=2, allow_nan=False)
 
     if write_latest:
         json_latest = exports_dir / "nfl_alt_floors_latest.json"
         with open(json_latest, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(payload, f, indent=2, allow_nan=False)
 
     # 2. CSV Exports
     fieldnames = [
@@ -709,6 +800,19 @@ def export_alt_floors(
         "l10_hit_rate",
         "season_hit_rate",
         "confidence_score",
+        "ranking_score",
+        "ranking_score_version",
+        "quote_eligible",
+        "bet_actionable",
+        "stake_fraction",
+        "break_even_probability",
+        "break_even_probability_status",
+        "market_probability",
+        "market_probability_status",
+        "calibrated_probability",
+        "probability_status",
+        "fair_decimal_odds",
+        "ev_per_unit",
         "rationale",
         "event_id",
         "player_id",
@@ -769,6 +873,7 @@ def generate_alt_floors_pipeline(
     as_of_utc: Any = None,
     inactive_by_team: dict[str, list[str]] | None = None,
     require_injury_evidence: bool = False,
+    export_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Complete pipeline orchestration for Alt Floor Props extraction and reporting."""
     weather_by_event: dict[str, dict[str, Any]] = {}
@@ -808,10 +913,16 @@ def generate_alt_floors_pipeline(
         target_book=target_book,
         write_latest=write_latest,
         inventory=inventory,
+        calibration_candidates=[p for pool in candidates.values() for p in pool],
+        export_context=export_context,
     )
 
     return {
         "count": len(master_pool),
+        "actionable_count": 0,
+        "bet_actionable_count": 0,
+        "calibration_count": sum(len(pool) for pool in candidates.values()),
+        "status": "QUOTED_RESEARCH",
         "inventory_count": len(inventory),
         "top3_by_category": {mkt: [p.to_dict() for p in props] for mkt, props in top3.items()},
         "master_pool": [p.to_dict() for p in master_pool],

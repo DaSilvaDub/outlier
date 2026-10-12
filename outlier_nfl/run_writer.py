@@ -21,6 +21,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +126,10 @@ class RunWriter:
                 "bytes": len(data),
                 "published_to": [str(d) for d in self._publish.get(name, [])],
             })
-        body = {**dict(manifest), "run_id": self.run_id, "artifacts": artifacts}
+        # Capture the actual seal clock after reading/hashing all staged artifacts.
+        # created_utc/context cutoffs are run-start times, not completion evidence.
+        body = {**dict(manifest), "run_id": self.run_id, "artifacts": artifacts,
+                "sealed_utc": datetime.now(UTC).isoformat()}
         manifest_bytes = json.dumps(body, indent=2, default=str, ensure_ascii=False).encode("utf-8")
         (self.stage_dir / MANIFEST_NAME).write_bytes(manifest_bytes)
         # Same transient-lock retry as the published copies: on Windows an indexer or
