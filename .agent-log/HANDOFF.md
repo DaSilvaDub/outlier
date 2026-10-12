@@ -1,3 +1,18 @@
+# HANDOFF — 2026-10-11 (Codex, NFL floor probability contract and shadow calibration)
+
+**Branch**: `fix/nfl-floor-calibration` · **Last implementation commit**: `f49af107e92cac3dd02f5a0f166d01b3e4820d4a`
+**PR**: https://github.com/DaSilvaDub/outlier/pull/261 (draft; unmerged).
+This handoff is saved in the following coordination commit. Resolve the final session HEAD with `git rev-parse fix/nfl-floor-calibration`; the completion artifact records its exact SHA.
+
+- **Files touched**: `outlier_nfl/{alt_floors,floor_probability,floor_calibration,pipeline,run_writer,matchup_rankings}.py`; `scripts/{nfl_floor_calibration,nfl_snapshot_diff}.py`; six targeted NFL test modules; `docs/NFL-FLOOR-CALIBRATION.md`.
+- **Behavior**: versioned ranking scores, exact paired market benchmarks, integer-line probability withholding, no calibrated probability/EV/approval/stakes. Complete selected-floor capture has run context and actual manifest seal. Offline strict settlement and chronological held-out monotone sigmoid fits remain SHADOW_ONLY.
+- **Pipeline repairs**: required floor-capture receipt, final withdrawal after late required-stage failure, windowed matchup alias preservation, JSON-escaped Windows path normalization in snapshot comparisons.
+- **Validation**: 1,131 NFL tests passed; MyPy 46 files and Pyright passed; changed-code Ruff passed excluding existing E402 violations; independent final reviewer found no blockers and passed 22 targeted cases.
+- **Data evidence**: current archive has 15 dated artifacts and 130 hash/size-verified legacy occurrences, including reruns. Stricter production audit admits zero targets; no NFL calibration or betting edge has been demonstrated. Saved SNF preview shows Brian Robinson benchmark 49.68% and seven withheld floors.
+- **Next steps**: review PR and hosted checks, merge through normal review, then collect sealed pregame captures and explicit verified-final outcome attestations. Complete prospective validation before any separate activation proposal. Synthetic tests are workflow evidence only. Existing canonical dirty work and historical production artifacts were preserved; no paid reasoning calls were made.
+
+---
+
 # HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
 
 **Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `296e99d`
