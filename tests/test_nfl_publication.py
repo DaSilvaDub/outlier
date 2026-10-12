@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,25 @@ def test_snapshot_rows_carry_the_run_id(tmp_path):
     rows = [json.loads(line) for line in
             next((tmp_path / "NFL" / "snapshots").glob("*.jsonl")).read_text().splitlines()]
     assert rows and {r["run_id"] for r in rows} == {summary["run_id"]}
+
+
+def test_bundle_seal_timestamp_uses_commit_clock_not_run_start(tmp_path, monkeypatch):
+    started = "2026-10-11T23:45:35+00:00"
+    finished = datetime(2026, 10, 12, 0, 25, tzinfo=UTC)
+
+    class CommitClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return finished
+
+    monkeypatch.setattr(run_writer, "datetime", CommitClock)
+    writer = RunWriter(tmp_path / "NFL", "sealed-time-test")
+    writer.stage_json("example.json", {"score": .8})
+    writer.commit({"created_utc": started, "sealed_utc": started})
+    manifest = json.loads((writer.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["created_utc"] == started
+    assert manifest["sealed_utc"] == finished.isoformat()
+    assert manifest["sealed_utc"] != manifest["created_utc"]
 
 
 def test_run_writer_refuses_reuse(tmp_path):

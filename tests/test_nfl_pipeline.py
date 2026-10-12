@@ -185,6 +185,41 @@ def test_pipeline_run_end_to_end(tmp_path: Path, mock_api_client):
     assert any(r.get("market") == "RUSH_YDS" for r in prop_records)
     assert any(r.get("market") == "REC_YDS" for r in prop_records)
 
+    # Floor research capture is sealed with the same run identity/context.
+    run_dir = Path(summary["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    floor_artifact = next(
+        a for a in manifest["artifacts"]
+        if a["name"].endswith("nfl_alt_floors_2026-09-13.json")
+    )
+    floors = json.loads((run_dir / floor_artifact["name"]).read_text(encoding="utf-8"))
+    assert floors["run_id"] == manifest["run_id"] == summary["run_id"]
+    assert floors["run_context"] == manifest["context"]
+    assert floors["captured_at"] == manifest["context"]["as_of_utc"]
+    assert "calibration_records" in floors
+    assert all(not r["actionable"] and not r["bet_actionable"] for r in floors["records"])
+    assert all(r["calibrated_probability"] is None for r in floors["records"])
+    assert any(r["name"] == "alt_floor_capture" and r["status"] == "OK"
+               for r in summary["stage_receipts"])
+
+
+@pytest.mark.skipif(not HAS_PIPELINE, reason="outlier_nfl.pipeline unavailable")
+def test_floor_capture_failure_withholds_publication(tmp_path: Path, mock_api_client):
+    pipeline = NflPipeline(client=mock_api_client, data_dir=tmp_path)
+    with patch("outlier_nfl.alt_floors.generate_alt_floors_pipeline",
+               side_effect=RuntimeError("capture disk failure")):
+        summary = pipeline.run(
+            date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR,
+            reports_dir=tmp_path / "reports" / "NFL",
+        )
+    assert summary["status"] == "FAILED"
+    assert summary["publication"] == "bundle_only"
+    assert any(r["name"] == "alt_floor_capture" and r["status"] == "FAILED"
+               for r in summary["stage_receipts"])
+    assert not (tmp_path / "NFL" / "normalized" / "nfl_run_pointer_latest.json").exists()
+    assert not (tmp_path / "NFL" / "normalized" / "nfl_props_latest.json").exists()
+    assert (Path(summary["run_dir"]) / "manifest.json").exists()
+
 
 @pytest.mark.skipif(not HAS_PIPELINE, reason="outlier_nfl.pipeline not yet implemented in M1")
 def test_pipeline_empty_schedule_graceful_degradation(tmp_path: Path, mock_api_client):

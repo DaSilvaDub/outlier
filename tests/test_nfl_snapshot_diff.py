@@ -20,6 +20,15 @@ def test_record_key_uses_identity_fields_only():
     assert snap.record_key(a) != snap.record_key(dict(a, line=6.5))
 
 
+def test_capture_normalizes_json_escaped_windows_work_roots():
+    work = Path(r"C:\sandbox\capture-one")
+    text = json.dumps({"run_dir": str(work / "data" / "NFL"),
+                       "written_files": [str(work / "reports" / "floor.md")]})
+    normalized = json.loads(snap._normalize_text(text, work, {}))
+    assert normalized["run_dir"].startswith("<WORK>")
+    assert normalized["written_files"][0].startswith("<WORK>")
+
+
 def test_diff_records_counts_added_removed_and_changed_fields():
     before = [{"event_id": "e1", "week": 1, "x": 1}, {"event_id": "e1", "week": 5, "x": 1}]
     after = [{"event_id": "e1", "week": 1, "x": 2}, {"event_id": "e1", "week": 2, "x": 1}]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
+import sys as _sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,8 +28,8 @@ def test_american_to_implied():
     assert round(american_to_implied(-900), 4) == 0.9000
     assert round(american_to_implied(100), 4) == 0.5000
     assert round(american_to_implied(200), 4) == 0.3333
-    assert american_to_implied(None) == 0.5000
-    assert american_to_implied("invalid") == 0.5000
+    assert american_to_implied(None) is None
+    assert american_to_implied("invalid") is None
 
 
 def test_extract_book_quote():
@@ -183,6 +185,7 @@ def test_ranking_top3_and_master_top9():
             cushion=cons - line,
             cushion_pct=((cons - line) / cons) * 100,
             target_book="HARDROCK",
+            quote_eligible=True,
             target_odds=-400,
             implied_probability=0.80,
             l5_hit_rate=0.80,
@@ -240,9 +243,6 @@ def test_ranking_top3_and_master_top9():
     assert master[-1].player_name == "QB3"
 
 
-import tempfile
-
-
 def test_export_alt_floors():
     """Verify file exports for JSON, CSV, and Markdown."""
     with tempfile.TemporaryDirectory() as tmp_dir_str:
@@ -263,6 +263,7 @@ def test_export_alt_floors():
             cushion=35.0,
             cushion_pct=35.2,
             target_book="HARDROCK",
+            quote_eligible=True,
             target_odds=-525,
             implied_probability=0.84,
             l5_hit_rate=1.0,
@@ -450,6 +451,7 @@ def test_windowed_run_does_not_clobber_the_undated_csv():
             cushion=50.0,
             cushion_pct=18.2,
             target_book="HARDROCK",
+            quote_eligible=True,
             target_odds=-400,
             implied_probability=0.8,
             l5_hit_rate=0.8,
@@ -646,10 +648,7 @@ def test_empty_evidenced_starter_set_blocks_qb_floors() -> None:
 
 # --- F23 (#229): executable floors need a real quote, identity and injury evidence ---
 
-import sys as _sys
-from pathlib import Path as _Path
-
-_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import nfl_snapshot_diff as _snap  # noqa: E402
 
 AS_OF = "2026-09-13T15:00:00+00:00"
@@ -702,7 +701,8 @@ def test_same_name_in_two_events_is_two_players():
 def test_retail_fallback_book_stays_executable_and_named():
     props, extra = _snap.alt_floor_cases()["target_book_absent_retail"]
     _top3, [m], _inv = _scan(props, **extra)
-    assert (m.target_book, m.target_odds, m.actionable) == ("DRAFTKINGS", -350, True)
+    assert (m.target_book, m.target_odds, m.quote_eligible) == ("DRAFTKINGS", -350, True)
+    assert not m.actionable and not m.bet_actionable
 
 
 def test_unresolved_team_row_does_not_abort_the_scan_and_is_inventory():
@@ -749,7 +749,7 @@ def test_display_names_count_as_retail_not_target(raw, canonical):
 def test_display_name_floor_stays_executable(case, book):
     props, extra = _snap.alt_floor_cases()[case]
     _top3, [m], inventory = _scan(props, **extra)
-    assert (m.target_book, m.actionable) == (book, True) and inventory == []
+    assert (m.target_book, m.quote_eligible) == (book, True) and inventory == []
 
 
 def test_dfs_display_name_is_still_inventory():
@@ -766,3 +766,121 @@ def test_all_inventory_without_injury_report_logs_a_warning(tmp_path, caplog):
             date_str="2026-09-13", as_of_utc=AS_OF, inactive_by_team=None,
             require_injury_evidence=True)
     assert any("injury report was not admitted" in r.getMessage() for r in caplog.records)
+
+
+
+def test_quote_eligible_floor_is_research_never_actionable(tmp_path):
+    props, extra = _snap.alt_floor_cases()["target_book_absent_retail"]
+    extra = {k: v for k, v in extra.items() if k != "inactive_by_team"}
+    cands = discover_alt_floor_candidates(props, as_of_utc=AS_OF, require_injury_evidence=True,
+                                         inactive_by_team=OK, **extra)
+    [candidate] = cands["RUSH_YDS"]
+    assert candidate.quote_eligible and not candidate.actionable
+    assert not candidate.bet_actionable and candidate.stake_fraction == 0
+    assert candidate.calibrated_probability is None and candidate.ev_per_unit is None
+    result = generate_alt_floors_pipeline(
+        props, exports_dir=tmp_path / "x", reports_dir=tmp_path / "r",
+        date_str="2026-09-13", as_of_utc=AS_OF, require_injury_evidence=True,
+        inactive_by_team=OK, export_context={"run_id": "run1", "captured_at": AS_OF,
+                                          "run_context": {"mode": "live"}}, **extra)
+    assert result["count"] == 1 and result["actionable_count"] == 0
+    payload = json.loads(Path(result["outputs"]["json"]).read_text())
+    assert payload["records"][0]["quote_eligible"]
+    assert payload["records"][0]["ranking_score_version"] == "nfl_alt_floor_rank_v1"
+    assert payload["calibration_records"][0]["run_id"] == "run1"
+    assert payload["calibration_records"][0]["captured_at"] == AS_OF
+    assert payload["calibration_records"][0]["run_context"] == {"mode": "live"}
+    assert payload["status"] == "QUOTED_RESEARCH"
+
+
+def test_capture_includes_selected_candidates_beyond_top_three_and_ineligible(tmp_path):
+    props = []
+    for n in range(5):
+        rows = _snap._floor_pair(player=f"Runner {n}", player_id=f"p{n}")
+        if n == 4:
+            rows[-1]["books"] = []
+        props.extend(rows)
+    result = generate_alt_floors_pipeline(
+        props, exports_dir=tmp_path / "x", reports_dir=tmp_path / "r",
+        date_str="2026-09-13", as_of_utc=AS_OF, require_injury_evidence=True,
+        inactive_by_team=OK)
+    payload = json.loads(Path(result["outputs"]["json"]).read_text())
+    assert result["count"] == 3
+    assert payload["calibration_record_count"] == 5
+    assert len({r["player_id"] for r in payload["calibration_records"]}) == 5
+    assert sum(r["quote_eligible"] for r in payload["calibration_records"]) == 4
+    assert all(not r["actionable"] for r in payload["calibration_records"])
+    assert all(r["scope"] == "full_game" and r["position"] == "OVER"
+               for r in payload["calibration_records"])
+
+
+def test_missing_historical_rates_are_unavailable_without_invented_counts():
+    props = _snap._floor_pair()
+    for row in props:
+        for key in ("l5_hit_rate", "l10_hit_rate", "season_hit_rate"):
+            row.pop(key, None)
+    cands = discover_alt_floor_candidates(props)
+    [candidate] = cands["RUSH_YDS"]
+    assert candidate.l5_hit_rate is None and candidate.l10_hit_rate is None
+    assert candidate.season_hit_rate is None
+    top3, master, inventory = rank_alt_floors(cands)
+    report = render_alt_floors_markdown(top3, master, "2026-09-13", inventory=inventory)
+    assert "L5: unavailable" in report and "L10: unavailable" in report
+    assert "Ranking Score" in report and "not a win probability" in report
+    assert "Confidence Score" not in report and "/5" not in report and "/10" not in report
+    assert "Parlay Construction Guidelines" not in report
+
+
+def test_integer_floor_withholds_unconditional_break_even():
+    props = _snap._floor_pair()
+    props[-1]["line"] = 49.0
+    [candidate] = discover_alt_floor_candidates(props)["RUSH_YDS"]
+    assert candidate.break_even_probability is None and candidate.implied_probability is None
+    assert candidate.to_dict()["implied_probability"] is None
+    assert candidate.break_even_probability_status == "push_probability_unmodeled"
+    assert candidate.market_probability is None
+
+
+def test_full_input_under_quote_is_used_only_for_exact_selected_line():
+    props = _snap._floor_pair()
+    floor_row = props[-1]
+    props.append({**floor_row, "position": "UNDER",
+                  "books": [{"book": "HARDROCK", "odds": 400}]})
+    [candidate] = discover_alt_floor_candidates(props)["RUSH_YDS"]
+    assert candidate.market_probability is not None
+    assert candidate.market_probability_status == "proportional_devig_market_benchmark"
+    assert candidate.quote_eligible and not candidate.actionable
+
+
+def test_conflicting_selected_quote_is_not_ranked():
+    props = _snap._floor_pair()
+    props.append({**props[-1], "books": [{"book": "HARDROCK", "odds": -600}]})
+    top3, master, inventory = rank_alt_floors(discover_alt_floor_candidates(props))
+    assert not master and all(not items for items in top3.values())
+    assert inventory[0].inventory_reason == "conflicting_selected_quotes"
+
+
+
+def test_direct_constructor_cannot_activate_an_unvalidated_floor():
+    [source] = discover_alt_floor_candidates(_snap._floor_pair())["RUSH_YDS"]
+    candidate = AltFloorProp(**{**source.to_dict(), "actionable": True,
+                               "bet_actionable": True, "stake_fraction": 0.05,
+                               "calibrated_probability": 0.99, "model_probability": 0.99,
+                               "fair_decimal_odds": 1.01, "ev_per_unit": 0.2,
+                               "probability_status": "validated"})
+    assert not candidate.actionable and not candidate.bet_actionable
+    assert candidate.stake_fraction == 0 and candidate.calibrated_probability is None
+    assert candidate.model_probability is None and candidate.fair_decimal_odds is None
+    assert candidate.ev_per_unit is None
+    assert candidate.to_dict()["probability_status"] == "insufficient_calibration_history"
+
+
+def test_conflicting_line_does_not_hide_safe_alternative_quote():
+    props = _snap._floor_pair()
+    alternative = {**props[-1], "line": 59.5,
+                   "books": [{"book": "HARDROCK", "odds": -300}]}
+    props.append({**props[-1], "books": [{"book": "HARDROCK", "odds": -600}]})
+    props.append(alternative)
+    [candidate] = discover_alt_floor_candidates(props)["RUSH_YDS"]
+    assert candidate.line == 59.5 and candidate.quote_eligible
+    assert candidate.inventory_reason is None and not candidate.actionable
