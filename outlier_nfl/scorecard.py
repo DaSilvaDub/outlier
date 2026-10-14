@@ -100,6 +100,22 @@ def _gradable(market: str) -> bool:
     return market == TD_MARKET or market in MARKET_COLUMNS
 
 
+def _played_keys(snap_rows: Iterable[Mapping[str, str]], week: int) -> set[tuple[str, str]]:
+    """Players with offensive snaps in ``week`` (regular season) per the nflverse snap counts."""
+    return {
+        _player_key(r.get("team"), r.get("player"))
+        for r in snap_rows
+        if r.get("game_type", "REG") == "REG"
+        and int(_f(r.get("week"))) == week
+        and _f(r.get("offense_snaps")) > 0
+    }
+
+
+def _zero_stat_row() -> dict[str, str]:
+    """A stat line for a player who played but recorded nothing in any graded column."""
+    return {col: "0" for col in (*MARKET_COLUMNS.values(), "rushing_tds", "receiving_tds")}
+
+
 def _prior_values(prior: Iterable[Mapping[str, str]], market: str) -> list[float]:
     """Realized prior values; games with the stat missing are left out, not zeroed."""
     return [v for v in (_actual(r, market) for r in prior) if v is not None]
@@ -194,11 +210,17 @@ def grade_signals(
     scripts: Iterable[Mapping[str, Any]],
     player_rows: Iterable[Mapping[str, str]],
     props: Iterable[Mapping[str, Any]] = (),
+    snap_rows: Iterable[Mapping[str, str]] = (),
 ) -> tuple[list[GradedSignal], list[dict[str, Any]]]:
     """Grade each unique (event, tag, player, market, side) signal.
 
     Returns graded signals and the ungraded ones (player did not play, market
     has no box-score column, or too few prior games), with a reason.
+
+    nflverse player stats omit players who played but recorded nothing (a TE
+    with snaps and no catches has no row). ``snap_rows`` (nflverse snap counts)
+    tells those players apart from players who did not play: with offensive
+    snaps this week and no stat row, the box-score markets grade as 0.
     """
     rows = [r for r in player_rows if r.get("season_type", "REG") == "REG"]
     current: dict[tuple[str, str], Mapping[str, str]] = {}
@@ -211,6 +233,7 @@ def grade_signals(
         elif wk < week:
             history[key].append(r)
     lines = consensus_lines(props)
+    played = _played_keys(snap_rows, week)
 
     graded: list[GradedSignal] = []
     skipped: list[dict[str, Any]] = []
@@ -226,6 +249,8 @@ def grade_signals(
             market, side = str(s.get("market")), str(s.get("side"))
             base = {"tag": s.get("tag"), "player": s.get("player_name"), "market": market}
             row = current.get(key)
+            if row is None and key in played:
+                row = _zero_stat_row()
             if row is None:
                 skipped.append({**base, "reason": "no box score this week"})
                 continue
