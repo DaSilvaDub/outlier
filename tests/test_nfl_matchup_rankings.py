@@ -196,3 +196,19 @@ def test_stage_receipt_failure_behavior():
     assert failing(receipts)
     status = run_status(receipts)
     assert status == "FAILED"
+
+
+def test_write_latest_false_writes_only_suffixed_reports(tmp_path: Path):
+    """Window / after-kickoff runs must not replace the rolling un-suffixed reports (F11)."""
+    kwargs = dict(
+        props=[], matchup_scripts=[], usage_players=[], rosters={}, tapes={}, weather_records=[],
+        date_str="2026-10-11_1pm", suffix="2026-10-11_1pm",
+    )
+    windowed = tmp_path / "windowed"
+    generate_matchup_rankings_pipeline(staged_reports_dir=windowed, write_latest=False, **kwargs)
+    names = {p.name for p in windowed.iterdir()}
+    assert names and all(n.startswith("2026-10-11_1pm_") for n in names)
+
+    full = tmp_path / "full"
+    generate_matchup_rankings_pipeline(staged_reports_dir=full, **kwargs)
+    assert {"Matchup_Boost_Rankings.csv", "Top_10_Overall_Matchups.md"} <= {p.name for p in full.iterdir()}

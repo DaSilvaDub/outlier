@@ -168,7 +168,7 @@ class MatchupRankingsEngine:
         # Index consensus props
         self.consensus_props: dict[tuple[str, str], dict[str, Any]] = {}
         for p in props:
-            p_dict = p.to_dict() if hasattr(p, "to_dict") else p
+            p_dict = p if isinstance(p, dict) else p.to_dict()
             if (
                 isinstance(p_dict, dict)
                 and p_dict.get("is_consensus_line")
@@ -836,8 +836,13 @@ def generate_matchup_rankings_pipeline(
     staged_reports_dir: Path,
     date_str: str = "latest",
     suffix: str = "latest",
+    write_latest: bool = True,
 ) -> dict[str, Any]:
     """Mandatory pipeline reporting stage: generates and stages all matchup ranking reports.
+
+    The rolling, un-suffixed copies (``Top_5_QB_Matchups.md``, ``Matchup_Boost_Rankings.csv``, ...)
+    are written only when ``write_latest`` is true. A window or after-kickoff run passes false so it
+    publishes only ``<suffix>_*`` files and never replaces the slate-wide rolling reports (F11).
 
     Returns summary dictionary with report paths and top candidates.
     """
@@ -885,9 +890,10 @@ def generate_matchup_rankings_pipeline(
         p_dated.write_text(content, encoding="utf-8")
         written_files.append(p_dated)
 
-        p_canonical = staged_reports_dir / canonical_name
-        p_canonical.write_text(content, encoding="utf-8")
-        written_files.append(p_canonical)
+        if write_latest:
+            p_canonical = staged_reports_dir / canonical_name
+            p_canonical.write_text(content, encoding="utf-8")
+            written_files.append(p_canonical)
 
     # 2. Write CSV
     csv_rows: list[list[Any]] = []
@@ -933,7 +939,10 @@ def generate_matchup_rankings_pipeline(
             p.prop_odds if p.prop_odds is not None else "N/A",
         ])
 
-    for csv_name in [f"{suffix}_Matchup_Boost_Rankings.csv", "Matchup_Boost_Rankings.csv"]:
+    csv_names = [f"{suffix}_Matchup_Boost_Rankings.csv"]
+    if write_latest:
+        csv_names.append("Matchup_Boost_Rankings.csv")
+    for csv_name in csv_names:
         csv_path = staged_reports_dir / csv_name
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
