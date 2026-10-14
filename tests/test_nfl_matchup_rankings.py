@@ -185,6 +185,31 @@ def test_engine_evaluation_and_reports(tmp_path: Path):
         assert len(rows) > 0
 
 
+def test_window_run_writes_no_un_suffixed_reports(tmp_path: Path):
+    """F11: write_latest=False stages only *_<suffix>_* names (regression for #209)."""
+    result = generate_matchup_rankings_pipeline(
+        props=[],
+        matchup_scripts=[],
+        usage_players=[],
+        rosters={},
+        tapes={},
+        weather_records=[],
+        staged_reports_dir=tmp_path,
+        date_str="2026-09-13",
+        suffix="2026-09-13_1pm",
+        write_latest=False,
+    )
+
+    assert result["status"] == "OK"
+    written = sorted(p.name for p in tmp_path.iterdir())
+    assert written, "window run staged nothing"
+    assert all(n.startswith("2026-09-13_1pm_") for n in written), written
+    for canonical in ("Matchup_Boost_Rankings.csv", "Top_10_Overall_Matchups.md",
+                      "Top_5_QB_Matchups.md", "Top_5_RB_Matchups.md",
+                      "Top_5_WR_Matchups.md", "Top_5_TE_Matchups.md"):
+        assert not (tmp_path / canonical).exists(), canonical
+
+
 def test_stage_receipt_failure_behavior():
     """Verify failing matchup_rankings receipt causes non-OK run_status."""
     receipts = [

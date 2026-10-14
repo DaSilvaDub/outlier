@@ -836,8 +836,13 @@ def generate_matchup_rankings_pipeline(
     staged_reports_dir: Path,
     date_str: str = "latest",
     suffix: str = "latest",
+    write_latest: bool = True,
 ) -> dict[str, Any]:
     """Mandatory pipeline reporting stage: generates and stages all matchup ranking reports.
+
+    ``write_latest`` controls the un-suffixed "current slate" copies, same role as
+    ``nfl_alt_floors_latest.json``: a windowed run carries only part of the slate
+    and must not overwrite them (F11, from #209).
 
     Returns summary dictionary with report paths and top candidates.
     """
@@ -863,7 +868,8 @@ def generate_matchup_rankings_pipeline(
 
     staged_reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Write Positional Reports (both dated and un-dated for symlink/rolling usage)
+    # 1. Write Positional Reports (dated always; un-dated rolling copies only for a
+    # full-slate run -- see ``write_latest``)
     qb_md = render_positional_markdown("TOP 5 QUARTERBACK MATCHUP BOOSTS", top_qbs, date_str)
     rb_md = render_positional_markdown("TOP 5 RUNNING BACK MATCHUP BOOSTS", top_rbs, date_str)
     wr_md = render_positional_markdown("TOP 5 WIDE RECEIVER MATCHUP BOOSTS", top_wrs, date_str)
@@ -885,9 +891,10 @@ def generate_matchup_rankings_pipeline(
         p_dated.write_text(content, encoding="utf-8")
         written_files.append(p_dated)
 
-        p_canonical = staged_reports_dir / canonical_name
-        p_canonical.write_text(content, encoding="utf-8")
-        written_files.append(p_canonical)
+        if write_latest:
+            p_canonical = staged_reports_dir / canonical_name
+            p_canonical.write_text(content, encoding="utf-8")
+            written_files.append(p_canonical)
 
     # 2. Write CSV
     csv_rows: list[list[Any]] = []
@@ -933,7 +940,10 @@ def generate_matchup_rankings_pipeline(
             p.prop_odds if p.prop_odds is not None else "N/A",
         ])
 
-    for csv_name in [f"{suffix}_Matchup_Boost_Rankings.csv", "Matchup_Boost_Rankings.csv"]:
+    csv_names = [f"{suffix}_Matchup_Boost_Rankings.csv"]
+    if write_latest:
+        csv_names.append("Matchup_Boost_Rankings.csv")
+    for csv_name in csv_names:
         csv_path = staged_reports_dir / csv_name
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)

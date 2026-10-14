@@ -934,6 +934,7 @@ def test_pipeline_high_prob_includes_actionable_records(tmp_path):
         date="2026-09-13",
         offline_fixtures_dir=FIXTURES_DIR,
         generate_game_script=False,
+        reports_dir=tmp_path / "reports",
     )
     assert summary["status"] == "OK"
     assert "tier_1_actionable_count" in summary

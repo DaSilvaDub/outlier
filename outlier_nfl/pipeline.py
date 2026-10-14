@@ -798,6 +798,7 @@ class NflPipeline:
                 staged_reports_dir=writer.staged_path("reports"),
                 date_str=target_date,
                 suffix=suffix,
+                write_latest=publish_latest,
             )
             if len(slate_events) == 0:
                 receipts.append(receipt("matchup_rankings", "EMPTY", received=0))
