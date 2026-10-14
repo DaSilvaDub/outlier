@@ -1,6 +1,6 @@
 # HANDOFF — 2026-10-14 (Claude, daily automated debug review)
 
-**Branch**: `claude/inspiring-fermat-zt9u2k` · **Last commit**: `e32681b` · **PR**: https://github.com/DaSilvaDub/outlier/pull/262
+**Branch**: `claude/inspiring-fermat-zt9u2k` · **Last commit**: `8d69968` · **PR**: https://github.com/DaSilvaDub/outlier/pull/262
 
 ## Accomplished
 1. **Fixed an F11 regression from 296e99d** (`outlier_nfl/matchup_rankings.py`, `outlier_nfl/pipeline.py`):
@@ -15,6 +15,12 @@
    left six untracked ones. Now writes to `tmp_path / "reports"`.
 3. **Regression test** `test_window_run_writes_no_un_suffixed_reports` pins the
    `write_latest=False` filename contract.
+4. **Fixed the Pyright error that has had CI red on `master` since 296e99d**
+   (`outlier_nfl/matchup_rankings.py:171`): `p.to_dict() if hasattr(p, "to_dict")` cannot
+   type-check, because `props` is `list[NflPlayerProp] | list[dict[str, Any]]` and Pyright
+   will not use `hasattr` to rule out the dict arm. Narrowed with `isinstance(p, dict)`;
+   behaviour identical. `Static Type Checking` was green at `50d5cee` and red from `296e99d`
+   onward, so this unblocks the base branch too.
 
 ## Files Touched
 - `outlier_nfl/matchup_rankings.py`, `outlier_nfl/pipeline.py`
@@ -25,7 +31,12 @@
   Both F11 failures fixed; the 51 remaining failures and 48 collection errors are all
   `ModuleNotFoundError` (structlog / sqlalchemy / openai / anthropic / google / dateutil) —
   this sandbox has no PyPI egress, per `docs/CLOUD-SANDBOX-LIMITATIONS.md`.
-- `mypy outlier_nfl`: clean (44 files). `ruff check` on changed files: no new findings.
+- `mypy outlier_scrapers outlier_nfl`: clean (131 files).
+- `pyright outlier_nfl`: 0 errors (was 1). **Run Pyright, not just mypy** -- `make typecheck`
+  runs both, and node is available here at `/opt/node22/bin`, so Pyright does work in the
+  sandbox. The one error Pyright still reports locally (`gemini_research.py:70`, unknown
+  import symbol `genai`) is a missing-dependency artifact, absent from CI's log.
+- `ruff check` on changed files: no new findings (stash-compared before/after).
 - `git status` clean after a full suite run.
 
 ## Next Steps
