@@ -1,3 +1,43 @@
+# HANDOFF — 2026-10-14 (Claude, daily automated debug review)
+
+**Branch**: `claude/inspiring-fermat-zt9u2k` · **Last commit**: `e32681b` · **PR**: https://github.com/DaSilvaDub/outlier/pull/262
+
+## Accomplished
+1. **Fixed an F11 regression from 296e99d** (`outlier_nfl/matchup_rankings.py`, `outlier_nfl/pipeline.py`):
+   `generate_matchup_rankings_pipeline` staged the un-suffixed canonical reports
+   (`Matchup_Boost_Rankings.csv`, `Top_*_Matchups.md`) unconditionally, so a window run
+   published its partial-slate rankings over the pregame full-slate ones. Gated behind
+   `write_latest`, mirroring `export_alt_floors` (the same bug fixed for alt floors in #209);
+   the pipeline passes its existing `publish_latest`.
+2. **Fixed test pollution of the tracked worktree** (`tests/test_nfl_calibration.py`):
+   `test_pipeline_high_prob_includes_actionable_records` ran the pipeline with the default
+   `reports_dir`, so a plain `pytest` rewrote three tracked files under `reports/NFL/` and
+   left six untracked ones. Now writes to `tmp_path / "reports"`.
+3. **Regression test** `test_window_run_writes_no_un_suffixed_reports` pins the
+   `write_latest=False` filename contract.
+
+## Files Touched
+- `outlier_nfl/matchup_rankings.py`, `outlier_nfl/pipeline.py`
+- `tests/test_nfl_matchup_rankings.py`, `tests/test_nfl_calibration.py`
+
+## Verification
+- `pytest --continue-on-collection-errors`: 53 failed → 51 failed, 1632 → 1635 passed.
+  Both F11 failures fixed; the 51 remaining failures and 48 collection errors are all
+  `ModuleNotFoundError` (structlog / sqlalchemy / openai / anthropic / google / dateutil) —
+  this sandbox has no PyPI egress, per `docs/CLOUD-SANDBOX-LIMITATIONS.md`.
+- `mypy outlier_nfl`: clean (44 files). `ruff check` on changed files: no new findings.
+- `git status` clean after a full suite run.
+
+## Next Steps
+- CI on PR #262 has real PyPI access and will exercise the ~48 suites this sandbox cannot
+  import; watch it rather than trusting the local run alone.
+- Open, not addressed here: repo-wide `ruff check` reports 1233 findings (the Makefile only
+  lints changed files, so this never gates). Worth a scoped cleanup decision — out of scope
+  for an automated debug run.
+- No reasoning models / desk runners were invoked (house rule; not requested this turn).
+
+---
+
 # HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
 
 **Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `296e99d`
