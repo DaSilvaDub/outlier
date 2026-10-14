@@ -168,7 +168,9 @@ class MatchupRankingsEngine:
         # Index consensus props
         self.consensus_props: dict[tuple[str, str], dict[str, Any]] = {}
         for p in props:
-            p_dict = p.to_dict() if hasattr(p, "to_dict") else p
+            # ``props`` is a list of records or of already-serialized dicts; narrow by
+            # type rather than by hasattr, which pyright cannot use to rule out dict.
+            p_dict = p if isinstance(p, dict) else p.to_dict()
             if (
                 isinstance(p_dict, dict)
                 and p_dict.get("is_consensus_line")
