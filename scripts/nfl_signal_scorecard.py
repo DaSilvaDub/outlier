@@ -47,7 +47,7 @@ from outlier_nfl.scorecard import (  # noqa: E402
     write_report,
 )
 from outlier_nfl.tape_nflverse import SCHEDULES_URL, fetch_csv  # noqa: E402
-from outlier_nfl.usage import fetch_player_weeks  # noqa: E402
+from outlier_nfl.usage import fetch_player_weeks, fetch_snap_counts  # noqa: E402
 
 
 def _slate_week(season: int, slate: str) -> int:
@@ -84,7 +84,13 @@ def main() -> int:
         print(f"nflverse has no week {week} box scores yet; try again after the games are posted.")
         return 1
 
-    graded, skipped = grade_signals(slate_iso, week, scripts, player_rows, props)
+    try:
+        snap_rows = fetch_snap_counts(season)
+    except Exception as exc:  # grading still works; players without a stat row stay ungraded
+        print(f"Snap counts unavailable ({exc}); players with no stat row stay ungraded.")
+        snap_rows = []
+
+    graded, skipped = grade_signals(slate_iso, week, scripts, player_rows, props, snap_rows)
     scripts_file = NORMALIZED_DIR / f"nfl_matchup_scripts_{slate_iso}.json"
     source_bytes = scripts_file.read_bytes()
     run_id = json.loads(source_bytes.decode("utf-8")).get("run_id")

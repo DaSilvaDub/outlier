@@ -32,6 +32,7 @@ from outlier_nfl.tape_nflverse import NFLVERSE_RELEASES, _name_key, _team, fetch
 logger = logging.getLogger(__name__)
 
 PLAYER_WEEK_URL = NFLVERSE_RELEASES + "/stats_player/stats_player_week_{season}.csv"
+SNAP_COUNTS_URL = NFLVERSE_RELEASES + "/snap_counts/snap_counts_{season}.csv"
 EXPECTED_URL = (
     "https://github.com/ffverse/ffopportunity/releases/download/latest-data/ep_weekly_{season}.csv"
 )
@@ -340,6 +341,14 @@ def fetch_player_weeks(season: int, fetch_rows: FetchRows = fetch_csv) -> list[d
     if not MIN_SEASON <= season <= MAX_SEASON:
         raise ValueError(f"Season out of range: {season}")
     return fetch_rows(PLAYER_WEEK_URL.format(season=season))
+
+
+def fetch_snap_counts(season: int, fetch_rows: FetchRows = fetch_csv) -> list[dict[str, str]]:
+    """nflverse snap counts for a validated season (separates "did not play" from "no stats")."""
+    season = int(season)
+    if not MIN_SEASON <= season <= MAX_SEASON:
+        raise ValueError(f"Season out of range: {season}")
+    return fetch_rows(SNAP_COUNTS_URL.format(season=season))
 
 
 def load_usage(

@@ -1,3 +1,28 @@
+# HANDOFF — 2026-10-14 (Claude, Week 5 Game-Script Accuracy + Signal Scorecard Snap-Count Fix)
+
+**Branch**: `claude/game-scripts-accuracy-check-18a539` · **Last commit**: `3db2cf9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/263
+
+## Accomplished
+1. **Game-script accuracy, week 5 (10-11 slate + Monday 10-12 BUF@LA)** — graded the 14 committed pre-kickoff scripts against nflverse final scores (offline, no reasoning models):
+   - Spread lean 6-7-1, total lean 7-7, straight-up winner 9-4 (+1 tie, NYG-WAS 27-27).
+   - Mean abs error: margin 9.9 pts, total 10.4 pts.
+   - Systematic low total: projected avg 44.0 vs actual 49.0; 11 of 14 leans were UNDER, only 5 hit. DET@ARI is labeled SHOOTOUT but leans UNDER 54.5 (final 45-21).
+   - Totals/spreads graded against the consensus line printed in each script, not the separate "lean" number. Grading was an ad-hoc scratch script, not committed.
+2. **Prop signal scorecard** (`scripts/nfl_signal_scorecard.py`) run for 2026-10-11 and 2026-10-12. Re-graded 10-11 after the fix below: week 5 hit rate 58/109 vs player avg, 49/100 vs consensus line. 11 signals stay ungraded by design (`LONG_PASS`/`LONG_REC` weather UNDERs have no box-score column).
+3. **Fix (PR #263)**: nflverse `stats_player_week` omits players who played but recorded no stats, so they were dropped as "no box score this week" (Jonnu Smith GB, Tory Horton SEA, both `REC_YDS` UNDER hits). `grade_signals` now takes `snap_rows` (new `usage.fetch_snap_counts`); offensive snaps this week + no stat row grades box-score markets as 0. Falls back to old behavior with a warning if the snap fetch fails. 4 new tests in `tests/test_nfl_scorecard.py`.
+
+## State to know about
+- Re-graded ledger + `reports/NFL/2026-10-1{1,2}_Signal_Scorecard.md` were written in the **canonical checkout** (gitignored ledger; reports uncommitted there). Ledger backup: `data/NFL/scorecard/ledger_before_snapfill_regrade_2026-10-14.jsonl`. The canonical copy of `scorecard.py` does not have the fix until PR #263 merges, so re-running the script from canonical will drop those 2 signals again and overwrite the re-grade.
+- Verification: ruff + mypy clean on touched files; 41 `tmp_path` `PermissionError`s (Windows temp ACL on `pytest-of-dasil`) are identical with and without the change. Use `--basetemp=.pytest_temp` to avoid.
+
+## Next steps
+1. Merge PR #263, then re-run `python scripts/nfl_signal_scorecard.py --date 2026-10-11 --week 5` from canonical so the checked-in code and ledger agree (`--week` avoids a flaky schedule fetch).
+2. Known gap, not changed: prior-game averages and `direction_baselines` still skip weeks with no stat row, slightly inflating averages for part-time players.
+3. Consider why totals run ~5 pts low and whether SHOOTOUT scripts should be allowed to lean OVER; consider committing a reusable game-level grader instead of the scratch script.
+4. Longest-play markets (`LONG_PASS`/`LONG_REC`) need play-by-play data to grade.
+
+---
+
 # HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
 
 **Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `296e99d`
