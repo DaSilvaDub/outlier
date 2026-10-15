@@ -29,8 +29,6 @@
 | Josh Downs | LONG_REC | UNDER | MEDIUM | `WEATHER_WET` | 8.5 mph wind + rain at kickoff: wr_deep pass-game haircut / ground lean |
 | Laquon Treadwell | REC_YDS | UNDER | MEDIUM | `WEATHER_WET` | 8.5 mph wind + rain at kickoff: wr_slot pass-game haircut / ground lean |
 | Laquon Treadwell | REC_YDS | UNDER | MEDIUM | `EFFICIENCY_HOT` | 31 yds/g vs 23 expected (+34%); regression risk |
-| Rico Dowdle | REC_YDS | OVER | MEDIUM | `EFFICIENCY_COLD` | 14 yds/g vs 20 expected (-30%); due to rebound |
-| Rico Dowdle | RUSH_YDS | OVER | MEDIUM | `EFFICIENCY_COLD` | 18 yds/g vs 33 expected (-43%); due to rebound |
 | Jaylen Warren | REC_YDS | UNDER | MEDIUM | `EFFICIENCY_HOT` | 36 yds/g vs 26 expected (+36%); regression risk |
 | Jaylen Warren | RUSH_YDS | UNDER | MEDIUM | `EFFICIENCY_HOT` | 77 yds/g vs 62 expected (+25%); regression risk |
 | Darnell Washington | REC_YDS | UNDER | MEDIUM | `EFFICIENCY_HOT` | 30 yds/g vs 18 expected (+61%); regression risk |
