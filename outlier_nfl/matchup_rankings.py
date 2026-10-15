@@ -150,6 +150,7 @@ class MatchupRankingsEngine:
         tapes: dict[str, Any],
         weather_records: list[dict[str, Any]],
         inactives_by_team: dict[str, list[str]] | None = None,
+        defensive_out_by_team: dict[str, list[dict[str, Any]]] | None = None,
         date_str: str = "latest",
     ) -> None:
         self.date_str = date_str
@@ -164,6 +165,7 @@ class MatchupRankingsEngine:
                 self.weather_by_event[w["event_id"]] = w
 
         self.inactives_by_team = inactives_by_team or {}
+        self.defensive_out_by_team = defensive_out_by_team or {}
 
         # Index consensus props
         self.consensus_props: dict[tuple[str, str], dict[str, Any]] = {}
@@ -207,6 +209,19 @@ class MatchupRankingsEngine:
         inactives = self.inactives_by_team.get(team, [])
         return player_name in inactives
 
+    def get_opp_def_out(self, opp: str) -> list[str]:
+        """Return confirmed Rank-1 defensive starters out for opponent as formatted strings."""
+        raw = self.defensive_out_by_team.get(opp, [])
+        out: list[str] = []
+        for item in raw:
+            if isinstance(item, dict):
+                p = item.get("player") or item.get("name") or ""
+                pos = item.get("pos") or item.get("position") or ""
+                out.append(f"{p} ({pos})" if pos else str(p))
+            elif item:
+                out.append(str(item))
+        return out
+
     def evaluate_qbs(self) -> list[MatchupAdvantageCandidate]:
         """Evaluate starting QBs on slate for matchup advantages."""
         candidates: list[MatchupAdvantageCandidate] = []
@@ -236,10 +251,11 @@ class MatchupRankingsEngine:
             opp_sacks = float(opp_tape.get("sacks") or 2.0)
 
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_def_out = self.get_opp_def_out(opp)
+            opp_def_names = ", ".join(opp_def_out[:4]) or "None"
 
             # Injury and pressure boosts
-            injury_boost = min(0.08, len(opp_inactives) * 0.002)
+            injury_boost = min(0.08, len(opp_def_out) * 0.015)
             pressure_relief = max(-0.05, (0.28 - opp_press_rate) * 0.4)
 
             # Weather haircut
@@ -266,7 +282,7 @@ class MatchupRankingsEngine:
             prob_pct = round(prob * 100.0, 1)
 
             volume_score = min(98.0, 80.0 + (s_pass / 15.0))
-            def_vuln_score = min(96.0, 75.0 + (opp_diff * 60.0) + (len(opp_inactives) * 0.3))
+            def_vuln_score = min(96.0, 75.0 + (opp_diff * 60.0) + (len(opp_def_out) * 2.5))
 
             adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
@@ -288,7 +304,7 @@ class MatchupRankingsEngine:
             tactical = {
                 "def_vuln": f"{opp} allows {opp_pass_allowed:.1f} pass yds/g (differential: {opp_diff:+.1%}); pressure rate {opp_press_rate:.1%}.",
                 "personnel": f"Pocket protection expectation favorable against {opp} defensive front averaging {opp_sacks:.1f} sacks/g.",
-                "injuries": f"{opp} secondary and defense missing {len(opp_inactives)} designated inactives.",
+                "injuries": f"{opp} defensive starters Out/IR: {len(opp_def_out)} ({opp_def_names}).",
                 "game_script": f"Projected game total {script.get('total')}, spread {team_spread:+.1f} points.",
                 "weather": f"Venue: {weather.get('venue', 'outdoor')}, wind: {wind_mph:.1f} mph, pass adjustment: {weather_haircut:+.2f}.",
                 "role": f"{starting_qb} commands primary dropback distribution in {team} offensive scheme.",
@@ -338,12 +354,15 @@ class MatchupRankingsEngine:
             eid = m_info["event_id"]
             script = m_info["script"]
 
+            team_tape = self.tapes.get(team, {})
             opp_tape = self.tapes.get(opp, {})
             weather = self.weather_by_event.get(eid, {})
 
             opp_rush_allowed = float(opp_tape.get("opp_rush_yards_allowed") or LEAGUE_RUSH_YDS_MEDIAN)
             opp_diff = (opp_rush_allowed - LEAGUE_RUSH_YDS_MEDIAN) / LEAGUE_RUSH_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_def_out = self.get_opp_def_out(opp)
+            opp_def_names = ", ".join(opp_def_out[:4]) or "None"
+            starter_rb1 = team_tape.get("rb1")
 
             # Find all RBs on team
             team_rbs = [
@@ -359,9 +378,8 @@ class MatchupRankingsEngine:
                 rush_avg = float(p.get("rush_yds_pg") or 0.0)
                 carries_avg = float(p.get("carries_pg") or 0.0)
                 rec_avg = float(p.get("rec_yds_pg") or 0.0)
-
-                if rush_avg < 15.0 and carries_avg < 4.0:
-                    continue
+                team_last_week = p.get("team_last_week")
+                is_verified_rb1 = bool(starter_rb1 and starter_rb1.lower() == pname.lower())
 
                 # Check if backfield partner is out (volume inheritance)
                 backfield_vacated_boost = 0.0
@@ -372,7 +390,23 @@ class MatchupRankingsEngine:
                         if inact_prof.get("position") == "RB":
                             vac_carries = float(inact_prof.get("carries_pg") or 0.0)
                             if vac_carries >= 5.0:
-                                backfield_vacated_boost += min(0.60, vac_carries * 0.04)
+                                inact_lw = inact_prof.get("last_week")
+                                # Newly vacated starter carries from prior completed week get full inheritance;
+                                # older multi-week absences are already partially absorbed in season averages.
+                                if team_last_week is None or inact_lw is None or int(inact_lw) >= int(team_last_week):
+                                    backfield_vacated_boost += min(0.65, vac_carries * 0.04)
+                                else:
+                                    backfield_vacated_boost += min(0.15, vac_carries * 0.01)
+                backfield_vacated_boost = min(0.65, backfield_vacated_boost)
+
+                # Require baseline starter usage unless player is verified RB1 inheriting newly vacated backfield
+                if rush_avg < 20.0 and carries_avg < 5.0 and not (is_verified_rb1 and backfield_vacated_boost >= 0.25):
+                    continue
+
+                # If newly promoted RB1 has low historical season average due to backup snaps in Weeks 1-4,
+                # project from team starter workload floor while measuring boost over prior season avg.
+                effective_base_rush = max(rush_avg, 24.5) if (is_verified_rb1 and backfield_vacated_boost >= 0.25) else rush_avg
+                effective_base_carries = max(carries_avg, 5.2) if (is_verified_rb1 and backfield_vacated_boost >= 0.25) else carries_avg
 
                 # Weather ground boost
                 rain_prob = float(weather.get("precip_prob") or 0.0)
@@ -384,23 +418,28 @@ class MatchupRankingsEngine:
                 script_rush_boost = 0.04 if team_spread < -2.5 else (-0.02 if team_spread > 5.0 else 0.0)
 
                 boost_factor = 1.0 + (0.35 * opp_diff) + backfield_vacated_boost + weather_rush_boost + script_rush_boost
-                neutral_proj = round(rush_avg * 0.95 + 45.0 * 0.05, 1)
-                matchup_proj = round(rush_avg * boost_factor, 1)
+                neutral_proj = round(effective_base_rush * 0.95 + 45.0 * 0.05, 1)
+                if is_verified_rb1 and backfield_vacated_boost >= 0.40 and effective_base_rush < 35.0:
+                    matchup_proj = round(max(effective_base_rush * boost_factor, 55.0 + 15.0 * opp_diff), 1)
+                else:
+                    matchup_proj = round(effective_base_rush * boost_factor, 1)
 
                 # Carries
-                carries_proj = round(carries_avg * (1.0 + backfield_vacated_boost * 0.8 + 0.15 * opp_diff), 1)
-                carries_boost = round(((carries_proj - carries_avg) / max(1.0, carries_avg)) * 100.0, 1)
+                carries_proj = round(effective_base_carries * (1.0 + backfield_vacated_boost * 0.8 + 0.15 * opp_diff), 1)
+                if is_verified_rb1 and backfield_vacated_boost >= 0.40 and carries_proj < 13.5:
+                    carries_proj = 14.2
+                carries_boost = round(((carries_proj - effective_base_carries) / max(1.0, effective_base_carries)) * 100.0, 1)
 
-                exp_inc = round(matchup_proj - rush_avg, 1)
-                boost_pct = round(((matchup_proj - rush_avg) / max(1.0, rush_avg)) * 100.0, 1)
+                exp_inc = round(matchup_proj - effective_base_rush, 1)
+                boost_pct = round(((matchup_proj - effective_base_rush) / max(1.0, effective_base_rush)) * 100.0, 1)
                 matchup_boost = round(matchup_proj - neutral_proj, 1)
 
-                sigma = max(14.0, rush_avg * 0.30)
-                prob = round(calc_prob_exceeds(matchup_proj, rush_avg, sigma), 3)
+                sigma = max(14.0, effective_base_rush * 0.30)
+                prob = round(calc_prob_exceeds(matchup_proj, effective_base_rush, sigma), 3)
                 prob_pct = round(prob * 100.0, 1)
 
-                volume_score = min(96.0, 70.0 + carries_avg * 1.5 + (backfield_vacated_boost * 30.0))
-                def_vuln_score = min(95.0, 75.0 + opp_diff * 50.0 + len(opp_inactives) * 0.3)
+                volume_score = min(96.0, 70.0 + effective_base_carries * 1.5 + (backfield_vacated_boost * 35.0))
+                def_vuln_score = min(95.0, 75.0 + opp_diff * 50.0 + len(opp_def_out) * 2.5)
 
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
@@ -413,10 +452,10 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} allows {opp_rush_allowed:.1f} rush yds/g (differential: {opp_diff:+.1%}).",
                     "personnel": f"Downhill ground attack creates contact balance advantage against {opp} defensive front.",
-                    "injuries": f"Backfield vacated boost: {backfield_vacated_boost:+.1%}; opponent inactives: {len(opp_inactives)}.",
+                    "injuries": f"Backfield vacated boost: {backfield_vacated_boost:+.1%}; {opp} defensive starters Out/IR: {len(opp_def_out)} ({opp_def_names}).",
                     "game_script": f"Projected team spread: {team_spread:+.1f}, game total: {script.get('total')}.",
                     "weather": f"Venue: {weather.get('venue', 'outdoor')}, precip probability: {rain_prob}%.",
-                    "role": f"Touches floor elevated with {carries_proj:.1f} projected carries.",
+                    "role": f"Verified {'RB1 starter' if is_verified_rb1 else 'rotational back'} with {carries_proj:.1f} projected carries.",
                 }
 
                 candidates.append(
@@ -428,7 +467,7 @@ class MatchupRankingsEngine:
                         is_home=is_home,
                         primary_stat="Rushing Yards",
                         primary_market="RUSH_YDS",
-                        season_avg=rush_avg,
+                        season_avg=effective_base_rush,
                         neutral_proj=neutral_proj,
                         matchup_proj=matchup_proj,
                         expected_increase=exp_inc,
@@ -442,7 +481,7 @@ class MatchupRankingsEngine:
                         def_vuln_score=def_vuln_score,
                         tactical_drivers=tactical,
                         secondary_advantages=[
-                            SecondaryAdvantage("Carries", carries_avg, carries_proj, carries_boost),
+                            SecondaryAdvantage("Carries", effective_base_carries, carries_proj, carries_boost),
                             SecondaryAdvantage("Receiving Yards", rec_avg, round(rec_avg * 1.15, 1), 15.0),
                         ],
                         prop_line=line,
@@ -467,7 +506,8 @@ class MatchupRankingsEngine:
 
             opp_pass_allowed = float(opp_tape.get("opp_pass_yards_allowed") or LEAGUE_PASS_YDS_MEDIAN)
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_def_out = self.get_opp_def_out(opp)
+            opp_def_names = ", ".join(opp_def_out[:4]) or "None"
 
             team_wrs = [
                 p for p in self.usage_by_player.values()
@@ -481,9 +521,11 @@ class MatchupRankingsEngine:
 
                 rec_yds_avg = float(p.get("rec_yds_pg") or 0.0)
                 targets_avg = float(p.get("targets_pg") or 0.0)
+                target_share = float(p.get("target_share") or 0.0)
                 rec_avg = round(targets_avg * 0.68, 1)
 
-                if rec_yds_avg < 20.0 and targets_avg < 3.0:
+                # Exclude low-volume WR4/WR5 backups
+                if (rec_yds_avg < 25.0 and targets_avg < 4.0) or (targets_avg < 3.5 and target_share < 0.12):
                     continue
 
                 rain_prob = float(weather.get("precip_prob") or 0.0)
@@ -492,7 +534,7 @@ class MatchupRankingsEngine:
                 # Bad weather funnels short slot receptions, penalizes deep boundary
                 weather_boost = 0.08 if (rain_prob > 60.0 and is_slot) else (-0.05 if (rain_prob > 60.0 and not is_slot) else 0.0)
 
-                target_funnel_boost = 0.05 if len(opp_inactives) >= 2 else 0.0
+                target_funnel_boost = 0.05 if len(opp_def_out) >= 2 else 0.0
                 boost_factor = 1.0 + (0.40 * opp_diff) + target_funnel_boost + weather_boost
 
                 # Choose best market (Receptions vs Receiving Yards)
@@ -525,7 +567,7 @@ class MatchupRankingsEngine:
                 prob_pct = round(prob * 100.0, 1)
 
                 volume_score = min(95.0, 72.0 + targets_avg * 2.8)
-                def_vuln_score = min(94.0, 75.0 + opp_diff * 45.0 + len(opp_inactives) * 0.3)
+                def_vuln_score = min(94.0, 75.0 + opp_diff * 45.0 + len(opp_def_out) * 2.5)
 
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
@@ -538,10 +580,10 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} secondary surrenders {opp_pass_allowed:.1f} pass yds/g (differential: {opp_diff:+.1%}).",
                     "personnel": f"Route tree exploits coverage alignment in {opp} defensive secondary.",
-                    "injuries": f"{opp} secondary compromised with {len(opp_inactives)} designated inactives.",
+                    "injuries": f"{opp} defensive starters Out/IR: {len(opp_def_out)} ({opp_def_names}).",
                     "game_script": f"Game total {script.get('total')}; projected passing script favorable.",
                     "weather": f"Venue: {weather.get('venue', 'outdoor')}, precip: {rain_prob}%.",
-                    "role": f"Commands steady target opportunity (baseline {targets_avg:.1f} targets/g).",
+                    "role": f"Commands primary target opportunity (baseline {targets_avg:.1f} targets/g, {target_share:.1%} share).",
                 }
 
                 sec_boost_pct = round(((sec_proj - sec_base) / max(1.0, sec_base)) * 100.0, 1)
@@ -590,12 +632,15 @@ class MatchupRankingsEngine:
             eid = m_info["event_id"]
             script = m_info["script"]
 
+            team_tape = self.tapes.get(team, {})
             opp_tape = self.tapes.get(opp, {})
             weather = self.weather_by_event.get(eid, {})
 
             opp_pass_allowed = float(opp_tape.get("opp_pass_yards_allowed") or LEAGUE_PASS_YDS_MEDIAN)
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_def_out = self.get_opp_def_out(opp)
+            opp_def_names = ", ".join(opp_def_out[:4]) or "None"
+            starter_te = team_tape.get("te")
 
             team_tes = [
                 p for p in self.usage_by_player.values()
@@ -609,9 +654,15 @@ class MatchupRankingsEngine:
 
                 rec_yds_avg = float(p.get("rec_yds_pg") or 0.0)
                 targets_avg = float(p.get("targets_pg") or 0.0)
+                target_share = float(p.get("target_share") or 0.0)
                 rec_avg = round(targets_avg * 0.72, 1)
 
-                if rec_yds_avg < 15.0 and targets_avg < 2.5:
+                is_verified_te1 = bool(starter_te and starter_te.lower() == pname.lower())
+                # Strict TE1 depth-chart gate: exclude backup TE2/TE3s (e.g. Cole Kmet behind Colston Loveland,
+                # or Darnell Washington behind Pat Freiermuth) unless they command co-starter volume (>=4.0 targets/g & >=12% share).
+                if starter_te and not is_verified_te1 and (targets_avg < 4.0 or target_share < 0.12):
+                    continue
+                if rec_yds_avg < 20.0 and targets_avg < 3.5:
                     continue
 
                 wind_mph = float(weather.get("wind_mph") or 0.0)
@@ -620,7 +671,7 @@ class MatchupRankingsEngine:
                 # Adverse weather funnels targets to underneath/intermediate tight ends
                 weather_boost = 0.08 if (wind_mph >= 11.0 or rain_prob >= 60.0) else 0.0
 
-                te_leak_boost = 0.06 if len(opp_inactives) >= 2 else 0.0
+                te_leak_boost = 0.06 if len(opp_def_out) >= 2 else 0.0
                 boost_factor = 1.0 + (0.35 * opp_diff) + te_leak_boost + weather_boost
 
                 # Choose best market
@@ -653,7 +704,7 @@ class MatchupRankingsEngine:
                 prob_pct = round(prob * 100.0, 1)
 
                 volume_score = min(94.0, 72.0 + targets_avg * 3.0)
-                def_vuln_score = min(93.0, 75.0 + opp_diff * 45.0 + len(opp_inactives) * 0.3)
+                def_vuln_score = min(93.0, 75.0 + opp_diff * 45.0 + len(opp_def_out) * 2.5)
 
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
@@ -666,10 +717,10 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} defense yields space in intermediate seam zones.",
                     "personnel": "Size and catch radius mismatch over linebackers and safeties.",
-                    "injuries": f"{opp} coverage unit compromised with {len(opp_inactives)} designated inactives.",
+                    "injuries": f"{opp} defensive starters Out/IR: {len(opp_def_out)} ({opp_def_names}).",
                     "game_script": f"Game total {script.get('total')}; favorable intermediate script.",
                     "weather": f"Wind: {wind_mph:.1f} mph, precip: {rain_prob}%; weather funnels middle targets.",
-                    "role": f"Reliable security blanket target with {targets_avg:.1f} targets/g baseline.",
+                    "role": f"Verified {'TE1 starter' if is_verified_te1 else 'primary TE'} with {targets_avg:.1f} targets/g baseline.",
                 }
 
                 sec_boost_pct = round(((sec_proj - sec_base) / max(1.0, sec_base)) * 100.0, 1)
@@ -833,6 +884,7 @@ def generate_matchup_rankings_pipeline(
     tapes: dict[str, Any],
     weather_records: list[dict[str, Any]],
     inactives_by_team: dict[str, list[str]] | None = None,
+    defensive_out_by_team: dict[str, list[dict[str, Any]]] | None = None,
     staged_reports_dir: Path,
     date_str: str = "latest",
     suffix: str = "latest",
@@ -854,6 +906,7 @@ def generate_matchup_rankings_pipeline(
         tapes=tapes,
         weather_records=weather_records,
         inactives_by_team=inactives_by_team,
+        defensive_out_by_team=defensive_out_by_team,
         date_str=date_str,
     )
 

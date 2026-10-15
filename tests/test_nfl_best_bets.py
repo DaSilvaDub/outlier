@@ -617,3 +617,80 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
 
+
+def test_backup_te_and_prior_season_l10_contamination_rejected():
+    """Backup TE2 (Cole Kmet behind starter Colston Loveland) with 50% season hit rate
+    and low 2026 target share must be REJECTED on both historical and opportunity pillars.
+    """
+    kmet_over = _prop(
+        player_name="Cole Kmet",
+        player_id="00-0036290",
+        team="CHI",
+        opponent="MIN",
+        matchup="MIN @ CHI",
+        market="REC_YDS",
+        position="OVER",
+        line=9.5,
+        odds=114,
+        implied=46.73,
+        l5_hit_rate=0.60,
+        l10_hit_rate=0.70,
+        season_hit_rate=0.50,
+    )
+    kmet_under = _prop(
+        player_name="Cole Kmet",
+        player_id="00-0036290",
+        team="CHI",
+        opponent="MIN",
+        matchup="MIN @ CHI",
+        market="REC_YDS",
+        position="UNDER",
+        line=9.5,
+        odds=-145,
+        implied=59.18,
+        l5_hit_rate=0.40,
+        l10_hit_rate=0.30,
+        season_hit_rate=0.50,
+    )
+    usage = [
+        {
+            "player": "Cole Kmet",
+            "team": "CHI",
+            "position": "TE",
+            "games": 4,
+            "target_share": 0.0607,
+            "carry_share": 0.0,
+            "targets_pg": 1.75,
+            "carries_pg": 0.0,
+        },
+        {
+            "player": "Colston Loveland",
+            "team": "CHI",
+            "position": "TE",
+            "games": 4,
+            "target_share": 0.1462,
+            "carry_share": 0.0,
+            "targets_pg": 4.50,
+            "carries_pg": 0.0,
+        },
+    ]
+    tapes = {
+        "CHI": {"te": "Colston Loveland", "qb": "Caleb Williams"},
+        "MIN": {"pass_rush": 62.0, "pressure_rate": 0.28},
+    }
+    payload = build_best_bets(
+        _inputs(
+            props=[kmet_over, kmet_under],
+            usage_players=usage,
+            tapes=tapes,
+            inactive={"CHI": [], "MIN": []},
+        )
+    )
+    over_pick = _pick(payload, "OVER")
+    assert over_pick["pillars"]["historical"]["status"] == CONTRADICTS
+    assert over_pick["pillars"]["historical"]["evidence"]["prior_season_l10_contamination"] is True
+    assert over_pick["pillars"]["opportunity"]["status"] == CONTRADICTS
+    assert over_pick["pillars"]["opportunity"]["evidence"]["backup_role_gate"] == "REJECTED_BACKUP_TE"
+    assert over_pick["pillars"]["opportunity"]["evidence"]["team_starter_te"] == "Colston Loveland"
+    assert over_pick["verdict"] == REJECTED
+
