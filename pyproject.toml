@@ -34,6 +34,7 @@ pythonpath = ["."]
 markers = [
     "uses_enforce_mode: marks tests that test portfolio enforce mode directly",
     "provider: tests that import OpenAI/Anthropic/Gemini SDKs at collection time",
+    "uses_real_ledger: opts out of the conftest guard that blocks the real feedback ledger",
 ]
 
 [tool.ruff]
