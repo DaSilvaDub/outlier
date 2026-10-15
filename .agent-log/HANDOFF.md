@@ -1,3 +1,59 @@
+# HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
+
+**Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
+
+## Accomplished
+1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
+   (`outlier_nfl/matchup_rankings.py`) compared raw name strings. The inactive list is
+   nflverse `full_name` (injuries/rosters, via `tape.injury_report()`); the ranked players
+   are usage's `player_display_name`. The columns disagree on suffixes and punctuation
+   ("Kenneth Walker" vs "Kenneth Walker III", "AJ Brown" vs "A.J. Brown"), so an inactive
+   or IR player was ranked and published in `Top_5_*_Matchups.md`,
+   `Top_10_Overall_Matchups.md` and `Matchup_Boost_Rankings.csv` with a prop line. It was
+   the only inactive filter in the repo that did not normalize — `usage_signals:245`,
+   `alt_floors._inactive_keys:211` and `tape_nflverse._depth_roles:555` all use
+   `_name_key`. Both joins (the filter and the RB vacated-backfield lookup) now key on
+   `tape_nflverse._name_key`. 3 regression tests, each verified failing pre-fix.
+2. **Daily debug review** of changes since 2026-10-10 (PRs #263, #266 and the
+   2026-10-11 matchup-rankings integration). The PR #263 snap-count fix in
+   `scorecard.py` reviewed clean: the snap-counts `team`/`player` columns go through the
+   same `_player_key` as the stat rows, and `_zero_stat_row` only zeroes graded columns.
+
+## State to know about
+- **This sandbox cannot run the checks.** The network policy blocks PyPI (403 on CONNECT
+  to `pypi.org`), so `pip install -r requirements.lock` fails and there is no pytest,
+  mypy, ruff or pyright. The new tests were run with a direct-call harness; CI on PR #268
+  is the authoritative check. A future cloud session has the same limit — rely on CI.
+- Master CI is green on `56c7e09` (Offline Pytest #916, Static Type Checking #943).
+- **PR #262** (`claude/inspiring-fermat-zt9u2k`, "a window run must not overwrite the
+  rolling matchup rankings (F11)") is superseded — diff checked against master: its
+  `write_latest`/`publish_latest` gating, its `isinstance(p, dict)` Pyright narrowing and
+  its window-run test all landed on master in PR #263's third commit (its test is a
+  near-duplicate of `test_write_latest_false_writes_only_suffixed_reports`). The only
+  part not on master is the `reports_dir=tmp_path / "reports"` fix in
+  `tests/test_nfl_calibration.py`, which open PR #267 covers. #262 can be closed.
+
+## Reported, not fixed (judgment calls, see PR #268 body)
+1. `inactives_by_team=None` (injury report not loaded) collapses to `{}` in the rankings
+   engine, so such a run ranks IR players. `alt_floors`/`best_bets` instead fail closed on
+   `None` (`require_injury_evidence`, `injury_report_loaded`). Making the mandatory stage
+   fail closed changes when publication is withheld — needs a ruling.
+2. `matchup_rankings.consensus_props` is keyed by `(player_name, market)` with no event or
+   team, so two same-named players on a slate collide, last one wins. Contrast
+   `scorecard.lookup_consensus_line`, which keys on the event and refuses an ambiguous
+   fallback.
+3. RB `boost_factor` is unclamped (the QB path clamps to `[0.90, 1.35]`) while
+   `backfield_vacated_boost` accumulates up to +0.60 per out RB, so two out RBs can more
+   than double a projection.
+
+## Next steps
+1. Drive PR #268 to green and merge.
+2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
+3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
+   `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
+
+---
+
 # HANDOFF — 2026-10-14 (Claude, Week 5 Game-Script Accuracy + Signal Scorecard Snap-Count Fix)
 
 **Branch**: `claude/game-scripts-accuracy-check-18a539` (merged) · **Merge commit**: `2736a0c` · **PR**: https://github.com/DaSilvaDub/outlier/pull/263 (squash-merged 2026-10-14)
