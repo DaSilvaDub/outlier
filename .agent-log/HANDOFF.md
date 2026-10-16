@@ -1266,3 +1266,10 @@ this sandbox cannot import.
 - **Open:** repo-wide ruff reports 19 remaining F401 unused imports (`scratch.py`,
   `script.py`, `append_feedback.py`, `tests/test_challenger_adversarial.py`,
   `tests/test_nfl_roster.py`).
+
+## Claude - 2026-10-15 test pollution of tracked calibration/ and reports/
+- Last Commit SHA: 09f758c (branch fix/tests-no-writes-to-calibration); PR https://github.com/DaSilvaDub/outlier/pull/267. Sync REPORT STATUS OK, nonce 03de5e878a8a4d52.
+- Canonical cleanup first: uncommitted Oct 11 NFL WIP (Gemini) + 8 HANDOFF entries + rolling NFL reports moved to PR https://github.com/DaSilvaDub/outlier/pull/265 (branch feat/nfl-best-bets-rankings-wip); canonical master then fast-forwarded to origin/master. calibration/*.json drift in canonical was reverted (test pollution / live-run outputs, not product work).
+- Fix: test_daily_job autouse fixture redirects feedback.DEFAULT_DB_PATH + probability_blend.DEFAULT_WEIGHTS_PATH to tmp_path; test_nfl_calibration passes reports_dir. New conftest guard _no_writes_to_real_tracked_artifacts fails any test that changes a git-tracked file under calibration/ or reports/ (fail-only).
+- Full offline suite: 2628 passed; 4 failures pre-exist on master (2 multiprocess contention, 2 test_capture_is_deterministic). Use a short --basetemp on Windows: long paths cause spurious FileNotFoundError (MAX_PATH).
+- Next steps: decide whether feedback_db.DEFAULT_DB_PATH (absolute path to canonical's production ledger) is intentional; consider making NflPipeline.run reports_dir default non-cwd-relative; merge #208's packs/ guard alongside the new one.

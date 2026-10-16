@@ -751,7 +751,7 @@ def test_compute_sportsbook_edge_normalizes_model_p_pct():
 def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
     """After projection overwrites model_p, sportsbook_edge_pts must track it."""
     from outlier_nfl import enrich_close as ec
-    from outlier_nfl.projection import ProjectionResult, MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+    from outlier_nfl.projection import MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
 
     record = {
         "player_name": "Test WR",
@@ -934,6 +934,9 @@ def test_pipeline_high_prob_includes_actionable_records(tmp_path):
         date="2026-09-13",
         offline_fixtures_dir=FIXTURES_DIR,
         generate_game_script=False,
+        # Omitting reports_dir publishes to the cwd-relative reports/NFL, i.e. the
+        # repo's tracked reports when pytest runs from the repo root.
+        reports_dir=tmp_path / "reports",
     )
     assert summary["status"] == "OK"
     assert "tier_1_actionable_count" in summary
