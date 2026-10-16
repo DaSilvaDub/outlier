@@ -1,3 +1,21 @@
+# HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
+
+**Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
+
+## Accomplished
+1. Review follow-up on #270. `scripts/backfill_projection_hashes.py` and `scripts/diagnose_so_gamelog_calibration.py` now call `paths.resolve_feedback_db_path()` when they run, so `OUTLIER_FEEDBACK_DB` wins over the import-time `FEEDBACK_DB_PATH`. `nightly_audit.ps1` passes `--db` only when `$env:OUTLIER_FEEDBACK_DB` is non-blank; otherwise the feedback CLI uses `paths.FEEDBACK_DB_PATH`.
+2. `tests/test_feedback_ledger_path.py` covers the writer and the reader against a decoy at the monkeypatched import-time path. Offline pytest: 2648 passed, 4 skipped. mypy: no issues in 131 files. pyright: 0 errors (pre-existing playwright import warning in `login.py`).
+
+## State to know about
+- Left alone: `.worktrees/test-pr97/` still hard-codes the canonical ledger in its archived `feedback.py` and `pack.py`. That tree is a committed historical snapshot, not a live reader of this branch.
+- Docs and skills that mention `calibration/feedback.sqlite3` are descriptions, not path construction.
+
+## Next steps
+1. Re-review and merge PR #270. Do not open a second PR for this branch.
+2. Carried over from 2026-10-15: drive PR #268, and decide the three matchup-ranking judgment calls in the handoff below.
+
+---
+
 # HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
 
 **Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
