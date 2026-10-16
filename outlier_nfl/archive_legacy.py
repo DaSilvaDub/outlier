@@ -320,9 +320,17 @@ def _snapshot_key(row: dict[str, Any]) -> tuple[str, ...]:
     and the prices (``best_odds``, ``implied_probability``) are not; rows that
     share a key are compared by ``_snapshot_conflict``.
     """
-    return (*prop_key(row), str(row.get("team") or ""),
-            json.dumps(row.get("line"), sort_keys=True),
+    return (*prop_key(row), str(row.get("team") or ""), _line_key(row.get("line")),
             str(row.get("taken_at") or ""), str(row.get("run_id") or ""))
+
+
+def _line_key(line: Any) -> str:
+    """``line`` as a key: numbers (not bools) as floats, so 1 and 1.0 match and
+    every NaN line gets one key; ``None`` and ``""`` stay distinct from numbers
+    and from each other."""
+    if isinstance(line, (int, float)) and not isinstance(line, bool):
+        line = float(line) + 0.0  # -0.0 -> 0.0
+    return json.dumps(line, sort_keys=True)
 
 
 SNAPSHOT_PRICE_FIELDS = ("best_odds", "implied_probability", "books")
@@ -333,22 +341,27 @@ def _books_of(row: dict[str, Any]) -> dict[str, Any]:
     return books if isinstance(books, dict) else {}
 
 
-def _snapshot_conflict(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    """Two rows with one ``_snapshot_key`` disagree.
+def _snapshot_conflict(a: dict[str, Any], b: dict[str, Any]) -> str | None:
+    """What two rows with one ``_snapshot_key`` disagree on, or ``None``.
 
     They conflict when a book quoted in both has a different price, or when any
-    non-price field differs. One row quoting extra books is not a conflict, and
-    then ``best_odds``/``implied_probability`` may legitimately differ; with the
-    same set of books they must match.
+    non-price field differs (``line`` is compared through the key, so 1 and 1.0
+    or two NaN lines are equal). One row quoting extra books is not a conflict,
+    and then ``best_odds``/``implied_probability`` may legitimately differ; with
+    the same set of books they must match.
     """
-    if any(a.get(f) != b.get(f) for f in (a.keys() | b.keys())
-           if f not in SNAPSHOT_PRICE_FIELDS):
-        return True
+    for f in sorted(a.keys() | b.keys()):
+        if f not in SNAPSHOT_PRICE_FIELDS and f != "line" and a.get(f) != b.get(f):
+            return f"field {f!r} {a.get(f)!r} vs {b.get(f)!r}"
     books_a, books_b = _books_of(a), _books_of(b)
-    if any(books_a[k] != books_b[k] for k in books_a.keys() & books_b.keys()):
-        return True
-    return books_a.keys() == books_b.keys() and any(
-        a.get(f) != b.get(f) for f in ("best_odds", "implied_probability"))
+    for k in sorted(books_a.keys() & books_b.keys()):
+        if books_a[k] != books_b[k]:
+            return f"book {k!r} price {books_a[k]!r} vs {books_b[k]!r}"
+    if books_a.keys() == books_b.keys():
+        for f in ("best_odds", "implied_probability"):
+            if a.get(f) != b.get(f):
+                return f"field {f!r} {a.get(f)!r} vs {b.get(f)!r} with the same books"
+    return None
 
 
 def _canon(row: dict[str, Any]) -> str:
@@ -388,9 +401,16 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
         variants = [seen[k][c] for c in sorted(seen[k])]
         for i, (a, paths_a) in enumerate(variants):
             for b, paths_b in variants[i + 1:]:
-                if _snapshot_conflict(a, b):
-                    first, second = sorted((min(paths_a), min(paths_b)))
-                    return [], f"snapshot copies disagree on row {k}: {first} vs {second}"
+                if _snapshot_conflict(a, b) is None:
+                    continue
+                if paths_a & paths_b:
+                    return [], (f"snapshot rows disagree on row {k} within one file "
+                                f"{min(paths_a & paths_b)}: {_snapshot_conflict(a, b)}")
+                # name the copies and the values in the same order
+                (x, px), (y, py) = sorted(((a, min(paths_a)), (b, min(paths_b))),
+                                          key=lambda t: t[1])
+                return [], (f"snapshot copies disagree on row {k} across two copies "
+                            f"{px} vs {py}: {_snapshot_conflict(x, y)}")
         kept.extend(r for r, _ in variants)  # every distinct row, unaltered
     return sorted(kept, key=_canon), None
 

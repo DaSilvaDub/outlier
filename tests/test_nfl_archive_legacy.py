@@ -384,6 +384,13 @@ def test_snapshot_copies_that_disagree_refuse_the_slate(tree, capsys):
     al.record_legacy(nfl, ("2026-10-05",), reports)
     st = al.legacy_status(nfl, "2026-10-05")
     assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert "across two copies" in st.refused_reason
+    # the copies are named in the same order as their values
+    copies, what = st.refused_reason.split(" across two copies ", 1)[1].rsplit(": ", 1)
+    first, second = copies.split(" vs ")
+    odds = [json.loads((nfl / c).read_text()).get("best_odds") for c in (first, second)]
+    assert what == f"field 'best_odds' {odds[0]!r} vs {odds[1]!r} with the same books"
+    assert sorted(odds, key=str) == [-125, None]
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
     assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
 
@@ -455,9 +462,11 @@ def test_a_shared_book_with_another_price_is_refused_despite_an_extra_book(tree,
           "2026-10-05T21:00:00Z")
     al.record_legacy(nfl, ("2026-10-05",), reports)
     st = al.legacy_status(nfl, "2026-10-05")
-    assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert st.status == "refused" and "snapshot rows disagree on row" in st.refused_reason
+    assert " within one file archive/legacy/" in st.refused_reason
+    assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
-    assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
+    assert "REFUSED snapshot rows disagree" in capsys.readouterr().out
 
 
 def test_every_distinct_row_under_a_key_is_compared(tree):
@@ -482,9 +491,10 @@ def test_a_true_duplicate_with_another_price_in_one_copy_is_refused(tree, capsys
           "2026-10-05T21:00:00Z")
     al.record_legacy(nfl, ("2026-10-05",), reports)
     st = al.legacy_status(nfl, "2026-10-05")
-    assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert st.status == "refused" and "within one file" in st.refused_reason
+    assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
-    assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
+    assert "REFUSED snapshot rows disagree" in capsys.readouterr().out
 
 
 # Order independence: 10a reruns must come out byte-identical.
@@ -574,7 +584,12 @@ def test_a_conflict_is_refused_in_either_order(tmp_path, capsys, swap):
     _snap(nfl1, [b, a] if swap else [a, b], "2026-10-05T21:00:00Z")
     al.record_legacy(nfl1, ("2026-10-05",), reports1)
     st = al.legacy_status(nfl1, "2026-10-05")
-    assert st.status == "refused" and st.refused_reason.startswith(reason.split(": ")[0])
+    assert "across two copies" in reason and "within one file" in st.refused_reason
+    # one file names the pair by canonical JSON; two copies name it in path order
+    assert st.status == "refused"
+    assert st.refused_reason.rsplit(": ", 1)[1] == "book 'hardrock' price -110 vs -125"
+    assert reason.rsplit(": ", 1)[1] in ("book 'hardrock' price -110 vs -125",
+                                         "book 'hardrock' price -125 vs -110")
 
 
 def test_a_conflict_reason_does_not_depend_on_copy_order(tmp_path):
@@ -584,3 +599,58 @@ def test_a_conflict_reason_does_not_depend_on_copy_order(tmp_path):
     reasons = [al.legacy_status(_two_copies(tmp_path / str(swap), swap, [a], [b])[0],
                                 "2026-10-05").refused_reason for swap in (False, True)]
     assert reasons[0] is not None and reasons[0] == reasons[1]
+
+
+# Line identity: numeric lines compare as floats; None, "" and numbers stay apart.
+def _hr_rows(line_a, line_b, books_a: dict, books_b: dict) -> list[dict]:
+    return [_wrow("2026-10-05", "first team reception", line=line_a, books=books_a),
+            _wrow("2026-10-05", "first team reception", line=line_b, books=books_b)]
+
+
+def _status_of(tree, rows: list[dict]) -> al.LegacyStatus:
+    nfl, reports = tree
+    _snap(nfl, rows, "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    return al.legacy_status(nfl, "2026-10-05")
+
+
+def test_line_1_and_1_0_are_one_key_so_a_hard_rock_price_change_is_refused(tree):
+    st = _status_of(tree, _hr_rows(1, 1.0, {"hardrock": -110}, {"hardrock": -125}))
+    assert st.status == "refused"
+    assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
+
+
+def test_line_1_and_1_0_with_the_same_price_and_an_extra_book_are_kept(tree):
+    st = _status_of(tree, _hr_rows(1, 1.0, {"hardrock": -110},
+                                   {"hardrock": -110, "fanduel": 105}))
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    assert st.snapshot_rows["pre_kickoff"] == 2
+
+
+def test_none_empty_string_and_numeric_lines_are_separate_keys():
+    assert al._line_key(1) == al._line_key(1.0)
+    assert al._line_key(0) == al._line_key(0.0) == al._line_key(-0.0)
+    assert len({al._line_key(None), al._line_key(""), al._line_key(0)}) == 3
+    assert al._line_key(False) != al._line_key(0)  # a bool is not a number here
+    assert al._line_key(float("nan")) == al._line_key(float("nan"))
+
+
+def test_none_and_empty_string_lines_with_other_prices_are_not_compared(tree):
+    st = _status_of(tree, _hr_rows(None, "", {"hardrock": -110}, {"hardrock": -125}))
+    assert st.refused_reason is None and st.snapshot_rows["pre_kickoff"] == 2
+
+
+def test_two_nan_lines_that_differ_by_an_extra_book_are_not_refused(tree):
+    nan = float("nan")
+    st = _status_of(tree, _hr_rows(nan, nan, {"hardrock": -110},
+                                   {"hardrock": -110, "fanduel": 105}))
+    assert st.status != "refused" and st.refused_reason is None
+    assert st.snapshot_rows["pre_kickoff"] == 2
+
+
+def test_two_nan_lines_with_another_shared_book_price_are_refused(tree):
+    nan = float("nan")
+    st = _status_of(tree, _hr_rows(nan, nan, {"hardrock": -110},
+                                   {"hardrock": -125, "fanduel": 105}))
+    assert st.status == "refused"
+    assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
