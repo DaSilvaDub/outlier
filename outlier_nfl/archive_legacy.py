@@ -313,27 +313,52 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
 def _snapshot_key(row: dict[str, Any]) -> tuple[str, ...]:
     """Identity of one row as ``snapshots.append_snapshot`` writes it.
 
-    ``prop_key`` (event, player, market, side ``position``, scope) is line- and
-    book-independent, so one capture can hold several rows under it, one per
-    ``team``, ``line`` and set of quoting ``books``. Those fields are part of the
-    identity. The prices (``best_odds``, ``implied_probability`` and the odds in
-    ``books``) are not, so a row with the same key and another price conflicts.
+    ``prop_key`` (event, player, market, side ``position``, scope) is line-
+    independent, so one capture can hold several rows under it, one per ``team``
+    and ``line``. Those fields are part of the identity. The quoting ``books``
+    and the prices (``best_odds``, ``implied_probability``) are not; rows that
+    share a key are compared by ``_snapshot_conflict``.
     """
-    books = row.get("books")
-    book_names = ",".join(sorted(str(b) for b in books)) if isinstance(books, dict) else ""
     return (*prop_key(row), str(row.get("team") or ""),
-            json.dumps(row.get("line"), sort_keys=True), book_names,
+            json.dumps(row.get("line"), sort_keys=True),
             str(row.get("taken_at") or ""), str(row.get("run_id") or ""))
+
+
+SNAPSHOT_PRICE_FIELDS = ("best_odds", "implied_probability", "books")
+
+
+def _books_of(row: dict[str, Any]) -> dict[str, Any]:
+    books = row.get("books")
+    return books if isinstance(books, dict) else {}
+
+
+def _snapshot_conflict(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Two rows with one ``_snapshot_key`` disagree.
+
+    They conflict when a book quoted in both has a different price, or when any
+    non-price field differs. One row quoting extra books is not a conflict, and
+    then ``best_odds``/``implied_probability`` may legitimately differ; with the
+    same set of books they must match.
+    """
+    if any(a.get(f) != b.get(f) for f in (a.keys() | b.keys())
+           if f not in SNAPSHOT_PRICE_FIELDS):
+        return True
+    books_a, books_b = _books_of(a), _books_of(b)
+    if any(books_a[k] != books_b[k] for k in books_a.keys() & books_b.keys()):
+        return True
+    return books_a.keys() == books_b.keys() and any(
+        a.get(f) != b.get(f) for f in ("best_odds", "implied_probability"))
 
 
 def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                     ) -> tuple[list[dict[str, Any]], str | None]:
-    """This slate's rows across every recorded copy, identical rows once.
+    """This slate's rows across every recorded copy, one row per key.
 
-    The second value is the refusal reason when two rows, in one copy or in two,
-    share a key (``_snapshot_key``) but differ in any value, e.g. the price.
+    Rows that share a key (``_snapshot_key``) without conflicting count once (the
+    first one read is kept). The second value is the refusal reason when two
+    rows, in one copy or in two, share a key and conflict (``_snapshot_conflict``).
     """
-    seen: dict[tuple[str, ...], tuple[dict[str, Any], str]] = {}
+    seen: dict[tuple[str, ...], list[tuple[dict[str, Any], str]]] = {}
     for e in snaps:
         try:
             lines = ar.resolve_path(root, e.path).read_text(encoding="utf-8").splitlines()
@@ -347,11 +372,15 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
             if not isinstance(row, dict) or row.get("slate_date") != slate:
                 continue
             k = _snapshot_key(row)
-            if k in seen and seen[k][0] != row:
-                return [], (f"snapshot copies disagree on row {k}: "
-                            f"{seen[k][1]} vs {e.path}")
-            seen.setdefault(k, (row, e.path))
-    return [r for r, _ in seen.values()], None
+            variants = seen.setdefault(k, [])
+            if any(row == other for other, _ in variants):
+                continue  # exact repeat
+            for other, path in variants:  # every distinct row under the key
+                if _snapshot_conflict(other, row):
+                    return [], (f"snapshot copies disagree on row {k}: "
+                                f"{path} vs {e.path}")
+            variants.append((row, e.path))
+    return [v[0][0] for v in seen.values()], None
 
 
 def _judge_snapshot_rows(rows: list[dict[str, Any]], kick: dict[str, datetime]

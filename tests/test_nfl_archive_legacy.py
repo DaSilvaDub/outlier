@@ -407,22 +407,64 @@ def _wrow(slate: str, name: str, *, line, books: dict, team: str = "") -> dict:
 
 
 @pytest.mark.parametrize("slate", ["2026-10-04", "2026-10-05"])
-def test_rows_under_one_prop_key_with_other_books_or_lines_are_not_a_conflict(tree, slate):
+def test_rows_under_one_prop_key_with_other_teams_lines_or_books_are_not_a_conflict(
+        tree, slate):
     nfl, reports = tree
-    rows = [_wrow(slate, "first team reception", line=0.5, books={"hardrock": -110}),
-            _wrow(slate, "first team reception", line=0.5, books={"fanduel": -120}),
-            _wrow(slate, "first team reception", line=1.5, books={"hardrock": 150}),
-            # empty line string, rows differ only by book
-            _wrow(slate, "first team td scorer", line="", books={"hardrock": 400}),
-            _wrow(slate, "first team td scorer", line="", books={"draftkings": 450}),
-            # the same row written twice is one row, not a conflict
-            _wrow(slate, "first team td scorer", line="", books={"draftkings": 450})]
+    rows = [_wrow(slate, "first team reception", line=0.5, team="LAC", books={"hardrock": -110}),
+            _wrow(slate, "first team reception", line=0.5, team="BUF", books={"hardrock": -120}),
+            _wrow(slate, "first team reception", line=1.5, team="LAC", books={"hardrock": 150}),
+            # empty line string; the second row only adds a book: one row, no conflict
+            _wrow(slate, "first team td scorer", line="", team="LAC", books={"hardrock": 400}),
+            _wrow(slate, "first team td scorer", line="", team="LAC",
+                  books={"hardrock": 400, "draftkings": 450}),
+            _wrow(slate, "first team td scorer", line="", team="BUF", books={"draftkings": 450}),
+            # the same row written twice is one row
+            _wrow(slate, "first team td scorer", line="", team="BUF", books={"draftkings": 450})]
     _snap(nfl, rows, "2026-10-05T21:00:00Z")
     al.record_legacy(nfl, (slate,), reports)
     st = al.legacy_status(nfl, slate)
     assert st.status == "legacy_regradable" and st.refused_reason is None
     assert st.snapshot_rows == {"pre_kickoff": 5, "post_slate": 0, "with_run_id": 0,
                                 "no_kickoff": 0, "copies": 1}
+
+
+def test_an_extra_book_with_the_same_shared_price_is_not_a_conflict(tree):
+    nfl, reports = tree
+    _snap(nfl, [_wrow("2026-10-05", "first team reception", line=0.5,
+                      books={"hardrock": -110}),
+                _wrow("2026-10-05", "first team reception", line=0.5,
+                      books={"hardrock": -110, "fanduel": 105})],
+          "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    st = al.legacy_status(nfl, "2026-10-05")
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    assert st.snapshot_rows["pre_kickoff"] == 1
+
+
+def test_a_shared_book_with_another_price_is_refused_despite_an_extra_book(tree, capsys):
+    nfl, reports = tree
+    _snap(nfl, [_wrow("2026-10-05", "first team reception", line=0.5,
+                      books={"hardrock": -110}),
+                _wrow("2026-10-05", "first team reception", line=0.5,
+                      books={"hardrock": -125, "fanduel": 105})],
+          "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    st = al.legacy_status(nfl, "2026-10-05")
+    assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
+    assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
+
+
+def test_every_distinct_row_under_a_key_is_compared(tree):
+    nfl, reports = tree
+    # hardrock-only first, then two fanduel rows that disagree with each other
+    _snap(nfl, [_wrow("2026-10-05", "first team reception", line=0.5,
+                      books={"hardrock": -110}),
+                _wrow("2026-10-05", "first team reception", line=0.5, books={"fanduel": 105}),
+                _wrow("2026-10-05", "first team reception", line=0.5, books={"fanduel": 120})],
+          "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    assert al.legacy_status(nfl, "2026-10-05").status == "refused"
 
 
 @pytest.mark.parametrize("line", [0.5, ""])
