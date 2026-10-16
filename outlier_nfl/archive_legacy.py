@@ -311,15 +311,27 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
 
 
 def _snapshot_key(row: dict[str, Any]) -> tuple[str, ...]:
-    return (*prop_key(row), str(row.get("taken_at") or ""), str(row.get("run_id") or ""))
+    """Identity of one row as ``snapshots.append_snapshot`` writes it.
+
+    ``prop_key`` (event, player, market, side ``position``, scope) is line- and
+    book-independent, so one capture can hold several rows under it, one per
+    ``team``, ``line`` and set of quoting ``books``. Those fields are part of the
+    identity. The prices (``best_odds``, ``implied_probability`` and the odds in
+    ``books``) are not, so a row with the same key and another price conflicts.
+    """
+    books = row.get("books")
+    book_names = ",".join(sorted(str(b) for b in books)) if isinstance(books, dict) else ""
+    return (*prop_key(row), str(row.get("team") or ""),
+            json.dumps(row.get("line"), sort_keys=True), book_names,
+            str(row.get("taken_at") or ""), str(row.get("run_id") or ""))
 
 
 def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                     ) -> tuple[list[dict[str, Any]], str | None]:
     """This slate's rows across every recorded copy, identical rows once.
 
-    The second value is the refusal reason when two copies disagree on a row key
-    (same prop, ``taken_at`` and ``run_id``, different values).
+    The second value is the refusal reason when two rows, in one copy or in two,
+    share a key (``_snapshot_key``) but differ in any value, e.g. the price.
     """
     seen: dict[tuple[str, ...], tuple[dict[str, Any], str]] = {}
     for e in snaps:

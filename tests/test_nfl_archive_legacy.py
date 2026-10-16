@@ -375,7 +375,64 @@ def test_snapshot_copies_that_disagree_refuse_the_slate(tree, capsys):
     nfl, reports = tree
     _snap(nfl, [_srow("E105B", "2026-10-05T20:00:00Z")], "2026-10-05T21:00:00Z")
     al.record_legacy(nfl, ("2026-10-05",), reports)
-    _snap(nfl, [_srow("E105B", "2026-10-05T20:00:00Z", line=30.5)], "2026-10-07T12:00:00Z")
+    _snap(nfl, [_srow("E105B", "2026-10-05T20:00:00Z", best_odds=-125)],  # other price
+          "2026-10-07T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    st = al.legacy_status(nfl, "2026-10-05")
+    assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
+    assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
+
+
+# Shaped after the two keys that refused Oct 4 and Oct 5 on Daniel's machine: one
+# copy of nfl_prop_snapshots_2026-09-29.jsonl, no run_id, the same prop_key and
+# taken_at on several rows. Each row is what snapshots.append_snapshot writes
+# (SNAPSHOT_FIELDS + slate_date, taken_at, books as {book: odds}).
+REAL_KEYS = {
+    "first team reception": ("05cd570bc7ad0f6493e9e1388095741bf2d05ead",
+                             "FIRST_TEAM_RECEPTION", "2026-10-01T17:32:38.856999+00:00"),
+    "first team td scorer": ("23a2e7817d5c4b313d5f0960ff102293b8f0cd2c",
+                             "FIRST_TEAM_TOUCHDOWN", "2026-10-01T17:36:42.360800+00:00"),
+}
+
+
+def _wrow(slate: str, name: str, *, line, books: dict, team: str = "") -> dict:
+    eid, market, taken = REAL_KEYS[name]
+    odds = max(books.values())
+    return {"event_id": eid, "event_starts_at": GAMES[slate][0][3], "matchup": "",
+            "team": team, "player_name": name, "market": market, "position": "OVER",
+            "line": line, "scope": "full_game", "best_odds": odds,
+            "implied_probability": 50.0, "is_consensus_line": True,
+            "slate_date": slate, "taken_at": taken, "books": books}
+
+
+@pytest.mark.parametrize("slate", ["2026-10-04", "2026-10-05"])
+def test_rows_under_one_prop_key_with_other_books_or_lines_are_not_a_conflict(tree, slate):
+    nfl, reports = tree
+    rows = [_wrow(slate, "first team reception", line=0.5, books={"hardrock": -110}),
+            _wrow(slate, "first team reception", line=0.5, books={"fanduel": -120}),
+            _wrow(slate, "first team reception", line=1.5, books={"hardrock": 150}),
+            # empty line string, rows differ only by book
+            _wrow(slate, "first team td scorer", line="", books={"hardrock": 400}),
+            _wrow(slate, "first team td scorer", line="", books={"draftkings": 450}),
+            # the same row written twice is one row, not a conflict
+            _wrow(slate, "first team td scorer", line="", books={"draftkings": 450})]
+    _snap(nfl, rows, "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl, (slate,), reports)
+    st = al.legacy_status(nfl, slate)
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    assert st.snapshot_rows == {"pre_kickoff": 5, "post_slate": 0, "with_run_id": 0,
+                                "no_kickoff": 0, "copies": 1}
+
+
+@pytest.mark.parametrize("line", [0.5, ""])
+def test_a_true_duplicate_with_another_price_in_one_copy_is_refused(tree, capsys, line):
+    nfl, reports = tree
+    _snap(nfl, [_wrow("2026-10-05", "first team reception", line=line,
+                      books={"hardrock": -110}),
+                _wrow("2026-10-05", "first team reception", line=line,
+                      books={"hardrock": -125})],  # same book, side and line; other price
+          "2026-10-05T21:00:00Z")
     al.record_legacy(nfl, ("2026-10-05",), reports)
     st = al.legacy_status(nfl, "2026-10-05")
     assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
