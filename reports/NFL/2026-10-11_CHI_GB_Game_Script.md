@@ -19,15 +19,12 @@
 
 | Player | Market | Side | Conf | Tag | Why |
 | :--- | :--- | :---: | :---: | :--- | :--- |
-| Caleb Williams | PASSING_TIMES_SACKED | OVER | MEDIUM | `MATCHUP_PASS_SUPPRESS` | Caleb Williams sacks vs GB pass rush (grade 75) |
 | Jordan Love | PASSING_TIMES_SACKED | OVER | MEDIUM | `MATCHUP_PASS_SUPPRESS` | Jordan Love sacks vs CHI pass rush (grade 85) |
 | Jordan Love | PASS_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: qb pass-game haircut / ground lean |
 | Jordan Love | LONG_PASS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: qb pass-game haircut / ground lean |
 | Christian Watson | REC_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_deep pass-game haircut / ground lean |
 | Christian Watson | LONG_REC | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_deep pass-game haircut / ground lean |
 | Skyy Moore | REC_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_slot pass-game haircut / ground lean |
-| Caleb Williams | PASS_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: qb pass-game haircut / ground lean |
-| Caleb Williams | LONG_PASS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: qb pass-game haircut / ground lean |
 | Rome Odunze | REC_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_deep pass-game haircut / ground lean |
 | Rome Odunze | LONG_REC | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_deep pass-game haircut / ground lean |
 | Kalif Raymond | REC_YDS | UNDER | MEDIUM | `WEATHER_WIND` | 12.4 mph wind at kickoff: wr_slot pass-game haircut / ground lean |

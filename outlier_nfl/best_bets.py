@@ -442,13 +442,25 @@ def _historical(
         val = _f(rates[k])
         if val is not None:
             norm_rates[k] = val / 100.0 if val > 1.0 else val
-    l5, l10 = norm_rates.get("l5"), norm_rates.get("l10")
+    l5, l10, szn = norm_rates.get("l5"), norm_rates.get("l10"), norm_rates.get("season")
+    position = str(prop.get("position") or "").upper()
     if l5 is not None and l10 is not None and l5 < 0.5 and l10 < 0.5:
         pillar.status = CONTRADICTS
         pillar.notes.append("L5 and L10 both below 50% for this side")
     elif norm_rates and all(v < 0.5 for v in norm_rates.values()):
         pillar.status = CONTRADICTS
         pillar.notes.append("all available hit-rate windows below 50% for this side")
+    elif (
+        position == "OVER"
+        and szn is not None
+        and szn <= 0.50
+        and (l5 is None or l5 <= 0.60)
+    ):
+        pillar.evidence["prior_season_l10_contamination"] = True
+        pillar.status = CONTRADICTS
+        pillar.notes.append(
+            f"current-season hit rate ({szn:.0%}) and L5 ({l5 if l5 is not None else 0.0:.0%}) do not support OVER (prior-season L10 contamination)"
+        )
     return pillar, base
 
 
@@ -470,6 +482,7 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
     player = str(prop.get("player_name") or "")
     market = str(prop.get("market") or "").upper()
     position = str(prop.get("position") or "").upper()
+    fam = market_family(market)
 
     weekly: dict[int, float] = defaultdict(float)
     for kind in _ngs_kinds(market):
@@ -498,10 +511,10 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
 
     if not weekly and not profile:
         pillar.notes.append("no NGS volume or usage profile matched this player")
-        if market_family(market) is None:
+        if fam is None:
             pillar.notes.append(f"market {market} has no opportunity metric mapped")
         return pillar
-    if market_family(market) is None or market in TD_MARKETS:
+    if fam is None or market in TD_MARKETS:
         pillar.status = ESTIMATED
         pillar.notes.append(
             f"market {market} requires red-zone/event opportunity metrics; generic usage is estimated"
@@ -511,6 +524,50 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
     if pillar.evidence.get("role_collapse") and position == "OVER":
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume under half of the player's average")
+
+    # Depth-chart & low-volume backup role gate on OVER props:
+    # Prevent demoted/backup players (e.g., TE2 Cole Kmet at 1.75 targets/g behind TE1 Colston Loveland,
+    # or low-share WR4/RB3s) from validating OVERs unless backed by a positive VACATED volume signal.
+    has_positive_vacated = any(
+        sig.side == "OVER" and float(sig.volume_adjustment or 0.0) > 0
+        for sig in src.matched_signals.get("opportunity", [])
+    )
+    if position == "OVER" and profile and not has_positive_vacated:
+        t_pg = _f(profile.get("targets_pg")) or 0.0
+        t_sh = _f(profile.get("target_share")) or 0.0
+        c_pg = _f(profile.get("carries_pg")) or 0.0
+        c_sh = _f(profile.get("carry_share")) or 0.0
+        pos_code = str(profile.get("position") or "").upper()
+        team_tape = src.inputs.tapes.get(team or "", {}) if team else {}
+        starter_te = team_tape.get("te")
+        if starter_te:
+            pillar.evidence["team_starter_te"] = starter_te
+
+        if fam == "rec":
+            if (
+                pos_code == "TE"
+                and starter_te
+                and not _names_match(str(starter_te), player, team, team)
+                and (t_pg < 3.5 or t_sh < 0.10)
+            ):
+                pillar.evidence["backup_role_gate"] = "REJECTED_BACKUP_TE"
+                pillar.status = CONTRADICTS
+                pillar.notes.append(
+                    f"backup TE behind starter {starter_te} ({t_pg:.2f} targets/g, {t_sh:.1%} share) contradicts OVER"
+                )
+            elif t_pg < 2.5 and t_sh < 0.09:
+                pillar.evidence["backup_role_gate"] = "REJECTED_LOW_VOLUME_RECEIVER"
+                pillar.status = CONTRADICTS
+                pillar.notes.append(
+                    f"low-volume receiving role ({t_pg:.2f} targets/g, {t_sh:.1%} target share) contradicts OVER"
+                )
+        elif fam == "rush":
+            if c_pg < 5.0 and c_sh < 0.20:
+                pillar.evidence["backup_role_gate"] = "REJECTED_LOW_VOLUME_RUSHER"
+                pillar.status = CONTRADICTS
+                pillar.notes.append(
+                    f"low-volume rushing role ({c_pg:.2f} carries/g, {c_sh:.1%} carry share) contradicts OVER"
+                )
     return pillar
 
 

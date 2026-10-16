@@ -212,3 +212,56 @@ def test_write_latest_false_writes_only_suffixed_reports(tmp_path: Path):
     full = tmp_path / "full"
     generate_matchup_rankings_pipeline(staged_reports_dir=full, **kwargs)
     assert {"Matchup_Boost_Rankings.csv", "Top_10_Overall_Matchups.md"} <= {p.name for p in full.iterdir()}
+
+
+def test_te2_excluded_and_defensive_out_used():
+    """Verify backup TE2 (Cole Kmet behind starter Colston Loveland) is excluded from TE rankings
+    and defensive_out_by_team drives opponent injury counts instead of raw practice-squad inactives.
+    """
+    engine = MatchupRankingsEngine(
+        props=[],
+        matchup_scripts=[
+            {
+                "home_team": "CHI",
+                "away_team": "MIN",
+                "event_id": "e_chi_min",
+                "total": 44.5,
+                "home_spread": 2.5,
+            }
+        ],
+        usage_players=[
+            {
+                "player": "Cole Kmet",
+                "team": "CHI",
+                "position": "TE",
+                "rec_yds_pg": 12.0,
+                "targets_pg": 1.75,
+                "target_share": 0.0607,
+            },
+            {
+                "player": "Colston Loveland",
+                "team": "CHI",
+                "position": "TE",
+                "rec_yds_pg": 34.0,
+                "targets_pg": 4.5,
+                "target_share": 0.1462,
+            },
+        ],
+        rosters={"CHI": {"starting_qb": "Caleb Williams"}},
+        tapes={
+            "CHI": {"qb": "Caleb Williams", "te": "Colston Loveland", "pass_yards": 225.0},
+            "MIN": {"opp_pass_yards_allowed": 248.0},
+        },
+        weather_records=[{"event_id": "e_chi_min", "venue": "outdoor", "wind_mph": 12.0, "precip_prob": 20.0}],
+        inactives_by_team={"MIN": [f"Practice Squad {i}" for i in range(50)]},
+        defensive_out_by_team={"MIN": [{"player": "Harrison Smith", "pos": "SS", "status": "Out"}]},
+        date_str="2026-10-11",
+    )
+
+    tes = engine.evaluate_tes()
+    te_names = [t.player for t in tes]
+    assert "Cole Kmet" not in te_names
+    assert "Colston Loveland" in te_names
+    loveland = next(t for t in tes if t.player == "Colston Loveland")
+    assert "1 (Harrison Smith (SS))" in loveland.tactical_drivers["injuries"]
+    assert "50" not in loveland.tactical_drivers["injuries"]

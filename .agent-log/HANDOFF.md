@@ -1266,3 +1266,76 @@ this sandbox cannot import.
 - **Open:** repo-wide ruff reports 19 remaining F401 unused imports (`scratch.py`,
   `script.py`, `append_feedback.py`, `tests/test_challenger_adversarial.py`,
   `tests/test_nfl_roster.py`).
+
+## Codex - 2026-10-11 4 p.m. NFL pipeline run
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52 (canonical sync passed; existing local NFL code edits preserved).
+- Files touched: refreshed saved Outlier auth, data/NFL/tape/prior_week.json and its backup, immutable run bundle 2026-10-11_4pm-20261011T191448Z-d97f380b, window-scoped normalized data/reports/exports, rolling matchup ranking reports, and this handoff. No product code changes made.
+- Executed: python -m outlier_nfl.pipeline --date 2026-10-11 --window 4pm --refresh-tape --generate-game-script. Initial schedule HTTP 403 recovered with python -m outlier_scrapers.login --headless --timeout 45.
+- Outcome: exit 0, status OK, publication published; 3 games (DET at ARI, SF at SEA, DEN at LAC), 10,607 player props, 2,989 consensus props, 3 game scripts. Pipeline best-bet statuses: 19 VALIDATED / 192 PROVISIONAL / 1,363 REJECTED. These are emitted pipeline labels, not an independent recommendation audit.
+- Verification: all required stage receipts OK; pointer manifest hash matched; all 34 bundled artifacts and 31 published copies matched their recorded hashes. Source receipts AVAILABLE for tape, usage, external schedule/NGS/PBP. Conflicting quotes were dropped rather than admitted. Paid reasoning was disabled. No unit tests needed for this execution-only task.
+- Next steps: requested run complete. Use dated _2026-10-11_4pm reports for this slate; rolling matchup ranking names also update during this window run. Independent betting recommendation review was not requested.
+
+## Codex - 2026-10-11 4 p.m. SGP proposals
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52 (no commits made).
+- Files touched: reports/NFL/2026-10-11_4pm_SGP_Proposals.md; data/NFL/research/sgp_2026-10-11_4pm_20261011T195419Z provider evidence and proposals.json; this handoff. Existing product edits preserved.
+- Built one two-leg PROVISIONAL SGP per matchup. Hard Rock individual prices refreshed at 3:54-3:55 p.m. ET; player identity, event identity, full-game scope, live injury-entry presence and roster text gate checked. No paid reasoning calls or bets placed.
+- Next steps: combined sportsbook SGP eligibility/prices and joint probability/EV remain unverified. All cards actionable=false, recommended_units=0. Use proposals.json and provider evidence for review.
+
+
+## Codex - 2026-10-11 Sunday Night Football pipeline
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; sync REPORT STATUS OK, nonce 822e54cf78024022. Existing local edits preserved; no code changes or commits made.
+- Ran: python -m outlier_nfl.pipeline --date 2026-10-11 --window snf --refresh-tape --generate-game-script. Paid reasoning disabled.
+- Matchup: BAL at ATL, kickoff 2026-10-12T00:20:00Z (8:20 p.m. ET). Run ID 2026-10-11_snf-20261011T234535Z-ad7fc48a; as-of 2026-10-11T23:45:35.478653Z.
+- Files touched: refreshed data/NFL/tape and backup; immutable SNF run bundle; dated/window normalized data, reports and exports; rolling matchup-ranking reports; this handoff.
+- Outcome: exit 0, status OK, publication published, 4,172 prop rows, 1,003 consensus props; best-bet labels 0 VALIDATED / 69 PROVISIONAL / 471 REJECTED. Provisional leaders carry injury_weather:MISSING; Huntley also opportunity:MISSING. Ranked inventory and Tier-1 counts are separate from validated best-bet approval.
+- Verification: all 6 required stage receipts OK; manifest pointer hash matched; all 32 bundled artifacts and 29 published copies matched recorded hashes; exactly one SNF event selected; source receipts AVAILABLE. No unit tests needed for this execution-only task.
+- Next steps: requested run complete. Use reports/NFL/2026-10-11_snf_BAL_ATL_Game_Script.md and data/NFL/normalized/nfl_best_bets_2026-10-11_snf.md. No independently approved staking recommendation or SGP was generated for SNF.
+
+## Codex - SNF report display
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; no commits or product changes made.
+- Files touched: reports/NFL/2026-10-11_snf_All_Reports.md and this handoff. Combined all three requested saved reports without changing originals; verified every complete source text is present in the combined file.
+- Clarified from the saved traces: injury report loaded=True, but injury_weather remains MISSING with venue_unverified and QUARANTINED_IDENTITY; Huntley opportunity evidence is also missing. The Markdown best-bets report shows 25 picks and 15 detailed traces from the 69 provisional candidates; every displayed pick has zero stake.
+- Next steps: requested reports displayed; unabridged combined report includes all ladder entries, traces, and original guidance.
+
+
+## Codex - 2026-10-12 Bills at Rams pipeline
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; canonical sync REPORT STATUS OK, nonce 2bfbeb0d71384c9f. Existing edits preserved; no product edits or commits made.
+- Ran: python -m outlier_nfl.pipeline --date 2026-10-12 --refresh-tape --generate-game-script. Paid reasoning disabled.
+- Run ID: 2026-10-12-20261012T030542Z-1a3efb3c; one event BUF at LAR, kickoff October 12 at 8:15 p.m. ET.
+- Files touched: refreshed tape and backup, immutable run bundle, dated/latest NFL normalized data and exports, game script, alternate floors, matchup rankings, this handoff.
+- Outcome: exit 0, status OK, publication published; 4475 player props, 1066 consensus props. Best-bet labels 0 VALIDATED / 105 PROVISIONAL / 466 REJECTED. Provisional rows have zero stake, stale injury_weather and missing market evidence.
+- Verification: required receipts all OK; pointer manifest hash, 35 bundled artifact hashes and 42 published-copy hashes verified. No unit tests needed for execution-only work.
+- Next steps: requested run complete. Use dated October 12 reports. Refresh game-day evidence before treating provisional inventory as approved plays. Existing unrelated worktree edits remain intact.
+
+## Codex daily pipeline run - 2026-10-13
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52 (sync attestation c29e7211708744b9).
+- Ran scripts/run_daily_pipeline.ps1 with local profile, MLB/WNBA, paid reasoning off; wrapper exit 0. MLB health 100%, failed IDs 0; WNBA no slate skipped under existing gate.
+- Manifest run_id 2026-10-13-1791934660, overall PARTIAL (E inputs incomplete). Existing enforced pack from 08:03 EDT retained; fresh feed extraction did not rebuild candidates.
+- Files touched by job: data exports, calibration maintenance/status, pack manifest/reasoning status, Desktop/Drive today exports. Existing unrelated edits preserved.
+- Desktop and G: Drive exports completed. Next steps: pack remains morning snapshot; no new paid verdicts produced.
+
+
+## Codex - 2026-10-15 Thursday NFL pipeline
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; canonical sync REPORT STATUS OK, nonce ae15a02921cd4812. Existing local edits preserved; no product edits or commits made.
+- Ran: python -m outlier_nfl.pipeline --date 2026-10-15 --refresh-tape --generate-game-script. Paid reasoning disabled.
+- Matchup: SEA at DEN, October 15 at 8:15 p.m. ET. Run ID: 2026-10-15-20261014T040926Z-968c8bad.
+- Files touched: refreshed tape and backup, immutable run bundle, dated/latest NFL normalized data and exports, game script, alternate floors, matchup rankings, this handoff.
+- Outcome: exit 0, status OK; 4269 player props, 1071 consensus props. Best-bet labels: 0 VALIDATED / 89 PROVISIONAL / 458 REJECTED. Provisional report rows carry zero stake with stale injury_weather and missing market evidence.
+- Verification: all 6 required receipts OK; pointer manifest hash, 35 bundled artifact hashes and 42 published-copy hashes verified. External schedule/NGS/PBP, tape and usage sources AVAILABLE. Conflicting quotes dropped. No unit tests needed for execution-only work.
+- Next steps: requested run complete; use dated October 15 reports. Refresh game-day evidence before staking. Unrelated existing worktree changes remain intact.
+
+## Codex candidate result check - 2026-10-14
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; sync nonce 8d73b007d7d54c5f.
+- Read-only comparison of eight saved October 13 candidates against official MLB game 849813: TB 3, CLE 1, Parker Messick 3 K in 5 IP.
+- Seven rows with usable saved selections: 2 wins, 5 losses. CLE +2.5 covers arithmetically but excluded from valid scorecard due priced_line=-1.5 mismatch. All eight actionable=false; no staking performance claim or ledger mutation.
+- Files touched: this handoff only. Original candidate pack preserved.
+
+
+## Codex - Rams-Bills full provisional board outcome audit, 2026-10-14
+- Last Commit SHA: a401bca4494a914675d5c2b2af488e6c7a113d52; canonical sync REPORT STATUS OK, nonce f413131eb5e94a2e. Existing edits preserved; no product-code changes, commits or paid reasoning calls.
+- Files touched: reports/NFL/2026-10-12_BUF_LAR_Provisional_Board_Audit.md; data/NFL/audits/2026-10-12_BUF_LAR/ (offline grader, frozen ESPN final summary, nflverse snap source, normalized stats, audit.json, graded_board.csv); this handoff.
+- Frozen prediction source: run 2026-10-12-20261012T030542Z-1a3efb3c/nfl_best_bets.json, PROVISIONAL only, 105 unique full-game selections. All original stakes zero.
+- Outcome: 46 W / 43 L, no pushes; 15 unresolved (9 format-specific fantasy, 6 unnamed categorical selections), 1 participation/void exception (Joshua Palmer). Numerical hit rate 51.7% across 89 rows. Top25: 16-6, 3 excluded; highlighted3: 3-0; remainder: 30-37, 13 excluded. Model Brier 0.2455, one correlated game; no calibration/promotion or staking performance claim.
+- Verified: original board matches manifest, all 35 original bundled artifacts unchanged; 105 CSV/JSON rows and zero stakes agree; ESPN final event401872994 BUF37 LAR34 OT; scope and event identity verified. No production ledger or historical rebuild performed.
+- Next steps: audit complete with explicit exclusions. Exact fantasy scoring contracts and named categorical outcome identities are needed to grade remaining rows; Palmer book-specific void remains unconfirmed. Game-day evidence, correlated-row treatment and multi-game validation remain required before promotion.
+- Review follow-up: archived FantasyData HTML/text for explicit zero-stat evidence and added offline assertions for those source rows; source hashes now include that HTML and the grader. Reran offline with unchanged counts; reproduction does not depend on live provider responses.
