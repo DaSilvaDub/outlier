@@ -83,6 +83,10 @@ def _slate(nfl: Path, reports: Path, date: str, *, priced: bool = True,
 
 @pytest.fixture
 def tree(tmp_path):
+    return _build_tree(tmp_path)
+
+
+def _build_tree(tmp_path: Path) -> tuple[Path, Path]:
     nfl, reports = tmp_path / "data" / "NFL", tmp_path / "reports" / "NFL"
     for d in al.LEGACY_SLATES:
         _slate(nfl, reports, d, card=d != "2026-09-27")  # Sep 27 has no card
@@ -413,7 +417,7 @@ def test_rows_under_one_prop_key_with_other_teams_lines_or_books_are_not_a_confl
     rows = [_wrow(slate, "first team reception", line=0.5, team="LAC", books={"hardrock": -110}),
             _wrow(slate, "first team reception", line=0.5, team="BUF", books={"hardrock": -120}),
             _wrow(slate, "first team reception", line=1.5, team="LAC", books={"hardrock": 150}),
-            # empty line string; the second row only adds a book: one row, no conflict
+            # empty line string; the second row only adds a book: no conflict
             _wrow(slate, "first team td scorer", line="", team="LAC", books={"hardrock": 400}),
             _wrow(slate, "first team td scorer", line="", team="LAC",
                   books={"hardrock": 400, "draftkings": 450}),
@@ -424,7 +428,8 @@ def test_rows_under_one_prop_key_with_other_teams_lines_or_books_are_not_a_confl
     al.record_legacy(nfl, (slate,), reports)
     st = al.legacy_status(nfl, slate)
     assert st.status == "legacy_regradable" and st.refused_reason is None
-    assert st.snapshot_rows == {"pre_kickoff": 5, "post_slate": 0, "with_run_id": 0,
+    # the {hardrock} and {hardrock, draftkings} rows are both kept; the repeat is one
+    assert st.snapshot_rows == {"pre_kickoff": 6, "post_slate": 0, "with_run_id": 0,
                                 "no_kickoff": 0, "copies": 1}
 
 
@@ -438,7 +443,7 @@ def test_an_extra_book_with_the_same_shared_price_is_not_a_conflict(tree):
     al.record_legacy(nfl, ("2026-10-05",), reports)
     st = al.legacy_status(nfl, "2026-10-05")
     assert st.status == "legacy_regradable" and st.refused_reason is None
-    assert st.snapshot_rows["pre_kickoff"] == 1
+    assert st.snapshot_rows["pre_kickoff"] == 2  # both rows kept, unaltered
 
 
 def test_a_shared_book_with_another_price_is_refused_despite_an_extra_book(tree, capsys):
@@ -480,3 +485,102 @@ def test_a_true_duplicate_with_another_price_in_one_copy_is_refused(tree, capsys
     assert st.status == "refused" and "snapshot copies disagree on row" in st.refused_reason
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05"]) == 1
     assert "REFUSED snapshot copies disagree" in capsys.readouterr().out
+
+
+# Order independence: 10a reruns must come out byte-identical.
+HR_FD = {"hardrock": -110, "fanduel": 105}
+HR_DK = {"hardrock": -110, "draftkings": 200}
+
+
+def _rows_ab(slate: str = "2026-10-05") -> tuple[dict, dict]:
+    return (_wrow(slate, "first team reception", line=0.5, books=HR_FD),
+            _wrow(slate, "first team reception", line=0.5, books=HR_DK))
+
+
+def _check_text(base: Path, nfl: Path, capsys, *extra: str) -> tuple[int, str]:
+    capsys.readouterr()
+    code = nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05", *extra])
+    return code, capsys.readouterr().out.replace(str(base), "<ROOT>")
+
+
+def _union(nfl: Path) -> tuple[list[dict], str | None]:
+    entries, _ = ar.read_manifest(ar.manifest_path(nfl))
+    snaps = [e for e in entries if (e.original_path or "") == SNAP]
+    return al._snapshot_union(nfl, snaps, "2026-10-05")
+
+
+def test_non_conflicting_rows_under_one_key_are_all_kept_unaltered(tree):
+    nfl, reports = tree
+    a, b = _rows_ab()
+    _snap(nfl, [a, b, dict(a)], "2026-10-05T21:00:00Z")  # a twice, byte-identical
+    al.record_legacy(nfl, ("2026-10-05",), reports)
+    rows, refused = _union(nfl)
+    assert refused is None
+    assert rows == sorted([a, b], key=al._canon)  # both kept, books not merged
+    assert al.legacy_status(nfl, "2026-10-05").snapshot_rows["pre_kickoff"] == 2
+
+
+def test_row_order_inside_one_copy_does_not_change_the_result(tmp_path, capsys):
+    a, b = _rows_ab()
+    results = []
+    for name, rows in (("fwd", [a, b, a]), ("rev", [b, a, b])):
+        nfl, reports = _build_tree(tmp_path / name)
+        _snap(nfl, rows, "2026-10-05T21:00:00Z")
+        al.record_legacy(nfl, ("2026-10-05",), reports)
+        # the copy's bytes (and so its sha256) differ, so compare the text check
+        # output, which names files by original path, plus the kept rows
+        results.append((_check_text(tmp_path / name, nfl, capsys), _union(nfl),
+                        al.legacy_status(nfl, "2026-10-05").snapshot_rows))
+    assert results[0] == results[1]
+    assert results[0][1] == (sorted([a, b], key=al._canon), None)
+
+
+def _two_copies(base: Path, swap: bool, rows_1: list[dict], rows_2: list[dict]
+                ) -> tuple[Path, Path]:
+    nfl, reports = _build_tree(base)
+    copies = [(rows_1, "2026-10-05T21:00:00Z"), (rows_2, "2026-10-07T12:00:00Z")]
+    for rows, mtime in (copies[::-1] if swap else copies):
+        _snap(nfl, rows, mtime)
+        al.record_legacy(nfl, ("2026-10-05",), reports)
+    return nfl, reports
+
+
+def test_copy_order_does_not_change_the_check_output(tmp_path, capsys):
+    a, b = _rows_ab()
+    outs = []
+    for swap in (False, True):
+        base = tmp_path / ("swapped" if swap else "listed")
+        nfl, _ = _two_copies(base, swap, [a], [b, a])
+        outs.append((_check_text(base, nfl, capsys), _check_text(base, nfl, capsys, "--json"),
+                     _union(nfl)))
+    assert outs[0] == outs[1]  # byte-identical text and JSON output
+    assert outs[0][2] == (sorted([a, b], key=al._canon), None)
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_a_conflict_is_refused_in_either_order(tmp_path, capsys, swap):
+    a = _wrow("2026-10-05", "first team reception", line=0.5, books={"hardrock": -110})
+    b = _wrow("2026-10-05", "first team reception", line=0.5,
+              books={"hardrock": -125, "fanduel": 105})
+    # across two copies, either recording order: identical refusal
+    base = tmp_path / "copies"
+    nfl, _ = _two_copies(base, swap, [a], [b])
+    code, out = _check_text(base, nfl, capsys)
+    assert code == 1 and "REFUSED snapshot copies disagree" in out
+    _, reason = _union(nfl)
+    assert reason is not None
+    # inside one copy, either row order
+    nfl1, reports1 = _build_tree(tmp_path / "one")
+    _snap(nfl1, [b, a] if swap else [a, b], "2026-10-05T21:00:00Z")
+    al.record_legacy(nfl1, ("2026-10-05",), reports1)
+    st = al.legacy_status(nfl1, "2026-10-05")
+    assert st.status == "refused" and st.refused_reason.startswith(reason.split(": ")[0])
+
+
+def test_a_conflict_reason_does_not_depend_on_copy_order(tmp_path):
+    a = _wrow("2026-10-05", "first team reception", line=0.5, books={"hardrock": -110})
+    b = _wrow("2026-10-05", "first team reception", line=0.5,
+              books={"hardrock": -125, "fanduel": 105})
+    reasons = [al.legacy_status(_two_copies(tmp_path / str(swap), swap, [a], [b])[0],
+                                "2026-10-05").refused_reason for swap in (False, True)]
+    assert reasons[0] is not None and reasons[0] == reasons[1]

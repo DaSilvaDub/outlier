@@ -291,8 +291,9 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
     # been rewritten between records, so read every recorded copy (from any slate),
     # take the union of this slate's rows and refuse the slate if copies disagree.
     snap_name = snapshot_path(root, slate).name
-    snaps = [e for e in legacy if Path(e.original_path or "").name == snap_name
-             and (e.original_path or "").startswith("snapshots/")]
+    snaps = sorted((e for e in legacy if Path(e.original_path or "").name == snap_name
+                    and (e.original_path or "").startswith("snapshots/")),
+                   key=lambda e: (e.sha256, e.path, e.mtime or "", e.slate or ""))
     refused: str | None = None
     if snaps:
         rows, refused = _snapshot_union(root, snaps, slate)
@@ -350,15 +351,23 @@ def _snapshot_conflict(a: dict[str, Any], b: dict[str, Any]) -> bool:
         a.get(f) != b.get(f) for f in ("best_odds", "implied_probability"))
 
 
+def _canon(row: dict[str, Any]) -> str:
+    return json.dumps(row, sort_keys=True, separators=(",", ":"))
+
+
 def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                     ) -> tuple[list[dict[str, Any]], str | None]:
-    """This slate's rows across every recorded copy, one row per key.
+    """This slate's distinct rows across every recorded copy.
 
-    Rows that share a key (``_snapshot_key``) without conflicting count once (the
-    first one read is kept). The second value is the refusal reason when two
-    rows, in one copy or in two, share a key and conflict (``_snapshot_conflict``).
+    Neither the rows nor the refusal depend on the order of copies or of rows in
+    a copy. All distinct rows under a key (``_snapshot_key``) are compared
+    pairwise. Keys are walked in sorted order, rows by canonical JSON. The second
+    value is the refusal reason for the first conflicting pair
+    (``_snapshot_conflict``), in one copy or across two. Only byte-identical rows
+    (same canonical JSON) collapse to one; every other row under a key is kept
+    unaltered (books are never merged), sorted by canonical JSON.
     """
-    seen: dict[tuple[str, ...], list[tuple[dict[str, Any], str]]] = {}
+    seen: dict[tuple[str, ...], dict[str, tuple[dict[str, Any], set[str]]]] = {}
     for e in snaps:
         try:
             lines = ar.resolve_path(root, e.path).read_text(encoding="utf-8").splitlines()
@@ -371,16 +380,19 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                 continue  # torn line
             if not isinstance(row, dict) or row.get("slate_date") != slate:
                 continue
-            k = _snapshot_key(row)
-            variants = seen.setdefault(k, [])
-            if any(row == other for other, _ in variants):
-                continue  # exact repeat
-            for other, path in variants:  # every distinct row under the key
-                if _snapshot_conflict(other, row):
-                    return [], (f"snapshot copies disagree on row {k}: "
-                                f"{path} vs {e.path}")
-            variants.append((row, e.path))
-    return [v[0][0] for v in seen.values()], None
+            variant = seen.setdefault(_snapshot_key(row), {}).setdefault(
+                _canon(row), (row, set()))
+            variant[1].add(e.path)
+    kept: list[dict[str, Any]] = []
+    for k in sorted(seen):
+        variants = [seen[k][c] for c in sorted(seen[k])]
+        for i, (a, paths_a) in enumerate(variants):
+            for b, paths_b in variants[i + 1:]:
+                if _snapshot_conflict(a, b):
+                    first, second = sorted((min(paths_a), min(paths_b)))
+                    return [], f"snapshot copies disagree on row {k}: {first} vs {second}"
+        kept.extend(r for r, _ in variants)  # every distinct row, unaltered
+    return sorted(kept, key=_canon), None
 
 
 def _judge_snapshot_rows(rows: list[dict[str, Any]], kick: dict[str, datetime]
