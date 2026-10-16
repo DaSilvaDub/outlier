@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from outlier_nfl.models import NflPlayerProp
+from outlier_nfl.tape_nflverse import _name_key
 
 logger = logging.getLogger("outlier_nfl.matchup_rankings")
 
@@ -156,6 +157,11 @@ class MatchupRankingsEngine:
         self.usage_by_player: dict[str, dict[str, Any]] = {
             p.get("player") or p.get("player_name", ""): p for p in usage_players if isinstance(p, dict)
         }
+        # Usage names are nflverse ``player_display_name``; the inactive list is
+        # ``full_name``. Only the normalized key joins the two (see is_player_inactive).
+        self.usage_by_key: dict[str, dict[str, Any]] = {
+            _name_key(name): p for name, p in self.usage_by_player.items() if name
+        }
         self.rosters = rosters
         self.tapes = tapes
         self.weather_by_event: dict[str, dict[str, Any]] = {}
@@ -164,6 +170,10 @@ class MatchupRankingsEngine:
                 self.weather_by_event[w["event_id"]] = w
 
         self.inactives_by_team = inactives_by_team or {}
+        self.inactive_keys_by_team: dict[str, set[str]] = {
+            team: {_name_key(n) for n in names}
+            for team, names in self.inactives_by_team.items()
+        }
 
         # Index consensus props
         self.consensus_props: dict[tuple[str, str], dict[str, Any]] = {}
@@ -203,9 +213,19 @@ class MatchupRankingsEngine:
                     }
 
     def is_player_inactive(self, player_name: str, team: str) -> bool:
-        """Check if player is confirmed inactive or on IR."""
-        inactives = self.inactives_by_team.get(team, [])
-        return player_name in inactives
+        """Check if player is confirmed inactive or on IR.
+
+        The names are compared on ``_name_key``, not raw strings: the inactive
+        list carries the injury report's / roster's ``full_name`` while ranked
+        players carry usage's ``player_display_name``, and the two nflverse
+        columns disagree on suffixes and punctuation ("Marvin Harrison Jr." vs
+        "Marvin Harrison", "A.J. Brown" vs "AJ Brown"). An exact-string match
+        lets those players through the filter and publishes a top matchup play
+        on a player who is not active. ``usage_signals``, ``alt_floors`` and
+        ``tape_nflverse._depth_roles`` all join these two sources the same way.
+        """
+        keys = self.inactive_keys_by_team.get(team, set())
+        return _name_key(player_name) in keys
 
     def evaluate_qbs(self) -> list[MatchupAdvantageCandidate]:
         """Evaluate starting QBs on slate for matchup advantages."""
@@ -366,13 +386,16 @@ class MatchupRankingsEngine:
                 # Check if backfield partner is out (volume inheritance)
                 backfield_vacated_boost = 0.0
                 team_inactives = self.inactives_by_team.get(team, [])
+                pname_key = _name_key(pname)
                 for inact in team_inactives:
-                    if inact != pname and inact in self.usage_by_player:
-                        inact_prof = self.usage_by_player[inact]
-                        if inact_prof.get("position") == "RB":
-                            vac_carries = float(inact_prof.get("carries_pg") or 0.0)
-                            if vac_carries >= 5.0:
-                                backfield_vacated_boost += min(0.60, vac_carries * 0.04)
+                    inact_key = _name_key(inact)
+                    inact_prof = self.usage_by_key.get(inact_key)
+                    if inact_key == pname_key or inact_prof is None:
+                        continue
+                    if inact_prof.get("position") == "RB":
+                        vac_carries = float(inact_prof.get("carries_pg") or 0.0)
+                        if vac_carries >= 5.0:
+                            backfield_vacated_boost += min(0.60, vac_carries * 0.04)
 
                 # Weather ground boost
                 rain_prob = float(weather.get("precip_prob") or 0.0)
