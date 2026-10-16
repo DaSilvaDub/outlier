@@ -1,0 +1,147 @@
+--- a/outlier_nfl/best_bets.py
++++ b/outlier_nfl/best_bets.py
+@@ -639,9 +639,9 @@
+          "fair_p": round(fair, 4), "model_p": round(final_p, 4), "edge": round(edge, 4),
+          "ev_per_unit": round(ev, 4), "stake_if_validated": round(stake, 4)}
+     )
+-    if edge <= 0:
++    if edge <= 0 or ev <= 0:
+         pillar.status = CONTRADICTS
+-        pillar.notes.append("no edge at the best available price")
++        pillar.notes.append("no positive expected return at the available price")
+     else:
+         pillar.status = status
+     return pillar
+--- a/outlier_nfl/projection.py
++++ b/outlier_nfl/projection.py
+@@ -112,7 +112,6 @@
+         return (
+             _f(row, "rushing_tds")
+             + _f(row, "receiving_tds")
+-            + _f(row, "passing_tds")
+             + _f(row, "special_teams_tds")
+         )
+     if m == "RUSH_REC_YDS":
+@@ -211,6 +210,8 @@
+ 
+ def _poisson_sf_gt(rate: float, threshold: float) -> float:
+     """P(X > threshold) for X~Poisson(rate); threshold usually a .5 line."""
++    if threshold < 0:
++        return 1.0
+     if rate <= 0:
+         return 0.0
+     k_max = int(math.floor(threshold))
+@@ -263,7 +264,7 @@
+         if pos in {"OVER", "YES"}:
+             model_p = p_over
+         elif pos == "UNDER":
+-            model_p = 1.0 - p_over
++            model_p = 1.0 - _poisson_sf_gt(mean, math.ceil(float(line)) - 1)
+         else:
+             return None
+         return ProjectionResult(
+@@ -366,6 +367,7 @@
+         record.pop("model_p_source", None)
+         record.pop("p_model", None)
+         record.pop("model_p_n_games", None)
++        record.pop("model_p_method", None)
+ 
+     if week_index is not None:
+         attach_projection_model_p_record(
+@@ -375,9 +377,11 @@
+             alpha=alpha,
+             min_games=min_games,
+         )
+-        if record.get("model_p") is not None and record.get("model_p_source") == (
+-            MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+-        ):
++        if record.get("model_p") is not None and record.get("model_p_source") in {
++            MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE,
++            MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN,
++            MODEL_P_SOURCE_PROJECTION_NFLVERSE_POISSON,
++        }:
+             return record
+ 
+     attach_empirical_model_p_record(
+--- a/outlier_nfl/config.py
++++ b/outlier_nfl/config.py
+@@ -517,6 +517,7 @@
+     "PASSTOUCHDOWNS": PROP_PASS_TDS,
+     "PASSTDSCORE": PROP_PASS_TDS,
+     "PASSCOMPLETIONS": PROP_PASS_COMP,
++    "PASSINGCOMPLETIONS": PROP_PASS_COMP,
+     "COMPLETIONS": PROP_PASS_COMP,
+     "PASSINGATTEMPTS": PROP_PASS_ATT,
+     "PASSATTEMPTS": PROP_PASS_ATT,
+@@ -524,8 +525,10 @@
+     "INTERCEPTIONS": PROP_INT,
+     "PASSINTERCEPTIONS": PROP_INT,
+     "PASSINGINTERCEPTIONS": PROP_INT,
++    "INTERCEPTIONSTHROWN": PROP_INT,
+     "INTS": PROP_INT,
+     "LONGESTCOMPLETION": PROP_LONG_PASS,
++    "LONGESTPASSINGCOMPLETION": PROP_LONG_PASS,
+     "LONGESTPASS": PROP_LONG_PASS,
+     # Player Props - Rushing
+     "RUSHINGYARDS": PROP_RUSH_YARDS,
+@@ -560,6 +563,7 @@
+     "FIRSTTD": PROP_FIRST_TD,
+     # Player Props - Special Teams / Defense
+     "FIELDGOALSMADE": PROP_FGM,
++    "MADEFIELDGOALS": PROP_FGM,
+     "FIELDGOALS": PROP_FGM,
+     "FGM": PROP_FGM,
+     "KICKINGPOINTS": PROP_KICK_PTS,
+--- a/outlier_nfl/boxscore.py
++++ b/outlier_nfl/boxscore.py
+@@ -228,7 +228,7 @@
+         if passing is None or rush is None:
+             return None
+         return passing + rush
+-    if norm in {"ANYTIMETD", "FIRSTTD"}:
++    if norm == "ANYTIMETD":
+         # Anytime TD scorer: rush + receiving (+ return) TDs. Passing TDs do not count.
+         has_any = False
+         total = 0.0
+@@ -249,6 +249,8 @@
+ 
+ def grade_side(actual: float, line: float, position: str) -> str:
+     """Grade OVER/UNDER/YES against an actual. Returns W, L, or P."""
++    if not math.isfinite(actual) or not math.isfinite(line):
++        raise BoxScoreError("Cannot grade nonfinite actual or line")
+     side = str(position or "").strip().upper()
+     if side in {"YES", "Y"}:
+         return "W" if actual >= 1.0 else "L"
+--- a/outlier_nfl/boxscore_nflverse.py
++++ b/outlier_nfl/boxscore_nflverse.py
+@@ -30,6 +30,7 @@
+ from urllib.request import Request, urlopen
+ 
+ from outlier_nfl.boxscore import BoxScoreError, NflBoxScoreEvent, _number, _token
++from outlier_nfl.utils import nfl_season_for_date
+ 
+ NFLVERSE_STATS_WEEK_URL = (
+     "https://github.com/nflverse/nflverse-data/releases/download/"
+@@ -272,8 +273,9 @@
+     cache_dir: Path | None = None,
+ ) -> list[NflBoxScoreEvent]:
+     """Convenience: load all completed games on an Eastern slate date."""
+-    season_year = season or event_date.year
+-    # NFL season year equals the calendar year of Week 1 (Sep); Sep/Oct/Nov/Dec use that year.
++    season_year = season if season is not None else nfl_season_for_date(event_date.isoformat())
++    if season_year is None:
++        raise BoxScoreError("Invalid NFL slate date")
+     return load_nflverse_events(
+         season=season_year,
+         event_date=event_date,
+--- a/outlier_nfl/settle.py
++++ b/outlier_nfl/settle.py
+@@ -627,7 +627,7 @@
+             slate = date.fromisoformat(args.slate_date)
+             return fetch_nflverse_boxscores_for_date(
+                 slate,
+-                season=args.season or slate.year,
++                season=args.season,
+                 cache_dir=Path(args.nflverse_cache) if args.nflverse_cache else None,
+             )
+         if args.season is None or args.week is None:
