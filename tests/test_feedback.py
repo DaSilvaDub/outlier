@@ -542,6 +542,9 @@ def test_pack_main_captures_feedback_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
     monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        pack.paths, "FEEDBACK_DB_PATH", tmp_path / "calibration" / "feedback.sqlite3"
+    )
 
     out_dir = pack.main(["--leagues", "WNBA"])
 
@@ -581,6 +584,9 @@ def test_pack_main_does_not_publish_when_feedback_capture_fails(tmp_path, monkey
     monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
+        pack.paths, "FEEDBACK_DB_PATH", tmp_path / "calibration" / "feedback.sqlite3"
+    )
+    monkeypatch.setattr(
         feedback,
         "capture_pack",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(feedback.FeedbackError("locked")),
@@ -619,6 +625,9 @@ def test_pack_swap_failure_rolls_back_ledger_and_restores_published_pack(tmp_pat
     monkeypatch.setattr(pack, "build_pack_with_coverage", fake_build)
     monkeypatch.setattr(pack, "build_freshness_section", lambda _leagues, _health: [])
     monkeypatch.setattr(pack.paths, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        pack.paths, "FEEDBACK_DB_PATH", tmp_path / "calibration" / "feedback.sqlite3"
+    )
     monkeypatch.setattr(
         pack,
         "_swap_staged_pack",

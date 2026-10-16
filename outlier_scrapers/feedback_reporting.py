@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from outlier_scrapers import totals_model
+from outlier_scrapers import paths, totals_model
 from outlier_scrapers.calibration import (
     _positive_unit_recommendation_rows,
     learned_multiplier_promotion_signal,
@@ -34,7 +34,7 @@ from outlier_scrapers.feedback_settlement import _is_play
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
 from outlier_scrapers.utils import _write_csv
 
-DEFAULT_REPORT_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\reports\latest")
+DEFAULT_REPORT_DIR = paths.FEEDBACK_REPORT_DIR
 
 
 def _flat_pnl(
@@ -817,8 +817,8 @@ def totals_edge_bucket_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path = DEFAULT_REPORT_DIR) -> Path:
-    output_dir = Path(output_dir)
+def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = None) -> Path:
+    output_dir = Path(output_dir) if output_dir is not None else DEFAULT_REPORT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     with _connect(Path(db_path)) as conn:
         rows = _joined_rows(conn)

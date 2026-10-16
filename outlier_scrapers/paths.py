@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,40 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
+
+# The canonical checkout's calibration directory. calibration/*.sqlite3 is
+# gitignored, so a PROJECT_ROOT-relative ledger would give every worktree its own
+# empty copy; local runs from any worktree share this one instead.
+CANONICAL_CALIBRATION_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration")
+
+
+def _resolve_calibration_path(env_var: str, relative: Path) -> Path:
+    """Env override, else the canonical checkout when present, else this checkout."""
+    override = os.environ.get(env_var, "").strip()
+    if override:
+        return Path(override)
+    if CANONICAL_CALIBRATION_DIR.is_dir():
+        return CANONICAL_CALIBRATION_DIR / relative
+    return PROJECT_ROOT / "calibration" / relative
+
+
+def resolve_feedback_db_path() -> Path:
+    """The single authoritative feedback ledger (decisions, snapshots, settlements).
+
+    Resolution order: ``OUTLIER_FEEDBACK_DB``; the canonical checkout's ledger when
+    its directory exists (local Windows runs, any worktree); ``PROJECT_ROOT`` for
+    CI and cloud sandboxes where the canonical checkout does not exist.
+    """
+    return _resolve_calibration_path("OUTLIER_FEEDBACK_DB", Path("feedback.sqlite3"))
+
+
+def resolve_feedback_report_dir() -> Path:
+    """Where feedback reports land; resolved like :func:`resolve_feedback_db_path`."""
+    return _resolve_calibration_path("OUTLIER_FEEDBACK_REPORT_DIR", Path("reports") / "latest")
+
+
+FEEDBACK_DB_PATH = resolve_feedback_db_path()
+FEEDBACK_REPORT_DIR = resolve_feedback_report_dir()
 
 
 @dataclass(frozen=True)

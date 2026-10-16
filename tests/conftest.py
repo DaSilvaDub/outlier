@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
-from outlier_scrapers import feedback_db, paths
+from outlier_scrapers import paths
 from outlier_scrapers.portfolio import PortfolioPolicy
 
 # Resolved at import, before any test monkeypatches paths.PROJECT_ROOT or chdirs.
@@ -87,12 +87,14 @@ def _no_writes_to_real_tracked_artifacts():
         )
 
 
-# The production ledger (an absolute path to the canonical checkout) and this
-# checkout's own copy. No test may open either.
+# The resolved production ledger (paths.FEEDBACK_DB_PATH, which honours
+# OUTLIER_FEEDBACK_DB), the canonical checkout's ledger, and this checkout's own
+# copy. No test may open any of them.
 REAL_LEDGER_PATHS = tuple(
     dict.fromkeys(
         [
-            feedback_db.DEFAULT_DB_PATH,
+            paths.FEEDBACK_DB_PATH,
+            paths.CANONICAL_CALIBRATION_DIR / "feedback.sqlite3",
             paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3",
         ]
     )
@@ -100,10 +102,18 @@ REAL_LEDGER_PATHS = tuple(
 
 # Module attributes that default to a real ledger, read at call time.
 _LEDGER_DEFAULT_ATTRS = (
+    ("outlier_scrapers.paths", "FEEDBACK_DB_PATH"),
     ("outlier_scrapers.feedback_db", "DEFAULT_DB_PATH"),
     ("outlier_scrapers.feedback", "DEFAULT_DB_PATH"),
     ("outlier_scrapers.so_eval", "DEFAULT_DB"),
     ("outlier_scrapers.so_promotion", "DEFAULT_DB"),
+)
+
+# Module attributes that default to the real feedback report directory.
+_REPORT_DIR_DEFAULT_ATTRS = (
+    ("outlier_scrapers.paths", "FEEDBACK_REPORT_DIR"),
+    ("outlier_scrapers.feedback_reporting", "DEFAULT_REPORT_DIR"),
+    ("outlier_scrapers.feedback", "DEFAULT_REPORT_DIR"),
 )
 
 
@@ -135,8 +145,8 @@ def _connect_target(database, uri: bool) -> str | None:
 def _no_real_feedback_ledger(request, monkeypatch, tmp_path):
     """Point ledger defaults at tmp_path and refuse any connection to the real ledger.
 
-    ``feedback_db.DEFAULT_DB_PATH`` is an absolute path to the canonical checkout's
-    production ledger, so without this every worktree's tests would read (and could
+    ``paths.FEEDBACK_DB_PATH`` resolves to the canonical checkout's production ledger
+    on local runs, so without this every worktree's tests would read (and could
     write) live decisions and settlements. Function defaults bound at import time
     (``db_path: Path = DEFAULT_DB_PATH``) are not reached by the attribute redirect,
     which is why ``sqlite3.connect`` also gets a tripwire.
@@ -147,9 +157,14 @@ def _no_real_feedback_ledger(request, monkeypatch, tmp_path):
     """
     if "uses_real_ledger" in {m.name for m in request.node.iter_markers()}:
         return
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    monkeypatch.delenv("OUTLIER_FEEDBACK_REPORT_DIR", raising=False)
     fake_ledger = tmp_path / "ledger" / "feedback.sqlite3"
     for module, attr in _LEDGER_DEFAULT_ATTRS:
         monkeypatch.setattr(f"{module}.{attr}", fake_ledger)
+    fake_report_dir = tmp_path / "ledger" / "reports"
+    for module, attr in _REPORT_DIR_DEFAULT_ATTRS:
+        monkeypatch.setattr(f"{module}.{attr}", fake_report_dir)
 
     real_connect = sqlite3.connect
 

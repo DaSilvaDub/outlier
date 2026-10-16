@@ -4032,6 +4032,8 @@ def test_second_enforce_pack_write_refused_without_reserved_exposure(tmp_path):
 
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
+    # conftest restores FEEDBACK_DB_PATH after the test.
+    P.FEEDBACK_DB_PATH = tmp_path / "calibration" / "feedback.sqlite3"
 
     try:
         with pytest.raises(ValueError, match="Enforce pack already exists"):
@@ -4073,6 +4075,8 @@ def test_enforce_refused_when_shadow_window_less_than_14_days(tmp_path):
 
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
+    # conftest restores FEEDBACK_DB_PATH after the test.
+    P.FEEDBACK_DB_PATH = tmp_path / "calibration" / "feedback.sqlite3"
 
     try:
         with pytest.raises(ValueError, match="feedback.sqlite3 not found"):
@@ -4160,6 +4164,8 @@ def test_enforce_refused_when_feedback_db_has_no_market_snapshots_table(tmp_path
 
     original_project_root = P.PROJECT_ROOT
     P.PROJECT_ROOT = tmp_path
+    # conftest restores FEEDBACK_DB_PATH after the test.
+    P.FEEDBACK_DB_PATH = tmp_path / "calibration" / "feedback.sqlite3"
     try:
         with pytest.raises(ValueError, match="Enforce mode refused.*market_snapshots"):
             write_pack([], out_dir)
