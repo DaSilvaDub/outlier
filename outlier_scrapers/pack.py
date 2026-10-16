@@ -623,7 +623,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
     else:
         from outlier_scrapers import feedback
 
-        feedback_db = args.feedback_db or (paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3")
+        feedback_db = args.feedback_db or paths.FEEDBACK_DB_PATH
         out_dir.parent.mkdir(parents=True, exist_ok=True)
         staging_dir = out_dir.parent / f".{out_dir.name}.feedback-staging-{uuid.uuid4().hex}"
         if out_dir.exists():
