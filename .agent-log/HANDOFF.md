@@ -1,3 +1,73 @@
+# HANDOFF — 2026-10-16 (Claude, Daily Debug Review: matchup-ranking game script)
+
+**Branch**: `claude/inspiring-fermat-73kdcm` · **Last commit**: `28af21a` · **PR**: https://github.com/DaSilvaDub/outlier/pull/273 (open)
+
+## Accomplished
+1. **Bug found and fixed (PR #273)** — `MatchupRankingsEngine` computed `team_spread`
+   as the *negation* of the team's own handicap (`matchup_rankings.py:271` and `:406`),
+   so every game-script branch in `evaluate_qbs` and `evaluate_rbs` fired for the wrong
+   team. `script["home_spread"]` is standard notation (negative = home favored), as
+   `matchup._market_context:423` builds it and `matchup._game_script:743` reads it. The
+   thresholds were written for that notation, so the flipped sign gave the favorite the
+   `+0.03` catch-up passing boost and the underdog the `+0.04` front-runner rush boost,
+   while the favorite's back took the `-0.02` trailing-team haircut — the inverse of this
+   repo's own model ("Favorite grind: run the ball", `matchup.py:775`). Reproduced on
+   JAX/PHI at `home_spread -8.0` with identical tape: favorite QB 229.2 vs dog 224.8 pass
+   yards, dog RB 104.0 vs favorite 98.0 rush yards; both pairs reverse after the fix.
+   Everything downstream of `matchup_proj` moved with it (`boost_pct`, `advantage_score`,
+   `confidence_tier`, rank order), so `Top_5_QB_Matchups.md`, `Top_5_RB_Matchups.md`,
+   `Top_10_Overall_Matchups.md` and `Matchup_Boost_Rankings.csv` published mis-ranked
+   plays with prop lines on every slate with a spread outside ±2.5. The published
+   `game_script` string also printed the negated number. 2 regression tests, each
+   verified failing pre-fix.
+2. **Daily debug review** of changes since 2026-10-15 — the feedback-ledger path
+   unification (`2950723`, `f04b540`) and the conftest ledger guard (`75a897f`) reviewed
+   clean on the production path. Two low-severity notes below.
+
+## State to know about
+- **This sandbox CAN run the checks, with one workaround.** Contrary to the 2026-10-15
+  handoff, Python 3.13 at `/usr/bin/python3.13` carries pandas/numpy/requests, and
+  pytest/mypy/ruff/pyright are uv tools on PATH. `PATH`'s `python3` is 3.11 with *no*
+  site-packages — use `python3.13 -m pytest` with
+  `PYTHONPATH=<pytest uv tool site-packages>:/root/.local/lib/python3.13/site-packages`.
+  The proxy still denies `pypi.org` (403 on CONNECT), so `sqlalchemy`, `anthropic`,
+  `openai` and `google-genai` cannot be installed: 30 modules fail to collect and 67
+  tests fail on those imports, identically before and after any change. `structlog` has
+  a tiny surface (`outlier_scrapers/api.py` only) and a scratchpad shim covers it.
+  Baseline on `9cf0a31`: **1876 passed, 43 skipped**; with PR #273: **1878 passed**.
+  mypy clean (131 files), pyright clean on the changed module.
+- `ruff check` reports **1232** pre-existing errors and `ruff format --check` wants 348
+  files reformatted. Ruff is **not** in CI (only `pytest.yml` and `typecheck.yml` are), and
+  the installed ruff's defaults are broader than `[tool.ruff]` configures. Left alone.
+
+## Reported, not fixed (judgment calls)
+1. `pack_publish._feedback_db_path()` (`:141`) says "read at call time" but returns the
+   import-time `paths.FEEDBACK_DB_PATH`, not `paths.resolve_feedback_db_path()`. The
+   sibling scripts fixed in `f04b540` call the resolver so `OUTLIER_FEEDBACK_DB` wins;
+   the enforce gate does not, so an env var set after import points the 14-day shadow
+   count at the wrong ledger. Production sets the var before the process starts, so this
+   is a consistency gap, not a live miscount. **Do not just swap in the resolver**: the
+   conftest guard monkeypatches `paths.FEEDBACK_DB_PATH` and deletes
+   `OUTLIER_FEEDBACK_DB`, so re-resolving would hand tests
+   `PROJECT_ROOT/calibration/feedback.sqlite3` — a path the `sqlite3.connect` tripwire
+   refuses. Needs a ruling on which layer owns the override.
+2. `tests/conftest.py::_connect_target` returns `None` when `uri=True` and the target
+   does not start with `file:`, but sqlite3 treats such a target as an ordinary filename
+   and opens it — so `sqlite3.connect(real_ledger, uri=True)` slips past the tripwire. It
+   also reads `uri` only from `kwargs`, missing a positional. Test-infra only; the
+   attribute redirect still covers the normal path.
+3. Carried over from 2026-10-15 and still open: `inactives_by_team=None` collapsing to
+   `{}` in the rankings engine (fail-open vs `alt_floors`' fail-closed), and
+   `matchup_rankings.consensus_props` keyed by `(player_name, market)` with no event or
+   team, so two same-named players on a slate collide.
+
+## Next steps
+1. Review and merge PR #273. CI is the authoritative check for the dependency-blocked modules.
+2. Carried over: PR #270 (feedback ledger path) and PR #268 (matchup inactives) if still open;
+   PR #262 can be closed as superseded.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)

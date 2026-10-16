@@ -266,9 +266,16 @@ class MatchupRankingsEngine:
             weather_haircut = float(weather.get("pass_adjustment") or 0.0)
             wind_mph = float(weather.get("wind_mph") or 0.0)
 
-            # Game script pass volume adjustment
+            # Game script pass volume adjustment. ``home_spread`` is the home
+            # team's handicap in standard notation (negative = home favored, see
+            # matchup._market_context), so this team's own spread is the home
+            # number for the home side and its negation for the away side.
+            # Negating the home side instead labelled the favorite a dog, which
+            # inverted both branches below: the thresholds are written for
+            # standard notation, where a positive spread is the underdog that
+            # throws to catch up and a negative one the favorite that grinds.
             spread = float(script.get("home_spread") or 0.0)
-            team_spread = -spread if is_home else spread
+            team_spread = spread if is_home else -spread
             script_boost = 0.03 if team_spread > 2.5 else (0.01 if team_spread < -2.5 else 0.0)
 
             # Projections
@@ -401,9 +408,11 @@ class MatchupRankingsEngine:
                 rain_prob = float(weather.get("precip_prob") or 0.0)
                 weather_rush_boost = 0.06 if rain_prob > 50.0 else 0.0
 
-                # Game script
+                # Game script. Same standard-notation spread as evaluate_qbs:
+                # negative is the favorite, which keeps running (+0.04), and a
+                # big positive is the trailing dog that abandons it (-0.02).
                 spread = float(script.get("home_spread") or 0.0)
-                team_spread = -spread if is_home else spread
+                team_spread = spread if is_home else -spread
                 script_rush_boost = 0.04 if team_spread < -2.5 else (-0.02 if team_spread > 5.0 else 0.0)
 
                 boost_factor = 1.0 + (0.35 * opp_diff) + backfield_vacated_boost + weather_rush_boost + script_rush_boost
