@@ -1,6 +1,12 @@
 # HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
 
-**Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
+**Branch**: `claude/inspiring-fermat-sq82jn` · **PR #268 merged** as `785ef42` · **follow-up PR**: https://github.com/DaSilvaDub/outlier/pull/271 (open, commit `6a64e56`)
+
+> **Read this first if you touch `matchup_rankings.py`:** PR #268 was merged from
+> `0e69635`, one commit *before* the review-nit fix was pushed, so `f12cea1` did not land.
+> Master has the `_name_key` inactive join but **not** the team-scoped usage index. PR #271
+> replays that one commit on top of the merge. Until #271 lands, the vacated-backfield
+> lookup on master can still credit one team's out RB with another team's carries.
 
 ## Accomplished
 1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
@@ -46,8 +52,18 @@
    `backfield_vacated_boost` accumulates up to +0.60 per out RB, so two out RBs can more
    than double a projection.
 
+## Review outcome (2026-10-16)
+The author reviewed #268: **APPROVE at 0e69635, no blockers**, 4 nits. Nit 1 was a real
+correctness gap (slate-wide usage index → cross-team volume leak) and is fixed in PR #271,
+keyed on `(team, name key)` rather than a team check on the resolved profile, which would
+have turned the false match into a lost boost when both teams carry the key. The other
+three needed no code and are answered on #268: the 2026-09-13 fixture slate renders
+byte-identically (its tape has no `inactive` block, so `injury_report()` returns `None`);
+a public `_name_key` alias is a repo-wide rename across 3 existing call sites, offered as a
+follow-up; the #265 overlap in the same two files is for whoever drives that PR.
+
 ## Next steps
-1. Drive PR #268 to green and merge.
+1. Review and merge PR #271 — it carries the fix #268's merge raced past.
 2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
 3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
    `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
