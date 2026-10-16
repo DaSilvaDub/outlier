@@ -277,3 +277,80 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+def _spread_engine() -> MatchupRankingsEngine:
+    """JAX hosts PHI as an 8-point favorite; both sides carry identical tape.
+
+    ``home_spread`` is the home team's handicap in standard notation (negative
+    means the home team is favored, see ``matchup._market_context``), so the only
+    thing separating the two teams here is which side of the spread they are on.
+    """
+    return MatchupRankingsEngine(
+        props=[],
+        matchup_scripts=[
+            {
+                "home_team": "JAX",
+                "away_team": "PHI",
+                "event_id": "e_phi_jax",
+                "total": 42.0,
+                "home_spread": -8.0,
+            }
+        ],
+        usage_players=[
+            {
+                "player": f"{team} RB",
+                "team": team,
+                "position": "RB",
+                "rush_yds_pg": 100.0,
+                "carries_pg": 18.0,
+                "rec_yds_pg": 10.0,
+            }
+            for team in ("JAX", "PHI")
+        ],
+        rosters={"JAX": {"starting_qb": "Trevor Lawrence"}, "PHI": {"starting_qb": "Jalen Hurts"}},
+        tapes={
+            team: {
+                "pass_yards": 220.0,
+                "rush_yards": 100.0,
+                "opp_pass_yards_allowed": 229.5,
+                "opp_rush_yards_allowed": 115.0,
+            }
+            for team in ("JAX", "PHI")
+        },
+        weather_records=[],
+        inactives_by_team={},
+        date_str="2026-10-16",
+    )
+
+
+def test_game_script_boosts_land_on_the_right_side_of_the_spread():
+    """The dog throws and the favorite runs -- the engine must not swap them.
+
+    ``team_spread`` was the negation of this team's own spread, so the branches
+    (written for standard notation) fired backwards: the favorite drew the
+    catch-up passing boost while its back took the trailing-team rush haircut.
+    """
+    engine = _spread_engine()
+
+    qbs = {c.team: c for c in engine.evaluate_qbs()}
+    # The 8-point dog throws to catch up: +0.03 pass volume vs the favorite's +0.01.
+    assert qbs["PHI"].matchup_proj > qbs["JAX"].matchup_proj
+
+    rbs = {c.team: c for c in engine.evaluate_rbs()}
+    # The favorite grinds (+0.04); the dog abandons the run (-0.02).
+    assert rbs["JAX"].matchup_proj > rbs["PHI"].matchup_proj
+    assert rbs["PHI"].matchup_proj < 100.0
+
+
+def test_published_team_spread_uses_standard_notation():
+    """A published "spread" must read as the handicap, not its negation."""
+    engine = _spread_engine()
+
+    qbs = {c.team: c for c in engine.evaluate_qbs()}
+    assert "-8.0" in qbs["JAX"].tactical_drivers["game_script"]
+    assert "+8.0" in qbs["PHI"].tactical_drivers["game_script"]
+
+    rbs = {c.team: c for c in engine.evaluate_rbs()}
+    assert "-8.0" in rbs["JAX"].tactical_drivers["game_script"]
+    assert "+8.0" in rbs["PHI"].tactical_drivers["game_script"]
