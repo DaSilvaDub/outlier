@@ -212,3 +212,68 @@ def test_write_latest_false_writes_only_suffixed_reports(tmp_path: Path):
     full = tmp_path / "full"
     generate_matchup_rankings_pipeline(staged_reports_dir=full, **kwargs)
     assert {"Matchup_Boost_Rankings.csv", "Top_10_Overall_Matchups.md"} <= {p.name for p in full.iterdir()}
+
+
+def _seattle_engine(inactives: dict[str, list[str]] | None) -> MatchupRankingsEngine:
+    """Engine for one game whose usage names carry suffixes / punctuation."""
+    return MatchupRankingsEngine(
+        props=[],
+        matchup_scripts=[
+            {
+                "home_team": "SEA",
+                "away_team": "ARI",
+                "event_id": "e_ari_sea",
+                "total": 44.0,
+                "home_spread": -3.0,
+            }
+        ],
+        usage_players=[
+            {"player": "Kenneth Walker III", "team": "SEA", "position": "RB",
+             "rush_yds_pg": 78.0, "carries_pg": 17.0},
+            {"player": "Zach Charbonnet", "team": "SEA", "position": "RB",
+             "rush_yds_pg": 26.0, "carries_pg": 6.0},
+            {"player": "A.J. Brown", "team": "SEA", "position": "WR",
+             "rec_yds_pg": 72.0, "targets_pg": 8.0},
+        ],
+        rosters={"SEA": {"starting_qb": "Sam Darnold"}},
+        tapes={
+            "SEA": {"qb": "Sam Darnold", "pass_yards": 230.0},
+            "ARI": {"opp_rush_yards_allowed": 120.0, "opp_pass_yards_allowed": 240.0},
+        },
+        weather_records=[],
+        inactives_by_team=inactives,
+        date_str="2026-10-18",
+    )
+
+
+def test_inactive_filtering_normalizes_suffixes_and_punctuation():
+    """The injury report's full_name must exclude usage's player_display_name.
+
+    nflverse spells the two columns differently (suffixes, initials), so an
+    exact-string match let an inactive player stay in the published rankings.
+    """
+    engine = _seattle_engine({"SEA": ["Kenneth Walker", "AJ Brown"]})
+
+    assert engine.is_player_inactive("Kenneth Walker III", "SEA")
+    assert engine.is_player_inactive("A.J. Brown", "SEA")
+    assert not engine.is_player_inactive("Zach Charbonnet", "SEA")
+
+    assert "Kenneth Walker III" not in [c.player for c in engine.evaluate_rbs()]
+    assert "A.J. Brown" not in [c.player for c in engine.evaluate_wrs()]
+
+
+def test_inactive_starting_qb_is_excluded_across_name_spellings():
+    """A starting QB ruled out under a differently punctuated name is not ranked."""
+    assert _seattle_engine(None).evaluate_qbs()[0].player == "Sam Darnold"
+    assert _seattle_engine({"SEA": ["Sam Darnold."]}).evaluate_qbs() == []
+
+
+def test_vacated_backfield_boost_survives_a_name_spelling_difference():
+    """The out RB's volume must still transfer when the two sources disagree."""
+    def charbonnet(engine: MatchupRankingsEngine) -> float:
+        rbs = {c.player: c for c in engine.evaluate_rbs()}
+        return rbs["Zach Charbonnet"].matchup_proj
+
+    with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
+    everyone_active = charbonnet(_seattle_engine(None))
+    assert with_partner_out > everyone_active
