@@ -14,11 +14,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from outlier_scrapers.paths import CONFIG_DIR, PROJECT_ROOT
+from outlier_scrapers.paths import CONFIG_DIR, FEEDBACK_DB_PATH
 from outlier_scrapers.so_sizing_blend import temper_independent_prob
 
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "so_promotion.json"
-DEFAULT_DB = PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+DEFAULT_DB = FEEDBACK_DB_PATH
 
 _DEFAULTS: dict[str, Any] = {
     "auto_promote": False,

@@ -1,7 +1,6 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
-$feedbackDb = Join-Path $repoRoot "calibration\feedback.sqlite3"
 $alertsDir = Join-Path $repoRoot "calibration\alerts"
 $statusPath = Join-Path $alertsDir "nightly_audit_status.json"
 $promotionReceipt = @{}
@@ -37,22 +36,28 @@ function Write-AuditStatus {
 try {
     Set-Location -LiteralPath $repoRoot
 
+    # Honor OUTLIER_FEEDBACK_DB when it is set. Otherwise omit --db so the
+    # feedback CLI uses paths.FEEDBACK_DB_PATH (the single resolver).
+    $feedbackDbArgs = @()
+    if ($null -ne $env:OUTLIER_FEEDBACK_DB) {
+        $feedbackDbOverride = $env:OUTLIER_FEEDBACK_DB.Trim()
+        if ($feedbackDbOverride) {
+            $feedbackDbArgs = @("--db", $feedbackDbOverride)
+        }
+    }
+
     Write-Output "Recomputing trustworthy closing-line value..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb, "recompute-clv"
-    )
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @("recompute-clv"))
 
     Write-Output "Applying the 90-day feedback retention policy..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb,
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @(
         "retention", "--cutoff-days", "90"
-    )
+    ))
 
     Write-Output "Generating nightly feedback report..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb,
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @(
         "report", "--output", (Join-Path $repoRoot "calibration\reports\latest")
-    )
+    ))
 
     $reportPath = Join-Path $repoRoot "calibration\reports\latest\play_vs_stand_down.csv"
     if (-not (Test-Path -LiteralPath $reportPath)) {
@@ -71,27 +76,24 @@ try {
     Write-Output "Learned-multiplier promotion signal: $($promotionReceipt.status)"
 
     Write-Output "Refitting audit-only blend weights..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb,
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @(
         "fit-blend", "--output", (Join-Path $repoRoot "calibration\blend_weights.json")
-    )
+    ))
 
     Write-Output "Refreshing market-consensus stake calibration..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb,
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @(
         "fit-stake-calibration",
         "--output", (Join-Path $repoRoot "calibration\stake_calibration.json"),
         "--source-column", "market_consensus_prob"
-    )
+    ))
 
     $toDate = Get-Date -Format "yyyy-MM-dd"
     $fromDate = (Get-Date).AddDays(-90).ToString("yyyy-MM-dd")
     Write-Output "Running nightly portfolio replay smoke check..."
-    Invoke-CheckedPython @(
-        "-m", "outlier_scrapers.feedback", "--db", $feedbackDb,
+    Invoke-CheckedPython (@("-m", "outlier_scrapers.feedback") + $feedbackDbArgs + @(
         "replay-portfolio", "--from", $fromDate, "--to", $toDate,
         "--policy", (Join-Path $repoRoot "config\portfolio_risk.json")
-    )
+    ))
 
     Write-AuditStatus -Status "ok" -Message "Nightly calibration audit completed." `
         -LearnedMultiplierPromotion $promotionReceipt

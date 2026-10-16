@@ -13,10 +13,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from outlier_scrapers.paths import PROJECT_ROOT
+from outlier_scrapers.paths import FEEDBACK_DB_PATH
 from outlier_scrapers.so_sizing_blend import temper_independent_prob
 
-DEFAULT_DB = PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+DEFAULT_DB = FEEDBACK_DB_PATH
 GAMELOG_HASH = "so-starter-gamelog-v2"
 GAMELOG_HASHES = frozenset({"so-starter-gamelog-v1", "so-starter-gamelog-v2"})
 DEFAULT_SOFT_RELIABILITY = 0.45

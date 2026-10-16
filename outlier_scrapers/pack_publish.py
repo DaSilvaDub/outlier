@@ -138,6 +138,11 @@ def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
         raise last_err
 
 
+def _feedback_db_path() -> Path:
+    """The ledger the enforce gate counts shadow days in, read at call time."""
+    return paths.FEEDBACK_DB_PATH
+
+
 def _swap_staged_pack(staging_dir: Path, out_dir: Path) -> Path | None:
     """Publish staging while retaining the prior pack for transaction rollback."""
 
@@ -211,9 +216,8 @@ def write_pack(
 
         # 14-day shadow window check
         import sqlite3
-        from outlier_scrapers import paths
 
-        db_path = paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3"
+        db_path = _feedback_db_path()
         if not db_path.exists():
             raise ValueError(
                 "Enforce mode refused: feedback.sqlite3 not found (0 shadow days). 14 required."
