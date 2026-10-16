@@ -6,8 +6,15 @@ import json
 import sqlite3
 from pathlib import Path
 
-DB = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3")
+from outlier_scrapers.paths import resolve_feedback_db_path
+
 GAMELOG = "so-starter-gamelog-v1"
+DIAGNOSIS_JSON = (
+    Path(__file__).resolve().parents[1]
+    / "docs"
+    / "plans"
+    / "2026-08-22-so-gamelog-calibration-diagnosis.json"
+)
 
 
 def _brier(p: float, y: float) -> float:
@@ -23,7 +30,9 @@ def _is_so(selection: str, market_type: str) -> bool:
 
 
 def main() -> None:
-    conn = sqlite3.connect(DB)
+    # Resolve at run time so OUTLIER_FEEDBACK_DB is honored even when it is set
+    # after outlier_scrapers.paths was imported.
+    conn = sqlite3.connect(resolve_feedback_db_path())
     conn.row_factory = sqlite3.Row
     cols = {r[1] for r in conn.execute("PRAGMA table_info(market_snapshots)")}
     hash_expr = (
@@ -191,10 +200,9 @@ def main() -> None:
             "winner=market" if c["market_correct"] and not c["indep_correct"] else "winner=indep/tie",
         )
 
-    out = Path(__file__).resolve().parents[1] / "docs" / "plans" / "2026-08-22-so-gamelog-calibration-diagnosis.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"n": n, "cases": cases}, indent=2), encoding="utf-8")
-    print("\nWrote", out)
+    DIAGNOSIS_JSON.parent.mkdir(parents=True, exist_ok=True)
+    DIAGNOSIS_JSON.write_text(json.dumps({"n": n, "cases": cases}, indent=2), encoding="utf-8")
+    print("\nWrote", DIAGNOSIS_JSON)
 
 
 if __name__ == "__main__":
