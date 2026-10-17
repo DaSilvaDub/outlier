@@ -1,3 +1,199 @@
+# HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
+
+**Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
+
+## Accomplished
+1. Review follow-up on #270. `scripts/backfill_projection_hashes.py` and `scripts/diagnose_so_gamelog_calibration.py` now call `paths.resolve_feedback_db_path()` when they run, so `OUTLIER_FEEDBACK_DB` wins over the import-time `FEEDBACK_DB_PATH`. `nightly_audit.ps1` passes `--db` only when `$env:OUTLIER_FEEDBACK_DB` is non-blank; otherwise the feedback CLI uses `paths.FEEDBACK_DB_PATH`.
+2. `tests/test_feedback_ledger_path.py` covers the writer and the reader against a decoy at the monkeypatched import-time path. Offline pytest: 2648 passed, 4 skipped. mypy: no issues in 131 files. pyright: 0 errors (pre-existing playwright import warning in `login.py`).
+
+## State to know about
+- Left alone: `.worktrees/test-pr97/` still hard-codes the canonical ledger in its archived `feedback.py` and `pack.py`. That tree is a committed historical snapshot, not a live reader of this branch.
+- Docs and skills that mention `calibration/feedback.sqlite3` are descriptions, not path construction.
+
+## Next steps
+1. Re-review and merge PR #270. Do not open a second PR for this branch.
+2. Carried over from 2026-10-15: drive PR #268, and decide the three matchup-ranking judgment calls in the handoff below.
+
+---
+
+# HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
+
+**Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
+
+## Accomplished
+1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
+   (`outlier_nfl/matchup_rankings.py`) compared raw name strings. The inactive list is
+   nflverse `full_name` (injuries/rosters, via `tape.injury_report()`); the ranked players
+   are usage's `player_display_name`. The columns disagree on suffixes and punctuation
+   ("Kenneth Walker" vs "Kenneth Walker III", "AJ Brown" vs "A.J. Brown"), so an inactive
+   or IR player was ranked and published in `Top_5_*_Matchups.md`,
+   `Top_10_Overall_Matchups.md` and `Matchup_Boost_Rankings.csv` with a prop line. It was
+   the only inactive filter in the repo that did not normalize — `usage_signals:245`,
+   `alt_floors._inactive_keys:211` and `tape_nflverse._depth_roles:555` all use
+   `_name_key`. Both joins (the filter and the RB vacated-backfield lookup) now key on
+   `tape_nflverse._name_key`. 3 regression tests, each verified failing pre-fix.
+2. **Daily debug review** of changes since 2026-10-10 (PRs #263, #266 and the
+   2026-10-11 matchup-rankings integration). The PR #263 snap-count fix in
+   `scorecard.py` reviewed clean: the snap-counts `team`/`player` columns go through the
+   same `_player_key` as the stat rows, and `_zero_stat_row` only zeroes graded columns.
+
+## State to know about
+- **This sandbox cannot run the checks.** The network policy blocks PyPI (403 on CONNECT
+  to `pypi.org`), so `pip install -r requirements.lock` fails and there is no pytest,
+  mypy, ruff or pyright. The new tests were run with a direct-call harness; CI on PR #268
+  is the authoritative check. A future cloud session has the same limit — rely on CI.
+- Master CI is green on `56c7e09` (Offline Pytest #916, Static Type Checking #943).
+- **PR #262** (`claude/inspiring-fermat-zt9u2k`, "a window run must not overwrite the
+  rolling matchup rankings (F11)") is superseded — diff checked against master: its
+  `write_latest`/`publish_latest` gating, its `isinstance(p, dict)` Pyright narrowing and
+  its window-run test all landed on master in PR #263's third commit (its test is a
+  near-duplicate of `test_write_latest_false_writes_only_suffixed_reports`). The only
+  part not on master is the `reports_dir=tmp_path / "reports"` fix in
+  `tests/test_nfl_calibration.py`, which open PR #267 covers. #262 can be closed.
+
+## Reported, not fixed (judgment calls, see PR #268 body)
+1. `inactives_by_team=None` (injury report not loaded) collapses to `{}` in the rankings
+   engine, so such a run ranks IR players. `alt_floors`/`best_bets` instead fail closed on
+   `None` (`require_injury_evidence`, `injury_report_loaded`). Making the mandatory stage
+   fail closed changes when publication is withheld — needs a ruling.
+2. `matchup_rankings.consensus_props` is keyed by `(player_name, market)` with no event or
+   team, so two same-named players on a slate collide, last one wins. Contrast
+   `scorecard.lookup_consensus_line`, which keys on the event and refuses an ambiguous
+   fallback.
+3. RB `boost_factor` is unclamped (the QB path clamps to `[0.90, 1.35]`) while
+   `backfield_vacated_boost` accumulates up to +0.60 per out RB, so two out RBs can more
+   than double a projection.
+
+## Next steps
+1. Drive PR #268 to green and merge.
+2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
+3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
+   `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
+
+---
+
+# HANDOFF — 2026-10-14 (Claude, Week 5 Game-Script Accuracy + Signal Scorecard Snap-Count Fix)
+
+**Branch**: `claude/game-scripts-accuracy-check-18a539` (merged) · **Merge commit**: `2736a0c` · **PR**: https://github.com/DaSilvaDub/outlier/pull/263 (squash-merged 2026-10-14)
+
+## Accomplished
+1. **Game-script accuracy, week 5 (10-11 slate + Monday 10-12 BUF@LA)** — graded the 14 committed pre-kickoff scripts against nflverse final scores (offline, no reasoning models):
+   - Spread lean 6-7-1, total lean 7-7, straight-up winner 9-4 (+1 tie, NYG-WAS 27-27).
+   - Mean abs error: margin 9.9 pts, total 10.4 pts.
+   - Systematic low total: projected avg 44.0 vs actual 49.0; 11 of 14 leans were UNDER, only 5 hit. DET@ARI is labeled SHOOTOUT but leans UNDER 54.5 (final 45-21).
+   - Totals/spreads graded against the consensus line printed in each script, not the separate "lean" number. Grading was an ad-hoc scratch script, not committed.
+2. **Prop signal scorecard** (`scripts/nfl_signal_scorecard.py`) run for 2026-10-11 and 2026-10-12. Re-graded 10-11 after the fix below: week 5 hit rate 58/109 vs player avg, 49/100 vs consensus line. 11 signals stay ungraded by design (`LONG_PASS`/`LONG_REC` weather UNDERs have no box-score column).
+3. **Fix (PR #263)**: nflverse `stats_player_week` omits players who played but recorded no stats, so they were dropped as "no box score this week" (Jonnu Smith GB, Tory Horton SEA, both `REC_YDS` UNDER hits). `grade_signals` now takes `snap_rows` (new `usage.fetch_snap_counts`); offensive snaps this week + no stat row grades box-score markets as 0. Falls back to old behavior with a warning if the snap fetch fails. 4 new tests in `tests/test_nfl_scorecard.py`.
+
+4. **CI fixes in the same PR** (`core` and `typecheck` were red from code already on master, since master CI runs were skipped):
+   - `typecheck`: Pyright flagged `dict.to_dict` at `matchup_rankings.py:171`; props are now narrowed with `isinstance(p, dict)`.
+   - `core`: the Matchup Rankings stage always wrote the rolling un-suffixed reports (`Top_5_*_Matchups.md`, `Top_10_Overall_Matchups.md`, `Matchup_Boost_Rankings.csv`), so a window run replaced slate-wide files and broke the F11 invariant (`test_window_run_preserves_bare_date_bytes`, `test_window_run_writes_only_suffixed_files`). `generate_matchup_rankings_pipeline` now takes `write_latest` and the pipeline passes `publish_latest`, as alt floors already do. New test: `test_write_latest_false_writes_only_suffixed_reports`.
+
+## State to know about
+- Re-graded ledger + `reports/NFL/2026-10-1{1,2}_Signal_Scorecard.md` were written in the **canonical checkout** (gitignored ledger; reports uncommitted there). Ledger backup: `data/NFL/scorecard/ledger_before_snapfill_regrade_2026-10-14.jsonl`. PR #263 is merged, but canonical's working tree has not been updated to master; until it is, re-running the script there uses the old `scorecard.py`, drops those 2 signals again and overwrites the re-grade.
+- Local-only test noise (all green in CI): `test_nfl_snapshot_diff::test_capture_is_deterministic[A|B]`, `test_challenger_adversarial` concurrency test; 20 pre-existing ruff E402 findings in `pipeline.py`.
+- Verification: ruff + mypy clean on touched files; 41 `tmp_path` `PermissionError`s (Windows temp ACL on `pytest-of-dasil`) are identical with and without the change. Use `--basetemp=.pytest_temp` to avoid.
+
+## Next steps
+1. Update canonical to master (it has uncommitted edits, so reconcile first), then re-run `python scripts/nfl_signal_scorecard.py --date 2026-10-11 --week 5` from canonical so code and ledger agree (`--week` avoids a flaky schedule fetch).
+2. Known gap, not changed: prior-game averages and `direction_baselines` still skip weeks with no stat row, slightly inflating averages for part-time players.
+3. Consider why totals run ~5 pts low and whether SHOOTOUT scripts should be allowed to lean OVER; consider committing a reusable game-level grader instead of the scratch script.
+4. Longest-play markets (`LONG_PASS`/`LONG_REC`) need play-by-play data to grade.
+
+---
+
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, Mandatory Matchup Advantage Rankings Pipeline Stage)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `296e99d`
+
+## Accomplished
+1. **Permanent Pipeline Integration (`outlier_nfl/pipeline.py` Stages 8 & 9)**:
+   - Permanently registered Matchup Advantage Rankings calculation and report generation as mandatory stages directly within `NflPipeline.run()`.
+   - Executed in exact dependency order: schedule -> rosters -> injuries -> usage -> defensive matchups -> weather -> projections -> **Matchup Advantage Rankings (Stages 8 & 9)** -> validation -> assembly -> publication.
+   - Enforced fail-closed behavior: `StageReceipt("matchup_rankings", ...)` appends `OK` on success, `EMPTY` if slate empty, and `FAILED` with captured errors if calculation fails. Any failure marks `run_status` as `FAILED`, invokes `writer.withhold_publication()`, suppresses public pointers (`nfl_run_pointer_latest.json`), and logs stage-level diagnostics.
+2. **Matchup Rankings Engine (`outlier_nfl/matchup_rankings.py`)**:
+   - `norm_cdf()` and `calc_prob_exceeds()` via `math.erf` for deterministic tail probabilities.
+   - Composite `calc_advantage_score()` combining boost magnitude (35%), exceedance probability (35%), volume/role opportunity (15%), and opponent vulnerability (15%).
+   - `MatchupRankingsEngine` screening all slate participants across QB, RB, WR, TE.
+   - Strict inactive and IR exclusion against `tape.injury_report()` and weekly injury reports.
+   - Renderers for Positional Top 5 markdown reports, Top 10 Overall, and `Matchup_Boost_Rankings.csv`.
+   - Atomic staging via `RunWriter.staged_path("reports")`.
+3. **Automated Synchronization & Publishing (`scripts/refresh_nfl_pack.ps1`)**:
+   - Added automated synchronization for dated and rolling matchup markdown reports (`*Matchups.md`) and rankings CSV (`Matchup_Boost_Rankings.csv`) into Google Drive (`G:\My Drive\today\extra_packs...`) and Desktop.
+4. **Verification & Quality Assurance**:
+   - `tests/test_nfl_matchup_rankings.py`: 4 automated test cases covering math helpers, inactive filtering, report/CSV generation, and receipt failure behavior.
+   - All 107 NFL test cases passing (`pytest --basetemp=.pytest_temp`).
+   - `mypy outlier_nfl`: 0 issues found in all 44 source files.
+   - `ruff check`: all checks passed.
+   - Full live pipeline executed for 2026-10-11 (`python -m outlier_nfl.pipeline --date 2026-10-11 --generate-game-script --target-alt-book HARDROCK`), cleanly generating all 12 report artifacts and exiting with status `OK`.
+
+---
+
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, NFL Positional Matchup Boosts & Top 10 Overall)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+
+## Accomplished
+1. **Quantitative Matchup Boost Engine (`run_boost_engine.py`)**:
+   - Developed and executed an offline, deterministic projection and boost engine calculating Season Avg entering Week 5, Neutral-Opponent Projection, Matchup-Adjusted Projection, Absolute Increase, Boost %, Matchup-Specific Boost, and Tail Probability $P(X > \text{Season Avg})$.
+   - Formulated standardized composite `MATCHUP_ADVANTAGE_SCORE` (0–100) weighting boost magnitude (35%), exceedance probability (35%), volume/role stability (15%), and opponent defensive vulnerability (15%).
+2. **Positional Top 5 Selections & Profiles**:
+   - **QB**: Bo Nix (67.1), Brock Purdy (66.1), Drake Maye (65.7), Trevor Lawrence (65.7), Joe Burrow (64.3).
+   - **RB**: Will Shipley (96.6), Jaylen Warren (83.7), Tyler Allgeier (80.1), D'Andre Swift (78.3), Derrick Henry (74.5).
+   - **WR**: Xavier Hutchinson (91.5), Jerry Jeudy (86.5), DeMario Douglas (78.7), Tee Higgins (77.0), Brian Thomas Jr. (75.6).
+   - **TE**: Cole Kmet (87.0), Tyler Warren (82.8), Pat Freiermuth (75.5), Hunter Henry (75.2), Brock Bowers (73.7).
+3. **Final Top 10 Overall Ranking (Position-Neutral)**:
+   - Evaluated all 20 finalists without positional quotas:
+     1. Will Shipley (RB, 96.6)
+     2. Xavier Hutchinson (WR, 91.5)
+     3. Cole Kmet (TE, 87.0)
+     4. Jerry Jeudy (WR, 86.5)
+     5. Jaylen Warren (RB, 83.7)
+     6. Tyler Warren (TE, 82.8)
+     7. Tyler Allgeier (RB, 80.1)
+     8. DeMario Douglas (WR, 78.7)
+     9. D'Andre Swift (RB, 78.3)
+     10. Tee Higgins (WR, 77.0)
+4. **Generated Reports & CSV Exports**:
+   - `reports/NFL/Top_5_QB_Matchups.md`
+   - `reports/NFL/Top_5_RB_Matchups.md`
+   - `reports/NFL/Top_5_WR_Matchups.md`
+   - `reports/NFL/Top_5_TE_Matchups.md`
+   - `reports/NFL/Top_10_Overall_Matchups.md`
+   - `reports/NFL/Matchup_Boost_Rankings.csv`
+5. **Testing & Integrity**:
+   - All 103 test cases passing in 6.70s (`pytest --basetemp=.pytest_temp`).
+   - Zero live paid reasoning calls invoked (strict house rule obedience).
+
+---
+
+# HANDOFF — 2026-10-11 (Antigravity/Gemini, NFL Forensic Audit, Quality Gates & Full Slate Refresh)
+
+**Branch**: `fix/nfl-pipeline-accuracy-audit` · **Last commit**: `50d5cee`
+
+## Accomplished
+1. **Spread Direction & Primary Line Fix (`outlier_nfl/calibration.py`)**:
+   - Rewrote `primary_spread()` to index quotes by signed `(team, line)` and match complementary pairs `(away_team, away_line)` with `(home_team, -away_line)` minimizing deviation from 50% implied probability. Eliminates the `-0.0` / `NEUTRAL` spread collapse across all 13 games.
+2. **Weekly Roster IR & Practice Squad Status Merging (`outlier_nfl/tape_nflverse.py`)**:
+   - Ingests `nflverse` `roster_weekly_{season}.csv` and merges all non-`ACT` designations (`RES` Injured Reserve, `DEV` Practice Squad, `INA`, `PUP`, `CUT`) into `inactive`. Prevents players on IR omitted from weekly practice injury reports (`Tank Bigsby`, `Trey Benson`, `James Conner`) from leaking into active depth charts and props.
+   - Added `_filter_chronic_defensive_inactives()`: defenders out for `>= 2` prior weeks (e.g. `Nick Bosa` on IR since Week 3) are excluded from `defensive_starters_out` so chronic injuries already baked into tape do not inflate `DIDF_SCORE_BOOST`.
+3. **`INJURY_CONFIDENCE_GATE` & Questionable Quarantine (`outlier_nfl/tape_nflverse.py`, `pipeline.py`, `best_bets.py`)**:
+   - Ingests `Questionable` players from weekly injury reports. Any candidate prop for a `Questionable` player (`Ladd McConkey`, `Ashton Jeanty`, `Rhamondre Stevenson`, `Caleb Williams`) is capped at `injury_weather: ESTIMATED` (`PROVISIONAL`, `stake = 0.0`) until confirmed active 90 min before kickoff.
+4. **`MODEL_DIRECTION_CONSISTENCY_GATE` & Score Realignment (`outlier_nfl/matchup.py`, `weather.py`)**:
+   - Enforces mathematical consistency between projected scores, game lines, and betting leans: `home_score + away_score` and `home_score - away_score` strictly match `total_lean` and `spread_lean`.
+   - Updated `apply_weather()` to apply pass volume haircuts (`-0.05` to `-0.06`) directly as point reductions to `home_score` and `away_score`, reconciling `total_lean = "UNDER"`.
+5. **Cross-Market Signal Matching & Laplace Smoothing Fix (`outlier_nfl/best_bets.py`)**:
+   - `_signal_matches_market()` propagates `RUSH_YDS` volume/matchup signals to `RUSH_REC_YDS` and `LONG_RUSH` (blocking `Will Shipley RUSH_REC_YDS UNDER` when `Saquon Barkley` is Out).
+   - Replaced uncalibrated Laplace smoothing on skewed/TD lines with `method="market_prior"` Beta shrinkage, rejected candidates with `max(rates) < 0.50`, and capped longshots `> +250` at `CONTRADICTS`.
+   - Capped DFS pick'em synthetic quotes (`Underdog`, `PrizePicks`, `Sleeper`, `Dabble`) at `ESTIMATED` (`PROVISIONAL`).
+   - Enforced the Same-Player Correlation Guard: maximum 1 `VALIDATED` pick per player per game.
+6. **Execution & Full Refresh (`2026-10-11`)**:
+   - Re-ran complete live pipeline: 13 scheduled games, 13 matchup scripts, 95 `VALIDATED` picks (from 113), 9 Hard Rock alternate floors.
+   - All 162 unit tests passing in 11.95s (`pytest --basetemp=.pytest_temp`).
+   - Synced regenerated outputs to `Desktop/today` and `G:\My Drive\today`.
+
+---
+
 # HANDOFF — 2026-10-10 (Antigravity/Gemini, WNBA Postgame Audit Upgrades: Assist Barrier, Rebound Defense Conflict & Scoring Priority)
 
 **Branch**: `feat/wnba-postgame-upgrades` · **Last commit**: `4a4d5f3`
@@ -1144,3 +1340,10 @@ this sandbox cannot import.
 - **Open:** repo-wide ruff reports 19 remaining F401 unused imports (`scratch.py`,
   `script.py`, `append_feedback.py`, `tests/test_challenger_adversarial.py`,
   `tests/test_nfl_roster.py`).
+
+## Claude - 2026-10-15 test pollution of tracked calibration/ and reports/
+- Last Commit SHA: 09f758c (branch fix/tests-no-writes-to-calibration); PR https://github.com/DaSilvaDub/outlier/pull/267. Sync REPORT STATUS OK, nonce 03de5e878a8a4d52.
+- Canonical cleanup first: uncommitted Oct 11 NFL WIP (Gemini) + 8 HANDOFF entries + rolling NFL reports moved to PR https://github.com/DaSilvaDub/outlier/pull/265 (branch feat/nfl-best-bets-rankings-wip); canonical master then fast-forwarded to origin/master. calibration/*.json drift in canonical was reverted (test pollution / live-run outputs, not product work).
+- Fix: test_daily_job autouse fixture redirects feedback.DEFAULT_DB_PATH + probability_blend.DEFAULT_WEIGHTS_PATH to tmp_path; test_nfl_calibration passes reports_dir. New conftest guard _no_writes_to_real_tracked_artifacts fails any test that changes a git-tracked file under calibration/ or reports/ (fail-only).
+- Full offline suite: 2628 passed; 4 failures pre-exist on master (2 multiprocess contention, 2 test_capture_is_deterministic). Use a short --basetemp on Windows: long paths cause spurious FileNotFoundError (MAX_PATH).
+- Next steps: decide whether feedback_db.DEFAULT_DB_PATH (absolute path to canonical's production ledger) is intentional; consider making NflPipeline.run reports_dir default non-cwd-relative; merge #208's packs/ guard alongside the new one.

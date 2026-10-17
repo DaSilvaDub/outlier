@@ -256,3 +256,40 @@ def test_partial_replay_keeps_unrelated_ledger_rows(tmp_path: Path) -> None:
     # An event in scope with no signals any more is cleared; others still survive.
     rows = sc.update_ledger(ledger, [], "2026-10-04", event_ids={"e1"})
     assert sorted(r["event_id"] for r in rows) == ["e0", "e2", "e3", "e4", "e5"]
+
+
+def _snap(name: str, team: str, week: int, snaps: float, game_type: str = "REG") -> dict[str, str]:
+    return {"player": name, "team": team, "week": str(week), "game_type": game_type,
+            "offense_snaps": str(snaps)}
+
+
+def test_player_with_snaps_but_no_stat_row_grades_as_zero() -> None:
+    # Bench Guy has no week-3 stat row (no catches), but the snap counts show he played.
+    rows = [*ROWS, _row("Bench Guy", "DEN", 1, receiving_yards=20), _row("Bench Guy", "DEN", 2, receiving_yards=30)]
+    snaps = [_snap("Bench Guy", "DEN", 3, 21)]
+    graded, skipped = sc.grade_signals("2026-09-27", 3, SCRIPTS, rows, PROPS, snap_rows=snaps)
+    bench = next(g for g in graded if g.player == "Bench Guy")
+    assert bench.actual == 0.0
+    assert bench.prior_avg == 25.0
+    assert bench.hit_vs_avg is False  # OVER signal, 0 yards
+    assert all(s["player"] != "Bench Guy" for s in skipped)
+
+
+def test_no_snaps_means_still_ungraded() -> None:
+    snaps = [_snap("Bench Guy", "DEN", 3, 0), _snap("Bench Guy", "DEN", 2, 30), _snap("Other", "DEN", 3, 40)]
+    _, skipped = sc.grade_signals("2026-09-27", 3, SCRIPTS, ROWS, PROPS, snap_rows=snaps)
+    assert ("Bench Guy", "no box score this week") in {(s["player"], s["reason"]) for s in skipped}
+
+
+def test_snap_fill_never_overrides_a_real_stat_row_or_postseason() -> None:
+    snaps = [_snap("Kyren Williams", "LA", 3, 50), _snap("Bench Guy", "DEN", 3, 30, game_type="POST")]
+    graded, skipped = sc.grade_signals("2026-09-27", 3, SCRIPTS, ROWS, PROPS, snap_rows=snaps)
+    kyren = next(g for g in graded if g.tag == "EFFICIENCY_HOT" and g.player == "Kyren Williams")
+    assert kyren.actual == 89.0
+    assert ("Bench Guy", "no box score this week") in {(s["player"], s["reason"]) for s in skipped}
+
+
+def test_snap_fill_leaves_non_box_score_markets_ungraded() -> None:
+    snaps = [_snap("Davante Adams", "LA", 3, 60)]
+    _, skipped = sc.grade_signals("2026-09-27", 3, SCRIPTS, ROWS, PROPS, snap_rows=snaps)
+    assert ("Davante Adams", "market not gradable from box scores") in {(s["player"], s["reason"]) for s in skipped}

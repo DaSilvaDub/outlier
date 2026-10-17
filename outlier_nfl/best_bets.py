@@ -94,7 +94,8 @@ RUSH_MARKETS = frozenset({"RUSH_YDS", "RUSH_ATT", "LONG_RUSH", "RUSH_TD"})
 REC_MARKETS = frozenset(
     {"REC_YDS", "REC", "LONG_REC", "REC_TD", "RECEIVING_TARGETS", "TARGETS"}
 )
-SCRIMMAGE_MARKETS = frozenset({"RUSH_REC_YDS", "ANYTIME_TD"})
+SCRIMMAGE_MARKETS = frozenset({"RUSH_REC_YDS"})
+TD_MARKETS = frozenset({"ANYTIME_TD", "FIRST_TD", "LAST_TD", "RUSH_TD", "REC_TD"})
 
 # NGS volume stat that measures a player's opportunity for each market family.
 NGS_VOLUME: dict[str, str] = dict(
@@ -204,6 +205,7 @@ class TraceInputs:
     usage_players: list[dict[str, Any]] = field(default_factory=list)
     weather: list[dict[str, Any]] = field(default_factory=list)
     inactive_by_team: dict[str, list[str]] | None = None  # None: injury report not loaded
+    questionable_by_team: dict[str, list[str]] = field(default_factory=dict)
     tapes: dict[str, dict[str, Any]] = field(default_factory=dict)
     movement: dict[tuple[str, ...], dict[str, Any]] = field(default_factory=dict)
     # Prediction-time boundary (F01). With ``as_of_utc`` set, week-bound external
@@ -264,6 +266,10 @@ class _Sources:
         self.inactive_keys: dict[str, set[str]] = {
             team: {_name_key(n) for n in names}
             for team, names in (inputs.inactive_by_team or {}).items()
+        }
+        self.questionable_keys: dict[str, set[str]] = {
+            team: {_name_key(n) for n in names}
+            for team, names in (inputs.questionable_by_team or {}).items()
         }
 
         self.ngs_misses: set[str] = set()
@@ -343,11 +349,23 @@ def _side_sign(position: str) -> int:
     return 1 if position == "OVER" else -1
 
 
+def _signal_matches_market(sig: PropSignal, prop_market: str) -> bool:
+    sig_mkt = str(sig.market).upper()
+    if sig_mkt == prop_market:
+        return True
+    if sig.tag in ("VACATED_CARRIES", "MATCHUP_RUSH_MISMATCH") and sig_mkt == "RUSH_YDS":
+        return prop_market in ("RUSH_REC_YDS", "LONG_RUSH")
+    if sig.tag in ("VACATED_TARGETS", "MATCHUP_COVERAGE_LEAK") and sig_mkt == "REC_YDS":
+        return prop_market in ("RUSH_REC_YDS", "LONG_REC", "REC")
+    return False
+
+
 def _matching_signals(prop: Mapping[str, Any], src: _Sources) -> tuple[list[PropSignal], list[str]]:
+    prop_mkt = str(prop.get("market") or "").upper()
     candidates = [
         s
         for s in src.signals.get(str(prop.get("event_id")), [])
-        if str(s.market).upper() == str(prop.get("market")).upper()
+        if _signal_matches_market(s, prop_mkt)
         and _names_match(s.player_name, str(prop.get("player_name") or ""), s.team, prop.get("team"))
     ]
     return resolve_signal_conflicts(candidates)
@@ -363,14 +381,48 @@ def _apply_signal(pillar: Pillar, sig: PropSignal, position: str) -> None:
     )
 
 
-def _historical(prop: Mapping[str, Any]) -> tuple[Pillar, float | None]:
+def _fair_prior(
+    prop: Mapping[str, Any],
+    by_line: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
+) -> float | None:
+    odds = prop.get("best_odds")
+    implied = _pct(prop.get("implied_probability"))
+    if implied is None and odds is not None:
+        implied = 1.0 / american_to_decimal(int(odds))
+    if implied is None:
+        return None
+    if by_line is not None:
+        opp = _opposite_implied(prop, by_line)
+        if opp is not None and implied + opp > 0:
+            return implied / (implied + opp)
+    return implied / ASSUMED_OVERROUND
+
+
+def _historical(
+    prop: Mapping[str, Any],
+    by_line: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
+) -> tuple[Pillar, float | None]:
     pillar = Pillar()
     rates = {k: prop.get(f"{k}_hit_rate") for k in ("l5", "l10", "l20", "season")}
     pillar.evidence = {f"{k}_hit_rate": v for k, v in rates.items()}
-    shrunk = compute_shrunk_empirical_model_p(
-        l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
-        l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+    market = str(prop.get("market") or "").upper()
+    fair_p = _fair_prior(prop, by_line)
+    use_market_prior = (
+        fair_p is not None
+        and (market in TD_MARKETS or market_family(market) is None or abs(fair_p - 0.50) > 0.12)
     )
+    if use_market_prior and fair_p is not None:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
+            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+            method="market_prior", market_prior=fair_p,
+            kappa=16.0 if (market in TD_MARKETS or market_family(market) is None) else 8.0,
+        )
+    else:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
+            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+        )
     if shrunk is None:
         pillar.notes.append("no usable hit rate")
         return pillar, None
@@ -385,13 +437,18 @@ def _historical(prop: Mapping[str, Any]) -> tuple[Pillar, float | None]:
     pillar.status = VERIFIED if len(present) >= 2 else ESTIMATED
     if len(present) < 2:
         pillar.notes.append("single hit-rate window; cannot cross-check")
-    l5, l10 = _f(rates["l5"]), _f(rates["l10"])
-    if l5 is not None and l10 is not None:
-        l5 = l5 / 100.0 if l5 > 1 else l5
-        l10 = l10 / 100.0 if l10 > 1 else l10
-        if l5 < 0.5 and l10 < 0.5:
-            pillar.status = CONTRADICTS
-            pillar.notes.append("L5 and L10 both below 50% for this side")
+    norm_rates: dict[str, float] = {}
+    for k in present:
+        val = _f(rates[k])
+        if val is not None:
+            norm_rates[k] = val / 100.0 if val > 1.0 else val
+    l5, l10 = norm_rates.get("l5"), norm_rates.get("l10")
+    if l5 is not None and l10 is not None and l5 < 0.5 and l10 < 0.5:
+        pillar.status = CONTRADICTS
+        pillar.notes.append("L5 and L10 both below 50% for this side")
+    elif norm_rates and all(v < 0.5 for v in norm_rates.values()):
+        pillar.status = CONTRADICTS
+        pillar.notes.append("all available hit-rate windows below 50% for this side")
     return pillar, base
 
 
@@ -444,7 +501,13 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
         if market_family(market) is None:
             pillar.notes.append(f"market {market} has no opportunity metric mapped")
         return pillar
-    pillar.status = VERIFIED
+    if market_family(market) is None or market in TD_MARKETS:
+        pillar.status = ESTIMATED
+        pillar.notes.append(
+            f"market {market} requires red-zone/event opportunity metrics; generic usage is estimated"
+        )
+    else:
+        pillar.status = VERIFIED
     if pillar.evidence.get("role_collapse") and position == "OVER":
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume under half of the player's average")
@@ -517,15 +580,24 @@ def _injury_weather(
     player_key = _name_key(prop.get("player_name"))
     position = str(prop.get("position") or "").upper()
     disqualified = False
+    is_questionable = False
     injury_ok = src.inputs.inactive_by_team is not None
     if injury_ok:
         if team:
             out_keys = src.inactive_keys.get(team, set())
+            q_keys = src.questionable_keys.get(team, set())
         else:  # team unknown: any team's report naming this player counts
             out_keys = {k for keys in src.inactive_keys.values() for k in keys}
+            q_keys = {k for keys in src.questionable_keys.values() for k in keys}
         if player_key in out_keys:
             disqualified = True
             pillar.notes.append("player listed Out/Doubtful on the injury report")
+        elif player_key in q_keys:
+            is_questionable = True
+            pillar.evidence["player_injury_status"] = "Questionable"
+            pillar.notes.append(
+                "player listed Questionable on weekly injury report; requires active confirmation"
+            )
         pillar.evidence["team_inactive"] = sorted((src.inputs.inactive_by_team or {}).get(team or "", []))
         pillar.evidence["opponent_inactive"] = sorted((src.inputs.inactive_by_team or {}).get(opponent or "", []))
         src.used["injury"].add(team)
@@ -554,19 +626,32 @@ def _injury_weather(
         _apply_signal(pillar, sig, position)
     pillar.delta = _clamp(pillar.delta, PILLAR_CAP)
 
+    identity_ok = bool(prop.get("player_id") and team and opponent and prop.get("event_id"))
+    pillar.evidence["player_team_identity_gate"] = "VERIFIED" if identity_ok else "QUARANTINED"
+    if not identity_ok:
+        pillar.notes.append("PLAYER_TEAM_IDENTITY_GATE failed: missing verified player_id, team, opponent, or event_id")
+
     if disqualified:
+        pillar.evidence["injury_confidence_gate"] = "REJECTED_INACTIVE"
         pillar.status = CONTRADICTS
-    elif not injury_ok or not weather_ok:
+    elif not injury_ok or not weather_ok or not identity_ok:
+        pillar.evidence["injury_confidence_gate"] = "MISSING" if not injury_ok else "QUARANTINED_IDENTITY"
         pillar.status = MISSING
     elif event_date != src.inputs.run_date:
+        pillar.evidence["injury_confidence_gate"] = "STALE"
         pillar.status = STALE
         pillar.notes.append(
             f"refresh ran {src.inputs.run_date}, game is {event_date}; validates on its game-day run"
         )
     elif pillar.delta <= CONTRADICT_DELTA:
+        pillar.evidence["injury_confidence_gate"] = "CONTRADICTS"
         pillar.status = CONTRADICTS
         pillar.notes.append("weather/injury adjustments lean against this side")
+    elif is_questionable:
+        pillar.evidence["injury_confidence_gate"] = "QUARANTINED_QUESTIONABLE"
+        pillar.status = ESTIMATED
     else:
+        pillar.evidence["injury_confidence_gate"] = "VERIFIED_ACTIVE"
         pillar.status = VERIFIED
     return pillar, disqualified
 
@@ -692,6 +777,23 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
         status = ESTIMATED
     edge = final_p - fair
     ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
+    market = str(prop.get("market") or "").upper()
+    books_quoted = {
+        str(b.get("book") or "").strip().lower()
+        for b in (prop.get("books") or [])
+        if isinstance(b, Mapping) and str(b.get("book") or "").strip()
+    }
+    if books_quoted and books_quoted.issubset({"underdog", "prizepicks", "sleeper", "dabble"}):
+        if cap != CONTRADICTS:
+            cap = ESTIMATED
+        gate_notes.append(
+            "DFS pick'em synthetic price only (no regulated sportsbook quote); capped at PROVISIONAL"
+        )
+    if (market in TD_MARKETS or market_family(market) is None) and int(odds) > 250:
+        cap = CONTRADICTS
+        gate_notes.append(
+            "longshot event/TD prop (> +250) requires dedicated Poisson red-zone pricing model"
+        )
     b = dec - 1.0
     kelly = (b * final_p - (1.0 - final_p)) / b if b > 0 else 0.0
     stake = max(0.0, min(MAX_STAKE, kelly * QUARTER_KELLY))
@@ -747,7 +849,7 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         src.matched_signals[signal_pillar(sig.tag)].append(sig)
         src.used["signals"].add((sig.event_id, sig.player_name, sig.market, sig.tag))
 
-    historical, base = _historical(prop)
+    historical, base = _historical(prop, by_line)
     if base is None:
         return None
     for sig in src.matched_signals.get("historical", []):
@@ -821,7 +923,7 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
 
 def _finish_signal_pillar(pillar: Pillar, note: str) -> None:
     pillar.delta = _clamp(pillar.delta, PILLAR_CAP)
-    if pillar.status in (VERIFIED, ESTIMATED) and pillar.delta <= CONTRADICT_DELTA:
+    if pillar.status in (VERIFIED, ESTIMATED, MISSING) and pillar.delta <= CONTRADICT_DELTA:
         pillar.status = CONTRADICTS
         pillar.notes.append(note)
 
@@ -866,6 +968,21 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         traced = trace_prop(prop, src, by_line)
         if traced is not None:
             picks.append(traced)
+    picks.sort(key=_rank_key)
+
+    # CORRELATION_CHECKED gate: allow at most 1 VALIDATED pick per (event_id, player_name)
+    seen_validated_players: set[tuple[str, str]] = set()
+    for pick in picks:
+        if pick["verdict"] != VALIDATED:
+            continue
+        pkey = (str(pick.get("event_id") or ""), _name_key(pick.get("player_name")))
+        if pkey in seen_validated_players:
+            pick["verdict"] = PROVISIONAL
+            pick["stake_fraction"] = 0.0
+            pick["gaps"].append("correlation:CORRELATED_SAME_PLAYER")
+        else:
+            seen_validated_players.add(pkey)
+
     picks.sort(key=_rank_key)
     for rank, pick in enumerate(picks, 1):
         pick["rank"] = rank

@@ -751,7 +751,7 @@ def test_compute_sportsbook_edge_normalizes_model_p_pct():
 def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
     """After projection overwrites model_p, sportsbook_edge_pts must track it."""
     from outlier_nfl import enrich_close as ec
-    from outlier_nfl.projection import ProjectionResult, MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
+    from outlier_nfl.projection import MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
 
     record = {
         "player_name": "Test WR",
@@ -934,6 +934,9 @@ def test_pipeline_high_prob_includes_actionable_records(tmp_path):
         date="2026-09-13",
         offline_fixtures_dir=FIXTURES_DIR,
         generate_game_script=False,
+        # Omitting reports_dir publishes to the cwd-relative reports/NFL, i.e. the
+        # repo's tracked reports when pytest runs from the repo root.
+        reports_dir=tmp_path / "reports",
     )
     assert summary["status"] == "OK"
     assert "tier_1_actionable_count" in summary
@@ -965,4 +968,22 @@ def test_missing_identity_rows_stay_singleton_primary():
     tagged = apply_same_player_correlation_guard([a, b])
     assert all(r["correlation_role"] == CORRELATION_ROLE_PRIMARY for r in tagged)
     assert all(r["actionable"] is True for r in tagged)
+
+
+def test_primary_spread_preserves_signed_favorite_regardless_of_line_order():
+    """primary_spread must not overwrite home negative spread with away positive spread."""
+    from outlier_nfl.calibration import primary_spread
+
+    lines_away_last = [
+        _make_game_line("SPREAD", -3.0, team="PIT"),
+        _make_game_line("SPREAD", +3.0, team="IND"),
+    ]
+    lines_home_last = [
+        _make_game_line("SPREAD", +3.0, team="IND"),
+        _make_game_line("SPREAD", -3.0, team="PIT"),
+    ]
+    assert primary_spread(lines_away_last, "IND", "PIT") == +3.0
+    assert primary_spread(lines_home_last, "IND", "PIT") == +3.0
+    assert primary_spread(lines_away_last, "PIT", "IND") == -3.0
+
 

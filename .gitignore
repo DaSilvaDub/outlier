@@ -1,4 +1,5 @@
 .pytest_cache/
+.pytest_temp/
 __pycache__/
 *.py[cod]
 .venv/

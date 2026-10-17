@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -832,13 +833,48 @@ def build_matchup_script(
             "lean stays on the favorite."
         )
 
-    clock_bleed_haircut = (GROUND_DOMINANCE_CLOCK_BLEED / 2.0) if has_dog_rush else 0.0
-    home_score = max(0.0, round(ctx["home_tt"] + score_boost[home] - clock_bleed_haircut))
-    away_score = max(0.0, round(ctx["away_tt"] + score_boost[away] - clock_bleed_haircut))
+    if script_type == "FRONT_RUNNER_GRIND" and favorite and underdog:
+        fav_tt = ctx["home_tt"] if favorite_is_home else ctx["away_tt"]
+        dog_tt = ctx["away_tt"] if favorite_is_home else ctx["home_tt"]
+        fav_score = float(round(fav_tt + min(score_boost[favorite], 1.5)))
+        dog_suppression = max(2.5, score_boost[favorite] + 2.0) - score_boost[underdog]
+        dog_score = max(0.0, float(round(dog_tt - dog_suppression)))
+        if fav_score + dog_score >= total:
+            dog_score = max(0.0, float(math.floor(total - fav_score - 0.5)))
+        if fav_score - dog_score <= abs_spread:
+            fav_score = float(math.ceil(dog_score + abs_spread + 0.5))
+        if favorite_is_home:
+            home_score, away_score = fav_score, dog_score
+        else:
+            away_score, home_score = fav_score, dog_score
+    elif has_dog_rush and favorite and underdog:
+        fav_tt = ctx["home_tt"] if favorite_is_home else ctx["away_tt"]
+        dog_tt = ctx["away_tt"] if favorite_is_home else ctx["home_tt"]
+        fav_score = max(0.0, float(math.floor(fav_tt + score_boost[favorite] - GROUND_DOMINANCE_CLOCK_BLEED)))
+        dog_score = max(0.0, float(math.floor(dog_tt + score_boost[underdog] - 1.5)))
+        if favorite_is_home:
+            home_score, away_score = fav_score, dog_score
+        else:
+            away_score, home_score = fav_score, dog_score
+    else:
+        if total_lean == "UNDER" and not any(score_boost.values()):
+            home_score = max(0.0, float(math.floor(ctx["home_tt"])))
+            away_score = max(0.0, float(math.floor(ctx["away_tt"])))
+        else:
+            home_score = max(0.0, float(round(ctx["home_tt"] + score_boost[home])))
+            away_score = max(0.0, float(round(ctx["away_tt"] + score_boost[away])))
+
     if home_score == away_score and abs_spread > 0 and favorite:
-        eff_total = (total - GROUND_DOMINANCE_CLOCK_BLEED) if has_dog_rush else total
-        fav_pts = round((eff_total + abs_spread) / 2.0)
-        dog_pts = round((eff_total - abs_spread) / 2.0)
+        eff_total = (
+            float(math.floor(total - 0.5))
+            if total_lean == "UNDER"
+            else float(math.ceil(total + 0.5))
+        )
+        fav_pts = float(math.ceil((eff_total + abs_spread) / 2.0))
+        dog_pts = max(0.0, eff_total - fav_pts)
+        if fav_pts - dog_pts <= abs_spread:
+            fav_pts += 1.0
+            dog_pts = max(0.0, dog_pts - 1.0)
         if favorite_is_home:
             home_score, away_score = fav_pts, dog_pts
         else:
@@ -846,9 +882,39 @@ def build_matchup_script(
 
     if script_type == "FRONT_RUNNER_GRIND":
         if favorite_is_home is True and home_score <= away_score:
-            home_score = away_score + 7
+            home_score = away_score + 7.0
         elif favorite_is_home is False and away_score <= home_score:
-            away_score = home_score + 7
+            away_score = home_score + 7.0
+
+    # MODEL_DIRECTION_CONSISTENCY_GATE: never allow projected score to contradict total_lean or spread_lean
+    if tape_map:
+        proj_total = home_score + away_score
+        if total_lean == "UNDER" and proj_total > total:
+            total_lean = "OVER"
+            notes.append(
+                f"Model direction consistency: projected total {proj_total:.1f} exceeds "
+                f"market {total:.1f} due to trench/injury boost; lean OVER."
+            )
+        elif total_lean == "OVER" and proj_total < total:
+            total_lean = "UNDER"
+            notes.append(
+                f"Model direction consistency: projected total {proj_total:.1f} is below "
+                f"market {total:.1f}; lean UNDER."
+            )
+        if abs_spread > 0:
+            cover_margin = (home_score - away_score) + home_spread
+            if spread_lean == "HOME" and cover_margin < 0:
+                spread_lean = "AWAY"
+                notes.append(
+                    f"Model direction consistency: projected margin ({home_score - away_score:+.1f}) "
+                    f"fails to cover {home} {home_spread:+.1f}; lean AWAY."
+                )
+            elif spread_lean == "AWAY" and cover_margin > 0:
+                spread_lean = "HOME"
+                notes.append(
+                    f"Model direction consistency: projected margin ({home_score - away_score:+.1f}) "
+                    f"covers {home} {home_spread:+.1f}; lean HOME."
+                )
 
     total_source = str(ctx.get("total_source") or "market")
     home_tt_source = str(ctx.get("home_tt_source") or "market")

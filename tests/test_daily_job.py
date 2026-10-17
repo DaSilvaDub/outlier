@@ -41,9 +41,17 @@ def _require_otp_fetcher():
 
 
 @pytest.fixture(autouse=True)
-def _disable_live_result_collection(monkeypatch):
+def _disable_live_result_collection(monkeypatch, tmp_path):
     if daily_job is not None:
         daily_job.run_explicit_refresh.last_results = []
+        # main() refits blend weights from feedback.DEFAULT_DB_PATH (a hard-coded
+        # path to the production ledger) into probability_blend.DEFAULT_WEIGHTS_PATH
+        # (the tracked calibration/blend_weights.json). Both are read at call time,
+        # so point them at tmp_path: the ledger is absent and the refit is skipped.
+        monkeypatch.setattr(daily_job.feedback, "DEFAULT_DB_PATH", tmp_path / "feedback.sqlite3")
+        monkeypatch.setattr(
+            daily_job.probability_blend, "DEFAULT_WEIGHTS_PATH", tmp_path / "blend_weights.json"
+        )
         monkeypatch.setattr(
             daily_job.results,
             "collect_and_import",

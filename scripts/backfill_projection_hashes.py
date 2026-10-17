@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from outlier_scrapers.feedback import initialize_database
+from outlier_scrapers.paths import resolve_feedback_db_path
 
 
 def _load_candidate_projection_fields(pack_dir: Path) -> list[dict[str, str]]:
@@ -73,7 +74,8 @@ def main() -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3"),
+        default=None,
+        help="Feedback ledger. Defaults to the resolved ledger (OUTLIER_FEEDBACK_DB).",
     )
     parser.add_argument(
         "--packs-root",
@@ -82,8 +84,12 @@ def main() -> int:
     )
     parser.add_argument("--dates", nargs="*", default=["2026-08-21", "2026-08-22"])
     args = parser.parse_args()
+    # Resolve at run time. paths.FEEDBACK_DB_PATH is fixed at import, so a
+    # ledger override set after the package loads (or by the caller of main)
+    # would otherwise be ignored.
+    db_path = args.db if args.db is not None else resolve_feedback_db_path()
     pack_dirs = [args.packs_root / date for date in args.dates]
-    stats = backfill(args.db, pack_dirs)
+    stats = backfill(db_path, pack_dirs)
     print(stats)
     return 0
 

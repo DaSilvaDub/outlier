@@ -576,20 +576,29 @@ def primary_spread(lines: Sequence[Any], away_team: str, home_team: str) -> floa
     """Primary spread as the away team's signed line, from a two-way pair
     (away +x quoted with home -x) closest to a coin flip. Without any pair, the
     priced one-sided quote closest to 50% (home -x read as away +x)."""
-    by_abs: dict[float, dict[str, tuple[float, float]]] = {}
+    by_team_line: dict[tuple[str, float], float] = {}
     for ln in lines:
         ip = _ip(ln)
         if ln.line is None or ip is None or ln.team not in (away_team, home_team):
             continue
-        by_abs.setdefault(abs(float(ln.line)), {})[ln.team] = (float(ln.line), ip)
-    pairs = []
-    for k, v in by_abs.items():
-        if len(v) == 2 and v[away_team][0] == -v[home_team][0]:
-            pairs.append((abs(v[away_team][1] - v[home_team][1]), k, v[away_team][0]))
+        key = (str(ln.team), float(ln.line))
+        if key not in by_team_line or abs(ip - 50.0) < abs(by_team_line[key] - 50.0):
+            by_team_line[key] = ip
+    pairs: list[tuple[float, float, float, float]] = []
+    for (team, away_line), away_ip in by_team_line.items():
+        if team != away_team:
+            continue
+        home_ip = by_team_line.get((home_team, -away_line))
+        if home_ip is not None:
+            balance = abs(away_ip - home_ip)
+            coin_dist = abs(away_ip - 50.0) + abs(home_ip - 50.0)
+            pairs.append((balance + coin_dist, abs(away_line), away_line, away_ip))
     if pairs:
         return min(pairs)[2]
-    singles = [(abs(ip - 50.0), k, line if team == away_team else -line)
-               for k, v in by_abs.items() for team, (line, ip) in v.items()]
+    singles = [
+        (abs(ip - 50.0), abs(line), line if team == away_team else -line)
+        for (team, line), ip in by_team_line.items()
+    ]
     return min(singles)[2] if singles else None
 
 

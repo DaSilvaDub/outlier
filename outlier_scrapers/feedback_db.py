@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from outlier_scrapers import probability_blend
+from outlier_scrapers import paths, probability_blend
 
-DEFAULT_DB_PATH = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration\feedback.sqlite3")
+DEFAULT_DB_PATH = paths.FEEDBACK_DB_PATH
 SCHEMA_VERSION = 5
 
 MARKET_SNAPSHOT_FIELDS = [
