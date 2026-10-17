@@ -1,3 +1,77 @@
+# HANDOFF — 2026-10-17 (Claude, Daily Debug Review: alt-floor name joins)
+
+**Branch**: `claude/inspiring-fermat-wva062` · **Last commit**: `a6a185b` · **PR**: https://github.com/DaSilvaDub/outlier/pull/274 (open, subscribed to CI)
+
+## Accomplished
+1. **Two bugs found and fixed (PR #274)** — `outlier_nfl/alt_floors.py` defined its own
+   `_name_key` (`re.sub(r"[^a-z]", "", lower)`) that strips punctuation but **not name
+   suffixes**, and used it to join two sources that disagree on exactly those.
+   - `floor_inventory_reason`: `inactive_by_team` is nflverse `full_name` (via
+     `tape.injury_report()` -> `inactive_players()`), the prop row is the Outlier feed's
+     spelling. "Kenneth Walker III" -> `kennethwalkeriii` vs "Kenneth Walker" ->
+     `kennethwalker`, so the function returned `None` (executable) instead of
+     `inactive_player`. An alt floor prop on a player ruled OUT/IR was ranked and
+     exported with a line — the F23 injury-evidence guarantee silently not holding.
+     Reproduced against the real function before fixing.
+   - The same function's F18 starter gate compared `starting_qbs` to the prop name as
+     raw strings. Those names resolve to `tape_roles[team]["qb"]` (nflverse depth chart)
+     in a live run, so a QB the feed spells "Michael Penix" against "Michael Penix Jr."
+     matched nothing and every PASS_YDS floor for them was dropped as inventory.
+   Both now key on `tape_nflverse._name_key`. `alt_floors` was the **last** module with a
+   divergent normalizer — `usage_signals`, `tape_nflverse._depth_roles`, `best_bets` and
+   `matchup_rankings` (since #268) all already used the shared one. 8 regression tests;
+   each suffix case verified failing pre-fix.
+2. **Swept the rest of the bug class, clean**: `schema._norm_name` (uppercase alnum, no
+   suffix strip) is only used by `player_prop_key`/`game_line_key` to dedupe feed quotes
+   against each other — both sides are the feed, no cross-source join. `roster._names_overlap`
+   is substring-based, so suffixes match by construction.
+3. **Reviewed everything that landed since the last debug review** (`e215da9..9cf0a31`:
+   the feedback-ledger path unification #270/#267 and the conftest write/ledger guards
+   #269). Reviewed clean.
+
+## State to know about
+- **This sandbox still cannot install deps.** PyPI is blocked by the network policy (403 on
+  CONNECT to `pypi.org`, DNS fails direct), so `sqlalchemy`, `openai`, `anthropic` and
+  `google-genai` are unavailable. I unblocked the rest of the suite with local `structlog`
+  and `dateutil` stand-ins on `PYTHONPATH`, **outside the repo** (nothing committed):
+  1884 passed / 43 skipped, and the 67 failed + 30 collection errors are byte-identical to
+  the pre-change baseline, every one a missing module rather than an assertion. mypy clean
+  (131 files); pyright unchanged from baseline (1 error, 11 warnings, all missing SDKs).
+  CI on #274 is the authoritative check. A future cloud session has the same limit.
+- `tests/conftest.py`'s `_no_real_feedback_ledger` monkeypatches
+  `outlier_scrapers.feedback`, which imports the whole heavy chain, so **every** test now
+  depends on `sqlalchemy`/`structlog` being installed. Fine in CI, but it is why a dep gap
+  in a sandbox now fails 100% of the suite instead of 50 files.
+- `pack_publish._feedback_db_path()`'s docstring says "read at call time" but it returns
+  the import-time `paths.FEEDBACK_DB_PATH` constant, not `paths.resolve_feedback_db_path()`.
+  Monkeypatchable (which is what the tests need), but a real `OUTLIER_FEEDBACK_DB` set
+  after import is not honoured there. Cosmetic given env vars are set pre-process; left alone.
+
+## Reported, not fixed (need a ruling or are architectural)
+1. `outlier_scrapers/database.py` runs `init_db()` (`create_all`) **at import time**, and
+   first attempts `create_engine(DATABASE_URL); engine.connect().close()` against
+   `postgresql://...localhost:5432` with no connect timeout. Every import of the pack chain
+   pays that, and in an environment where 5432 is dropped rather than refused it hangs
+   instead of falling back. Pre-existing and architectural: moving it behind a lazy
+   accessor touches the whole storage layer.
+2. Carried over from 2026-10-15, still open on master — `inactives_by_team=None` collapses
+   to `{}` in `MatchupRankingsEngine` (`matchup_rankings.py:172`), so a run with no injury
+   report ranks IR players, where `alt_floors`/`best_bets` fail closed
+   (`require_injury_evidence`, `injury_report_loaded`). This is the one with betting-integrity
+   impact and it needs your ruling, since failing closed changes when publication is withheld.
+
+## Next steps
+1. Drive PR #274 to green and merge (subscribed; I will handle CI failures).
+2. Decide item 2 above.
+3. Open PRs #271 (vacated-backfield team scope) and #273 (game script side of the spread)
+   cover the other two matchup-ranking judgment calls from 2026-10-15. #272, #265, #261,
+   #216, #215, #208 are also still open. `matchup_rankings.py` is under active work in
+   #271/#273 — I deliberately stayed out of that file.
+4. Carried over from 2026-10-14: update the canonical checkout to master before re-running
+   `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
