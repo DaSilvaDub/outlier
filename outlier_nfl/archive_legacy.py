@@ -26,6 +26,14 @@ by one by their ``taken_at`` and ``run_id``; the file's modified time is ignored
 ``cache/espn_injuries_filter_*`` and ``exports/nfl_only_filter_summary_*`` come
 from the untracked helper scripts (report section 12) and get
 ``untracked_helper_output``: never pipeline output, never an original.
+
+A snapshot row in one of the multi-player markets of
+:data:`MULTI_PLAYER_MARKET_LABELS` whose ``player_name`` is exactly that market's
+label (the writer stored the label instead of the player) has lost its player
+and can't be graded under any rule. Such rows are set aside one by one as
+``unrecoverable_row: player_identity_lost`` (``LegacyStatus.unrecoverable_rows``:
+counts by market and game, file lines, keys) and are neither compared nor
+counted as ``pre_kickoff``. Every other row is checked as before.
 """
 
 from __future__ import annotations
@@ -48,6 +56,16 @@ PREDICTION_PREFIXES = ("nfl_high_prob_props_", "nfl_calibrated_props_", "nfl_mat
 CARD_PREFIX = "nfl_best_bets_"
 HELPER_GLOBS = ("cache/espn_injuries_filter_{d}*", "exports/nfl_only_filter_summary_{d}*")
 SLATE_GLOBS = ("normalized/*_{d}*", "exports/*_{d}*", "scorecard/*_{d}*")
+# The five multi-player markets whose snapshot rows the writer saved with the
+# market label as ``player_name``. Matched exactly (market and label), nothing else.
+MULTI_PLAYER_MARKET_LABELS = {
+    "FIRST_TEAM_RECEPTION": "First Team Reception",
+    "FIRST_TEAM_TOUCHDOWN": "First Team TD Scorer",
+    "FIRST_TD": "First TD Scorer",
+    "LAST_TOUCHDOWN": "Last TD Scorer",
+    "MOST_RECEIVING_YARDS": "Most Receiving Yards",
+}
+PLAYER_IDENTITY_LOST = "unrecoverable_row: player_identity_lost"
 _SCRIPT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_([A-Za-z]+)_([A-Za-z]+)_Game_Script\.md$")
 
 
@@ -148,6 +166,9 @@ class LegacyStatus:
     # original pre-repair) | recomputed_from_hit_rates (today's code would compute it)
     probability_sources: dict[str, int] = field(default_factory=dict)
     refused_reason: str | None = None  # set when status is "refused"
+    # snapshot rows set aside as PLAYER_IDENTITY_LOST (empty when there are none):
+    # label, rows, keys, keys_kept, by_market, by_game, lines {path: [line numbers]}
+    unrecoverable_rows: dict[str, Any] = field(default_factory=dict)
     dated_by: str = "mtime"  # legacy files have no run manifest; their mtime dates them
 
 
@@ -295,8 +316,9 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
                     and (e.original_path or "").startswith("snapshots/")),
                    key=lambda e: (e.sha256, e.path, e.mtime or "", e.slate or ""))
     refused: str | None = None
+    lost: dict[str, Any] = {}
     if snaps:
-        rows, refused = _snapshot_union(root, snaps, slate)
+        rows, refused, lost = _snapshot_union(root, snaps, slate)
         snap_rows.update(_judge_snapshot_rows(rows, kick))
         snap_rows["copies"] = len(snaps)
         for e in snaps:
@@ -308,7 +330,7 @@ def legacy_status(nfl_dir: Path | str, slate: str) -> LegacyStatus:
     status = "refused" if refused else (
         "legacy_regradable" if regradable else "unrecoverable")
     return LegacyStatus(slate, status, first, source, sorted(regradable), card, files,
-                        snap_rows, prob_sources, refused)
+                        snap_rows, prob_sources, refused, unrecoverable_rows=lost)
 
 
 def _snapshot_key(row: dict[str, Any]) -> tuple[str, ...]:
@@ -368,34 +390,71 @@ def _canon(row: dict[str, Any]) -> str:
     return json.dumps(row, sort_keys=True, separators=(",", ":"))
 
 
+def player_identity_lost(row: dict[str, Any]) -> bool:
+    """True when ``row`` is in one of the five multi-player markets and its
+    ``player_name`` is exactly that market's label. No other test."""
+    market = row.get("market")
+    return isinstance(market, str) and market in MULTI_PLAYER_MARKET_LABELS \
+        and row.get("player_name") == MULTI_PLAYER_MARKET_LABELS[market]
+
+
+def _identity_lost_summary(lost: dict[str, dict[str, Any]],
+                           lines: dict[str, set[int]], keys_kept: int) -> dict[str, Any]:
+    """``LegacyStatus.unrecoverable_rows`` for the distinct rows set aside."""
+    if not lost:
+        return {}
+    by_market: dict[str, int] = {}
+    by_game: dict[tuple[str, str], int] = {}
+    for row in lost.values():
+        m = str(row.get("market"))
+        by_market[m] = by_market.get(m, 0) + 1
+        g = (str(row.get("event_id") or ""), str(row.get("matchup") or ""))
+        by_game[g] = by_game.get(g, 0) + 1
+    return {"label": PLAYER_IDENTITY_LOST, "rows": len(lost),
+            "keys": len({_snapshot_key(r) for r in lost.values()}), "keys_kept": keys_kept,
+            "by_market": dict(sorted(by_market.items())),
+            "by_game": [{"event_id": e, "matchup": m, "rows": n}
+                        for (e, m), n in sorted(by_game.items())],
+            "lines": {p: sorted(n) for p, n in sorted(lines.items())}}
+
+
 def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
-                    ) -> tuple[list[dict[str, Any]], str | None]:
+                    ) -> tuple[list[dict[str, Any]], str | None, dict[str, Any]]:
     """This slate's distinct rows across every recorded copy.
 
     Neither the rows nor the refusal depend on the order of copies or of rows in
-    a copy. All distinct rows under a key (``_snapshot_key``) are compared
-    pairwise. Keys are walked in sorted order, rows by canonical JSON. The second
-    value is the refusal reason for the first conflicting pair
-    (``_snapshot_conflict``), in one copy or across two. Only byte-identical rows
-    (same canonical JSON) collapse to one; every other row under a key is kept
-    unaltered (books are never merged), sorted by canonical JSON.
+    a copy. Rows that lost their player (``player_identity_lost``) are set aside
+    first and summarized in the third value; they are never compared. All other
+    distinct rows under a key (``_snapshot_key``) are compared pairwise. Keys are
+    walked in sorted order, rows by canonical JSON. The second value is the
+    refusal reason for the first conflicting pair (``_snapshot_conflict``), in
+    one copy or across two. Only byte-identical rows (same canonical JSON)
+    collapse to one; every other row under a key is kept unaltered (books are
+    never merged), sorted by canonical JSON.
     """
     seen: dict[tuple[str, ...], dict[str, tuple[dict[str, Any], set[str]]]] = {}
+    lost: dict[str, dict[str, Any]] = {}
+    lost_lines: dict[str, set[int]] = {}
     for e in snaps:
         try:
             lines = ar.resolve_path(root, e.path).read_text(encoding="utf-8").splitlines()
         except OSError:
             continue
-        for line in lines:
+        for lineno, line in enumerate(lines, start=1):
             try:
                 row = json.loads(line)
             except ValueError:
                 continue  # torn line
             if not isinstance(row, dict) or row.get("slate_date") != slate:
                 continue
+            if player_identity_lost(row):
+                lost.setdefault(_canon(row), row)
+                lost_lines.setdefault(e.path, set()).add(lineno)
+                continue
             variant = seen.setdefault(_snapshot_key(row), {}).setdefault(
                 _canon(row), (row, set()))
             variant[1].add(e.path)
+    summary = _identity_lost_summary(lost, lost_lines, len(seen))
     kept: list[dict[str, Any]] = []
     for k in sorted(seen):
         variants = [seen[k][c] for c in sorted(seen[k])]
@@ -404,15 +463,17 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                 if _snapshot_conflict(a, b) is None:
                     continue
                 if paths_a & paths_b:
-                    return [], (f"snapshot rows disagree on row {k} within one file "
-                                f"{min(paths_a & paths_b)}: {_snapshot_conflict(a, b)}")
+                    reason = (f"snapshot rows disagree on row {k} within one file "
+                              f"{min(paths_a & paths_b)}: {_snapshot_conflict(a, b)}")
+                    return [], reason, summary
                 # name the copies and the values in the same order
                 (x, px), (y, py) = sorted(((a, min(paths_a)), (b, min(paths_b))),
                                           key=lambda t: t[1])
-                return [], (f"snapshot copies disagree on row {k} across two copies "
-                            f"{px} vs {py}: {_snapshot_conflict(x, y)}")
+                reason = (f"snapshot copies disagree on row {k} across two copies "
+                          f"{px} vs {py}: {_snapshot_conflict(x, y)}")
+                return [], reason, summary
         kept.extend(r for r, _ in variants)  # every distinct row, unaltered
-    return sorted(kept, key=_canon), None
+    return sorted(kept, key=_canon), None, summary
 
 
 def _judge_snapshot_rows(rows: list[dict[str, Any]], kick: dict[str, datetime]

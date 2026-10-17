@@ -13,6 +13,8 @@ under ``archive/legacy/<sha256>/``. The originals are only read.
 For a legacy ``--slate``, ``check`` also prints ``STATUS <slate>
 legacy_regradable|unrecoverable``, whether an original card exists, and each
 file's verdict (original / partial / post_slate per game; snapshots per row).
+Snapshot rows whose player was lost (``unrecoverable_row: player_identity_lost``)
+are listed with counts by market and game and their file lines.
 
 ``check`` is read-only. It lists every expected slate (each dated run pointer
 plus any ``--slate``) whose roles are missing, every archived file that is gone
@@ -69,6 +71,17 @@ def _record(args: argparse.Namespace) -> int:
     return 1 if result.conflicts else 0
 
 
+def _ranges(nums: list[int]) -> str:
+    """``[1, 2, 3, 7]`` as ``1-3,7``."""
+    spans: list[list[int]] = []
+    for n in nums:
+        if spans and n == spans[-1][1] + 1:
+            spans[-1][1] = n
+        else:
+            spans.append([n, n])
+    return ",".join(str(a) if a == b else f"{a}-{b}" for a, b in spans)
+
+
 def _check(args: argparse.Namespace) -> int:
     legacy = tuple(s for s in args.slate or [] if s in al.LEGACY_SLATES)
     report = ar.check_archive(Path(args.nfl_dir), args.slate, args.season, legacy)
@@ -103,6 +116,15 @@ def _check(args: argparse.Namespace) -> int:
                       f"{r['pre_kickoff']}, post_slate "
                       f"{r['post_slate']}, with_run_id {r['with_run_id']}, "
                       f"no_kickoff {r['no_kickoff']}")
+            if st.unrecoverable_rows:
+                u = st.unrecoverable_rows
+                print(f"  {u['label']}: {u['rows']} rows under {u['keys']} keys set aside, "
+                      f"not counted as pre_kickoff ({u['keys_kept']} keys kept)")
+                print("    by market: " + ", ".join(f"{m} {n}" for m, n in u["by_market"].items()))
+                print("    by game: " + ", ".join(f"{g['event_id']} ({g['matchup']}) {g['rows']}"
+                                                for g in u["by_game"]))
+                for path, nums in u["lines"].items():
+                    print(f"    lines {path}: {_ranges(nums)}")
 
         for g in report.gaps:
             where = g.slate or (g.role or "manifest")

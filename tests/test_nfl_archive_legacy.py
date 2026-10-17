@@ -277,7 +277,8 @@ def test_cli_record_and_check(tree, capsys):
 def test_legacy_status_source_has_no_write_calls():
     import inspect
     src = "".join(inspect.getsource(f) for f in (
-        al.legacy_status, al._judge_snapshot_rows, al._snapshot_union, al._kickoffs, al._covered, al._load))
+        al.legacy_status, al._judge_snapshot_rows, al._snapshot_union,
+        al.player_identity_lost, al._identity_lost_summary, al._kickoffs, al._covered, al._load))
     for call in ("write_", "open(", "unlink", "mkdir", "replace(", "record_"):
         assert call not in src, call
 
@@ -516,7 +517,8 @@ def _check_text(base: Path, nfl: Path, capsys, *extra: str) -> tuple[int, str]:
 def _union(nfl: Path) -> tuple[list[dict], str | None]:
     entries, _ = ar.read_manifest(ar.manifest_path(nfl))
     snaps = [e for e in entries if (e.original_path or "") == SNAP]
-    return al._snapshot_union(nfl, snaps, "2026-10-05")
+    rows, refused, _ = al._snapshot_union(nfl, snaps, "2026-10-05")
+    return rows, refused
 
 
 def test_non_conflicting_rows_under_one_key_are_all_kept_unaltered(tree):
@@ -654,3 +656,157 @@ def test_two_nan_lines_with_another_shared_book_price_are_refused(tree):
                                    {"hardrock": -125, "fanduel": 105}))
     assert st.status == "refused"
     assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
+
+
+# Player identity lost: real rows from Daniel's archived copy of
+# nfl_prop_snapshots_2026-09-29.jsonl (archive/legacy/b08596eb.../), each line
+# "<line number> <row>" exactly as printed by the read-only extract. The subset
+# holds lines 1063-1067 (DET First Team Reception), the first two rows of each of
+# the 15 keys where the writer stored the market label as player_name, and the
+# first five other rows of each slate.
+REAL_EXTRACT = Path(__file__).parent / "fixtures" / "nfl" / "legacy_snapshot_rows_2026-09-29.txt"
+
+
+def _real_rows(lines: range | None = None) -> list[tuple[int, str]]:
+    out = []
+    for text in REAL_EXTRACT.read_text(encoding="utf-8").splitlines():
+        n, row = text.split(" ", 1)
+        if lines is None or int(n) in lines:
+            out.append((int(n), row))
+    return out
+
+
+def _snap_at_lines(nfl: Path, rows: list[tuple[int, str]], mtime: str) -> None:
+    """The rows at their original line numbers; the gaps are blank lines (skipped)."""
+    body = [""] * max(n for n, _ in rows)
+    for n, row in rows:
+        body[n - 1] = row
+    _put(nfl / SNAP, "\n".join(body) + "\n", mtime)
+
+
+DET_1063_1067 = range(1063, 1068)
+
+
+def test_the_five_labels_are_the_ones_in_the_real_rows():
+    labels = {(r["market"], r["player_name"]) for r in (json.loads(t) for _, t in _real_rows())
+              if r["player_name"] in al.MULTI_PLAYER_MARKET_LABELS.values()}
+    assert labels == set(al.MULTI_PLAYER_MARKET_LABELS.items())
+
+
+def test_det_first_team_reception_lines_1063_1067_are_set_aside_not_refused(tree, capsys):
+    nfl, reports = tree
+    rows = _real_rows(DET_1063_1067)
+    assert [json.loads(t)["books"] for _, t in rows] == [
+        {"draftkings": 205}, {"draftkings": 340}, {"draftkings": 330},
+        {"draftkings": 1000}, {"draftkings": 450}]
+    _snap_at_lines(nfl, rows, "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    # not pre_kickoff: none of the five rows is counted anywhere
+    assert st.snapshot_rows == {"pre_kickoff": 0, "post_slate": 0, "with_run_id": 0,
+                                "no_kickoff": 0, "copies": 1}
+    u = st.unrecoverable_rows
+    (path, nums), = u["lines"].items()
+    assert path.startswith("archive/legacy/")
+    assert path.endswith("/nfl_prop_snapshots_2026-09-29.jsonl")
+    assert u == {"label": "unrecoverable_row: player_identity_lost", "rows": 5, "keys": 1,
+                 "keys_kept": 0, "by_market": {"FIRST_TEAM_RECEPTION": 5},
+                 "by_game": [{"event_id": "05cd570bc7ad0f6493e9e1388095741bf2d05ead",
+                              "matchup": "DET @ CAR", "rows": 5}],
+                 "lines": {path: [1063, 1064, 1065, 1066, 1067]}}
+    capsys.readouterr()
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04"]) == 0
+    out = capsys.readouterr().out
+    assert ("  unrecoverable_row: player_identity_lost: 5 rows under 1 keys set aside, "
+            "not counted as pre_kickoff (0 keys kept)\n") in out
+    assert "    by market: FIRST_TEAM_RECEPTION 5\n" in out
+    assert "    by game: 05cd570bc7ad0f6493e9e1388095741bf2d05ead (DET @ CAR) 5\n" in out
+    assert f"    lines {path}: 1063-1067\n" in out
+    assert "REFUSED" not in out
+    capsys.readouterr()
+    nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04", "--json"])
+    (legacy,) = json.loads(capsys.readouterr().out)["legacy"]
+    assert legacy["unrecoverable_rows"] == u
+
+
+def _named(row: str, name: str, **kw) -> dict:
+    return {**json.loads(row), "player_name": name, **kw}
+
+
+def test_a_real_player_price_conflict_beside_an_excluded_group_still_refuses(tree, capsys):
+    nfl, reports = tree
+    rows = _real_rows(DET_1063_1067)
+    first = rows[0][1]
+    # a named player in the same market, same key, DraftKings +205 vs +210
+    a = _named(first, "P One")
+    b = _named(first, "P One", books={"draftkings": 210}, best_odds=210)
+    _snap_at_lines(nfl, rows + [(1068, json.dumps(a)), (1069, json.dumps(b))],
+                   "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    assert st.status == "refused"
+    assert "snapshot rows disagree on row" in st.refused_reason and "'p one'" in st.refused_reason
+    assert st.refused_reason.endswith(": book 'draftkings' price 205 vs 210")
+    assert st.unrecoverable_rows["rows"] == 5 and st.unrecoverable_rows["keys"] == 1
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04"]) == 1
+    out = capsys.readouterr().out
+    assert "REFUSED snapshot rows disagree" in out and "player_identity_lost: 5 rows" in out
+
+
+def test_a_real_player_in_a_multi_player_market_gets_the_normal_check(tree):
+    nfl, reports = tree
+    first = _real_rows(DET_1063_1067)[0][1]
+    rows = [(1, json.dumps(_named(first, "P One"))),
+            (2, json.dumps(_named(first, "P One", books={"draftkings": 205, "fanduel": 230})))]
+    _snap_at_lines(nfl, rows, "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    assert st.refused_reason is None and st.unrecoverable_rows == {}
+    assert st.snapshot_rows["pre_kickoff"] == 2  # both kept, compared, counted
+
+
+@pytest.mark.parametrize("name,market", [
+    ("first team reception", "FIRST_TEAM_RECEPTION"),   # not the exact label
+    ("First Team Reception ", "FIRST_TEAM_RECEPTION"),  # trailing space
+    ("First TD Scorer", "FIRST_TEAM_RECEPTION"),        # another market's label
+    ("First Team Reception", "first_team_reception"),   # market not on the list as written
+    ("Anytime TD Scorer", "ANYTIME_TD"),                # not one of the five markets
+])
+def test_only_the_exact_market_label_pair_is_set_aside(tree, name, market):
+    nfl, reports = tree
+    rows = [_named(t, name, market=market) for _, t in _real_rows(range(1063, 1065))]
+    assert not any(al.player_identity_lost(r) for r in rows)
+    _snap_at_lines(nfl, [(i + 1, json.dumps(r)) for i, r in enumerate(rows)],
+                   "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    # compared as usual: DraftKings +205 vs +340 under one key is a conflict
+    assert st.status == "refused" and st.unrecoverable_rows == {}
+    assert st.refused_reason.endswith(": book 'draftkings' price 205 vs 340")
+
+
+@pytest.mark.parametrize("slate,lost_rows,lost_keys,kept_keys,by_market", [
+    ("2026-10-04", 17, 7, 5, {"FIRST_TD": 4, "FIRST_TEAM_RECEPTION": 5,
+                              "FIRST_TEAM_TOUCHDOWN": 4, "LAST_TOUCHDOWN": 4}),
+    ("2026-10-05", 16, 8, 5, {"FIRST_TD": 4, "FIRST_TEAM_TOUCHDOWN": 4,
+                              "LAST_TOUCHDOWN": 4, "MOST_RECEIVING_YARDS": 4}),
+])
+def test_real_subset_sets_aside_the_15_label_keys(tree, slate, lost_rows, lost_keys,
+                                                  kept_keys, by_market):
+    nfl, reports = tree
+    rows = _real_rows()
+    # 7 keys on Oct 4 + 8 on Oct 5 = the 15 colliding keys of the full 648-row file
+    _snap_at_lines(nfl, rows, "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, (slate,), reports)
+    st = al.legacy_status(nfl, slate)
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    u = st.unrecoverable_rows
+    assert (u["rows"], u["keys"], u["keys_kept"], u["by_market"]) == (
+        lost_rows, lost_keys, kept_keys, by_market)
+    assert st.snapshot_rows["pre_kickoff"] == kept_keys  # the clean rows, one per key
+
+
+def test_check_prints_line_numbers_as_ranges():
+    assert nfl_archive._ranges([1063, 1064, 1065, 1066, 1067, 1291, 1293]) == "1063-1067,1291,1293"
+    assert nfl_archive._ranges([]) == ""
