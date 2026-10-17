@@ -13,8 +13,9 @@ under ``archive/legacy/<sha256>/``. The originals are only read.
 For a legacy ``--slate``, ``check`` also prints ``STATUS <slate>
 legacy_regradable|unrecoverable``, whether an original card exists, and each
 file's verdict (original / partial / post_slate per game; snapshots per row).
-Snapshot rows whose player was lost (``unrecoverable_row: player_identity_lost``)
-are listed with counts by market and game and their file lines.
+Snapshot rows with the market label as ``player_name``
+(``unrecoverable_row:market_label_as_player``) are listed with counts by
+market and game and their file lines.
 
 ``check`` is read-only. It lists every expected slate (each dated run pointer
 plus any ``--slate``) whose roles are missing, every archived file that is gone

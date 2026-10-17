@@ -278,7 +278,8 @@ def test_legacy_status_source_has_no_write_calls():
     import inspect
     src = "".join(inspect.getsource(f) for f in (
         al.legacy_status, al._judge_snapshot_rows, al._snapshot_union,
-        al.player_identity_lost, al._identity_lost_summary, al._kickoffs, al._covered, al._load))
+        al.market_label_as_player, al._market_label_summary, al._kickoffs, al._covered,
+        al._load))
     for call in ("write_", "open(", "unlink", "mkdir", "replace(", "record_"):
         assert call not in src, call
 
@@ -658,7 +659,7 @@ def test_two_nan_lines_with_another_shared_book_price_are_refused(tree):
     assert st.refused_reason.endswith(": book 'hardrock' price -110 vs -125")
 
 
-# Player identity lost: real rows from Daniel's archived copy of
+# Market label as player: real rows from Daniel's archived copy of
 # nfl_prop_snapshots_2026-09-29.jsonl (archive/legacy/b08596eb.../), each line
 # "<line number> <row>" exactly as printed by the read-only extract. The subset
 # holds lines 1063-1067 (DET First Team Reception), the first two rows of each of
@@ -688,6 +689,7 @@ DET_1063_1067 = range(1063, 1068)
 
 
 def test_the_five_labels_are_the_ones_in_the_real_rows():
+    assert al.MARKET_LABEL_AS_PLAYER == "unrecoverable_row:market_label_as_player"
     labels = {(r["market"], r["player_name"]) for r in (json.loads(t) for _, t in _real_rows())
               if r["player_name"] in al.MULTI_PLAYER_MARKET_LABELS.values()}
     assert labels == set(al.MULTI_PLAYER_MARKET_LABELS.items())
@@ -710,7 +712,7 @@ def test_det_first_team_reception_lines_1063_1067_are_set_aside_not_refused(tree
     (path, nums), = u["lines"].items()
     assert path.startswith("archive/legacy/")
     assert path.endswith("/nfl_prop_snapshots_2026-09-29.jsonl")
-    assert u == {"label": "unrecoverable_row: player_identity_lost", "rows": 5, "keys": 1,
+    assert u == {"label": "unrecoverable_row:market_label_as_player", "rows": 5, "keys": 1,
                  "keys_kept": 0, "by_market": {"FIRST_TEAM_RECEPTION": 5},
                  "by_game": [{"event_id": "05cd570bc7ad0f6493e9e1388095741bf2d05ead",
                               "matchup": "DET @ CAR", "rows": 5}],
@@ -718,7 +720,7 @@ def test_det_first_team_reception_lines_1063_1067_are_set_aside_not_refused(tree
     capsys.readouterr()
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04"]) == 0
     out = capsys.readouterr().out
-    assert ("  unrecoverable_row: player_identity_lost: 5 rows under 1 keys set aside, "
+    assert ("  unrecoverable_row:market_label_as_player: 5 rows under 1 keys set aside, "
             "not counted as pre_kickoff (0 keys kept)\n") in out
     assert "    by market: FIRST_TEAM_RECEPTION 5\n" in out
     assert "    by game: 05cd570bc7ad0f6493e9e1388095741bf2d05ead (DET @ CAR) 5\n" in out
@@ -751,7 +753,8 @@ def test_a_real_player_price_conflict_beside_an_excluded_group_still_refuses(tre
     assert st.unrecoverable_rows["rows"] == 5 and st.unrecoverable_rows["keys"] == 1
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-04"]) == 1
     out = capsys.readouterr().out
-    assert "REFUSED snapshot rows disagree" in out and "player_identity_lost: 5 rows" in out
+    assert "REFUSED snapshot rows disagree" in out
+    assert "  unrecoverable_row:market_label_as_player: 5 rows" in out
 
 
 def test_a_real_player_in_a_multi_player_market_gets_the_normal_check(tree):
@@ -776,7 +779,7 @@ def test_a_real_player_in_a_multi_player_market_gets_the_normal_check(tree):
 def test_only_the_exact_market_label_pair_is_set_aside(tree, name, market):
     nfl, reports = tree
     rows = [_named(t, name, market=market) for _, t in _real_rows(range(1063, 1065))]
-    assert not any(al.player_identity_lost(r) for r in rows)
+    assert not any(al.market_label_as_player(r) for r in rows)
     _snap_at_lines(nfl, [(i + 1, json.dumps(r)) for i, r in enumerate(rows)],
                    "2026-10-10T12:00:00Z")
     al.record_legacy(nfl, ("2026-10-04",), reports)

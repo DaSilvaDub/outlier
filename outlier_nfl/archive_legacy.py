@@ -31,7 +31,7 @@ A snapshot row in one of the multi-player markets of
 :data:`MULTI_PLAYER_MARKET_LABELS` whose ``player_name`` is exactly that market's
 label (the writer stored the label instead of the player) has lost its player
 and can't be graded under any rule. Such rows are set aside one by one as
-``unrecoverable_row: player_identity_lost`` (``LegacyStatus.unrecoverable_rows``:
+``unrecoverable_row:market_label_as_player`` (``LegacyStatus.unrecoverable_rows``:
 counts by market and game, file lines, keys) and are neither compared nor
 counted as ``pre_kickoff``. Every other row is checked as before.
 """
@@ -65,7 +65,7 @@ MULTI_PLAYER_MARKET_LABELS = {
     "LAST_TOUCHDOWN": "Last TD Scorer",
     "MOST_RECEIVING_YARDS": "Most Receiving Yards",
 }
-PLAYER_IDENTITY_LOST = "unrecoverable_row: player_identity_lost"
+MARKET_LABEL_AS_PLAYER = "unrecoverable_row:market_label_as_player"
 _SCRIPT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_([A-Za-z]+)_([A-Za-z]+)_Game_Script\.md$")
 
 
@@ -166,7 +166,7 @@ class LegacyStatus:
     # original pre-repair) | recomputed_from_hit_rates (today's code would compute it)
     probability_sources: dict[str, int] = field(default_factory=dict)
     refused_reason: str | None = None  # set when status is "refused"
-    # snapshot rows set aside as PLAYER_IDENTITY_LOST (empty when there are none):
+    # snapshot rows set aside as MARKET_LABEL_AS_PLAYER (empty when there are none):
     # label, rows, keys, keys_kept, by_market, by_game, lines {path: [line numbers]}
     unrecoverable_rows: dict[str, Any] = field(default_factory=dict)
     dated_by: str = "mtime"  # legacy files have no run manifest; their mtime dates them
@@ -390,7 +390,7 @@ def _canon(row: dict[str, Any]) -> str:
     return json.dumps(row, sort_keys=True, separators=(",", ":"))
 
 
-def player_identity_lost(row: dict[str, Any]) -> bool:
+def market_label_as_player(row: dict[str, Any]) -> bool:
     """True when ``row`` is in one of the five multi-player markets and its
     ``player_name`` is exactly that market's label. No other test."""
     market = row.get("market")
@@ -398,7 +398,7 @@ def player_identity_lost(row: dict[str, Any]) -> bool:
         and row.get("player_name") == MULTI_PLAYER_MARKET_LABELS[market]
 
 
-def _identity_lost_summary(lost: dict[str, dict[str, Any]],
+def _market_label_summary(lost: dict[str, dict[str, Any]],
                            lines: dict[str, set[int]], keys_kept: int) -> dict[str, Any]:
     """``LegacyStatus.unrecoverable_rows`` for the distinct rows set aside."""
     if not lost:
@@ -410,7 +410,7 @@ def _identity_lost_summary(lost: dict[str, dict[str, Any]],
         by_market[m] = by_market.get(m, 0) + 1
         g = (str(row.get("event_id") or ""), str(row.get("matchup") or ""))
         by_game[g] = by_game.get(g, 0) + 1
-    return {"label": PLAYER_IDENTITY_LOST, "rows": len(lost),
+    return {"label": MARKET_LABEL_AS_PLAYER, "rows": len(lost),
             "keys": len({_snapshot_key(r) for r in lost.values()}), "keys_kept": keys_kept,
             "by_market": dict(sorted(by_market.items())),
             "by_game": [{"event_id": e, "matchup": m, "rows": n}
@@ -423,8 +423,8 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
     """This slate's distinct rows across every recorded copy.
 
     Neither the rows nor the refusal depend on the order of copies or of rows in
-    a copy. Rows that lost their player (``player_identity_lost``) are set aside
-    first and summarized in the third value; they are never compared. All other
+    a copy. Rows with the market label as player (``market_label_as_player``)
+    are set aside first and summarized in the third value; they are never compared. All other
     distinct rows under a key (``_snapshot_key``) are compared pairwise. Keys are
     walked in sorted order, rows by canonical JSON. The second value is the
     refusal reason for the first conflicting pair (``_snapshot_conflict``), in
@@ -447,14 +447,14 @@ def _snapshot_union(root: Path, snaps: list[ar.ArchiveEntry], slate: str
                 continue  # torn line
             if not isinstance(row, dict) or row.get("slate_date") != slate:
                 continue
-            if player_identity_lost(row):
+            if market_label_as_player(row):
                 lost.setdefault(_canon(row), row)
                 lost_lines.setdefault(e.path, set()).add(lineno)
                 continue
             variant = seen.setdefault(_snapshot_key(row), {}).setdefault(
                 _canon(row), (row, set()))
             variant[1].add(e.path)
-    summary = _identity_lost_summary(lost, lost_lines, len(seen))
+    summary = _market_label_summary(lost, lost_lines, len(seen))
     kept: list[dict[str, Any]] = []
     for k in sorted(seen):
         variants = [seen[k][c] for c in sorted(seen[k])]
