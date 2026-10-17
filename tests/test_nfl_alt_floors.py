@@ -766,3 +766,67 @@ def test_all_inventory_without_injury_report_logs_a_warning(tmp_path, caplog):
             date_str="2026-09-13", as_of_utc=AS_OF, inactive_by_team=None,
             require_injury_evidence=True)
     assert any("injury report was not admitted" in r.getMessage() for r in caplog.records)
+
+
+# --- the inactive and starter joins key on the shared name normalizer ---
+
+
+def test_inactive_join_matches_across_a_name_suffix():
+    """``inactive_by_team`` is nflverse ``full_name``; the prop row is the feed's spelling.
+
+    The two disagree on suffixes ("Kenneth Walker III" vs "Kenneth Walker"), so a
+    suffix-blind key left a player ruled out executable and published him with a line.
+    """
+    props = _snap._floor_pair(player="Kenneth Walker", player_id="00-WALKER")
+    _top3, master, [inv] = _scan(props, inactive_by_team={"BAL": ["Kenneth Walker III"]})
+    assert master == []
+    assert (inv.player_name, inv.inventory_reason) == ("Kenneth Walker", "inactive_player")
+
+
+@pytest.mark.parametrize("feed,nflverse", [
+    ("Kenneth Walker", "Kenneth Walker III"),
+    ("Kenneth Walker III", "Kenneth Walker"),
+    ("Michael Penix", "Michael Penix Jr."),
+    ("AJ Brown", "A.J. Brown"),
+    ("Amon-Ra St. Brown", "Amon-Ra St Brown"),
+])
+def test_floor_inventory_reason_is_suffix_and_punctuation_insensitive(feed, nflverse):
+    from outlier_nfl.alt_floors import floor_inventory_reason
+
+    row = {"team": "BAL", "event_id": "e1", "player_name": feed}
+    assert floor_inventory_reason(
+        row, book="HARDROCK", odds=-400, target_book="HARDROCK",
+        inactive_by_team={"BAL": [nflverse]}, require_injury_evidence=True,
+    ) == "inactive_player"
+
+
+def test_an_active_namesake_is_not_dropped_by_the_normalized_join():
+    """Normalizing must not over-match: a different player stays executable."""
+    from outlier_nfl.alt_floors import floor_inventory_reason
+
+    row = {"team": "BAL", "event_id": "e1", "player_name": "Derrick Henry"}
+    assert floor_inventory_reason(
+        row, book="HARDROCK", odds=-400, target_book="HARDROCK",
+        inactive_by_team={"BAL": ["Kenneth Walker III"]}, require_injury_evidence=True,
+    ) is None
+
+
+def test_evidenced_starter_gate_matches_a_suffixed_qb_name():
+    """F18: the starter set comes from the tape's depth-chart roles (nflverse).
+
+    A raw-string gate dropped every PASS_YDS floor for a QB the feed spells
+    without the suffix the depth chart carries.
+    """
+    base = {"player_name": "Michael Penix", "team": "ATL", "opponent": "BAL",
+            "matchup": "BAL @ ATL", "market": "PASS_YDS", "position": "OVER",
+            "scope": "full_game", "l10_hit_rate": 0.9, "l5_hit_rate": 0.9,
+            "season_hit_rate": 0.9}
+    props = [{**base, "line": 250.5, "is_consensus_line": True,
+              "books": [{"book": "FANDUEL", "odds": -110}]},
+             {**base, "line": 200.5, "is_consensus_line": False,
+              "books": [{"book": "HARDROCK", "odds": -200}]}]
+    assert len(discover_alt_floor_candidates(
+        props, starting_qbs={"Michael Penix Jr."}).get("PASS_YDS", [])) == 1
+    # A genuinely benched QB is still excluded.
+    assert discover_alt_floor_candidates(
+        props, starting_qbs={"Kirk Cousins"}).get("PASS_YDS", []) == []

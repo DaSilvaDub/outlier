@@ -24,6 +24,7 @@ from typing import Any
 
 from outlier_nfl.config import normalize_team
 from outlier_nfl.roster import get_team_depth_chart
+from outlier_nfl.tape_nflverse import _name_key
 
 logger = logging.getLogger("outlier_nfl.alt_floors")
 
@@ -157,10 +158,6 @@ def _finite_odds(odds: Any) -> float | None:
     return val if math.isfinite(val) and val != 0 else None
 
 
-def _name_key(name: Any) -> str:
-    return re.sub(r"[^a-z]", "", str(name or "").lower())
-
-
 def _parse_utc(raw: Any) -> datetime | None:
     if isinstance(raw, datetime):
         return raw if raw.tzinfo is not None else None
@@ -189,6 +186,13 @@ def floor_inventory_reason(
     sportsbook, an event id plus a resolved team, a kickoff still ahead of
     ``as_of_utc``, and (when required) an admitted injury report that does not
     list the player.
+
+    The inactive join is keyed on ``tape_nflverse._name_key``, the same
+    normalizer every other inactive filter in the repo uses. ``inactive_by_team``
+    carries nflverse ``full_name`` (via ``tape.injury_report()``) while the prop
+    row carries the feed's spelling, and the two disagree on suffixes and
+    punctuation ("Kenneth Walker III" vs "Kenneth Walker"); a suffix-blind key
+    let a player ruled out stay executable.
     """
     if odds is None:
         return "no_quote"
@@ -267,7 +271,10 @@ def discover_alt_floor_candidates(
     thresholds = min_lines or DEFAULT_MIN_LINES
     # A supplied (even empty) starter set restricts PASS_YDS: no evidenced
     # starter means no QB floor (F18). None keeps the unrestricted default.
-    active_qbs = set(starting_qbs) if starting_qbs is not None else None
+    # Keyed on _name_key: the starter names come from the tape's depth-chart
+    # roles (nflverse), the prop names from the feed, and the two disagree on
+    # suffixes and punctuation ("Michael Penix" vs "Michael Penix Jr.").
+    active_qbs = {_name_key(q) for q in starting_qbs} if starting_qbs is not None else None
 
     # 1. Build consensus map if not passed
     # A supplied map is keyed (player_name, market); a built one by event+player.
@@ -301,7 +308,7 @@ def discover_alt_floor_candidates(
             continue
 
         # In PASS_YDS, restrict to starting QBs if index is provided
-        if mkt == "PASS_YDS" and active_qbs is not None and player not in active_qbs:
+        if mkt == "PASS_YDS" and active_qbs is not None and _name_key(player) not in active_qbs:
             continue
 
         try:
