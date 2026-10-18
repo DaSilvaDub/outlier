@@ -1,3 +1,51 @@
+# HANDOFF — 2026-10-18 (Claude, Daily Debug Review: matchup-ranking consensus-prop name join)
+
+**Branch**: `claude/inspiring-fermat-2gfske` · **Last commit**: `ca1fede` · **PR**: https://github.com/DaSilvaDub/outlier/pull/277 (open, subscribed for CI/review events)
+
+## Accomplished
+1. **Bug found and fixed (PR #277)** — `MatchupRankingsEngine` indexed consensus props by
+   the props feed's raw `player_name` and looked them up with usage's
+   `player_display_name` (RB/WR/TE) or the roster's `starting_qb` (QB). The sources
+   disagree on suffixes and punctuation, so the lookup missed and the ranked player was
+   published in `Top_5_*_Matchups.md`, `Top_10_Overall_Matchups.md` and
+   `Matchup_Boost_Rankings.csv` with `N/A` for line, odds and implied probability even
+   though a consensus line existed. This was the last props-to-usage join in the package
+   still comparing raw strings (`best_bets:580`, `alt_floors:282,315`,
+   `scorecard:152,248`, `snapshots:61` all key on `_name_key`), and the same engine's
+   inactive filter was fixed this way in #268. Index plus all four lookups now go through
+   a `consensus_prop()` accessor keyed on `tape_nflverse._name_key`. 2 regression tests,
+   both verified failing pre-fix.
+2. **Reviewed** the three PRs merged since the 2026-10-15 review (#267 tests-only, #270
+   feedback-ledger path resolver, #272 legacy snapshot key). No defects worth a change.
+   #270's resolver and conftest guard are consistent; #272's `_snapshot_union` is
+   order-independent as claimed.
+
+## State to know about
+- **This sandbox cannot run the checks.** PyPI is blocked (DNS failure direct, 403 on
+  CONNECT through the agent proxy), so `pytest` collects 1815 import errors and zero
+  tests run. mypy, pyright and ruff do run (they need no project deps). The new tests
+  were verified with a direct-call harness. CI on #277 is authoritative.
+- **Four daily-review PRs are now open and unmerged**: #271 (vacated-backfield team
+  scope, the #268 review nit that never landed on master), #273 (matchup-ranking spread
+  sign inverted — betting impact), #274 (alt-floors inactive/starter name join), #277
+  (this one). #271, #273 and #277 all touch `outlier_nfl/matchup_rankings.py` and
+  `tests/test_nfl_matchup_rankings.py`. The source hunks do not overlap, but #271 and
+  #277 both append to the end of the test file, so expect a trivial conflict in whichever
+  merges second.
+- Carried over: `boost_factor` is clamped to `[0.90, 1.35]` only on the QB path
+  (`matchup_rankings.py:277`). RB (`:409`), WR (`:519`) and TE (`:647`) are unclamped —
+  the 2026-10-15 handoff raised this for RB; it applies to WR and TE too.
+
+## Next steps
+1. Merge the backlog in dependency order: #271 (fixes a landed bug), then #273 (the
+   highest-impact of the four), then #274 and #277.
+2. Decide the three judgment calls from the 2026-10-15 handoff; item 1
+   (`inactives_by_team=None` collapsing to `{}` so a run with no injury report ranks IR
+   players) is still the one with betting-integrity impact.
+3. Rule on the RB/WR/TE `boost_factor` clamp.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
