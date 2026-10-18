@@ -214,10 +214,13 @@ def test_write_latest_false_writes_only_suffixed_reports(tmp_path: Path):
     assert {"Matchup_Boost_Rankings.csv", "Top_10_Overall_Matchups.md"} <= {p.name for p in full.iterdir()}
 
 
-def _seattle_engine(inactives: dict[str, list[str]] | None) -> MatchupRankingsEngine:
+def _seattle_engine(
+    inactives: dict[str, list[str]] | None,
+    props: list[dict[str, object]] | None = None,
+) -> MatchupRankingsEngine:
     """Engine for one game whose usage names carry suffixes / punctuation."""
     return MatchupRankingsEngine(
-        props=[],
+        props=props or [],
         matchup_scripts=[
             {
                 "home_team": "SEA",
@@ -277,3 +280,62 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+# The props feed spells these players without the suffix / with the initials run
+# together; usage carries "Kenneth Walker III" and "A.J. Brown".
+_SEATTLE_CONSENSUS_PROPS: list[dict[str, object]] = [
+    {
+        "player_name": "Kenneth Walker",
+        "market": "RUSH_YDS",
+        "position": "OVER",
+        "is_consensus_line": True,
+        "scope": "full_game",
+        "line": 64.5,
+        "best_odds": -115,
+        "implied_probability": 53.5,
+    },
+    {
+        "player_name": "AJ Brown",
+        "market": "REC",
+        "position": "OVER",
+        "is_consensus_line": True,
+        "scope": "full_game",
+        "line": 5.5,
+        "best_odds": 105,
+        "implied_probability": 48.8,
+    },
+]
+
+
+def test_consensus_prop_lookup_normalizes_suffixes_and_punctuation():
+    """The props feed's player_name must join usage's player_display_name.
+
+    A raw-string lookup missed the consensus line whenever the two sources
+    spell the player differently, and the ranked player was published with an
+    "N/A" line and odds even though a line existed.
+    """
+    engine = _seattle_engine(None, _SEATTLE_CONSENSUS_PROPS)
+
+    walker = engine.consensus_prop("Kenneth Walker III", "RUSH_YDS")
+    assert walker is not None and walker["line"] == 64.5
+    brown = engine.consensus_prop("A.J. Brown", "REC")
+    assert brown is not None and brown["line"] == 5.5
+
+    # Still no cross-player match, and still market-specific.
+    assert engine.consensus_prop("Zach Charbonnet", "RUSH_YDS") is None
+    assert engine.consensus_prop("Kenneth Walker III", "REC") is None
+
+
+def test_ranked_candidate_carries_the_consensus_line_across_spellings():
+    """The published candidate gets line, odds and implied, not "N/A"."""
+    engine = _seattle_engine(None, _SEATTLE_CONSENSUS_PROPS)
+
+    walker = {c.player: c for c in engine.evaluate_rbs()}["Kenneth Walker III"]
+    assert walker.prop_line == 64.5
+    assert walker.prop_odds == -115
+    assert walker.prop_implied == 53.5
+
+    brown = {c.player: c for c in engine.evaluate_wrs()}["A.J. Brown"]
+    assert brown.prop_line == 5.5
+    assert brown.prop_odds == 105

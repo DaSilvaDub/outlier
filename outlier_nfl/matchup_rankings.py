@@ -175,7 +175,12 @@ class MatchupRankingsEngine:
             for team, names in self.inactives_by_team.items()
         }
 
-        # Index consensus props
+        # Index consensus props. The props feed carries the sportsbook's
+        # ``player_name`` while the ranked players come from usage's
+        # ``player_display_name`` and the rosters' ``starting_qb``; the three
+        # disagree on suffixes and punctuation, so the index is keyed on
+        # ``_name_key`` like every other props-to-usage join in the package
+        # (``best_bets``, ``alt_floors``, ``scorecard``, ``snapshots``).
         self.consensus_props: dict[tuple[str, str], dict[str, Any]] = {}
         for p in props:
             p_dict = p if isinstance(p, dict) else p.to_dict()
@@ -188,7 +193,7 @@ class MatchupRankingsEngine:
                 pname = p_dict.get("player_name", "")
                 mkt = p_dict.get("market", "")
                 if pname and mkt:
-                    self.consensus_props[(pname, mkt)] = p_dict
+                    self.consensus_props[(_name_key(pname), mkt)] = p_dict
 
         # Index matchup scripts by team
         self.team_matchups: dict[str, dict[str, Any]] = {}
@@ -226,6 +231,18 @@ class MatchupRankingsEngine:
         """
         keys = self.inactive_keys_by_team.get(team, set())
         return _name_key(player_name) in keys
+
+    def consensus_prop(self, player_name: str, market: str) -> dict[str, Any] | None:
+        """The consensus OVER prop for ``player_name`` in ``market``, or ``None``.
+
+        Keyed on ``_name_key`` for the same reason as
+        :meth:`is_player_inactive`: a raw-string lookup misses the consensus
+        line whenever the props feed and nflverse spell the player differently
+        ("A.J. Brown" vs "AJ Brown", "Kenneth Walker III" vs "Kenneth Walker"),
+        and the player is then published with an "N/A" line and odds even
+        though a line exists.
+        """
+        return self.consensus_props.get((_name_key(player_name), market))
 
     def evaluate_qbs(self) -> list[MatchupAdvantageCandidate]:
         """Evaluate starting QBs on slate for matchup advantages."""
@@ -291,7 +308,7 @@ class MatchupRankingsEngine:
             adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
             # Look up consensus prop
-            prop_rec = self.consensus_props.get((starting_qb, "PASS_YDS"))
+            prop_rec = self.consensus_prop(starting_qb, "PASS_YDS")
             line = prop_rec.get("line") if prop_rec else None
             odds = prop_rec.get("best_odds") if prop_rec else None
             implied = prop_rec.get("implied_probability") if prop_rec else None
@@ -428,7 +445,7 @@ class MatchupRankingsEngine:
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
                 # Consensus prop lookup
-                prop_rec = self.consensus_props.get((pname, "RUSH_YDS"))
+                prop_rec = self.consensus_prop(pname, "RUSH_YDS")
                 line = prop_rec.get("line") if prop_rec else None
                 odds = prop_rec.get("best_odds") if prop_rec else None
                 implied = prop_rec.get("implied_probability") if prop_rec else None
@@ -553,7 +570,7 @@ class MatchupRankingsEngine:
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
                 # Consensus prop lookup
-                prop_rec = self.consensus_props.get((pname, best_mkt))
+                prop_rec = self.consensus_prop(pname, best_mkt)
                 line = prop_rec.get("line") if prop_rec else None
                 odds = prop_rec.get("best_odds") if prop_rec else None
                 implied = prop_rec.get("implied_probability") if prop_rec else None
@@ -681,7 +698,7 @@ class MatchupRankingsEngine:
                 adv_score = calc_advantage_score(boost_pct, prob, volume_score, def_vuln_score)
 
                 # Consensus prop lookup
-                prop_rec = self.consensus_props.get((pname, best_mkt))
+                prop_rec = self.consensus_prop(pname, best_mkt)
                 line = prop_rec.get("line") if prop_rec else None
                 odds = prop_rec.get("best_odds") if prop_rec else None
                 implied = prop_rec.get("implied_probability") if prop_rec else None
