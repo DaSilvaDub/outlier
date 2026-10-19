@@ -766,9 +766,9 @@ def render_positional_markdown(
         md.append(f"| **Season Average entering Slate** | **{p.season_avg}** | Prior completed games per-game baseline |")
         md.append(f"| **Neutral-Opponent Projection** | **{p.neutral_proj}** | Baseline vs league-median defense |")
         md.append(f"| **Matchup-Adjusted Projection** | **{p.matchup_proj}** | Adjusted for opponent & situational catalysts |")
-        md.append(f"| **Expected Increase** | **+{p.expected_increase}** | Absolute edge over season average |")
-        md.append(f"| **Matchup Boost Percentage** | **+{p.boost_pct}%** | Relative statistical expansion |")
-        md.append(f"| **Matchup-Specific Boost** | **+{p.matchup_specific_boost}** | Isolated opponent defensive impact |")
+        md.append(f"| **Expected Increase** | **{p.expected_increase:+}** | Absolute edge over season average |")
+        md.append(f"| **Matchup Boost Percentage** | **{p.boost_pct:+}%** | Relative statistical expansion |")
+        md.append(f"| **Matchup-Specific Boost** | **{p.matchup_specific_boost:+}** | Isolated opponent defensive impact |")
         md.append(f"| **Probability Exceeding Avg** | **{p.prob_pct}%** | Calibrated tail probability P(X > Season Avg) |")
         md.append(f"| **Confidence Tier** | **{p.confidence_tier}** | Model conviction tier |")
         md.append(f"| **Consensus Betting Line** | **{line_str}** | Market line & best odds |")
@@ -777,7 +777,7 @@ def render_positional_markdown(
         md.append("### Secondary Advantages")
         for sec in p.secondary_advantages:
             md.append(
-                f"- **{sec.stat}:** Season Avg `{sec.season_avg}` → Proj `{sec.matchup_proj}` (**+{sec.boost_pct}%**)"
+                f"- **{sec.stat}:** Season Avg `{sec.season_avg}` → Proj `{sec.matchup_proj}` (**{sec.boost_pct:+}%**)"
             )
         md.append("")
 
@@ -818,7 +818,7 @@ def render_top_10_overall_markdown(
         )
         md.append(
             f"| **{rank}** | **{p.player}** | {p.team} | {p.position} | {p.opponent} | "
-            f"{p.primary_stat} | {p.season_avg} | {p.matchup_proj} | **+{p.boost_pct}%** | "
+            f"{p.primary_stat} | {p.season_avg} | {p.matchup_proj} | **{p.boost_pct:+}%** | "
             f"**{p.prob_pct}%** | **{p.advantage_score}** | {line_str} |"
         )
 
@@ -837,7 +837,7 @@ def render_top_10_overall_markdown(
         md.append(f"- **Matchup:** {p.matchup_str} | **Venue:** {'Home' if p.is_home else 'Away'}")
         md.append(
             f"- **Primary Advantage Stat:** **{p.primary_stat}** (Season Avg: `{p.season_avg}` → "
-            f"Proj: `{p.matchup_proj}`, **+{p.boost_pct}%**, P(Above): **{p.prob_pct}%**)"
+            f"Proj: `{p.matchup_proj}`, **{p.boost_pct:+}%**, P(Above): **{p.prob_pct}%**)"
         )
         md.append(f"- **Consensus Line:** `{line_str}` | **Market Implied:** `{implied_str}`")
         md.append(f"- **Defensive Vulnerability:** {t.get('def_vuln', 'N/A')}")
