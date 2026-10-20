@@ -4,7 +4,7 @@
 price or book changes, so a single bet that is re-captured (T-30 recaptures,
 second book, a later pack run) shows up several times in ``_joined_rows``. The
 fitters and the outcome-level report sections now read ``_outcome_rows``: the
-first (decision-time) capture of each outcome.
+decision-time capture of each outcome (earliest published capture, else earliest).
 """
 
 from __future__ import annotations
@@ -43,6 +43,18 @@ def test_keeps_the_earliest_capture_by_instant_not_by_text():
     kept = one_row_per_outcome([later, earlier])
 
     assert [row["snapshot_id"] for row in kept] == ["snap-early"]
+
+
+def test_a_published_capture_beats_an_earlier_unselected_one():
+    # The decision-time capture is the one the pack published, not merely the
+    # first time a scraper saw the line (797 such groups in the live ledger).
+    early_unpublished = _row(captured_at="2026-07-01T12:00:00-04:00", snapshot_id="a", selected=0)
+    published = _row(captured_at="2026-07-01T15:00:00-04:00", snapshot_id="b", selected=1)
+    later_published = _row(captured_at="2026-07-01T18:00:00-04:00", snapshot_id="c", selected=1)
+
+    kept = one_row_per_outcome([early_unpublished, later_published, published])
+
+    assert [row["snapshot_id"] for row in kept] == ["b"]
 
 
 def test_distinct_lines_selections_and_events_stay_separate():

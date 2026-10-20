@@ -121,8 +121,13 @@ def test_shadow_neutral_learned_diagnostic_never_vetoes_a_stake():
 def test_portfolio_shadow_mode_does_not_touch_the_published_row():
     projected, original = _run(observed_mean=0.40, multipliers_neutral=False, mode="shadow")
 
-    assert "negative_learned_edge" not in original["data_quality_flags"]
-    assert original["actionable"] == "true"
+    # write_pack copies every projected key except units/actionable/board back
+    # onto the published row, so the projected row must stay unflagged too.
+    for row in (projected, original):
+        assert "negative_learned_edge" not in row["data_quality_flags"]
+        assert row["data_quality_tier"] == "HIGH"
+        assert row["_board"] == "board_a"
+        assert row["actionable"] == "true"
     assert original["recommended_units_pre_news"] == 1.5
     # The allocator still sees the learned ceiling of zero.
     assert projected["pre_cap_units"] == 0.0

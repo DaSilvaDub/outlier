@@ -184,10 +184,12 @@ def _apply_learned_stake_before_caps(
     ):
         projected["pre_cap_units"] = 0.0
         # Portfolio shadow mode publishes the legacy stake; only the allocator
-        # sees the learned ceiling, so the published row is left alone there.
-        targets = (projected,) if policy.shadow_mode else (projected, original)
-        for row in targets:
-            _withhold_negative_learned_edge(row)
+        # sees the learned ceiling. write_pack copies every projected key except
+        # units/actionable/board back onto the published row, so flagging even
+        # the projected row would leak a disqualifying flag onto a staked bet.
+        if not policy.shadow_mode:
+            for row in (projected, original):
+                _withhold_negative_learned_edge(row)
 
 
 NEGATIVE_LEARNED_EDGE_FLAG = "negative_learned_edge"

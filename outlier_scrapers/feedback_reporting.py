@@ -374,7 +374,7 @@ def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and "ultimate_alt:" in str(row.get("signal_flags") or "")
         and _normal_result(row.get("win_loss_push") or "") in {"W", "L", "PUSH"}
     ]
-    # Dedup after the board filter: the first capture of an outcome is often the
+    # Dedup after the board filter: the kept capture of an outcome is often the
     # candidates-board row, which would otherwise hide its shadow-lane copy.
     shadow_rows = one_row_per_outcome(shadow_rows)
 
@@ -568,7 +568,7 @@ def _report_markdown(
         f"- Pack decision memberships: {coverage['pack_decision_memberships']}",
         f"- Settlements: {coverage['settlements']}",
         f"- Graded and linked decisions: {coverage['graded_and_linked']}",
-        f"- Graded outcomes (first capture per bet; probability scoring basis): "
+        f"- Graded outcomes (decision-time capture per bet; probability scoring basis): "
         f"{coverage.get('graded_outcomes', coverage['graded_and_linked'])}",
         f"- Unlinked settlements: {coverage['unlinked_settlements']}",
         f"- Independent-model probabilities: {coverage['independent_probabilities']}",
@@ -828,7 +828,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = N
     output_dir.mkdir(parents=True, exist_ok=True)
     with _connect(Path(db_path)) as conn:
         # Decision-level rows answer "how did our calls do"; outcome-level rows
-        # (first capture per bet) score probabilities and feed promotion gates,
+        # (decision-time capture per bet) score probabilities and feed promotion gates,
         # where a T-30 re-capture or second book is not a new observation.
         rows = _joined_rows(conn)
         outcome_rows = one_row_per_outcome(rows)
