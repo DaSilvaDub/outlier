@@ -98,7 +98,7 @@ def test_published_run_missing_a_raw_file_fails(
     assert not _pointer(tmp_path).exists()
 
 
-def test_refused_run_missing_a_raw_file_is_archived_with_the_list_and_never_admissible(
+def test_refused_run_missing_a_raw_file_is_archived_with_the_list_and_reported_by_check(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _drop_raw_before_record(monkeypatch, "raw/player_props.json")
     run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
@@ -107,13 +107,9 @@ def test_refused_run_missing_a_raw_file_is_archived_with_the_list_and_never_admi
     entry = got["run_manifest"]
     assert entry.missing_raw == [f"{run['run_id']}/raw/player_props.json"]
     assert run["archive"]["missing"] == entry.missing_raw
-    assert ar.admissible(tmp_path / "NFL", entry.slate) is False  # type: ignore[arg-type]
-
-
-def test_complete_published_slate_is_admissible(tmp_path: Path) -> None:
-    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
-    assert ar.admissible(tmp_path / "NFL", SLATE) is True
-    assert _entries(tmp_path, run["run_id"])["run_manifest"].missing_raw is None
+    report = ar.check_archive(tmp_path / "NFL", [entry.slate])  # type: ignore[list-item]
+    assert any(g.kind == "missing_raw" and g.slate == entry.slate for g in report.gaps)
+    assert entry.slate not in report.complete_slates
 
 
 def test_check_catches_a_tampered_archived_run_manifest(
@@ -133,7 +129,6 @@ def test_check_catches_a_tampered_archived_run_manifest(
     assert nfl_archive.main(["check", "--nfl-dir", str(nfl)]) == 1
     out = capsys.readouterr().out
     assert "sha_mismatch" in out and "manifest.json" in out
-    assert ar.admissible(nfl, SLATE) is False
 
 
 def test_pointer_names_a_recorded_run_and_does_not_move_when_record_fails(
@@ -186,27 +181,59 @@ def test_refused_run_logs_nothing_published_before_a_record_failure(
     assert any("nothing published" in m for m in messages), messages
 
 
-def test_missing_raw_list_alone_makes_a_slate_inadmissible(
+
+def test_refused_run_shares_the_published_slate_name_and_missing_raw_blocks_it(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Even once every role is archived, the run's missing_raw list keeps it out."""
-    name = "raw/player_props.json"
-    real = nfl_pipeline.record_run
-    saved: dict[str, bytes] = {}
+    """A windowed slate: published and refused runs both land under 2026-10-04_early."""
+    def run_window(client: Any, clock: str) -> dict[str, Any]:
+        tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+        if not tape.exists():
+            tape.parent.mkdir(parents=True, exist_ok=True)
+            tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+        now = parse_utc(clock)
+        return NflPipeline(client=client, data_dir=tmp_path, clock=lambda: now).run(
+            date=SLATE, window="Early", as_of_utc=clock, reports_dir=tmp_path / "reports")
 
-    def dropping(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
-        f = Path(nfl_dir) / "runs" / run_id / name
-        saved[run_id] = f.read_bytes()
-        f.unlink()
-        return real(nfl_dir, run_id, *a, **k)
-
-    monkeypatch.setattr(nfl_pipeline, "record_run", dropping)
-    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    key = f"{SLATE}_early"
+    published = run_window(snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    assert published["publication"] == "published"
     nfl = tmp_path / "NFL"
-    (nfl / "runs" / run["run_id"] / name).write_bytes(saved[run["run_id"]])
-    slate = _entries(tmp_path, run["run_id"])["run_manifest"].slate
-    assert slate is not None
-    ar.record_run(nfl, run["run_id"], slate)  # late: now every role is archived
-    got = _entries(tmp_path, run["run_id"])
-    assert set(ar.PREGAME_ROLES) <= set(got)
-    assert got["run_manifest"].missing_raw
-    assert ar.admissible(nfl, slate) is False
+    assert key in ar.check_archive(nfl).complete_slates
+    _drop_raw_before_record(monkeypatch, "raw/player_props.json")
+    refused = run_window(snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    assert refused["publication"] == "bundle_only"
+    slates = {r["run_id"]: {e.slate for e in _entries(tmp_path, r["run_id"]).values()}
+              for r in (published, refused)}
+    assert slates == {published["run_id"]: {key}, refused["run_id"]: {key}}
+    assert _entries(tmp_path, refused["run_id"])["run_manifest"].missing_raw
+    report = ar.check_archive(nfl)
+    assert any(g.kind == "missing_raw" and g.slate == key for g in report.gaps)
+    assert key in report.slates and key not in report.complete_slates
+
+
+def test_failed_record_writes_no_new_published_copy(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Readers open dated/_latest copies directly, so they must not move either."""
+    _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    nfl = tmp_path / "NFL"
+    watched = [p for p in sorted((nfl / "normalized").glob("*.json"))
+               if not p.name.startswith("nfl_run_pointer_")]
+    assert any(p.name.endswith(f"_{SLATE}.json") for p in watched)
+    assert any(p.name.endswith("_latest.json") for p in watched)
+
+    def snapshot() -> dict[str, bytes]:
+        roots = [nfl / "normalized", nfl / "exports", tmp_path / "reports"]
+        return {str(p): p.read_bytes() for r in roots if r.is_dir()
+                for p in sorted(r.rglob("*")) if p.is_file()}
+
+    before = snapshot()
+    real = nfl_pipeline.record_run
+
+    def failing(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
+        real(nfl_dir, run_id, *a, **k)
+        return ar.RecordResult([], [], [f"{run_id}/manifest.json: simulated conflict"], [])
+
+    monkeypatch.setattr(nfl_pipeline, "record_run", failing)
+    with pytest.raises(nfl_pipeline.RunArchiveError):
+        _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), "2026-10-04T15:30:00+00:00")
+    assert snapshot() == before

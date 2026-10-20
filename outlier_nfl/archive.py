@@ -96,7 +96,7 @@ class ArchiveEntry:
     original_path: str | None = None
     mtime: str | None = None
     # run_manifest only: raw files of a refused/failed/partial run that were not
-    # archived. A slate with any such entry is never admissible (see admissible()).
+    # archived. check_archive reports a missing_raw gap for any such entry.
     missing_raw: list[str] | None = None
 
     def key(self) -> tuple[str, str]:
@@ -326,7 +326,7 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
     ctx = manifest.get("context") or {}
     # Key by the pointer's slate name (e.g. 2026-10-04_early), the same key check uses.
     pointer_slates = [k for k, v in pointed_runs(root).items() if v == run_id]
-    slate_key = slate or (pointer_slates[0] if pointer_slates else ctx.get("slate_date"))
+    slate_key = slate or (pointer_slates[0] if pointer_slates else context_slate_key(ctx))
     captured = ctx.get("run_started_utc") or manifest.get("created_utc")
     season = ctx.get("season")
     sealed = {a.get("name"): a.get("sha256") for a in manifest.get("artifacts") or []}
@@ -357,6 +357,18 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
         (result.recorded if new else result.already).append(entry)
     _record_run_tape(root, run_id, manifest, slate_key, season, captured, result)
     return result
+
+
+def context_slate_key(ctx: dict[str, Any]) -> Any:
+    """The slate name a run's context gives it: ``<slate_date>[_<window>]``.
+
+    The same suffix the pipeline names its pointer and published files with, so a
+    refused run lands under the slate a published run of that window would.
+    """
+    date, window = ctx.get("slate_date"), ctx.get("window")
+    if isinstance(date, str) and isinstance(window, str) and window.strip():
+        return f"{date}_{window.strip().lower()}"
+    return date
 
 
 TAPE_ARCHIVE_DIR = "archive/tape"
@@ -655,14 +667,3 @@ def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
                             f"run {e.run_id} archived without {e.missing_raw}"))
     return CheckReport(expected, sorted(seasons or []), len(entries), gaps)
 
-
-def admissible(nfl_dir: Path | str, slate: str) -> bool:
-    """True only when ``slate`` is archived complete and unaltered.
-
-    A slate whose run entry lists ``missing_raw`` is never admissible, whatever
-    else is archived for it.
-    """
-    entries, _ = read_manifest(manifest_path(nfl_dir))
-    if any(e.slate == slate and e.missing_raw for e in entries):
-        return False
-    return slate in check_archive(nfl_dir, slates=[slate]).complete_slates

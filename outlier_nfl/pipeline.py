@@ -933,7 +933,7 @@ class NflPipeline:
             # moves. A run that cannot be archived fails and its pointers stay put.
             summary["archive"] = _archive_committed_run(
                 self.nfl_dir, writer.run_id, published=published,
-                slate=suffix if pointers else None)
+                slate=suffix)
 
         writer.commit(
             {

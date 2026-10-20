@@ -113,10 +113,10 @@ class RunWriter:
         pointers: Iterable[Path] = (),
         before_pointers: Callable[[], Any] | None = None,
     ) -> dict[str, Any]:
-        """Seal the bundle, publish copies, then write ``pointers`` last.
+        """Seal the bundle, run ``before_pointers``, publish copies, then write ``pointers`` last.
 
-        ``before_pointers`` runs after the bundle is sealed and before any pointer
-        moves (e.g. archive recording). If it raises, no pointer is written.
+        ``before_pointers`` runs after the bundle is sealed and before any published
+        copy or pointer is written (archive recording). If it raises, neither is.
         """
         if self.committed:
             raise RuntimeError(f"run {self.run_id} already committed")
@@ -138,13 +138,17 @@ class RunWriter:
         _replace_with_retry(self.stage_dir, self.run_dir)
         self.committed = True
 
+        # Recorded before any published copy or pointer is written: scripts and
+        # .ps1 runners read the dated/_latest copies directly, not via a pointer.
+        if before_pointers is not None:
+            before_pointers()
+
         for name, dests in self._publish.items():
+            if not dests:  # bundle-only artifact: nothing to copy
+                continue
             data = (self.run_dir / name).read_bytes()
             for dest in dests:
                 _atomic_write_bytes(dest, data)
-
-        if before_pointers is not None:
-            before_pointers()
 
         manifest_sha = _sha256(manifest_bytes)
         pointer = {
