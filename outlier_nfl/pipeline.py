@@ -26,6 +26,7 @@ if callable(_stdout_reconfigure):
     _stdout_reconfigure(encoding="utf-8", errors="replace")
 
 from outlier_nfl.api import IncompletePaginationError, OutlierNflApiClient
+from outlier_nfl.archive import record_run
 from outlier_nfl.constants import (
     MARKET_TYPE_GAMELINE,
     MARKET_TYPE_TEAM_PROP,
@@ -919,6 +920,21 @@ class NflPipeline:
         pointers = [norm / f"nfl_run_pointer_{suffix}.json"] if publish else []
         if publish_latest:
             pointers.append(norm / "nfl_run_pointer_latest.json")
+        if status != "OK":
+            logger.error(
+                "NFL Pipeline run %s (%s): nothing published; bundle kept at %s",
+                status, gate_reason(receipts), writer.run_dir,
+            )
+        published = summary["publication"] == "published"
+
+        def _record() -> None:
+            # Phase 1: every committed run, refused or unpublished included, is
+            # archived with its manifest (and so its status) before any pointer
+            # moves. A run that cannot be archived fails and its pointers stay put.
+            summary["archive"] = _archive_committed_run(
+                self.nfl_dir, writer.run_id, published=published,
+                slate=suffix)
+
         writer.commit(
             {
                 "created_utc": now_utc,
@@ -930,13 +946,8 @@ class NflPipeline:
                 "publication_reason": publication_reason,
             },
             pointers=pointers,
+            before_pointers=_record,
         )
-
-        if status != "OK":
-            logger.error(
-                "NFL Pipeline run %s (%s): nothing published; bundle kept at %s",
-                status, gate_reason(receipts), writer.run_dir,
-            )
         logger.info(
             "NFL Pipeline run completed: %d games, %d spreads, %d totals, %d team totals, %d props (%d consensus, %d Tier-1 anchors)",
             len(all_game_lines),
@@ -1098,6 +1109,39 @@ def _refresh_tape(
 
 # Exit code when a required stage receipt is not OK (F03); 1 stays "crashed".
 EXIT_REQUIRED_STAGE_FAILED = 3
+
+
+class RunArchiveError(RuntimeError):
+    """A committed run could not be recorded in the archive."""
+
+
+def _archive_committed_run(nfl_dir: Path, run_id: str, *, published: bool = False,
+                           slate: str | None = None) -> dict[str, Any]:
+    """Record ``run_id`` with ``archive.record_run``; raise unless its manifest is archived.
+
+    A published run missing any raw file raises. A refused/failed/partial run
+    missing raw files only warns; the list goes into its archive entry.
+    """
+    try:
+        result = record_run(nfl_dir, run_id, slate, published=published)
+    except Exception as exc:
+        raise RunArchiveError(f"run {run_id} committed but not archived: {exc}") from exc
+    entries = [*result.recorded, *result.already]
+    if published and result.missing:
+        raise RunArchiveError(
+            f"run {run_id} published but raw files missing from the archive: {result.missing}")
+    if result.conflicts or not any(e.role == "run_manifest" for e in entries):
+        raise RunArchiveError(
+            f"run {run_id} committed but not archived: conflicts={result.conflicts} "
+            f"missing={result.missing}")
+    for item in result.missing:
+        logger.warning("Run %s archived without %s", run_id, item)
+    return {
+        "recorded": len(result.recorded),
+        "already": len(result.already),
+        "missing": list(result.missing),
+        "notes": list(result.notes),
+    }
 
 
 def format_stage_failure(summary: dict[str, Any]) -> str:

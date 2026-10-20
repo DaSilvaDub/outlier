@@ -91,6 +91,7 @@ def _check(args: argparse.Namespace) -> int:
         print(json.dumps({"slates": report.slates, "complete": report.complete_slates,
                           "seasons": report.seasons, "entries": report.entries,
                           "gaps": [asdict(g) for g in report.gaps],
+                          "notes": [asdict(g) for g in report.notes],
                           "legacy": [{**asdict(st), "files": [
                               {**asdict(f), "verdict": f.verdict} for f in st.files]}
                               for st in statuses]}, indent=2))
@@ -127,6 +128,9 @@ def _check(args: argparse.Namespace) -> int:
                 for path, nums in u["lines"].items():
                     print(f"    lines {path}: {_ranges(nums)}")
 
+        for g in report.notes:
+            where = g.slate or (g.role or "manifest")
+            print(f"NOTE {where:<21} {g.kind:<25} {g.detail}")
         for g in report.gaps:
             where = g.slate or (g.role or "manifest")
             print(f"GAP {where:<22} {g.kind:<25} {g.detail}")
