@@ -915,6 +915,48 @@ def _joined_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     ]
 
 
+def _outcome_key(row: dict[str, Any]) -> tuple[str, ...]:
+    """Identity of one gradeable bet; selections already embed side and line."""
+
+    return tuple(
+        _text(row.get(field))
+        for field in ("sport", "event_id", "market_id", "outcome_id", "selection", "line")
+    )
+
+
+def one_row_per_outcome(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the first (decision-time) capture of each outcome.
+
+    A new snapshot is written for every capture time, price and book, so one bet
+    re-captured at T-30 or quoted by a second book appears several times in
+    ``_joined_rows``. Those copies share one result; counting each inflates n in
+    fitting and evaluation. Ordering is by parsed instant (stored offsets mix
+    ``-04:00`` and ``+00:00``, so text order is wrong), then snapshot_id.
+    """
+
+    far_future = datetime.max.replace(tzinfo=timezone.utc)
+    first: dict[tuple[str, ...], tuple[tuple[datetime, str, str], dict[str, Any]]] = {}
+    for index, row in enumerate(rows):
+        rank = (
+            _parse_utc(row.get("captured_at")) or far_future,
+            _text(row.get("snapshot_id")),
+            _text(row.get("decision_id")),
+        )
+        key = _outcome_key(row)
+        if not all(key[1:5]):
+            # Never merge rows that cannot be identified; each stands alone.
+            key = ("__unidentified__", str(index))
+        if key not in first or rank < first[key][0]:
+            first[key] = (rank, row)
+    return [row for _rank, row in sorted(first.values(), key=lambda item: item[0])]
+
+
+def _outcome_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Settled rows for fitting/evaluation: one row per outcome (see above)."""
+
+    return one_row_per_outcome(_joined_rows(conn))
+
+
 def _mean(values: Iterable[float | None]) -> float | None:
     kept = [value for value in values if value is not None]
     return sum(kept) / len(kept) if kept else None

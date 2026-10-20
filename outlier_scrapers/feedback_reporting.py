@@ -29,6 +29,7 @@ from outlier_scrapers.feedback_db import (
     _probability,
     _text,
     _utc_now,
+    one_row_per_outcome,
 )
 from outlier_scrapers.feedback_settlement import _is_play
 from outlier_scrapers.portfolio import PortfolioPolicy, allocate_portfolio_risk
@@ -373,6 +374,9 @@ def ultimate_alt_shadow_release(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and "ultimate_alt:" in str(row.get("signal_flags") or "")
         and _normal_result(row.get("win_loss_push") or "") in {"W", "L", "PUSH"}
     ]
+    # Dedup after the board filter: the first capture of an outcome is often the
+    # candidates-board row, which would otherwise hide its shadow-lane copy.
+    shadow_rows = one_row_per_outcome(shadow_rows)
 
     def alt_type(row: dict[str, Any]) -> str:
         for flag in str(row.get("signal_flags") or "").split(";"):
@@ -564,6 +568,8 @@ def _report_markdown(
         f"- Pack decision memberships: {coverage['pack_decision_memberships']}",
         f"- Settlements: {coverage['settlements']}",
         f"- Graded and linked decisions: {coverage['graded_and_linked']}",
+        f"- Graded outcomes (first capture per bet; probability scoring basis): "
+        f"{coverage.get('graded_outcomes', coverage['graded_and_linked'])}",
         f"- Unlinked settlements: {coverage['unlinked_settlements']}",
         f"- Independent-model probabilities: {coverage['independent_probabilities']}",
         f"- Published PLAY decisions: {play_coverage.get('total_decisions', 0)}",
@@ -821,7 +827,11 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = N
     output_dir = Path(output_dir) if output_dir is not None else DEFAULT_REPORT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     with _connect(Path(db_path)) as conn:
+        # Decision-level rows answer "how did our calls do"; outcome-level rows
+        # (first capture per bet) score probabilities and feed promotion gates,
+        # where a T-30 re-capture or second book is not a new observation.
         rows = _joined_rows(conn)
+        outcome_rows = one_row_per_outcome(rows)
         decision_coverage = _decision_coverage(conn)
         positive_unit_rows = _positive_unit_recommendation_rows(conn)
         coverage = {
@@ -835,6 +845,7 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = N
             ).fetchone()[0],
             "settlements": conn.execute("SELECT COUNT(*) FROM settlements").fetchone()[0],
             "graded_and_linked": len(rows),
+            "graded_outcomes": len(outcome_rows),
             "unlinked_settlements": conn.execute(
                 "SELECT COUNT(*) FROM settlements WHERE decision_id IS NULL"
             ).fetchone()[0],
@@ -843,8 +854,8 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = N
             ).fetchone()[0],
         }
 
-    probability_metrics = _probability_metrics(rows)
-    calibration = _calibration_curve(rows)
+    probability_metrics = _probability_metrics(outcome_rows)
+    calibration = _calibration_curve(outcome_rows)
     expected_actual = [
         {
             key: row[key]
@@ -858,19 +869,19 @@ def generate_report(db_path: Path = DEFAULT_DB_PATH, output_dir: Path | None = N
         }
         for row in probability_metrics
     ]
-    market_type = _grouped(rows, "market_type", "market_type")
-    edge_buckets = _bucketed(rows, "edge", "edge_bucket", _edge_bucket)
-    odds_ranges = _bucketed(rows, "price", "odds_range", _odds_bucket)
+    market_type = _grouped(outcome_rows, "market_type", "market_type")
+    edge_buckets = _bucketed(outcome_rows, "edge", "edge_bucket", _edge_bucket)
+    odds_ranges = _bucketed(outcome_rows, "price", "odds_range", _odds_bucket)
     books = _grouped(rows, "book", "book")
-    leagues = _grouped(rows, "sport", "league")
-    signal_flags = _signal_results(rows)
+    leagues = _grouped(outcome_rows, "sport", "league")
+    signal_flags = _signal_results(outcome_rows)
     play_vs_stand_down = _play_vs_stand_down(rows)
     model_performance = _model_performance(rows)
-    missing_edge_diagnostics = _missing_edge_diagnostics(rows)
+    missing_edge_diagnostics = _missing_edge_diagnostics(outcome_rows)
     ultimate_alt_release = ultimate_alt_shadow_release(rows)
     learned_multiplier_signal = learned_multiplier_promotion_signal(positive_unit_rows)
-    totals_paired_loss = totals_paired_oos_loss(rows)
-    totals_edge_buckets = totals_edge_bucket_report(rows)
+    totals_paired_loss = totals_paired_oos_loss(outcome_rows)
+    totals_edge_buckets = totals_edge_bucket_report(outcome_rows)
 
     metric_fields = [
         "probability_source",
