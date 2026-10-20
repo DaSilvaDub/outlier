@@ -1,3 +1,29 @@
+# HANDOFF — 2026-10-20 (Claude, NBA master pipeline plan)
+
+**Branch**: `claude/nba-master-pipeline-fusion-cc1443` · **PR**: see `gh pr list --head claude/nba-master-pipeline-fusion-cc1443` (docs only)
+
+## Accomplished
+1. Planning only, no production code changed. Design of record: `docs/plans/2026-10-20-nba-master-pipeline.md`. It covers new package `outlier_nba/`, built from five read-only audits (cfb-analytics NCAA *football*, outlier_nfl, shared core + MLB, WNBA, nba-props-pipeline/Sports_Analytics).
+2. Audit verdict: no component in any pipeline has shown out-of-sample skill over the vig-free market. The NBA design is therefore market-anchored: model blend weight 0 until a coded two-key promotion gate passes per market family. One joint game simulation prices every market.
+3. Decisions (user "proceed", 2026-10-20):
+   - D1: slim NBA harness modeled on outlier_nfl.
+   - D2: add numpy.
+   - D3: shared feedback ledger with sport='NBA'.
+   - D4: backfill 2016-17 → 2025-26, plus a historical closing-line source search.
+   - D5: desk compatibility deferred.
+4. Side-finding PRs: #281 (NFL name-key suffix gap + rankings FAILED still publishing) and #282 (shared-core dead gate, ledger pseudo-replication, so_eval retention erosion). #282 also needs the user's ruling on the 0.75 blend floor.
+
+## State to know about
+- `report-sync.ps1` failed until `.git/refs/heads/master (1)` and `.git/refs/remotes/origin/master (1)` (cloud-sync conflict copies) were moved out of `.git/refs`. Backup is in the session scratchpad. If fetch dies with "bad object refs/... (1)", look for `* (N)` ref files.
+- `git fetch` prints "failed to delete .git/worktrees/<name>: Permission denied" for stale worktree folders. This is harmless; the cloud-sync filter blocks the deletes. The app's sync_with_base_branch refused because of this, so merge FETCH_HEAD manually.
+- cfb-analytics fix commit `fb6ffb3` is still on an unpushed local branch.
+
+## Next steps
+1. Phases 0–1 of the plan: NBA registry aliases + results grading, a data-source verification spike, and NBA shadow price capture into the ledger. Ship first; the 2026-27 season is starting and prop history cannot be backfilled.
+2. Merge #281/#282 after CI; rule on the #282 blend floor.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
