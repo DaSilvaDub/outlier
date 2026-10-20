@@ -1324,7 +1324,7 @@ def main() -> int:
                 score = p.get("advantage_score")
                 print(
                     f"    #{idx:<2} {p.get('player'):<20} ({p.get('position')}, {p.get('team')} vs {p.get('opponent')}): "
-                    f"{p_stat} {s_avg} -> {m_proj} (+{b_pct}%) | Score: {score}/100"
+                    f"{p_stat} {s_avg} -> {m_proj} ({b_pct:+}%) | Score: {score}/100"
                 )
         print("=" * 60)
         if summary.get("status") != "OK":

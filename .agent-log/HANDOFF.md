@@ -1,3 +1,63 @@
+# HANDOFF — 2026-10-19 (Claude, Daily Debug Review: matchup report sign formatting)
+
+**Branch**: `claude/inspiring-fermat-pv1i7q` · **Last commit**: `eb56faf` · **PR**: see below (open, do not open a second one)
+
+## Accomplished
+1. **Bug found and fixed** — the matchup-ranking renderers hard-coded a `+` in front of
+   four signed values (`expected_increase`, `boost_pct`, `matchup_specific_boost`, each
+   secondary advantage's `boost_pct`) in `render_positional_markdown`,
+   `render_top_10_overall_markdown` and `pipeline.main`'s console summary. All four go
+   negative (QB boost factor clamps to 0.90; RB/WR/TE factors take negative `opp_diff`
+   plus negative script/weather terms), so a player projected *below* his average was
+   published as `+-10.0%` / `+-26.0`. The positional reports take `candidates[:5]` of
+   whatever the slate holds, so a one-game Thursday/Monday slate publishes every QB
+   regardless of sign — routine output. `Matchup_Boost_Rankings.csv` was already correct.
+   Fixed with `:+` (non-negative output is byte-identical to before). 1 regression test,
+   verified failing pre-fix.
+2. **Daily debug review** of everything merged since 2026-10-16 — PR #272 only
+   (`outlier_nfl/archive_legacy.py`, `scripts/nfl_archive.py`, legacy snapshot
+   set-aside + conflict detection). Reviewed clean apart from item 1 under "Reported,
+   not fixed". Checked `_books_of` against `snapshots._books`: the writer stores `books`
+   as a dict, so the dict-shape assumption is right.
+
+## State to know about
+- **This sandbox can now run most of the suite** (the 2026-10-15 handoff said it could
+  not). PyPI is still blocked, but `pytest`/`mypy`/`ruff`/`pyright` are on PATH. Stubbing
+  `structlog` and `dateutil.parser` on `PYTHONPATH` brings collection to 2017 tests;
+  **1901 passed, 43 skipped, 74 failed, every failure environmental** (126 errors from the
+  missing `sqlalchemy`, 6 from the missing `google` SDK, the rest artifacts of the
+  structlog stub). mypy: no issues in 131 files. pyright: 1 error, the missing
+  `google.genai` import. CI remains authoritative.
+- Open PRs from the previous daily runs are still unmerged: #277 (consensus-prop name
+  key — judgment call 2 below), #274 (alt-floor name keys), #273 (game script side),
+  #271 (vacated-backfield team scoping).
+
+## Reported, not fixed
+1. `archive_legacy._snapshot_union` double-counts a row whose `line` one copy wrote as
+   `1` and another as `1.0`. `_snapshot_key` normalizes the line through `_line_key`, so
+   both land on one key; `_canon` does not, so they stay two variants; `_snapshot_conflict`
+   skips `line`, so they do not conflict and both are kept. `pre_kickoff` then counts the
+   same prop twice in `scripts/nfl_archive.py check`. Repro: two rows identical but for
+   `line=1` vs `line=1.0` → `_snapshot_key` equal, `_snapshot_conflict` None, `_canon`
+   different. Low impact (audit counts only, no betting output). Recommended next step:
+   key the variants on a canonical form that routes `line` through `_line_key`, so the
+   pair collapses without merging rows that differ on books or price — but the docstring
+   states the strict "every distinct row kept unaltered" rule deliberately, so the owner
+   of PR #272 should rule on it rather than have it patched underneath them.
+2. Carried over from 2026-10-15 and still open: `inactives_by_team=None` collapses to
+   `{}` in `MatchupRankingsEngine`, so a run with no injury report ranks IR players while
+   `alt_floors`/`best_bets` fail closed. Needs a ruling on withholding publication.
+3. Carried over from 2026-10-15 and still open: RB/WR/TE `boost_factor` is unclamped while
+   the QB path clamps to `[0.90, 1.35]`; `backfield_vacated_boost` accumulates up to +0.60
+   per out RB, so two out RBs can more than double a projection.
+
+## Next steps
+1. Drive this PR to green and merge. Do not open a second PR for this branch.
+2. Merge or close the four stale daily-review PRs (#271, #273, #274, #277).
+3. Decide items 1-3 above; 2 is the one with betting-integrity impact.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)

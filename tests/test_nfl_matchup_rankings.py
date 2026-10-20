@@ -9,6 +9,8 @@ from outlier_nfl.matchup_rankings import (
     generate_matchup_rankings_pipeline,
     MatchupRankingsEngine,
     norm_cdf,
+    render_positional_markdown,
+    render_top_10_overall_markdown,
 )
 from outlier_nfl.stage_receipts import failing, receipt, run_status
 
@@ -277,3 +279,62 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+def _negative_boost_qb_engine() -> MatchupRankingsEngine:
+    """One-game slate where the visiting QB draws an elite pass defense.
+
+    A single-game slate (Thursday or Monday night) publishes every QB it finds,
+    because the positional reports take the top five of whatever the slate has.
+    """
+    return MatchupRankingsEngine(
+        props=[],
+        matchup_scripts=[
+            {
+                "home_team": "SF",
+                "away_team": "SEA",
+                "event_id": "e_sea_sf",
+                "total": 41.5,
+                "home_spread": -1.0,
+            }
+        ],
+        usage_players=[],
+        rosters={"SF": {"starting_qb": "Brock Purdy"}, "SEA": {"starting_qb": "Sam Darnold"}},
+        tapes={
+            "SF": {"pass_yards": 260.0, "opp_pass_yards_allowed": 240.0, "pressure_rate": 0.30},
+            "SEA": {"pass_yards": 215.0, "opp_pass_yards_allowed": 150.0, "pressure_rate": 0.40},
+        },
+        weather_records=[],
+        inactives_by_team={},
+        date_str="2026-10-19",
+    )
+
+
+def test_negative_boosts_render_with_their_own_sign():
+    """A ranked player projected below his average must not read as a boost.
+
+    The renderers used to hard-code the plus sign, so a QB facing a top pass
+    defense was published as ``+-10.0%`` / ``+-26.0`` in ``Top_5_QB_Matchups.md``
+    and ``Top_10_Overall_Matchups.md``.
+    """
+    engine = _negative_boost_qb_engine()
+    qbs = engine.evaluate_qbs()
+    down = [c for c in qbs if c.player == "Brock Purdy"]
+    assert down, "the QB facing the elite pass defense must still be ranked"
+    assert down[0].boost_pct < 0.0
+    assert down[0].expected_increase < 0.0
+    assert down[0].matchup_specific_boost < 0.0
+    assert any(s.boost_pct < 0.0 for s in down[0].secondary_advantages)
+
+    positional = render_positional_markdown("TOP 5 QUARTERBACK MATCHUP BOOSTS", qbs, "2026-10-19")
+    overall = render_top_10_overall_markdown(qbs, "2026-10-19")
+    for report in (positional, overall):
+        assert "+-" not in report
+    assert f"**{down[0].boost_pct:+}%**" in positional
+    assert f"**{down[0].expected_increase:+}**" in positional
+    assert f"**{down[0].boost_pct:+}%**" in overall
+
+    # A gain still carries its plus sign.
+    up = [c for c in qbs if c.player == "Sam Darnold"]
+    assert up and up[0].boost_pct > 0.0
+    assert f"**+{up[0].boost_pct}%**" in positional
