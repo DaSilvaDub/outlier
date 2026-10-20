@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -23,6 +24,12 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures" / "nfl"
 SLATE = "2026-09-13"
 
 
+def unarchived(nfl: Path) -> None:
+    """Drop the archive the pipeline wrote at commit, leaving a bundle as it was before
+    the pipeline recorded its own runs (what the manual ``record`` catch-up sees)."""
+    shutil.rmtree(nfl / "archive", ignore_errors=True)
+
+
 def _tree(root: Path) -> dict[str, tuple[bytes, int]]:
     return {p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
             for p in sorted(root.rglob("*")) if p.is_file() and "archive" not in p.parts}
@@ -32,6 +39,7 @@ def _tree(root: Path) -> dict[str, tuple[bytes, int]]:
 def run(tmp_path):
     summary = NflPipeline(data_dir=tmp_path).run(
         date=SLATE, offline_fixtures_dir=FIXTURES_DIR, reports_dir=tmp_path / "reports")
+    unarchived(tmp_path / "NFL")
     return tmp_path / "NFL", summary["run_id"]
 
 

@@ -1939,6 +1939,26 @@ def _normalize_text(text: str, work: Path, run_ids: dict[str, str]) -> str:
 _HASH_KEYS = frozenset({"sha256", "manifest_sha256"})
 
 
+def _scrub_archived_run_manifests(text: str) -> str:
+    """Blank the sha256 and size the archive records for each run's own manifest.json.
+
+    Those are hashes of the bundle manifest, which embeds work paths and run IDs; the
+    raw feeds' hashes stay, since their bytes are the run's real pregame capture.
+    """
+    out = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            out.append(line)
+            continue
+        if isinstance(row, dict) and row.get("role") == "run_manifest":
+            row = {**row, "sha256": "<SHA256>", "size": "<BYTES>"}
+            line = json.dumps(row, sort_keys=True)
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
 def _scrub_bundle_hashes(rel: str, text: str) -> str:
     """Blank hashes and sizes a run bundle takes over raw bytes (they embed work paths
     and run IDs).
@@ -1948,6 +1968,8 @@ def _scrub_bundle_hashes(rel: str, text: str) -> str:
     machine-specific noise (a longer work dir changes every size).
     """
     name = rel.rsplit("/", 1)[-1]
+    if rel.endswith("archive/manifest.jsonl"):
+        return _scrub_archived_run_manifests(text)
     if not (name == "manifest.json" or name.startswith("nfl_run_pointer_")):
         return text
     try:

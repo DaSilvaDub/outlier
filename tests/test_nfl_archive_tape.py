@@ -21,6 +21,7 @@ from outlier_nfl.pipeline import NflPipeline
 from outlier_nfl.run_context import parse_utc
 from scripts import nfl_archive
 from scripts import nfl_snapshot_diff as snap
+from tests.test_nfl_archive_writer import unarchived
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "nfl"
 SLATE = "2026-10-04"
@@ -46,6 +47,7 @@ def _live(tmp_path: Path, clock: str = PREGAME) -> tuple[Path, str]:
     s = NflPipeline(client=snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path,
                     clock=lambda: now).run(date=SLATE, as_of_utc=clock,
                                            reports_dir=tmp_path / "reports")
+    unarchived(nfl)
     return nfl, s["run_id"]
 
 
@@ -92,6 +94,7 @@ def test_refused_or_packaged_tape_records_nothing(tmp_path):
     NflPipeline(data_dir=tmp_path).run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR,
                                        reports_dir=tmp_path / "reports")  # packaged tape
     nfl = tmp_path / "NFL"
+    unarchived(nfl)
     result = ar.record_pointed_runs(nfl)
     assert not result.notes and _tape_entries(nfl) == []
 
