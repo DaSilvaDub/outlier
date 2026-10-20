@@ -1,3 +1,120 @@
+# HANDOFF — 2026-10-20 (Claude, Daily Debug Review: no new fixable bug; RB boost cap still unruled)
+
+**Branch**: `claude/inspiring-fermat-24u1w9` · **Base**: `daa71fb` (= `origin/master`) · **PR**: see below
+
+## Accomplished
+Daily automated debug/code-health review. **No code changes** — nothing found met the
+"high-confidence + intended behaviour clear + low risk" bar, and the one substantive
+finding needs an owner ruling (below).
+
+### Reviewed (changes since the 2026-10-16 handoff)
+1. **PR #280 — NFL run archiving** (`222b385..f47ec44`: `archive.py`, `pipeline.py`,
+   `run_writer.py`, `scripts/nfl_archive.py`, `scripts/nfl_snapshot_diff.py`).
+   Reviewed clean. Checked specifically: `run_manifest` is last in `PREGAME_ROLES`, so
+   `missing_raw` is complete when the manifest entry is written; `RecordResult.notes`
+   exists (the `_empty_result()` 4-arg call leaves it defaulted); `context_slate_key`
+   reproduces the pipeline's `suffix` formula exactly (`pipeline.py:423`);
+   `pointed_runs` excludes the `latest` pointer, so `slate_key` can never be `"latest"`;
+   `before_pointers` runs after the bundle seal and before any published copy or
+   pointer, so a `RunArchiveError` leaves pointers untouched; `bundle_only` correctly
+   excludes raw roles (which sit in `_publish` with empty dest lists).
+2. **PR #272 — legacy snapshot keying** (`archive_legacy.py`: `_snapshot_key`,
+   `_line_key`, `_snapshot_conflict`, `_snapshot_union`). Reviewed clean; the
+   order-independence and per-key pairwise comparison hold.
+3. Spot-read `run_context.py`, `utils.py`, `snapshots.py`, `consensus.py`,
+   `matchup_rankings.py`, `best_bets._market`.
+
+## Findings (reported, not fixed)
+1. **HIGH — `matchup_rankings.py:398` + `:409`: RB matchup boost has no effective cap.**
+   `backfield_vacated_boost += min(0.60, vac_carries * 0.04)` caps each out RB's
+   contribution but accumulates across them, and the RB `boost_factor` (409) is
+   unclamped — unlike the QB path's `max(0.90, min(1.35, boost_factor))` at :277.
+   Two out RBs at >=15 carries/g give +1.20, so `boost_factor >= 2.2` and
+   `matchup_proj` more than doubles `rush_yds_pg`; `carries_proj` (:413) scales by
+   `1 + 0.8*boost` ~ 1.96x. That feeds `boost_pct` -> `advantage_score` ->
+   `TIER_1_ANCHOR` and `volume_score` (:425), and is published in
+   `Top_5_RB_Matchups.md`, `Top_10_Overall_Matchups.md` and
+   `Matchup_Boost_Rankings.csv` next to a real prop line. WR (:519) and TE (:647) are
+   also unclamped but bounded in practice by their inputs.
+   First reported 2026-10-15 (handoff item 3); **still unruled after 5 days**, and no
+   open PR touches it (checked all 8 open branches: #265, #271, #273, #274, #277, #278,
+   #281, #282 all still carry the line verbatim). `feat/nfl-best-bets-rankings-wip`
+   has two `+=` caps in the same shape, which suggests the per-out-player cap may be
+   deliberate — so whether the fix is a total cap, a `boost_factor` clamp, or both, and
+   with what bounds, is a modelling decision. **Needs a ruling before anyone patches it.**
+2. **LOW — `pipeline.py:934`: `summary["archive"]` reaches no artifact and no stdout.**
+   `_record` runs via `before_pointers`, i.e. after `stage("summary", summary)` (:919)
+   has already sealed the bundle's `summary.json`, and the CLI summary print
+   (:1257-1310) never reads the key. So the archive result — including `missing`, the
+   raw files a refused run could not archive — is only visible through
+   `logger.warning("Run %s archived without %s")` in `_archive_committed_run`.
+   Harmless today; worth one CLI line or a post-commit summary rewrite.
+3. **LOW — `utils.py` `safe_write_json` flushes but never `os.fsync`.** Its siblings
+   `atomic_write_bytes` and `snapshots.append_snapshot` both flush+fsync. The
+   `_replace_with_retry` can therefore be committed before the bytes reach disk, so a
+   crash or power loss can leave a truncated or empty target where the module docstring
+   promises atomic JSON writing. Adding fsync costs latency on every JSON write
+   (Windows/OneDrive), so it is a trade-off call, not a drive-by fix.
+4. **LOW / latent — `snapshots.py:105-109`: same-run dedup uses a coarser key than row
+   identity.** `prop_key` is line- and team-independent by design, so if one
+   `append_snapshot` call for a run_id ever carries two rows under one key, a later call
+   with the same run_id drops the one not yet written. Not reachable today (each run gets
+   a fresh uuid run_id and calls `append_snapshot` once), so latent only.
+5. **LOW — `utils.py` `_steal_if_stale` can delete a live lock where hardlinks are
+   unavailable.** A lock judged stale is renamed to `grave`; if it turns out fresh it is
+   handed back with `os.link(grave, lock)`. On a filesystem without hardlinks (FAT32 /
+   exFAT) that raises `OSError`, the `except OSError: pass` swallows it, and
+   `_unlink_with_retry(grave)` then deletes the only copy — leaving
+   no lock file while a real holder still believes it holds one, so the next
+   `O_CREAT|O_EXCL` succeeds and two writers run. Narrow (NTFS supports hardlinks), but
+   the path is plainly there.
+
+## State to know about — sandbox limits
+- **PyPI is blocked by the network policy** (403 to CONNECT via the agent proxy; `pypi.org`
+  is also in `no_proxy` with no DNS), so `pip install -r requirements.lock` cannot run and
+  `sqlalchemy` / `google-genai` / pandas-stack deps are absent. Same limit as 2026-10-15.
+- `pytest`, `mypy`, `ruff` and `pyright` ARE available as isolated uv tools under
+  `/root/.local/bin/`. Stubbing `structlog` in a scratchpad dir (NOT in the repo) and
+  putting it on `PYTHONPATH` lets most of the suite collect and run:
+  `PYTHONPATH="/home/user/outlier:<stubs>" /root/.local/bin/pytest --ignore=<30 dep-bound files>`.
+  Worth reusing in future cloud sessions — it turns "cannot run the checks" into
+  1930 real passes.
+- CI on master is the authoritative gate; `make lint-check` lints only files changed vs
+  HEAD, so the repo-wide `ruff check` count (1234 under default rules) is not a gate.
+
+## Verification run this session
+- Offline pytest subset: **1930 passed, 43 skipped, 67 failed** — every failure a missing
+  third-party dep (64x `sqlalchemy`, 3x `google.genai`), none a code failure. 30 further
+  test files could not even be collected for the same reason and were ignored.
+- Reviewed-area suites, all green: `test_nfl_pipeline_archive`, `test_nfl_archive_writer`,
+  `test_nfl_archive_tape`, `test_nfl_archive_legacy`, `test_nfl_archive_check`,
+  `test_nfl_archive_manifest`, `test_nfl_archive_redownload`, `test_nfl_matchup_rankings`,
+  `test_nfl_snapshot_diff` — **159 passed**.
+- mypy: **Success, no issues in 131 source files**.
+- pyright: 1 error, 11 warnings — all from the unresolvable missing packages
+  (`from google import genai` in `gemini_research.py:70`). 0 real errors.
+- Bug-class ruff scan (`F,B0,B9,PLE,PLW0,PLW1,PLW3`): 36 findings, all triaged as
+  non-defects. The 8 `B023` late-binding closures (`tape_nflverse.py:559-566`,
+  `portfolio.py:373-378`, `gemini_research.py:91`) are each invoked inside the same loop
+  iteration; the `B905` zips are over fixed 2-tuples or equal-length sequences;
+  `cards.py:126` `F841` is an unused `exc` name only (the retry loop always returns or
+  raises). The rest is style.
+- No reasoning models / desk runners were invoked (house rule).
+
+## Next steps
+1. **Rule on finding 1** (RB boost cap) — the only finding with betting-integrity impact.
+   Carried over unruled from 2026-10-15.
+2. Carried over from 2026-10-15/16: decide the other two matchup-ranking judgment calls
+   (`inactives_by_team=None` failing open in the rankings engine — PR #281 may now cover
+   this, check it; and `consensus_props` keyed without event/team — PR #277).
+3. The open-PR queue is long (13 open, oldest #208 from 2026-10-05). #271, #273, #274,
+   #277, #278, #281 are all small single-bug NFL fixes that keep rebasing past each other;
+   worth a merge sweep.
+4. Carried over from 2026-10-14: update the canonical checkout to master before re-running
+   `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
