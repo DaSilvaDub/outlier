@@ -766,3 +766,20 @@ def test_all_inventory_without_injury_report_logs_a_warning(tmp_path, caplog):
             date_str="2026-09-13", as_of_utc=AS_OF, inactive_by_team=None,
             require_injury_evidence=True)
     assert any("injury report was not admitted" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("listed,quoted", [
+    ("Kenneth Walker", "Kenneth Walker III"),
+    ("Michael Pittman Jr.", "Michael Pittman"),
+    ("Amon-Ra St. Brown", "Amon-Ra St Brown"),
+])
+def test_inactive_join_ignores_name_suffixes_and_punctuation(listed, quoted):
+    """The injury list and the prop feed spell names differently; an inactive
+    player must still be set aside (shared tape_nflverse._name_key)."""
+    from outlier_nfl.alt_floors import floor_inventory_reason
+
+    row = {"team": "SEA", "event_id": "e1", "player_name": quoted}
+    reason = floor_inventory_reason(
+        row, book="HARDROCK", odds=-300, target_book="HARDROCK",
+        inactive_by_team={"SEA": [listed]})
+    assert reason == "inactive_player"

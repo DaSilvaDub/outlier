@@ -1,3 +1,44 @@
+# HANDOFF — 2026-10-20 (Claude, NFL inactive-name join + rankings publish re-gate)
+
+**Branch**: `fix/nfl-inactive-join-and-rankings-gate` · **Base**: `daa71fb` · **PR**: see `gh pr list --head fix/nfl-inactive-join-and-rankings-gate`
+
+## Accomplished
+1. **Inactive-player name join (alt floors + matchup)**. `alt_floors.py` had a local
+   `_name_key` that only stripped non-letters, and `matchup.build_matchup_script`
+   (`_eligible`, plus the `inactive` set passed to `_role_player`) used `.strip().lower()`.
+   "Kenneth Walker III" vs injury-list "Kenneth Walker" never matched, so an inactive
+   player could be ranked/recommended. Both modules now import `tape_nflverse._name_key`
+   (suffix + punctuation aware, same key PR #268 put in `matchup_rankings`). `_role_player`
+   re-keys its inactive set, so raw names or keys both work. Corrected the 2026-10-15
+   entry below that claimed alt floors already used the shared key.
+2. **Matchup-rankings FAILED now withholds publication**. The publish decision ran
+   before the (required) `matchup_rankings` receipt existed, so a rankings crash still
+   committed dated/latest files and pointers while the log said "nothing published".
+   `pipeline.run` now re-gates after rankings: any failing required receipt calls
+   `writer.withhold_publication()` and sets `publication_reason` (rankings stays
+   required — `receipt()` default, CLI already exits 3 on it).
+3. Tests (each verified RED before the fix): `test_inactive_join_ignores_name_suffixes_and_punctuation`
+   (alt floors), `test_inactive_tape_rb1_matches_across_name_suffixes` /
+   `test_inactive_depth_chart_rb1_skipped_across_name_suffixes` (matchup),
+   `test_failed_matchup_rankings_withholds_publication` (pipeline path, stage gates).
+
+## State to know about
+- Pre-existing on clean `origin/master` (not this branch): `test_nfl_archive_legacy.py::
+  test_row_order_inside_one_copy_does_not_change_the_result` and
+  `::test_copy_order_does_not_change_the_check_output` fail locally (output differs on
+  mtime-dated files), and `test_nfl_snapshot_diff.py::test_capture_is_deterministic[A|B]` fails
+  when pytest runs with a custom `--basetemp` (absolute `run_dir` not masked). Offline NFL
+  suite on this branch: 1100 passed, only those 4 failing. Ruff E402s in `pipeline.py` / `test_nfl_alt_floors.py` are pre-existing.
+- Canonical checkout has uncommitted NFL calibration-rule edits (alt_floors hit-rate floor,
+  matchup clock bleed) on `feat/week6-postgame-calibration-rules`; they sit near
+  `floor_inventory_reason` and may need a trivial rebase over this PR.
+
+## Next steps
+1. Review/merge this PR.
+2. Triage the two archive-legacy test failures on master.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
@@ -32,6 +73,10 @@
    `alt_floors._inactive_keys:211` and `tape_nflverse._depth_roles:555` all use
    `_name_key`. Both joins (the filter and the RB vacated-backfield lookup) now key on
    `tape_nflverse._name_key`. 3 regression tests, each verified failing pre-fix.
+   *Correction (2026-10-20, Claude):* `alt_floors` did **not** use the shared key — it
+   had a local `_name_key` that only stripped non-letters, so "Kenneth Walker III" never
+   matched "Kenneth Walker"; `matchup._eligible`/`_role_player` used `.strip().lower()`.
+   Both now import `tape_nflverse._name_key` (see the 2026-10-20 entry).
 2. **Daily debug review** of changes since 2026-10-10 (PRs #263, #266 and the
    2026-10-11 matchup-rankings integration). The PR #263 snap-count fix in
    `scorecard.py` reviewed clean: the snap-counts `team`/`player` columns go through the
