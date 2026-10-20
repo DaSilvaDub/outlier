@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -111,8 +111,13 @@ class RunWriter:
         manifest: Mapping[str, Any],
         *,
         pointers: Iterable[Path] = (),
+        before_pointers: Callable[[], Any] | None = None,
     ) -> dict[str, Any]:
-        """Seal the bundle, publish copies, then write ``pointers`` last."""
+        """Seal the bundle, publish copies, then write ``pointers`` last.
+
+        ``before_pointers`` runs after the bundle is sealed and before any pointer
+        moves (e.g. archive recording). If it raises, no pointer is written.
+        """
         if self.committed:
             raise RuntimeError(f"run {self.run_id} already committed")
         artifacts = []
@@ -137,6 +142,9 @@ class RunWriter:
             data = (self.run_dir / name).read_bytes()
             for dest in dests:
                 _atomic_write_bytes(dest, data)
+
+        if before_pointers is not None:
+            before_pointers()
 
         manifest_sha = _sha256(manifest_bytes)
         pointer = {

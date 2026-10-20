@@ -73,3 +73,140 @@ def test_record_exception_fails_the_run(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(nfl_pipeline, "record_run", boom)
     with pytest.raises(nfl_pipeline.RunArchiveError, match="disk full"):
         _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+
+
+def _drop_raw_before_record(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Delete ``name`` from the committed bundle just before it is recorded."""
+    real = nfl_pipeline.record_run
+
+    def dropping(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
+        (Path(nfl_dir) / "runs" / run_id / name).unlink()
+        return real(nfl_dir, run_id, *a, **k)
+
+    monkeypatch.setattr(nfl_pipeline, "record_run", dropping)
+
+
+def _pointer(tmp_path: Path) -> Path:
+    return tmp_path / "NFL" / "normalized" / f"nfl_run_pointer_{SLATE}.json"
+
+
+def test_published_run_missing_a_raw_file_fails(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _drop_raw_before_record(monkeypatch, "raw/player_props.json")
+    with pytest.raises(nfl_pipeline.RunArchiveError, match="raw/player_props.json"):
+        _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    assert not _pointer(tmp_path).exists()
+
+
+def test_refused_run_missing_a_raw_file_is_archived_with_the_list_and_never_admissible(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _drop_raw_before_record(monkeypatch, "raw/player_props.json")
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    assert run["status"] == "FAILED"
+    got = _entries(tmp_path, run["run_id"])
+    entry = got["run_manifest"]
+    assert entry.missing_raw == [f"{run['run_id']}/raw/player_props.json"]
+    assert run["archive"]["missing"] == entry.missing_raw
+    assert ar.admissible(tmp_path / "NFL", entry.slate) is False  # type: ignore[arg-type]
+
+
+def test_complete_published_slate_is_admissible(tmp_path: Path) -> None:
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    assert ar.admissible(tmp_path / "NFL", SLATE) is True
+    assert _entries(tmp_path, run["run_id"])["run_manifest"].missing_raw is None
+
+
+def test_check_catches_a_tampered_archived_run_manifest(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts import nfl_archive
+
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    nfl = tmp_path / "NFL"
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl)]) == 0
+    capsys.readouterr()
+    archived = ar.resolve_path(nfl, _entries(tmp_path, run["run_id"])["run_manifest"].path)
+    body = json.loads(archived.read_text(encoding="utf-8"))
+    body["status"] = "OK" if body["status"] != "OK" else "FAILED"
+    data = json.dumps(body, indent=2).encode("utf-8")
+    original_size = archived.stat().st_size
+    archived.write_bytes(data[:original_size].ljust(original_size, b" "))  # same size
+    assert nfl_archive.main(["check", "--nfl-dir", str(nfl)]) == 1
+    out = capsys.readouterr().out
+    assert "sha_mismatch" in out and "manifest.json" in out
+    assert ar.admissible(nfl, SLATE) is False
+
+
+def test_pointer_names_a_recorded_run_and_does_not_move_when_record_fails(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    pointer = _pointer(tmp_path)
+    before = pointer.read_bytes()
+    assert json.loads(before)["run_id"] == first["run_id"]
+    assert "run_manifest" in _entries(tmp_path, first["run_id"])
+
+    seen: list[bool] = []
+    real = nfl_pipeline.record_run
+
+    def failing(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
+        # When record runs, the pointer must not name this run yet.
+        seen.append(json.loads(pointer.read_text(encoding="utf-8"))["run_id"] == run_id)
+        real(nfl_dir, run_id, *a, **k)
+        return ar.RecordResult([], [], [f"{run_id}/manifest.json: simulated conflict"], [])
+
+    monkeypatch.setattr(nfl_pipeline, "record_run", failing)
+    with pytest.raises(nfl_pipeline.RunArchiveError):
+        _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    assert seen == [False]
+    assert pointer.read_bytes() == before
+    for p in (tmp_path / "NFL" / "normalized").glob("nfl_run_pointer_*.json"):
+        assert "run_manifest" in _entries(tmp_path, json.loads(p.read_text())["run_id"])
+
+
+def test_refused_run_logs_nothing_published_before_a_record_failure(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import logging
+
+    messages: list[str] = []
+
+    class _Keep(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    def boom(*_a: Any, **_k: Any) -> ar.RecordResult:
+        raise OSError("disk full")
+
+    handler = _Keep(level=logging.ERROR)
+    nfl_pipeline.logger.addHandler(handler)
+    monkeypatch.setattr(nfl_pipeline, "record_run", boom)
+    try:
+        with pytest.raises(nfl_pipeline.RunArchiveError):
+            _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    finally:
+        nfl_pipeline.logger.removeHandler(handler)
+    assert any("nothing published" in m for m in messages), messages
+
+
+def test_missing_raw_list_alone_makes_a_slate_inadmissible(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even once every role is archived, the run's missing_raw list keeps it out."""
+    name = "raw/player_props.json"
+    real = nfl_pipeline.record_run
+    saved: dict[str, bytes] = {}
+
+    def dropping(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
+        f = Path(nfl_dir) / "runs" / run_id / name
+        saved[run_id] = f.read_bytes()
+        f.unlink()
+        return real(nfl_dir, run_id, *a, **k)
+
+    monkeypatch.setattr(nfl_pipeline, "record_run", dropping)
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    nfl = tmp_path / "NFL"
+    (nfl / "runs" / run["run_id"] / name).write_bytes(saved[run["run_id"]])
+    slate = _entries(tmp_path, run["run_id"])["run_manifest"].slate
+    assert slate is not None
+    ar.record_run(nfl, run["run_id"], slate)  # late: now every role is archived
+    got = _entries(tmp_path, run["run_id"])
+    assert set(ar.PREGAME_ROLES) <= set(got)
+    assert got["run_manifest"].missing_raw
+    assert ar.admissible(nfl, slate) is False

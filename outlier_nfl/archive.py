@@ -95,6 +95,9 @@ class ArchiveEntry:
     fetched_at: str | None = None
     original_path: str | None = None
     mtime: str | None = None
+    # run_manifest only: raw files of a refused/failed/partial run that were not
+    # archived. A slate with any such entry is never admissible (see admissible()).
+    missing_raw: list[str] | None = None
 
     def key(self) -> tuple[str, str]:
         return (self.role, self.path)
@@ -164,7 +167,15 @@ def parse_entry(raw: Any) -> ArchiveEntry:
         mtime = _aware(mtime, "mtime")
     elif original_path is not None or mtime is not None:
         raise ArchiveError("original_path and mtime are only for legacy roles")
+    missing_raw = raw.get("missing_raw")
+    if missing_raw is not None:
+        if role != "run_manifest":
+            raise ArchiveError("missing_raw is only for run_manifest")
+        if not (isinstance(missing_raw, list) and missing_raw
+                and all(isinstance(m, str) and m for m in missing_raw)):
+            raise ArchiveError(f"missing_raw must be a non-empty list of strings: {missing_raw!r}")
     return ArchiveEntry(
+        missing_raw=missing_raw,
         slate=slate, role=role, path=path, sha256=sha, size=size,
         captured_at=_aware(raw.get("captured_at"), "captured_at"), source=source,
         season=season, run_id=run_id, fetched_at=fetched_at,
@@ -228,6 +239,7 @@ def record_file(
     nfl_dir: Path | str, path: Path | str, *, role: str, slate: str | None, source: str,
     season: Any, captured_at: Any, run_id: str | None = None, fetched_at: str | None = None,
     original_path: str | None = None, mtime: str | None = None,
+    missing_raw: list[str] | None = None,
 ) -> tuple[ArchiveEntry, bool]:
     """Append one entry for ``path``. Returns ``(entry, newly_recorded)``.
 
@@ -247,6 +259,7 @@ def record_file(
         "size": src.stat().st_size, "captured_at": captured_at, "source": source,
         "season": season, "run_id": run_id, "fetched_at": fetched_at,
         "original_path": original_path, "mtime": mtime,
+        **({"missing_raw": list(missing_raw)} if missing_raw else {}),
     })
     mpath = manifest_path(root)
     mpath.parent.mkdir(parents=True, exist_ok=True)
@@ -282,8 +295,14 @@ def _empty_result() -> RecordResult:
     return RecordResult([], [], [], [])
 
 
-def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> RecordResult:
+def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
+               *, published: bool | None = None) -> RecordResult:
     """Record a committed run bundle's pregame feeds and its manifest.
+
+    The run manifest is recorded last. Raw files that could not be archived are
+    written into its entry as ``missing_raw``. With ``published=True`` a missing
+    raw file stops recording before the manifest: a published card can't be
+    missing its inputs, and the caller fails the run.
 
     Each raw file must still match the sha256 the run manifest sealed, so a file
     edited after the run is never archived as that run's capture.
@@ -313,6 +332,11 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
     sealed = {a.get("name"): a.get("sha256") for a in manifest.get("artifacts") or []}
     for role, name in PREGAME_ROLES.items():
         f = run_dir / name
+        if role == "run_manifest" and result.missing and published:
+            result.conflicts.append(
+                f"{run_id}: published run is missing raw files {result.missing}; "
+                "run manifest not archived")
+            continue
         if not f.is_file():
             result.missing.append(f"{run_id}/{name}")
             continue
@@ -322,7 +346,8 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None) -> Re
         try:
             entry, new = record_file(
                 root, f, role=role, slate=slate_key, season=season, captured_at=captured,
-                run_id=run_id, source="run_writer" if role == "run_manifest" else "outlier_api")
+                run_id=run_id, source="run_writer" if role == "run_manifest" else "outlier_api",
+                missing_raw=list(result.missing) if role == "run_manifest" else None)
         except ArchiveConflict as exc:
             result.conflicts.append(str(exc))
             continue
@@ -625,4 +650,19 @@ def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
                             f"{e.path}: {f.stat().st_size} bytes, archived {e.size}"))
         elif sha256_file(f) != e.sha256:
             gaps.append(Gap(e.slate, e.role, "sha_mismatch", e.path))
+        if e.missing_raw:
+            gaps.append(Gap(e.slate, e.role, "missing_raw",
+                            f"run {e.run_id} archived without {e.missing_raw}"))
     return CheckReport(expected, sorted(seasons or []), len(entries), gaps)
+
+
+def admissible(nfl_dir: Path | str, slate: str) -> bool:
+    """True only when ``slate`` is archived complete and unaltered.
+
+    A slate whose run entry lists ``missing_raw`` is never admissible, whatever
+    else is archived for it.
+    """
+    entries, _ = read_manifest(manifest_path(nfl_dir))
+    if any(e.slate == slate and e.missing_raw for e in entries):
+        return False
+    return slate in check_archive(nfl_dir, slates=[slate]).complete_slates
