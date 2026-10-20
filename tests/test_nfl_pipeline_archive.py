@@ -182,34 +182,44 @@ def test_refused_run_logs_nothing_published_before_a_record_failure(
 
 
 
-def test_refused_run_shares_the_published_slate_name_and_missing_raw_blocks_it(
+def test_refused_sibling_with_missing_raw_leaves_the_pointer_slate_complete(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A windowed slate: published and refused runs both land under 2026-10-04_early."""
-    def run_window(client: Any, clock: str) -> dict[str, Any]:
-        tape = tmp_path / "NFL" / "tape" / "prior_week.json"
-        if not tape.exists():
-            tape.parent.mkdir(parents=True, exist_ok=True)
-            tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
-        now = parse_utc(clock)
-        return NflPipeline(client=client, data_dir=tmp_path, clock=lambda: now).run(
-            date=SLATE, window="Early", as_of_utc=clock, reports_dir=tmp_path / "reports")
-
+    """Published and refused runs share 2026-10-04_early; only the pointer run blocks."""
     key = f"{SLATE}_early"
-    published = run_window(snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    published = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
     assert published["publication"] == "published"
     nfl = tmp_path / "NFL"
     assert key in ar.check_archive(nfl).complete_slates
     _drop_raw_before_record(monkeypatch, "raw/player_props.json")
-    refused = run_window(snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    refused = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
     assert refused["publication"] == "bundle_only"
     slates = {r["run_id"]: {e.slate for e in _entries(tmp_path, r["run_id"]).values()}
               for r in (published, refused)}
     assert slates == {published["run_id"]: {key}, refused["run_id"]: {key}}
     assert _entries(tmp_path, refused["run_id"])["run_manifest"].missing_raw
     report = ar.check_archive(nfl)
-    assert any(g.kind == "missing_raw" and g.slate == key for g in report.gaps)
-    assert key in report.slates and key not in report.complete_slates
+    assert not any(g.kind == "missing_raw" for g in report.gaps)
+    assert any(g.kind == "missing_raw" and g.slate == key and refused["run_id"] in g.detail
+               for g in report.notes)
+    assert key in report.complete_slates
 
+
+def test_pointer_run_with_missing_raw_blocks_its_slate(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    key = f"{SLATE}_early"
+    published = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    _drop_raw_before_record(monkeypatch, "raw/player_props.json")
+    refused = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    nfl = tmp_path / "NFL"
+    pointer = nfl / "normalized" / f"nfl_run_pointer_{key}.json"
+    body = json.loads(pointer.read_text(encoding="utf-8"))
+    assert body["run_id"] == published["run_id"]
+    body["run_id"] = refused["run_id"]  # the slate's pointer now names the refused run
+    pointer.write_text(json.dumps(body), encoding="utf-8")
+    report = ar.check_archive(nfl)
+    assert any(g.kind == "missing_raw" and g.slate == key and refused["run_id"] in g.detail
+               for g in report.gaps)
+    assert key not in report.complete_slates
 
 def test_failed_record_writes_no_new_published_copy(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,3 +247,88 @@ def test_failed_record_writes_no_new_published_copy(
     with pytest.raises(nfl_pipeline.RunArchiveError):
         _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), "2026-10-04T15:30:00+00:00")
     assert snapshot() == before
+
+
+def _window_run(tmp_path: Path, client: Any, clock: str) -> dict[str, Any]:
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    if not tape.exists():
+        tape.parent.mkdir(parents=True, exist_ok=True)
+        tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    now = parse_utc(clock)
+    return NflPipeline(client=client, data_dir=tmp_path, clock=lambda: now).run(
+        date=SLATE, window="Early", as_of_utc=clock, reports_dir=tmp_path / "reports")
+
+
+def test_pipeline_passes_its_suffix_as_the_slate_name(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the context fallback disabled, the pipeline's suffix alone names the slate."""
+    monkeypatch.setattr(ar, "context_slate_key", lambda ctx: ctx.get("slate_date"))
+    run = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    assert run["publication"] == "bundle_only"
+    assert {e.slate for e in _entries(tmp_path, run["run_id"]).values()} == {f"{SLATE}_early"}
+
+
+def test_record_run_without_a_pointer_names_the_slate_from_the_run_context(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Manual catch-up (no pointer, no slate argument) builds <date>_<window>."""
+    def unrecorded(nfl_dir: Any, run_id: str, *a: Any, **k: Any) -> ar.RecordResult:
+        return ar.RecordResult([], [ar.parse_entry({
+            "slate": SLATE, "role": "run_manifest", "path": "x", "sha256": "0" * 64,
+            "size": 0, "captured_at": PREGAME, "source": "run_writer", "season": 2026,
+            "run_id": run_id})], [], [])
+
+    monkeypatch.setattr(nfl_pipeline, "record_run", unrecorded)
+    run = _window_run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    assert _entries(tmp_path, run["run_id"]) == {}
+    ar.record_run(tmp_path / "NFL", run["run_id"])
+    assert {e.slate for e in _entries(tmp_path, run["run_id"]).values()} == {f"{SLATE}_early"}
+
+
+def test_bundle_only_artifacts_are_listed_and_a_missing_raw_input_is_not(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _drop_raw_before_record(monkeypatch, "raw/player_props.json")
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR, fail_markets=True), LATER)
+    nfl = tmp_path / "NFL"
+    entry = _entries(tmp_path, run["run_id"])["run_manifest"]
+    manifest = json.loads(ar.resolve_path(nfl, entry.path).read_text(encoding="utf-8"))
+    skipped = sorted(a["name"] for a in manifest["artifacts"] if not a["published_to"])
+    raw = set(ar.PREGAME_ROLES.values())
+    assert "raw/player_props.json" in skipped
+    assert entry.bundle_only == [n for n in skipped if n not in raw]
+    assert entry.bundle_only  # a refused run publishes nothing, so there are some
+    assert entry.missing_raw == [f"{run['run_id']}/raw/player_props.json"]
+
+
+def test_published_run_entry_lists_only_its_unpublished_artifacts(tmp_path: Path) -> None:
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    entry = _entries(tmp_path, run["run_id"])["run_manifest"]
+    manifest = json.loads(ar.resolve_path(tmp_path / "NFL", entry.path).read_text("utf-8"))
+    raw = set(ar.PREGAME_ROLES.values())
+    want = sorted(a["name"] for a in manifest["artifacts"]
+                  if not a["published_to"] and a["name"] not in raw)
+    assert (entry.bundle_only or []) == want
+    assert entry.missing_raw is None
+
+
+@pytest.mark.parametrize("window", [None, "Early", " 1PM "])
+def test_context_slate_key_equals_the_pipeline_suffix(tmp_path: Path, window: str | None) -> None:
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True, exist_ok=True)
+    tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    now = parse_utc(PREGAME)
+    run = NflPipeline(client=snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path,
+                      clock=lambda: now).run(date=SLATE, window=window, as_of_utc=PREGAME,
+                                             reports_dir=tmp_path / "reports")
+    suffix = run["run_id"].rsplit("-", 2)[0]
+    manifest = json.loads((tmp_path / "NFL" / "runs" / run["run_id"] / "manifest.json")
+                          .read_text(encoding="utf-8"))
+    assert ar.context_slate_key(manifest["context"]) == suffix
+    assert suffix == (SLATE if window is None else f"{SLATE}_{window.strip().lower()}")
+    assert (tmp_path / "NFL" / "normalized" / f"nfl_run_pointer_{suffix}.json").is_file()
+
+
+@pytest.mark.parametrize("window", [None, "", "early", " 1PM "])
+def test_context_slate_key_matches_the_pipeline_suffix_formula(window: str | None) -> None:
+    """Hand-written contexts (catch-up of old bundles) get the pipeline's suffix too."""
+    suffix = f"{SLATE}_{window.strip().lower()}" if window and window.strip() else SLATE
+    assert ar.context_slate_key({"slate_date": SLATE, "window": window}) == suffix

@@ -98,6 +98,10 @@ class ArchiveEntry:
     # run_manifest only: raw files of a refused/failed/partial run that were not
     # archived. check_archive reports a missing_raw gap for any such entry.
     missing_raw: list[str] | None = None
+    # run_manifest only: bundle artifacts with no publish destination, so they
+    # exist only under runs/<run_id>/ (the writer skips copying them). Raw inputs
+    # are archived under their own roles and never listed here.
+    bundle_only: list[str] | None = None
 
     def key(self) -> tuple[str, str]:
         return (self.role, self.path)
@@ -174,8 +178,15 @@ def parse_entry(raw: Any) -> ArchiveEntry:
         if not (isinstance(missing_raw, list) and missing_raw
                 and all(isinstance(m, str) and m for m in missing_raw)):
             raise ArchiveError(f"missing_raw must be a non-empty list of strings: {missing_raw!r}")
+    bundle_only = raw.get("bundle_only")
+    if bundle_only is not None:
+        if role != "run_manifest":
+            raise ArchiveError("bundle_only is only for run_manifest")
+        if not (isinstance(bundle_only, list) and bundle_only
+                and all(isinstance(m, str) and m for m in bundle_only)):
+            raise ArchiveError(f"bundle_only must be a non-empty list of strings: {bundle_only!r}")
     return ArchiveEntry(
-        missing_raw=missing_raw,
+        missing_raw=missing_raw, bundle_only=bundle_only,
         slate=slate, role=role, path=path, sha256=sha, size=size,
         captured_at=_aware(raw.get("captured_at"), "captured_at"), source=source,
         season=season, run_id=run_id, fetched_at=fetched_at,
@@ -239,7 +250,7 @@ def record_file(
     nfl_dir: Path | str, path: Path | str, *, role: str, slate: str | None, source: str,
     season: Any, captured_at: Any, run_id: str | None = None, fetched_at: str | None = None,
     original_path: str | None = None, mtime: str | None = None,
-    missing_raw: list[str] | None = None,
+    missing_raw: list[str] | None = None, bundle_only: list[str] | None = None,
 ) -> tuple[ArchiveEntry, bool]:
     """Append one entry for ``path``. Returns ``(entry, newly_recorded)``.
 
@@ -260,6 +271,7 @@ def record_file(
         "season": season, "run_id": run_id, "fetched_at": fetched_at,
         "original_path": original_path, "mtime": mtime,
         **({"missing_raw": list(missing_raw)} if missing_raw else {}),
+        **({"bundle_only": list(bundle_only)} if bundle_only else {}),
     })
     mpath = manifest_path(root)
     mpath.parent.mkdir(parents=True, exist_ok=True)
@@ -329,7 +341,12 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
     slate_key = slate or (pointer_slates[0] if pointer_slates else context_slate_key(ctx))
     captured = ctx.get("run_started_utc") or manifest.get("created_utc")
     season = ctx.get("season")
-    sealed = {a.get("name"): a.get("sha256") for a in manifest.get("artifacts") or []}
+    artifacts = [a for a in manifest.get("artifacts") or [] if isinstance(a, dict)]
+    sealed = {a.get("name"): a.get("sha256") for a in artifacts}
+    raw_names = set(PREGAME_ROLES.values())
+    bundle_only = sorted(str(a["name"]) for a in artifacts
+                         if a.get("name") and not a.get("published_to")
+                         and a["name"] not in raw_names)
     for role, name in PREGAME_ROLES.items():
         f = run_dir / name
         if role == "run_manifest" and result.missing and published:
@@ -347,7 +364,8 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
             entry, new = record_file(
                 root, f, role=role, slate=slate_key, season=season, captured_at=captured,
                 run_id=run_id, source="run_writer" if role == "run_manifest" else "outlier_api",
-                missing_raw=list(result.missing) if role == "run_manifest" else None)
+                missing_raw=list(result.missing) if role == "run_manifest" else None,
+                bundle_only=bundle_only if role == "run_manifest" else None)
         except ArchiveConflict as exc:
             result.conflicts.append(str(exc))
             continue
@@ -598,6 +616,9 @@ class CheckReport:
     seasons: list[int]
     entries: int
     gaps: list[Gap]
+    # Reported but not blocking: e.g. a sibling run's missing_raw on a slate whose
+    # pointer names a different, complete run.
+    notes: list[Gap] = field(default_factory=list)
 
     @property
     def complete_slates(self) -> list[str]:
@@ -619,6 +640,7 @@ def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
     expected = sorted(set(pointers) | set(slates or []))
     gaps = [Gap(None, None, "invalid_line", f"manifest line {p.line}: {p.reason}")
             for p in problems]
+    notes: list[Gap] = []
 
     by_slate: dict[str, list[ArchiveEntry]] = {}
     for e in entries:
@@ -663,7 +685,11 @@ def check_archive(nfl_dir: Path | str, slates: list[str] | None = None,
         elif sha256_file(f) != e.sha256:
             gaps.append(Gap(e.slate, e.role, "sha_mismatch", e.path))
         if e.missing_raw:
-            gaps.append(Gap(e.slate, e.role, "missing_raw",
-                            f"run {e.run_id} archived without {e.missing_raw}"))
-    return CheckReport(expected, sorted(seasons or []), len(entries), gaps)
+            gap = Gap(e.slate, e.role, "missing_raw",
+                      f"run {e.run_id} archived without {e.missing_raw}")
+            # Blocks the slate only when it is the run the slate's pointer names
+            # (or the slate has no pointer). A sibling run's list is a note.
+            pointed = pointers.get(e.slate) if e.slate else None
+            (gaps if pointed is None or pointed == e.run_id else notes).append(gap)
+    return CheckReport(expected, sorted(seasons or []), len(entries), gaps, notes)
 
