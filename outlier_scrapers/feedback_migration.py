@@ -20,12 +20,14 @@ from outlier_scrapers import paths
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_TABLES = (
-    "market_snapshots",
-    "decisions",
-    "settlements",
-    "pack_snapshot_memberships",
-)
+# One plain-literal query per table (no SQL built from strings).
+_COUNT_QUERIES = {
+    "market_snapshots": "SELECT COUNT(*) FROM market_snapshots",
+    "decisions": "SELECT COUNT(*) FROM decisions",
+    "settlements": "SELECT COUNT(*) FROM settlements",
+    "pack_snapshot_memberships": "SELECT COUNT(*) FROM pack_snapshot_memberships",
+}
+VERIFIED_TABLES = tuple(_COUNT_QUERIES)
 _SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 
@@ -59,10 +61,9 @@ def _row_counts(conn: sqlite3.Connection) -> dict[str, int]:
     present = {
         row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    # Table names come from the fixed VERIFIED_TABLES tuple, never from input.
     return {
-        table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-        for table in VERIFIED_TABLES
+        table: conn.execute(query).fetchone()[0]
+        for table, query in _COUNT_QUERIES.items()
         if table in present
     }
 

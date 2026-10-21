@@ -49,9 +49,9 @@ def _seed(db_path: Path, snapshots: int = 3) -> None:
             )
 
 
-def _count(db_path: Path, table: str = "market_snapshots") -> int:
+def _count(db_path: Path) -> int:
     with closing(sqlite3.connect(db_path)) as conn:
-        return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        return conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]
 
 
 # --- refusal guard ---------------------------------------------------------
