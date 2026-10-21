@@ -476,3 +476,127 @@ def test_player_prop_selections_still_route_to_the_player_lookup(tmp_path):
     assert summary["settlement_rows"] == 1
     assert rows[0]["actual_result"] == "20"
     assert rows[0]["win_loss_push"] == "W"
+
+
+NBA_BOX_STATS = {
+    # A 31-point / 12-rebound / 11-assist night: DD and TD both true.
+    "TRIPLE": {"PTS": 31, "REB": 12, "AST": 11, "STL": 2, "BLK": 1, "3PT": 4, "TO": 3},
+    # 10 PTS / 10 REB: a double-double only.
+    "DOUBLE": {"PTS": 10, "REB": 10, "AST": 2, "STL": 0, "BLK": 0, "3PT": 0, "TO": 1},
+    "QUIET": {"PTS": 9, "REB": 3, "AST": 2, "STL": 1, "BLK": 1, "3PT": 1, "TO": 0},
+}
+
+
+def test_nba_grades_singles_combos_dd_and_td_from_box_score():
+    t = NBA_BOX_STATS["TRIPLE"]
+    assert results._player_actual("Points", t, "NBA") == 31
+    assert results._player_actual("Rebounds", t, "NBA") == 12
+    assert results._player_actual("Assists", t, "NBA") == 11
+    assert results._player_actual("Three Pointers", t, "NBA") == 4
+    assert results._player_actual("3PTS", t, "NBA") == 4
+    assert results._player_actual("Points + Rebounds", t, "NBA") == 43
+    assert results._player_actual("Points + Assists", t, "NBA") == 42
+    assert results._player_actual("Rebounds + Assists", t, "NBA") == 23
+    assert results._player_actual("Points + Rebounds + Assists", t, "NBA") == 54
+    assert results._player_actual("Steals + Blocks", t, "NBA") == 3
+    assert results._player_actual("Double Double", t, "NBA") == 1
+    assert results._player_actual("Triple Double", t, "NBA") == 1
+    d = NBA_BOX_STATS["DOUBLE"]
+    assert results._player_actual("Double Double", d, "NBA") == 1
+    assert results._player_actual("Triple Double", d, "NBA") == 0
+    q = NBA_BOX_STATS["QUIET"]
+    assert results._player_actual("Double Double", q, "NBA") == 0
+    assert results._player_actual("Mystery Stat", q, "NBA") is None
+
+
+def test_wnba_triple_double_is_graded_too():
+    assert results._player_actual("Triple Double", NBA_BOX_STATS["TRIPLE"], "WNBA") == 1
+
+
+def test_nba_uses_espn_basketball_path_and_espn_codes_match_ledger_selection():
+    assert results.SPORT_PATHS["NBA"] == "basketball/nba"
+    event = results.FinalEvent(
+        "e1", "NBA", datetime(2026, 10, 21).date(), "NY", "GS", 101.0, 110.0, {}
+    )
+    # Outlier selections use tricodes; ESPN reports NY / GS.
+    assert results._event_match(event, "NYK @ GSW Total O/U OVER 210.5")
+    assert not results._event_match(event, "LAL @ GSW Total O/U OVER 210.5")
+
+
+def test_nba_end_to_end_collects_total_player_prop_and_td(tmp_path):
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    summary_payload = {
+        "boxscore": {
+            "players": [
+                {
+                    "statistics": [
+                        {
+                            "name": "statistics",
+                            "labels": ["MIN", "FG", "3PT", "REB", "AST", "PTS", "STL", "BLK"],
+                            "athletes": [
+                                {
+                                    "athlete": {"displayName": "Jalen Brunson Jr."},
+                                    "stats": ["38", "11-22", "4-9", "12", "11", "31", "2", "1"],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    board = _scoreboard()
+    comp = board["events"][0]["competitions"][0]["competitors"]
+    comp[0]["team"]["abbreviation"] = "NY"
+    comp[0]["score"] = "101"
+    comp[1]["team"]["abbreviation"] = "GS"
+    comp[1]["score"] = "110"
+    with feedback.open_database(db) as conn:
+        _seed(conn, "total", "NYK @ GSW Total O/U UNDER 215.5", "GAMELINE", "215.5")
+        _seed(conn, "td", "Jalen Brunson Jr. - Triple Double OVER 0.5", "PLAYER_PROP", "0.5")
+        conn.execute("UPDATE market_snapshots SET sport = 'NBA'")
+
+        def fake_fetch(url: str) -> dict:
+            assert "/basketball/nba/" in url
+            return summary_payload if "/summary?" in url else board
+
+        rows, summary = results.collect_settlement_rows(
+            conn, ["NBA"], lookback_days=3, now=NOW, fetch_json=fake_fetch
+        )
+    assert summary["settlement_rows"] == 2
+    by_market = {row["market_id"]: row for row in rows}
+    assert by_market["market-total"]["actual_result"] == "211"
+    assert by_market["market-total"]["win_loss_push"] == "W"
+    assert by_market["market-td"]["actual_result"] == "1"
+    assert by_market["market-td"]["win_loss_push"] == "W"
+
+
+def _event_with(*names):
+    return results.FinalEvent(
+        "e1", "NBA", datetime(2026, 10, 21).date(), "NY", "BOS", 100.0, 110.0,
+        {results._token(n): {"PTS": 20.0} for n in names},
+    )
+
+
+def test_player_match_is_suffix_insensitive_in_both_directions():
+    # ledger name without the suffix, box score with it (and the reverse)
+    event = _event_with("Jaren Jackson Jr.", "Gary Payton")
+    assert results._player_boxscore_key(event, "Jaren Jackson - PTS OVER 20.5") == "JARENJACKSONJR"
+    assert results._player_boxscore_key(event, "Gary Payton II - PTS OVER 5.5") == "GARYPAYTON"
+    assert results._player_boxscore_key(event, "Jaren Jackson Jr. - PTS OVER 20.5") == "JARENJACKSONJR"
+
+
+def test_suffix_matching_refuses_ambiguous_names():
+    event = _event_with("Gary Payton", "Gary Payton II")
+    # exact full-name hit still wins, and a bare name matching two keys is not guessed
+    assert results._player_boxscore_key(event, "Gary Payton II - PTS OVER 5.5") == "GARYPAYTONII"
+    assert results._player_boxscore_key(event, "Gary Payton - PTS OVER 5.5") == "GARYPAYTON"
+    twin = _event_with("Larry Nance Jr.", "Larry Nance Sr.")
+    assert results._player_boxscore_key(twin, "Larry Nance - PTS OVER 5.5") is None
+
+
+def test_double_and_triple_double_are_unsupported_when_a_category_is_missing():
+    stats = {"PTS": 12, "REB": 9, "AST": 4}  # no STL/BLK in the box score
+    assert results._player_actual("Double Double", stats, "NBA") is None
+    assert results._player_actual("Triple Double", stats, "NBA") is None
