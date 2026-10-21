@@ -24,8 +24,10 @@ _RETENTION_FULL_FIDELITY_VERDICTS = {"PLAY", "BET"}
 # eligible sample for every fitter and report metric derived from these
 # rows, not just trim bytes. What's left is portfolio-sizing-at-capture-time
 # and pack-provenance metadata that none of them consume.
+# projection_feature_hash is NOT disposable: so_eval filters on it to admit
+# current-generation SO rows into the promotion sample, so clearing it shrank
+# that sample every night. It is a short digest; keeping it costs nothing.
 _RETENTION_SLIMMED_COLUMNS = [
-    "projection_feature_hash",
     "projection_quality_flags",
     "pack_path",
     "policy_fingerprint",
@@ -47,14 +49,16 @@ def apply_retention_policy(
     A row keeps its portfolio-sizing-at-capture-time and pack-provenance
     columns (``pre_cap_units``, ``portfolio_units``, ``cap_reasons``,
     ``policy_fingerprint``, ``portfolio_mode``, ``pack_path``,
-    ``projection_feature_hash``, ``projection_quality_flags``) only if it
+    ``projection_quality_flags``) only if it
     reached ``PLAY``/``BET`` or the desk flagged it (``board =
     'A_FLAGGED'``); those columns are cleared once the row is already
     settled and older than ``cutoff_days``. Every other column -- including
     the probability/edge/signal-component fields ``fit_blend_weights()``,
     ``fit_stake_calibration_from_db()``, and ``generate_report()`` all read
     via the shared settled-row query -- is left alone regardless of age, so
-    retention never shrinks the eligible sample those consume. Unsettled,
+    retention never shrinks the eligible sample those consume.
+    ``projection_feature_hash`` is likewise always kept: ``so_eval`` gates the
+    SO promotion sample on it. Unsettled,
     recent, played, or flagged rows are never touched. Vacuums afterward to
     actually reclaim the freed pages on disk.
     """
@@ -81,7 +85,7 @@ def apply_retention_policy(
               AND t.settled_at < ?
               AND s.captured_at < ?
               AND (
-                  s.projection_feature_hash IS NOT NULL OR s.projection_quality_flags IS NOT NULL
+                  s.projection_quality_flags IS NOT NULL
                   OR s.pack_path IS NOT NULL OR s.policy_fingerprint IS NOT NULL
                   OR s.portfolio_mode IS NOT NULL OR s.pre_cap_units IS NOT NULL
                   OR s.portfolio_units IS NOT NULL OR s.cap_reasons IS NOT NULL

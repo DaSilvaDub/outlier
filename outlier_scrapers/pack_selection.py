@@ -921,16 +921,8 @@ def _apply_quality_and_signal_flags(
     if slate_quality.severe_line_discount_trap(row):
         dq_flags.append("severe_line_discount_trap")
 
-    learned_cons_p = _to_float(row.get("learned_conservative_probability"))
-    implied_p = _to_float(row.get("implied_prob"))
-    if (
-        learned_cons_p is not None
-        and implied_p is not None
-        and learned_cons_p < implied_p
-    ):
-        dq_flags.append("negative_learned_edge")
-        row["recommended_units_pre_news"] = ""
-
+    # negative_learned_edge is applied in pack_sizing._apply_learned_stake_before_caps:
+    # the conservative learned probability does not exist until write_pack sizes the row.
     if (
         row.get("data_quality_tier") == "LOW"
         and str(card.get("board") or row.get("board") or "").upper() == "A"

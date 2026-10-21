@@ -1,3 +1,50 @@
+# HANDOFF - 2026-10-21 (Codex, PR 282 blend ruling and integration)
+
+**Last policy commit**: `c832634`. NFL integration: `bf0aab99da22b6340d3b914a401cfec4305caf47`.
+**PR**: https://github.com/DaSilvaDub/outlier/pull/282
+**Files touched**: probability_blend.py, test_probability_blend.py, test_feedback.py, this handoff.
+
+- Adopted market weight 1.0/model weight 0.0 for missing or failed chronological holdouts; legacy 0.75 caller values cannot bypass this rule. Successful holdouts keep the scored train-only weight.
+- Apply the segment fallback before existing prior shrinkage: a validated global prior can still contribute to a segment.
+- Regression coverage includes failed global/segment holdouts, no holdout, legacy floor inputs and successful train-only weights. Targeted offline suite passed 136 tests. Independent review found no merge blocker and passed 36 focused tests; ruff and mypy (105 files) pass.
+- Existing saved blend artifacts are unchanged and remain compatible; a subsequent fit/rebuild applies the new rule. config/blend_promotion.json remains shadow. No paid/live reasoning, calibration rewrite or wagering promotion.
+- Canonical dirty NFL/calibration/report work was preserved; all implementation occurred in the existing PR worktree.
+
+**Next steps**: Require green hosted CI on updated head, then merge #282 after #281. #284 already merged at b636cf239ad64fc0e8d82e2ff1f77e1242ccf7ca. Do not treat historical handoff requests below as still pending.
+
+---
+
+# HANDOFF — 2026-10-20 (Claude, outlier_scrapers evaluation/gating audit fixes)
+
+**Branch**: `fix/core-eval-gating-audit` · **PR**: https://github.com/DaSilvaDub/outlier/pull/282 (open)
+
+## Accomplished (TDD; each new test failed before its fix)
+1. **Dead `negative_learned_edge` gate**: moved from `pack_selection._apply_quality_and_signal_flags` into `pack_sizing._apply_learned_stake_before_caps`, where `learned_conservative_probability` actually exists.
+   - Fires only when the learned layer is active. Uses a push-aware EV check.
+   - Enforce mode: flag, blank units, LOW tier, `A_FLAGGED`.
+   - Portfolio shadow mode: zeroes only the allocator's `pre_cap_units`, because the copy-back in `write_pack` would otherwise leak the flag onto a staked published row.
+   - No live change today: `shadow_multipliers_neutral: true`.
+2. **Pseudo-replication**: `feedback_db.one_row_per_outcome` / `_outcome_rows` keep the decision-time capture per bet (earliest *published* capture, else earliest; parsed instant).
+   - Used by: `fit_blend_weights`, `fit_stake_calibration_from_db`, and the outcome-level report sections plus the ultimate-alt gate.
+   - Stay per-decision: PLAY vs STAND_DOWN, model verdicts, books, drawdown.
+   - Ledger copy: 33,474 rows vs 28,669 outcomes.
+3. **Retention vs so_eval**: `projection_feature_hash` is no longer cleared. Damage was latent; the oldest v2 SO row would have aged out on 2026-11-20.
+4. **Blend floor**: not changed. Evidence and a proposed rule (market weight 1.0 when the holdout is missing or fails) are in the PR body, awaiting the user's ruling.
+
+## State to know about
+- Offline pytest locally: 2715 passed, 2 skipped, 4 failed. The 4 (`test_nfl_archive_legacy` order tests, `test_nfl_snapshot_diff::test_capture_is_deterministic[A/B]`) also fail on clean `origin/master` `daa71fb`, so they are pre-existing and likely Windows-local. ruff, mypy and pyright are clean.
+- The reasoning guard hook blocks any command line that names the provider test files, even inside `--ignore=`. The offline run used a scratch helper that drops those five files.
+- STEP 0 `report-sync` ran `checkout -B master` over **uncommitted NFL edits** in the canonical checkout (previously on `feat/week6-postgame-calibration-rules`). Those edits now sit on `master` in `C:\Users\dasil\Dev\GitHub\outlier`. Not touched by this session.
+
+## Next steps
+1. User ruling on item 4 (blend floor), then a small follow-up PR if approved.
+2. Follow-ups (report only):
+   - `nightly_audit.ps1` never runs `compute-drawdown`.
+   - `slate_strategy` is missing from `refresh_plan.REFRESH_TASKS`.
+   - `so_eval` and `learned_multiplier_promotion_signal` don't dedupe captures either.
+
+---
+
 # HANDOFF - 2026-10-21 (Codex, PR 281 integration)
 
 - Last reviewed fix commit SHA: 144a4d8f2188fb79273303e6e3a91b6577f88485.

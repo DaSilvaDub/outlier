@@ -18,6 +18,7 @@ from outlier_scrapers.feedback_db import (
     _float,
     _joined_rows,
     _mean,
+    _outcome_rows,
     _text,
 )
 
@@ -92,10 +93,13 @@ def fit_blend_weights(
     min_samples: int = 200,
     prior_strength: float = 30.0,
 ) -> dict[str, Any]:
-    """Fit a versioned blend artifact from pregame, settled ledger snapshots."""
+    """Fit a versioned blend artifact from pregame, settled ledger snapshots.
+
+    One row per outcome: re-captures of the same bet are not new evidence.
+    """
 
     with _connect(Path(db_path)) as conn:
-        rows = _joined_rows(conn)
+        rows = _outcome_rows(conn)
     artifact = probability_blend.fit_weight_artifact(
         rows, min_samples=min_samples, prior_strength=prior_strength
     )
@@ -114,11 +118,14 @@ def fit_stake_calibration_from_db(
     confidence_level: float = stake_calibration.DEFAULT_CONFIDENCE_LEVEL,
     policy_fingerprint: str = "",
 ) -> dict[str, Any]:
-    """Fit a stake-calibration artifact from settled ledger rows (Track C1)."""
+    """Fit a stake-calibration artifact from settled ledger rows (Track C1).
+
+    One row per outcome: re-captures of the same bet are not new evidence.
+    """
 
     cutoff = as_of or datetime.now(timezone.utc)
     with _connect(Path(db_path)) as conn:
-        rows = _joined_rows(conn)
+        rows = _outcome_rows(conn)
     artifact = stake_calibration.fit_stake_calibration(
         rows,
         as_of=cutoff,
