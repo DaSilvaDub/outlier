@@ -277,3 +277,15 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+def test_r_data_01_raw_injury_feed_rows_never_print_as_designated_inactives():
+    """REMOVE #3 / R-DATA-01: 40+ cumulative injury-report rows must be capped at <= 7 game-day inactives."""
+    raw_ari_rows = [f"Reserve Player {chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(49)]
+    engine = _seattle_engine({"ARI": raw_ari_rows})
+    qbs = engine.evaluate_qbs()
+    assert len(qbs) == 1
+    inj_text = qbs[0].tactical_drivers["injuries"]
+    assert "49 designated inactives" not in inj_text
+    assert "7 capped injury listing(s), defensive status unverified" in inj_text
+    assert "filtered from 49 cumulative injury-report rows" in inj_text

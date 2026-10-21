@@ -94,3 +94,11 @@ When a game concludes:
 1. Retrieve official box scores (via Outlier API or verified boxscore feeds).
 2. Reconcile game lines (Spread, Total, Team Totals) and individual player props.
 3. Apply the 3 Game Script Calibration Rules (Underdog RB Deficit Discount, Two-High Shell Target Divergence, and Multi-Window Re-Basing) to update future projections.
+4. Enforce the **Week 6 Postgame Calibration Rules**:
+   - **`R-INJ-01` (In-Game Injury Exit Attribution):** Verify whether low starter volume (`<= 2` targets/touches) + a backup snap spike (`Terry McLaurin 27 yds on 1 tgt` -> `Treylon Burks 66 yds on 5 tgt`) resulted from an in-game injury exit before altering player tiers or target-share rules.
+   - **`R-TOT-01` (2H Clock-Bleed Haircut & 1H Derivative Priority):** Apply `-1.0` drive/team (`-18%` 2H scoring) when `abs(1H margin) >= 10` and express weather/defensive Under theses via **1st-Half Unders** (`6-1`, `+73.0%` ROI).
+   - **`R-PROP-01` & `R-PROP-02` (Underdog QB & Committee RB Script Guards):** Block `PASS_COMP`/`PASS_ATT UNDER` on `+6.0` underdogs or `SHOOTOUT` scripts (`>= 51.0`), and require `>= 65%` carry share for underdog `RUSH_ATT OVER` (`spread >= +4.5`).
+   - **`R-PROP-03` & `R-PROP-04` (Longest-Play Unders & Wind Contradiction Veto):** Prioritize `LONG_RUSH`/`LONG_REC UNDER` (`6-0`) and block `LONG_REC`/`LONG_PASS`/`PASS_YDS >= 275.5 OVER` when `WEATHER_WIND` (`>= 12 mph`) is active.
+   - **Active Depth-Chart Starter Gate:** Block backup TE2/RB2 `OVER` props (`Jake Tonges` when `George Kittle` is active) and backup RB `UNDER` props (`Kendre Miller`, `Kaelon Black`).
+
+> Implementation status: R-TOT-01 is an optional scenario helper; the pregame model does not yet simulate halftime outcomes or apply this haircut. Historical audit counts and ROI above are unverified saved observations, not prospective validation or wagering approval.

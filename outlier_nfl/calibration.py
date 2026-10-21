@@ -98,6 +98,10 @@ DEFAULT_LAPLACE_ALPHA = 2.0
 # (α=β=2). Prior mean comes from sportsbook-only implied (PrizePicks excluded).
 DEFAULT_MARKET_PRIOR_KAPPA = 4.0
 
+# Alpha WR1 Target-Share Threshold (R-PROP-05):
+# Require >= 28% team target share before treating a receiver as a bracket-proof solo alpha.
+ALPHA_WR1_MIN_TARGET_SHARE = 0.28
+
 
 def _normalize_hit_rate(value: Any) -> float | None:
     try:
