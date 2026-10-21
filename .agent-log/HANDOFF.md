@@ -1,3 +1,22 @@
+# HANDOFF - 2026-10-21 (Claude, NBA Phase 2c: model vs historical closing lines)
+
+**Branch**: `claude/nba-phase2-market-backtest` (stacked on `claude/nba-phase2-evidence`, PR #293). Report: `docs/nba/phase2-market-backtest.md`.
+
+## Accomplished
+1. `ingest/sbro.py` parses Sportsbook Reviews Online season pages (private research only, owner-approved; Terms forbid reuse without consent) and joins to ESPN games on date, teams and both scores (0 mismatches). `track/market_compare.py` compares the model with the closing moneyline, spread and total on the same games; `backtest --sbro`, `sbro-fetch`.
+2. **Result: the closing market beats the model every season.** 5,431 games (2018-19 to 2022-23): home-win log loss market 0.6115 vs simulation 0.6320 (gap -0.0205, CI excludes zero by game and by date); spread MAE 10.28 vs 10.67; total MAE 14.33 vs 14.79; simulated totals 1.8 low on these games. Blending the simulation into the market with a prior-seasons weight (0.15-0.20): +0.0005, CI spans zero.
+
+## State to know about
+- The raw pages are cached under `%LOCALAPPDATA%/outlier_nba/sbro_cache`, outside git; only aggregates are published.
+- The archive ends in 2022-23 (partial); the close has no stated book or time.
+- Consequence: model weight 0 is correct; the promotion gate would not pass this model.
+
+## Next steps
+1. Test whether availability/rest information closes any of the gap (the market prices injuries; this model does not).
+2. Fix the totals bias; authenticated run.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2b: model probabilities + promotion evidence)
 
 **Branch**: `claude/nba-phase2-evidence` (stacked on `claude/nba-phase2-team-model`, PR #292). Doc: `docs/nba/phase2-evidence.md`.

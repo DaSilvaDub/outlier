@@ -202,6 +202,7 @@ def score(
     scored_seasons: Sequence[str],
     first_pool_season: str,
     market: Mapping[str, float] | None = None,
+    market_lines: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     season_arr = np.array(ds.season)
     y = (ds.hp > ds.ap).astype(np.float64)
@@ -234,6 +235,17 @@ def score(
     }  # fmt: skip
     report["ot"] = _ot_report(ds, preds, sim, scored_mask, season_arr, scored_seasons)
     report["market"] = market_comparison(ds, p_pool, market or {}, y)
+    if market_lines:
+        from outlier_nba.track.market_compare import market_report
+
+        report["market_lines"] = market_report(
+            ds,
+            market_lines,
+            {"sim": p_sim, "elo": p_elo, "ridge": p_ridge, "pool": p_pool},
+            sim["margin"],
+            sim["total"],
+            scored_seasons,
+        )
     return report
 
 
@@ -333,6 +345,7 @@ def run_backtest(
     start_params: TeamParams | None = None,
     tune_params: bool = True,
     market: Mapping[str, float] | None = None,
+    market_lines: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Tune on seasons up to ``tune_season``, walk forward over everything, score the window."""
     from outlier_nba.ratings.possessions import build_dataset, describe
@@ -352,7 +365,13 @@ def run_backtest(
     season_arr = np.array(ds.season)
     sim = run_sim(preds, season_arr >= tune_season, n_draws=n_draws, seed=seed)
     report = score(
-        ds, preds, sim, scored_seasons=scored, first_pool_season=tune_season, market=market
+        ds,
+        preds,
+        sim,
+        scored_seasons=scored,
+        first_pool_season=tune_season,
+        market=market,
+        market_lines=market_lines,
     )
     report.update(
         {

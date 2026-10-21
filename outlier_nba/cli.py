@@ -268,6 +268,15 @@ def run_team(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def run_sbro_fetch(args: argparse.Namespace) -> int:
+    from outlier_nba.ingest import espn, sbro
+
+    first, _, last = str(args.seasons).partition(":")
+    made = sbro.fetch_seasons(espn.seasons_between(first, last or first))
+    print(json.dumps({"requested": made, "cache": str(sbro.cache_dir())}))
+    return EXIT_OK
+
+
 def run_backtest_cmd(args: argparse.Namespace) -> int:
     from outlier_nba import team_run
     from outlier_nba.ingest import espn
@@ -276,16 +285,27 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
 
     first, _, last = str(args.seasons).partition(":")
     games = team_run.load_store_games(args.store)
+    market_lines = None
+    sbro_report = None
+    if args.sbro:
+        from outlier_nba.ingest import sbro
+
+        market_lines, sbro_report = sbro.load_market(
+            espn.seasons_between(first, last or first), games
+        )
     report = backtest.run_backtest(
         games,
         first_scored=first,
         last_scored=last or first,
+        market_lines=market_lines,
         tune_season=args.tune_season,
         n_draws=args.draws,
         tune_params=not args.no_tune,
         start_params=TeamParams.from_dict(team_run.load_params()[0].to_dict()),
     )
     report["coverage"] = espn.coverage_report(args.store)
+    if sbro_report is not None:
+        report["sbro_join"] = sbro_report
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if args.write_config and not args.no_tune:
@@ -409,6 +429,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
     bk.add_argument("--no-tune", action="store_true")
+    bk.add_argument("--sbro", action="store_true", help="compare with cached SBRO closing lines")
+    sf = sub.add_parser("sbro-fetch", help="cache SBRO season pages (private research only)")
+    sf.add_argument("--seasons", default="2018-19:2022-23", help="FIRST:LAST season labels")
     bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")
     bk.add_argument("--draws", type=int, default=4000)
     bk.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
@@ -419,6 +442,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "backfill":
         return run_backfill(args)
+    if args.command == "sbro-fetch":
+        return run_sbro_fetch(args)
     if args.command == "ratings":
         return run_ratings(args)
     if args.command == "run":
