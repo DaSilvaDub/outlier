@@ -827,6 +827,14 @@ class NflPipeline:
             )
             errors.append(f"matchup rankings failed: {exc}")
 
+        # Re-gate: required stages that report after the publish decision (matchup
+        # rankings) must withhold what best bets / alt floors already staged (F03).
+        if failing(receipts) and publish:
+            writer.withhold_publication()
+            publish, publish_latest = False, False
+            publication_reason = gate_reason(receipts)
+            logger.warning("Bundle-only run (%s)", publication_reason)
+
         status = run_status(receipts)
         summary: dict[str, Any] = {
             "status": status,
