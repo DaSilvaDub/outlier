@@ -796,6 +796,7 @@ class NflPipeline:
                 tapes=tapes,
                 weather_records=weather_records,
                 inactives_by_team=tape.injury_report(),
+                defensive_out_by_team=tape.team_lists("defensive_starters_out"),
                 staged_reports_dir=writer.staged_path("reports"),
                 date_str=target_date,
                 suffix=suffix,

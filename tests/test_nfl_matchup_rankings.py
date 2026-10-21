@@ -277,3 +277,27 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+def test_r_data_01_raw_injury_feed_rows_never_print_as_designated_inactives():
+    """REMOVE #3 / R-DATA-01: 40+ cumulative injury-report rows must be capped at <= 7 game-day inactives."""
+    raw_ari_rows = [f"Reserve Player {chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(49)]
+    engine = _seattle_engine({"ARI": raw_ari_rows})
+    qbs = engine.evaluate_qbs()
+    assert len(qbs) == 1
+    inj_text = qbs[0].tactical_drivers["injuries"]
+    assert "49 designated inactives" not in inj_text
+    assert "defensive starter availability unverified; no injury boost" in inj_text
+    assert qbs[0].matchup_proj == _seattle_engine(None).evaluate_qbs()[0].matchup_proj
+
+
+def test_verified_defensive_list_is_separate_deduplicated_and_empty_is_authoritative():
+    engine = _seattle_engine({"ARI": ["Unknown Reserve"]})
+    engine.tapes["ARI"]["defensive_starters_out"] = ["Wrong Embedded Name"]
+    baseline = engine.evaluate_qbs()[0].matchup_proj
+    engine.defensive_out_by_team = {"ARI": []}
+    assert engine._opp_defensive_inactives("ARI") == []
+    assert engine.evaluate_qbs()[0].matchup_proj == baseline
+    engine.defensive_out_by_team = {"ARI": ["Defensive Starter Jr.", "Defensive Starter"]}
+    assert engine._opp_defensive_inactives("ARI") == ["Defensive Starter Jr."]
+    assert engine.evaluate_qbs()[0].matchup_proj > baseline

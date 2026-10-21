@@ -51,6 +51,11 @@ MAX_STRAIGHT_ODDS: int = -250
 PLAY_TYPE_STRAIGHT = "STRAIGHT"
 PLAY_TYPE_PARLAY = "PARLAY_ONLY"
 
+# Hard Rock Alternate Floor Filter (R-ALT-01): require L5 >= 80% and L10 >= 70%
+# minimum hit-rate convergence so 20%-60% L5 candidates are never ranked.
+MIN_FLOOR_L5_HIT_RATE: float = 0.80
+MIN_FLOOR_L10_HIT_RATE: float = 0.70
+
 DEFAULT_MIN_LINES: dict[str, float] = {
     "PASS_YDS": 149.5,
     "RUSH_YDS": 34.5,
@@ -170,6 +175,16 @@ def _parse_utc(raw: Any) -> datetime | None:
     return ts if ts.tzinfo is not None else None
 
 
+def _normalized_floor_hit_rate(value: Any) -> float | None:
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rate) or not 0.0 <= rate <= 100.0:
+        return None
+    return rate / 100.0 if rate > 1.0 else rate
+
+
 def floor_inventory_reason(
     row: dict[str, Any],
     *,
@@ -208,6 +223,10 @@ def floor_inventory_reason(
     out = {_name_key(n) for n in (inactive_by_team or {}).get(team, [])}
     if _name_key(row.get("player_name")) in out:
         return "inactive_player"
+    l5 = _normalized_floor_hit_rate(row.get("l5_hit_rate"))
+    l10 = _normalized_floor_hit_rate(row.get("l10_hit_rate"))
+    if l5 is None or l10 is None or l5 < MIN_FLOOR_L5_HIT_RATE or l10 < MIN_FLOOR_L10_HIT_RATE:
+        return "insufficient_hit_rate"
     return None
 
 
@@ -340,9 +359,9 @@ def discover_alt_floor_candidates(
         cushion_pct = (cushion / cons_line * 100.0) if cons_line > 0 else 0.0
         cushion_ratio = cushion / cons_line if cons_line > 0 else 0.0
 
-        l5 = float(row.get("l5_hit_rate") or 0.0)
-        l10 = float(row.get("l10_hit_rate") or 0.0)
-        season = float(row.get("season_hit_rate") or 0.0)
+        l5 = _normalized_floor_hit_rate(row.get("l5_hit_rate")) or 0.0
+        l10 = _normalized_floor_hit_rate(row.get("l10_hit_rate")) or 0.0
+        season = _normalized_floor_hit_rate(row.get("season_hit_rate")) or 0.0
         # No quote is no price evidence: never an invented 0.50 (F23).
         implied_p = american_to_implied(b_odds) if b_odds is not None else None
         play_type = (

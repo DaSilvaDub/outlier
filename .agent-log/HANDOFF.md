@@ -1451,3 +1451,11 @@ this sandbox cannot import.
 - Fix: test_daily_job autouse fixture redirects feedback.DEFAULT_DB_PATH + probability_blend.DEFAULT_WEIGHTS_PATH to tmp_path; test_nfl_calibration passes reports_dir. New conftest guard _no_writes_to_real_tracked_artifacts fails any test that changes a git-tracked file under calibration/ or reports/ (fail-only).
 - Full offline suite: 2628 passed; 4 failures pre-exist on master (2 multiprocess contention, 2 test_capture_is_deterministic). Use a short --basetemp on Windows: long paths cause spurious FileNotFoundError (MAX_PATH).
 - Next steps: decide whether feedback_db.DEFAULT_DB_PATH (absolute path to canonical's production ledger) is intentional; consider making NflPipeline.run reports_dir default non-cwd-relative; merge #208's packs/ guard alongside the new one.
+
+## Codex - 2026-10-21 NFL local-work reconciliation
+- Last Commit SHA: 77d0f6f (implementation; preceding recovery commit a8e04eab2a3d85203a730837dcb32f4d4fe9e12a).
+- Draft PR: https://github.com/DaSilvaDub/outlier/pull/289; artifact/sync guard PR: https://github.com/DaSilvaDub/outlier/pull/288.
+- Files Touched: NFL floor, best-bet, matchup/rankings/calibration and pipeline wiring; corresponding tests; existing .agents rule edits; saved rolling NFL reports marked PROVISIONAL, not rebuilt.
+- Verification: 152 focused offline tests passed; 82 follow-up tests passed after review fixes. Verified defensive lists now reach rankings; arbitrary injury names add no opponent defensive boost. Missing/invalid qualifying carry share quarantines the pick. No live reasoning providers invoked.
+- Preservation: original tracked canonical changes remain in stash c2c703364379a679c49ecbed99137e335a7be507. Calibration values were excluded, not discarded; archived separately at C:/Users/dasil/.codex/tmp/outlier-preserved-calibration-20261021.zip. Historical original handoff entries remain in the stash.
+- Next Steps: review draft PR #289. Recovered policy thresholds remain heuristic; saved reports remain provisional/non-executable. Standalone second-half clock helper is not wired into production scoring. Existing pipeline/alt-floor test E402 imports were not cleaned up. Test artifacts preserved outside the worktree at C:/Users/dasil/.codex/tmp/nfl-reconcile-run-20261021.

@@ -265,3 +265,23 @@ def test_zero_event_slate_stays_ok_and_props_receipt_empty(tmp_path):
 def test_admitted_props_count_is_recorded(tmp_path, pregame):
     good, _ = pregame
     assert _receipt(good, "player_props")["received"] == good["player_props_count"] == 8
+
+
+def test_rankings_receives_separate_defensive_starter_tape_block(tmp_path, monkeypatch):
+    from outlier_nfl import matchup_rankings
+
+    captured = {}
+    original = matchup_rankings.generate_matchup_rankings_pipeline
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(matchup_rankings, "generate_matchup_rankings_pipeline", capture)
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    payload = snap.frozen_tape(FIXTURES_DIR)
+    payload["defensive_starters_out"] = {"KC": ["Verified Defender"], "BAL": []}
+    tape.write_text(json.dumps(payload), encoding="utf-8")
+    _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), PREGAME)
+    assert captured["defensive_out_by_team"] == payload["defensive_starters_out"]

@@ -51,6 +51,12 @@ Determine the true game catalysts and contrast with pre-game expectations:
 
 Distinguish between factors the model *should* have anticipated vs. genuine random variance.
 
+#### Mandatory In-Game Injury Exit Attribution & Anti-Overreaction Rule (`R-INJ-01`)
+Whenever a primary starter (`>= 75%` snap baseline) misses an `OVER` prop with anomalously low opportunity volume (`<= 2` targets or carries) while a direct backup at the same position sees a sudden snap/target spike (e.g., `Terry McLaurin` catching `1` pass for `27` yards [`54.5%` of his `49.5` line] on `1` target before exiting with an in-game injury, while backup boundary WR `Treylon Burks` logs `4` rec / `5` tgt for `66` yards in his vacated snaps = `93` combined boundary WR yards):
+1. **Verify In-Game Injury Exit First:** Never attribute a `1-target` starter line to "defensive bracket coverage" or "split target share" without checking for an in-game injury exit and backup replacement production.
+2. **Classify as Sound Process / In-Game Injury Variance:** If the player was on pace (`>= 50%` of line cleared on their opening catch/touch) and the vacated role easily cleared the prop threshold, classify the wager under **Category 3: Wrong despite good reasoning (`SOUND PROCESS / IN-GAME INJURY VARIANCE`)**.
+3. **Forbid Post-Hoc Rule Penalties:** Never downgrade an Alpha WR1's tier (`Heuristic #9`) or invent a restrictive target-share rule off an in-game injury exit.
+
 ### Step 5: Detect Analytical Mistakes
 Screen for common prediction pitfalls:
 - Overweighting recent small samples (e.g. L5 hit-rate chasing)

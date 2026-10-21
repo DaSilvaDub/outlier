@@ -151,6 +151,7 @@ class MatchupRankingsEngine:
         tapes: dict[str, Any],
         weather_records: list[dict[str, Any]],
         inactives_by_team: dict[str, list[str]] | None = None,
+        defensive_out_by_team: dict[str, list[str]] | None = None,
         date_str: str = "latest",
     ) -> None:
         self.date_str = date_str
@@ -164,6 +165,7 @@ class MatchupRankingsEngine:
         }
         self.rosters = rosters
         self.tapes = tapes
+        self.defensive_out_by_team = defensive_out_by_team or {}
         self.weather_by_event: dict[str, dict[str, Any]] = {}
         for w in weather_records:
             if isinstance(w, dict) and w.get("event_id"):
@@ -227,6 +229,28 @@ class MatchupRankingsEngine:
         keys = self.inactive_keys_by_team.get(team, set())
         return _name_key(player_name) in keys
 
+    def _opp_defensive_inactives(self, opp: str) -> list[str]:
+        """Only the separately verified defensive-starter list supports scoring."""
+        names = self.defensive_out_by_team.get(opp, [])
+        seen: set[str] = set()
+        verified: list[str] = []
+        for name in names:
+            key = _name_key(name)
+            if key and key not in seen:
+                seen.add(key)
+                verified.append(str(name))
+        return verified
+
+    def _format_opp_inactive_narrative(self, opp: str, unit_label: str) -> str:
+        verified = self._opp_defensive_inactives(opp)
+        if opp in self.defensive_out_by_team:
+            preview = ", ".join(verified[:3])
+            return (
+                f"{opp} {unit_label} missing {len(verified)} verified defensive starter(s)"
+                + (f" ({preview})." if preview else ".")
+            )
+        return f"{opp} {unit_label}: defensive starter availability unverified; no injury boost."
+
     def evaluate_qbs(self) -> list[MatchupAdvantageCandidate]:
         """Evaluate starting QBs on slate for matchup advantages."""
         candidates: list[MatchupAdvantageCandidate] = []
@@ -256,7 +280,7 @@ class MatchupRankingsEngine:
             opp_sacks = float(opp_tape.get("sacks") or 2.0)
 
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_inactives = self._opp_defensive_inactives(opp)
 
             # Injury and pressure boosts
             injury_boost = min(0.08, len(opp_inactives) * 0.002)
@@ -308,7 +332,7 @@ class MatchupRankingsEngine:
             tactical = {
                 "def_vuln": f"{opp} allows {opp_pass_allowed:.1f} pass yds/g (differential: {opp_diff:+.1%}); pressure rate {opp_press_rate:.1%}.",
                 "personnel": f"Pocket protection expectation favorable against {opp} defensive front averaging {opp_sacks:.1f} sacks/g.",
-                "injuries": f"{opp} secondary and defense missing {len(opp_inactives)} designated inactives.",
+                "injuries": self._format_opp_inactive_narrative(opp, "secondary and defense"),
                 "game_script": f"Projected game total {script.get('total')}, spread {team_spread:+.1f} points.",
                 "weather": f"Venue: {weather.get('venue', 'outdoor')}, wind: {wind_mph:.1f} mph, pass adjustment: {weather_haircut:+.2f}.",
                 "role": f"{starting_qb} commands primary dropback distribution in {team} offensive scheme.",
@@ -363,7 +387,7 @@ class MatchupRankingsEngine:
 
             opp_rush_allowed = float(opp_tape.get("opp_rush_yards_allowed") or LEAGUE_RUSH_YDS_MEDIAN)
             opp_diff = (opp_rush_allowed - LEAGUE_RUSH_YDS_MEDIAN) / LEAGUE_RUSH_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_inactives = self._opp_defensive_inactives(opp)
 
             # Find all RBs on team
             team_rbs = [
@@ -436,7 +460,7 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} allows {opp_rush_allowed:.1f} rush yds/g (differential: {opp_diff:+.1%}).",
                     "personnel": f"Downhill ground attack creates contact balance advantage against {opp} defensive front.",
-                    "injuries": f"Backfield vacated boost: {backfield_vacated_boost:+.1%}; opponent inactives: {len(opp_inactives)}.",
+                    "injuries": f"Backfield vacated boost: {backfield_vacated_boost:+.1%}; {self._format_opp_inactive_narrative(opp, 'defensive front')}",
                     "game_script": f"Projected team spread: {team_spread:+.1f}, game total: {script.get('total')}.",
                     "weather": f"Venue: {weather.get('venue', 'outdoor')}, precip probability: {rain_prob}%.",
                     "role": f"Touches floor elevated with {carries_proj:.1f} projected carries.",
@@ -490,7 +514,7 @@ class MatchupRankingsEngine:
 
             opp_pass_allowed = float(opp_tape.get("opp_pass_yards_allowed") or LEAGUE_PASS_YDS_MEDIAN)
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_inactives = self._opp_defensive_inactives(opp)
 
             team_wrs = [
                 p for p in self.usage_by_player.values()
@@ -561,7 +585,7 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} secondary surrenders {opp_pass_allowed:.1f} pass yds/g (differential: {opp_diff:+.1%}).",
                     "personnel": f"Route tree exploits coverage alignment in {opp} defensive secondary.",
-                    "injuries": f"{opp} secondary compromised with {len(opp_inactives)} designated inactives.",
+                    "injuries": self._format_opp_inactive_narrative(opp, "secondary"),
                     "game_script": f"Game total {script.get('total')}; projected passing script favorable.",
                     "weather": f"Venue: {weather.get('venue', 'outdoor')}, precip: {rain_prob}%.",
                     "role": f"Commands steady target opportunity (baseline {targets_avg:.1f} targets/g).",
@@ -618,7 +642,7 @@ class MatchupRankingsEngine:
 
             opp_pass_allowed = float(opp_tape.get("opp_pass_yards_allowed") or LEAGUE_PASS_YDS_MEDIAN)
             opp_diff = (opp_pass_allowed - LEAGUE_PASS_YDS_MEDIAN) / LEAGUE_PASS_YDS_MEDIAN
-            opp_inactives = self.inactives_by_team.get(opp, [])
+            opp_inactives = self._opp_defensive_inactives(opp)
 
             team_tes = [
                 p for p in self.usage_by_player.values()
@@ -689,7 +713,7 @@ class MatchupRankingsEngine:
                 tactical = {
                     "def_vuln": f"{opp} defense yields space in intermediate seam zones.",
                     "personnel": "Size and catch radius mismatch over linebackers and safeties.",
-                    "injuries": f"{opp} coverage unit compromised with {len(opp_inactives)} designated inactives.",
+                    "injuries": self._format_opp_inactive_narrative(opp, "coverage unit"),
                     "game_script": f"Game total {script.get('total')}; favorable intermediate script.",
                     "weather": f"Wind: {wind_mph:.1f} mph, precip: {rain_prob}%; weather funnels middle targets.",
                     "role": f"Reliable security blanket target with {targets_avg:.1f} targets/g baseline.",
@@ -856,6 +880,7 @@ def generate_matchup_rankings_pipeline(
     tapes: dict[str, Any],
     weather_records: list[dict[str, Any]],
     inactives_by_team: dict[str, list[str]] | None = None,
+    defensive_out_by_team: dict[str, list[str]] | None = None,
     staged_reports_dir: Path,
     date_str: str = "latest",
     suffix: str = "latest",
@@ -877,6 +902,7 @@ def generate_matchup_rankings_pipeline(
         tapes=tapes,
         weather_records=weather_records,
         inactives_by_team=inactives_by_team,
+        defensive_out_by_team=defensive_out_by_team,
         date_str=date_str,
     )
 

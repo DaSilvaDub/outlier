@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from outlier_nfl.models import BookPrice, NflGameLine, NflPlayerProp
 from outlier_nfl.pipeline import NflPipeline
 
@@ -784,3 +786,41 @@ def test_inactive_depth_chart_rb1_skipped_across_name_suffixes():
 
     tape = {"rb1": "Kenneth Walker III"}
     assert _role_player(tape, "SEA", "rb1", {"kenneth walker"}) != "Kenneth Walker III"
+def test_r_tot_01_second_half_clock_bleed_haircut():
+    """R-TOT-01: -18% 2nd-half scoring haircut triggers when |1H margin| >= 10."""
+    from outlier_nfl.matchup import apply_second_half_clock_bleed
+
+    h2, a2, triggered = apply_second_half_clock_bleed(24.0, 10.0, 14.0, 10.0)
+    assert triggered is True
+    assert h2 == pytest.approx(11.48)
+    assert a2 == pytest.approx(8.20)
+
+    h2_close, a2_close, triggered_close = apply_second_half_clock_bleed(17.0, 14.0, 14.0, 10.0)
+    assert triggered_close is False
+    assert (h2_close, a2_close) == (14.0, 10.0)
+
+
+def test_r_data_01_scenario_1_front_runner_matches_projected_winner_and_1h_under_rule():
+    """R-DATA-01 & REMOVE #1: Scenario 1 front-runner must match projected score winner, and UNDER includes 1H rule."""
+    from outlier_nfl.matchup import MatchupScript, render_matchup_markdown
+
+    # Underdog TB (+7.5) is the spread_lean ("AWAY"), but DAL is projected to win 25-22
+    script = MatchupScript(
+        event_id="e_tb_dal",
+        matchup="TB @ DAL",
+        home_team="DAL",
+        away_team="TB",
+        script_type="COMPETITIVE",
+        spread_lean="AWAY",
+        total_lean="UNDER",
+        home_score=25.0,
+        away_score=22.0,
+        home_spread=-7.5,
+        total=50.5,
+        mismatches=(),
+        prop_signals=(),
+    )
+    md = render_matchup_markdown(script, {"home_team": "DAL", "away_team": "TB", "matchup": "TB @ DAL"}, [])
+    assert "DAL controls with the run game. Projected DAL 25, TB 22." in md
+    assert "TB controls with the run game. Projected TB 22, DAL 25." not in md
+    assert "express low-total/weather unders via 1H UNDER" in md

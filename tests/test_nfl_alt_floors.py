@@ -739,7 +739,7 @@ def test_display_names_count_as_retail_not_target(raw, canonical):
     from outlier_nfl.alt_floors import floor_inventory_reason
 
     assert _extract_book_quote([{"book": raw, "odds": -300}]) == (canonical, -300)
-    row = {"team": "BAL", "event_id": "e1", "player_name": "x"}
+    row = {"team": "BAL", "event_id": "e1", "player_name": "x", "l5_hit_rate": 0.8, "l10_hit_rate": 0.8}
     assert floor_inventory_reason(row, book=raw, odds=-300, target_book="HARDROCK") is None
 
 
@@ -783,3 +783,25 @@ def test_inactive_join_ignores_name_suffixes_and_punctuation(listed, quoted):
         row, book="HARDROCK", odds=-300, target_book="HARDROCK",
         inactive_by_team={"SEA": [listed]})
     assert reason == "inactive_player"
+@pytest.mark.parametrize("l5,l10", [(0.4, 0.7), (0.8, 0.6), (None, None), ("bad", 0.8), (float("nan"), 0.8), (float("inf"), 0.8), (101, 80)])
+def test_r_alt_01_rejects_low_l5_or_l10_hit_rate_from_actionable_ranking(l5, l10):
+    props, extra = _snap.alt_floor_cases()["eligible_control"]
+    for row in props:
+        if not row.get("is_consensus_line"):
+            row.update(l5_hit_rate=l5, l10_hit_rate=l10)
+    top3, master, inventory = _scan(props, **extra)
+    assert master == []
+    assert all(not rows for rows in top3.values())
+    assert len(inventory) == 1
+    assert inventory[0].inventory_reason == "insufficient_hit_rate"
+    assert inventory[0].actionable is False
+
+
+def test_floor_percentage_hit_rates_use_same_confidence_as_fractions():
+    props, extra = _snap.alt_floor_cases()["eligible_control"]
+    _, [fraction], _ = _scan(props, **extra)
+    for row in props:
+        for key in ("l5_hit_rate", "l10_hit_rate", "season_hit_rate"):
+            row[key] = row.get(key, 0.0) * 100.0
+    _, [percentage], _ = _scan(props, **extra)
+    assert percentage.confidence_score == fraction.confidence_score
