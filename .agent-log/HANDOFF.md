@@ -1,3 +1,23 @@
+# HANDOFF - 2026-10-21 (Claude, NBA Phase 2b: model probabilities + promotion evidence)
+
+**Branch**: `claude/nba-phase2-evidence` (stacked on `claude/nba-phase2-team-model`, PR #292). Doc: `docs/nba/phase2-evidence.md`.
+
+## Accomplished
+1. `nba_model_probs` + `nba_model_eval` view (first pre-tip model forecast joined to the first pre-tip market capture, its settlement and verified CLV). `run` records model rows as its last stage (`--db`, `--no-ledger`).
+2. `track/evidence.py` builds per-family `Evidence` from settled outcomes (one side per line, pushes excluded, None when uncomputable); `promote` previews, `promote --apply` lets the evaluator write.
+3. 372 NBA + daily_job tests pass; 100% coverage on the three new modules.
+
+## State to know about
+- Nothing can reach the promotion thresholds yet: they need 1,500 settled lines on 45 dates and a clear log-loss win over the market, and NBA capture only began this season.
+- `run` now defaults its bundle root to `data/NBA/team` so it cannot collide with capture bundles.
+- Still unverified: authenticated `run` against live Outlier.
+
+## Next steps
+1. Authenticated `capture` + `run` + `settle` for a few days, then `promote` (preview) to see real counts.
+2. Model fixes (totals bias, home-side calibration), then Phase 3.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.

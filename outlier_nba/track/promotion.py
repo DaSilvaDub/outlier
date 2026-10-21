@@ -141,11 +141,7 @@ def _failures(ev: Evidence, th: Mapping[str, Any]) -> list[str]:
     return bad
 
 
-def evaluate(
-    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
-) -> dict[str, dict[str, Any]]:
-    """Re-decide each family named in ``evidence``; returns the new decision per family."""
-    cfg = _load(Path(path))
+def _decide(cfg: dict[str, Any], evidence: Mapping[str, Evidence]) -> dict[str, dict[str, Any]]:
     cap = float(cfg["max_model_weight"])
     decisions: dict[str, dict[str, Any]] = {}
     for family, ev in evidence.items():
@@ -153,14 +149,36 @@ def evaluate(
         failed = _failures(ev, cfg["thresholds"])
         promoted = not failed
         weight = min(max(ev.fitted_weight or 0.0, 0.0), cap) if promoted else 0.0
-        cfg["families"][family] = {
+        new = {
             "status": "promoted" if promoted else "shadow",
             "model_weight": weight,
             "last_evidence": {k: v for k, v in ev.__dict__.items()},
             "failed_keys": failed,
         }
-        decisions[family] = {"from": fam["status"], **cfg["families"][family]}
-        logger.info("promotion_decision", family=family, status=cfg["families"][family]["status"],
-                    failed=failed)  # fmt: skip
+        decisions[family] = {"from": fam["status"], **new}
+    return decisions
+
+
+def preview(
+    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
+) -> dict[str, dict[str, Any]]:
+    """What :func:`evaluate` would decide, without writing anything."""
+    return _decide(_load(Path(path)), evidence)
+
+
+def evaluate(
+    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
+) -> dict[str, dict[str, Any]]:
+    """Re-decide each family named in ``evidence``; returns the new decision per family."""
+    cfg = _load(Path(path))
+    decisions = _decide(cfg, evidence)
+    for family, decision in decisions.items():
+        cfg["families"][family] = {k: v for k, v in decision.items() if k != "from"}
+        logger.info(
+            "promotion_decision",
+            family=family,
+            status=decision["status"],
+            failed=decision["failed_keys"],
+        )
     _write(cfg, Path(path))
     return decisions

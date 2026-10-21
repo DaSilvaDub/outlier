@@ -31,7 +31,7 @@ from outlier_nba.pipeline import NbaPipeline, PipelineResult, Stage
 from outlier_nba.pricing import blend, team_markets
 from outlier_nba.ratings.model import AsOf, TeamModel, TeamParams, predict
 from outlier_nba.ratings.possessions import TEAM_INDEX, TEAMS, Dataset, build_dataset
-from outlier_nba.receipts import StageReceipt, receipt
+from outlier_nba.receipts import StageReceipt, failing, receipt
 from outlier_nba.run_context import (
     AsOfReader,
     RunContext,
@@ -43,6 +43,7 @@ from outlier_nba.run_writer import RunWriter
 from outlier_nba.sim.engine import SimDraws, SimInputError, SimParams, simulate
 from outlier_nba.track import capture as capture_mod
 from outlier_nba.track import promotion
+from outlier_nba.track.model_ledger import record_model_probs
 from outlier_nba.track.backtest import Predictions, walk_forward
 from outlier_scrapers import paths
 
@@ -543,6 +544,7 @@ def run_team_shadow(
     params: TeamParams | None = None,
     params_source: str = "given",
     feed_receipt_loader: Callable[[], Mapping[str, Any] | None] = load_feed_receipt,
+    ledger_db: Path | None = None,
     n_draws: int = DEFAULT_DRAWS,
     promotion_path: Path = promotion.DEFAULT_PATH,
     slate_date: str | None = None,
@@ -609,6 +611,7 @@ def run_team_shadow(
             neutral_by_event=neutral_by_event,
             promotion_path=promotion_path,
         )
+        state["shadow_rows"] = rows
         writer.stage_text("team_shadow.csv", rows_to_csv(rows))
         ladders = fair_ladders(event_teams(slate.events, records), draws_by_event)
         writer.stage_text(
@@ -639,12 +642,26 @@ def run_team_shadow(
             )
         return receipt("price_team_markets", "OK", received=len(rows))
 
+    def model_ledger(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
+        # Side effect, so it runs last and only when everything before it passed.
+        prior = failing(state["receipts"])
+        if prior:
+            return receipt("model_ledger", "EMPTY", reason=f"skipped: {len(prior)} stage(s) not OK")
+        if not ctx.publishes:
+            return receipt(
+                "model_ledger", "EMPTY", reason=f"skipped: {ctx.mode} run is bundle-only"
+            )
+        stats = record_model_probs(ledger_db, state["shadow_rows"], ctx.run_id)  # type: ignore[arg-type]
+        return receipt("model_ledger", "OK", received=stats["model_rows"])
+
     stages = [
         Stage("feeds", True, feeds),
         Stage("team_state", True, team_state),
         Stage("normalize", True, normalize),
         Stage("price_team_markets", True, price),
     ]
+    if ledger_db is not None:
+        stages.append(Stage("model_ledger", True, model_ledger))
     result = pipe.run(ctx, stages)
     logger.info("nba_team_shadow", run_id=result.run_id, status=result.status,
                 published=result.published, withheld=result.withheld_reason)  # fmt: skip
