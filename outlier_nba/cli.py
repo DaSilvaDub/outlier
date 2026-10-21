@@ -211,9 +211,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.only_if_due:
-        from outlier_nba.track.due import capture_due
+        from outlier_nba.track import due as due_mod
 
-        due = capture_due(args.db, _utc_now())
+        now = _utc_now()
+        due = due_mod.capture_due(args.db, now, last_attempt=due_mod.read_last_attempt(args.db))
         if not due.due:
             print(
                 json.dumps(
@@ -222,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return EXIT_OK
         logger.info("nba_capture_due", reason=due.reason)
+        due_mod.record_attempt(args.db, now)
 
     from outlier_scrapers.api import OutlierApiClient
 

@@ -8,9 +8,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 # NBA shadow capture/settle for Task Scheduler. No reasoning-model calls.
-#   capture: ticks every 15 min; `--only-if-due` skips unless a tip within 60 min lacks a
-#            verified-window capture (or the last capture is >12h old), so a tick is cheap
-#            and a real capture (~2 min, ~175 MB) runs only when CLV needs it.
+#   capture: ticks every 15 min; `--only-if-due` skips unless a tip within 30 min lacks a
+#            capture in its 60-min verified-close window (or the slate is >12h stale), so a
+#            tick is cheap and a real capture (~2 min, ~175 MB) runs only when CLV needs it.
 #   settle : once a morning, grades the last 3 days against box scores.
 # Ledger and run bundles live under %LOCALAPPDATA%\Outlier, off the cloud-filtered
 # checkout (see calibration corruption history) and out of %TEMP% (wiped daily at 03:00).
@@ -67,5 +67,13 @@ catch {
     Add-Content -LiteralPath $logPath -Encoding UTF8 -Value "=== $(Get-Date -Format o) $Mode error: $summary"
 }
 
-Write-Status -Status $(if ($exitCode -eq 0) { "ok" } else { "failed" }) -ExitCode $exitCode -Summary $summary
+$status = if ($exitCode -ne 0) { "failed" } elseif ($summary -match '"skipped": true') { "skipped" } else { "ok" }
+if ($status -eq "skipped") {
+    # Keep the last real capture's status readable; a skip only bumps the heartbeat.
+    Set-Content -LiteralPath (Join-Path $logDir "nba_capture_heartbeat.txt") -Encoding UTF8 `
+        -Value "$([DateTime]::UtcNow.ToString('o')) $summary"
+}
+else {
+    Write-Status -Status $status -ExitCode $exitCode -Summary $summary
+}
 exit $exitCode

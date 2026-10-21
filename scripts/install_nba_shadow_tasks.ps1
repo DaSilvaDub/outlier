@@ -1,9 +1,12 @@
 $ErrorActionPreference = "Stop"
 
 # Registers the NBA shadow tasks (re-run safely; -Force replaces them). Times are local.
-#   Outlier NBA Capture : 10:00 daily, every 15 min for 15 h (covers tips 11:00-02:00 ET)
+#   Outlier NBA Capture : 10:00 daily, every 15 min for 15 h (last tick ~00:45, so tips
+#                         ~10:30-01:15 local get a verified close; the machine runs ET)
 #   Outlier NBA Settle  : 06:00 daily, catches up on wake if the PC was asleep
-# Points at the canonical checkout so Outlier-Quad-Sync keeps the code current.
+# Tasks run only while you are logged on and do not wake the PC; a sleeping evening
+# misses that night's closes. Points at the canonical checkout (Outlier-Quad-Sync keeps
+# it current), so install after these scripts have merged to master.
 
 $scripts = "C:\Users\dasil\Dev\GitHub\outlier\scripts"
 $launcher = Join-Path $scripts "run_nba_shadow_hidden.vbs"
