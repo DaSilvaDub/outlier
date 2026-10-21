@@ -29,6 +29,55 @@
 
 ---
 
+# HANDOFF — 2026-10-20 (Claude, NBA Phases 0–1: foundations + shadow capture)
+
+**Branch**: `claude/nba-phase01` (stacked on `claude/nba-master-pipeline-fusion-cc1443`, PR #284 docs-only) · **PR**: see `gh pr list --head claude/nba-phase01`
+
+## Accomplished
+1. Phase 0. NBA registry: 30 teams with aliases and display names, including LA/Los Angeles variants and vendor codes (GS/NY/NO/SA/UTAH/WSH); `opp_rank_applicable=False`; still `enabled_by_default=False`. `results.py` grades NBA through the existing ESPN basketball path: PTS/REB/AST/3PTS, combos, S+B, DD and now TD. `outlier_nba/`: `identity` (one suffix/punctuation-insensitive name key), `run_context` (as-of cutoff; only live/fixture publish), `receipts` + `run_writer` + `pipeline`. The receipt log is sealed before the publication decision, so any required FAILED receipt withholds everything; this is tested on the pipeline path. numpy added to dependencies; `outlier_nba*` added to packages and the pyright include. Data-source spike: `docs/nba/data-sources.md`.
+2. Phase 1. `ingest/outlier.py` (reuses `OutlierApiClient` and the shared normalizer), `market/devig.py` (multiplicative, Shin with arb fallback, power; clean-room), `market/consensus.py` (per-book devig, median, renormalize, `thin_market` < 3 books, placeholder drop, DFS books excluded), `market/ladders.py` (integer-line push from adjacent half-lines). `track/capture.py` writes every game, team-total and prop/ladder rung to the shared ledger with `sport='NBA'`, board `SHADOW`, units 0, never actionable. `track/views.py` adds the `nba_outcome_eval` view (first pre-tip capture per outcome). `track/settle.py` + `track/clv.py` settle through `results.py`; CLV only from a close ≤60 min pre-tip, otherwise `close_unverified`.
+3. `daily_job --leagues MLB,WNBA,NBA` runs the unchanged MLB/WNBA pipeline plus a non-fatal NBA shadow capture + settle; the default is unchanged. `python -m outlier_nba.cli capture|settle` are the standalone entry points.
+4. A fixture slate is captured three times, settled, and read through the view in `tests/test_nba_shadow_e2e.py`.
+
+## State to know about
+- **No live Outlier read was made.** Outlier session credentials are off limits to this session, so the NBA payload shapes are verified only from the stored WNBA/MLB raw feeds. The first authenticated `python -m outlier_nba.cli capture --db <temp.sqlite3>` is the real verification; the full-game `periodLabel` values for NBA are the likeliest surprise (unknown labels are skipped, fail-closed, and counted in `slate_summary.json`).
+- The 2026-27 season opened **today** (2026-10-20, per ESPN), so every day without capture is lost prop history.
+- Build large ledger writes in local temp and copy them in; the default `--db` is the shared ledger (D3), which sits behind the cloud-sync filter.
+- Side-effecting stages (the ledger write) must stay last in the stage list: a stage that fails after it would withhold publication but not undo the write.
+- stats.nba.com timed out and cdn.nba.com returned 403 to a plain client; neither was worked around. Phase 2/3 lineup, shot-chart and tracking data has no confirmed free source.
+
+## Next steps
+1. Run one authenticated capture into a temp ledger, inspect `slate_summary.json`, then schedule `--leagues MLB,WNBA,NBA`.
+2. Phase 2 (team model), starting with a decision on the historical closing-line source (D4).
+
+---
+
+# HANDOFF — 2026-10-20 (Claude, NBA master pipeline plan)
+
+**Branch**: `claude/nba-master-pipeline-fusion-cc1443` · **PR**: see `gh pr list --head claude/nba-master-pipeline-fusion-cc1443` (docs only)
+
+## Accomplished
+1. Planning only, no production code changed. Design of record: `docs/plans/2026-10-20-nba-master-pipeline.md`. It covers new package `outlier_nba/`, built from five read-only audits (cfb-analytics NCAA *football*, outlier_nfl, shared core + MLB, WNBA, nba-props-pipeline/Sports_Analytics).
+2. Audit verdict: no component in any pipeline has shown out-of-sample skill over the vig-free market. The NBA design is therefore market-anchored: model blend weight 0 until a coded two-key promotion gate passes per market family. One joint game simulation prices every market.
+3. Decisions (user "proceed", 2026-10-20):
+   - D1: slim NBA harness modeled on outlier_nfl.
+   - D2: add numpy.
+   - D3: shared feedback ledger with sport='NBA'.
+   - D4: backfill 2016-17 → 2025-26, plus a historical closing-line source search.
+   - D5: desk compatibility deferred.
+4. Side-finding PRs: #281 (NFL name-key suffix gap + rankings FAILED still publishing) and #282 (shared-core dead gate, ledger pseudo-replication, so_eval retention erosion). #282 also needs the user's ruling on the 0.75 blend floor.
+
+## State to know about
+- `report-sync.ps1` failed until `.git/refs/heads/master (1)` and `.git/refs/remotes/origin/master (1)` (cloud-sync conflict copies) were moved out of `.git/refs`. Backup is in the session scratchpad. If fetch dies with "bad object refs/... (1)", look for `* (N)` ref files.
+- `git fetch` prints "failed to delete .git/worktrees/<name>: Permission denied" for stale worktree folders. This is harmless; the cloud-sync filter blocks the deletes. The app's sync_with_base_branch refused because of this, so merge FETCH_HEAD manually.
+- cfb-analytics fix commit `fb6ffb3` is still on an unpushed local branch.
+
+## Next steps
+1. Phases 0–1 of the plan: NBA registry aliases + results grading, a data-source verification spike, and NBA shadow price capture into the ledger. Ship first; the 2026-27 season is starting and prop history cannot be backfilled.
+2. Merge #281/#282 after CI; rule on the #282 blend floor.
+
+---
+
 # HANDOFF — 2026-10-16 (Grok, finish PR #270 leftover ledger paths)
 
 **Branch**: `fix/unify-feedback-ledger-path` · **Last commit**: `f04b540` · **PR**: https://github.com/DaSilvaDub/outlier/pull/270 (open, do not open another)
@@ -639,7 +688,6 @@ Beads task: `dasil-9xv`.
 - Review and merge the PR, then re-run the WNBA pack and check whether the
   now-live postseason gates change the Board A set.
 - Reconcile 2026-10-04 WNBA postseason results and NFL Week 4 box scores.
->>>>>>> origin/master
 
 ---
 
