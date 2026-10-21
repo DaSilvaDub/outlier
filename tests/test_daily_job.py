@@ -896,3 +896,84 @@ def test_persist_desk_feedback_is_nonfatal(tmp_path, monkeypatch):
     stats = _REAL_PERSIST_DESK_FEEDBACK(pack_dir, db)
     assert stats["status"] == "failed"
     assert "ambiguous" in stats["error"]
+
+
+def test_split_nba_shadow_separates_nba_and_leaves_other_leagues_untouched():
+    _require_daily_job()
+    assert daily_job.split_nba_shadow(["MLB", "WNBA"]) == (["MLB", "WNBA"], False)
+    assert daily_job.split_nba_shadow(["MLB", "WNBA", "NBA"]) == (["MLB", "WNBA"], True)
+    assert daily_job.split_nba_shadow(["NBA"]) == ([], True)
+
+
+def _stub_main_environment(monkeypatch, tmp_path, calls):
+    monkeypatch.setattr(daily_job, "load_environment", lambda: None)
+    monkeypatch.setattr(daily_job, "_acquire_writer_lock", lambda: tmp_path / ".lock")
+    monkeypatch.setattr(daily_job, "_release_writer_lock", lambda _lock: None)
+    monkeypatch.setattr(
+        daily_job, "_run_locked_pipeline", lambda args, leagues: calls.append(("pipeline", leagues)) or 0
+    )
+    monkeypatch.setattr(
+        daily_job, "run_nba_shadow", lambda db: calls.append(("nba", db)) or True
+    )
+
+
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        (["--leagues", "MLB,WNBA"], [("pipeline", ["MLB", "WNBA"])]),
+        (["--leagues", "MLB,WNBA,NBA"], [("pipeline", ["MLB", "WNBA"]), ("nba", None)]),
+        (["--leagues", "NBA"], [("nba", None)]),
+    ],
+)
+def test_leagues_flag_runs_nba_shadow_only_when_asked(monkeypatch, tmp_path, argv, expected):
+    _require_daily_job()
+    calls: list = []
+    _stub_main_environment(monkeypatch, tmp_path, calls)
+    assert daily_job.main(argv) == 0
+    assert calls == expected
+
+
+def test_default_leagues_do_not_include_nba(monkeypatch, tmp_path):
+    _require_daily_job()
+    calls: list = []
+    _stub_main_environment(monkeypatch, tmp_path, calls)
+    daily_job.main([])
+    assert calls == [("pipeline", ["MLB", "WNBA"])]
+
+
+def test_nba_shadow_failure_never_changes_the_pipeline_exit_code(monkeypatch, tmp_path):
+    _require_daily_job()
+    calls: list = []
+    _stub_main_environment(monkeypatch, tmp_path, calls)
+    monkeypatch.setattr(daily_job, "run_nba_shadow", lambda db: False)
+    assert daily_job.main(["--leagues", "MLB,NBA"]) == 0
+
+
+def test_run_nba_shadow_swallows_errors(monkeypatch, tmp_path):
+    _require_daily_job()
+
+    class Boom:
+        def __init__(self):
+            raise RuntimeError("no auth")
+
+    monkeypatch.setattr(daily_job, "OutlierApiClient", Boom)
+    assert daily_job.run_nba_shadow(tmp_path / "ledger.sqlite3") is False
+
+
+def test_run_nba_shadow_reports_capture_and_settlement(monkeypatch, tmp_path):
+    _require_daily_job()
+    from types import SimpleNamespace
+
+    import outlier_nba.cli as nba_cli
+
+    seen = {}
+    monkeypatch.setattr(daily_job, "OutlierApiClient", lambda: "client")
+    monkeypatch.setattr(
+        nba_cli, "run_capture",
+        lambda client, **kw: seen.update(client=client, **kw)
+        or SimpleNamespace(status="OK", published=True, exit_code=0),
+    )
+    monkeypatch.setattr(nba_cli, "run_settle", lambda db: {"settlement_rows": 4})
+    db = tmp_path / "ledger.sqlite3"
+    assert daily_job.run_nba_shadow(db) is True
+    assert seen["client"] == "client" and seen["db_path"] == db

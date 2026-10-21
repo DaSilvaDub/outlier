@@ -118,3 +118,48 @@ def test_new_full_game_market_aliases():
     assert normalize_market(wnba, "FREE_THROWS_ATTEMPTED") == "FTA"
     assert normalize_market(wnba, "DEFENSIVE_REBOUNDS") == "DREB"
 
+
+
+NBA_CODES = {
+    "ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+    "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+    "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
+}
+
+
+def test_nba_registry_has_thirty_teams_and_stays_disabled_by_default():
+    from outlier_scrapers.registry import NBA_TEAM_DISPLAY, get_sport_config, supported_leagues
+
+    assert set(NBA_TEAM_DISPLAY) == NBA_CODES
+    assert "NBA" not in supported_leagues()
+    nba = get_sport_config("NBA", allow_disabled=True)
+    assert nba.enabled_by_default is False
+    assert nba.opp_rank_applicable is False
+
+
+def test_every_nba_team_resolves_from_code_and_display_name():
+    from outlier_scrapers.registry import NBA_TEAM_DISPLAY, get_sport_config
+
+    nba = get_sport_config("NBA", allow_disabled=True)
+    for code, name in NBA_TEAM_DISPLAY.items():
+        assert normalize_team(nba, code) == code
+        assert normalize_team(nba, name) == code
+        assert team_display_name(nba, code) == name
+
+
+def test_nba_los_angeles_variants_and_vendor_codes():
+    from outlier_scrapers.registry import get_sport_config
+
+    nba = get_sport_config("NBA", allow_disabled=True)
+    assert normalize_team(nba, "LA Clippers") == "LAC"
+    assert normalize_team(nba, "Los Angeles Clippers") == "LAC"
+    assert normalize_team(nba, "LA Lakers") == "LAL"
+    assert normalize_team(nba, "Los Angeles Lakers") == "LAL"
+    for raw, code in {
+        "GS": "GSW", "NY": "NYK", "NO": "NOP", "SA": "SAS", "UTAH": "UTA",
+        "WSH": "WAS", "BRK": "BKN", "CHO": "CHA", "PHO": "PHX",
+    }.items():
+        assert normalize_team(nba, raw) == code
+    # a bare "LA" is ambiguous between the two NBA clubs and must not be guessed
+    assert normalize_team(nba, "LA") is None
+    assert normalize_team(nba, "Seattle Supersonics") is None

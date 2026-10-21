@@ -56,14 +56,18 @@ PREDICTION_PREFIXES = ("nfl_high_prob_props_", "nfl_calibrated_props_", "nfl_mat
 CARD_PREFIX = "nfl_best_bets_"
 HELPER_GLOBS = ("cache/espn_injuries_filter_{d}*", "exports/nfl_only_filter_summary_{d}*")
 SLATE_GLOBS = ("normalized/*_{d}*", "exports/*_{d}*", "scorecard/*_{d}*")
-# The five multi-player markets whose snapshot rows the writer saved with the
-# market label as ``player_name``. Matched exactly (market and label), nothing else.
+# The seven multi-player markets whose snapshot rows the writer saved with the
+# market label as ``player_name`` (a read-only scan of the archived
+# nfl_prop_snapshots_2026-09-29.jsonl found every row of each one that way).
+# Matched exactly (market and label), nothing else.
 MULTI_PLAYER_MARKET_LABELS = {
     "FIRST_TEAM_RECEPTION": "First Team Reception",
     "FIRST_TEAM_TOUCHDOWN": "First Team TD Scorer",
     "FIRST_TD": "First TD Scorer",
     "LAST_TOUCHDOWN": "Last TD Scorer",
+    "MOST_PASSING_YARDS": "Most Passing Yards",
     "MOST_RECEIVING_YARDS": "Most Receiving Yards",
+    "MOST_RUSHING_YARDS": "Most Rushing Yards",
 }
 MARKET_LABEL_AS_PLAYER = "unrecoverable_row:market_label_as_player"
 _SCRIPT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_([A-Za-z]+)_([A-Za-z]+)_Game_Script\.md$")
@@ -391,7 +395,7 @@ def _canon(row: dict[str, Any]) -> str:
 
 
 def market_label_as_player(row: dict[str, Any]) -> bool:
-    """True when ``row`` is in one of the five multi-player markets and its
+    """True when ``row`` is in one of the multi-player markets and its
     ``player_name`` is exactly that market's label. No other test."""
     market = row.get("market")
     return isinstance(market, str) and market in MULTI_PLAYER_MARKET_LABELS \

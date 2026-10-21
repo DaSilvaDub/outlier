@@ -169,6 +169,49 @@ WNBA_TEAM_DISPLAY = {
 }
 
 
+# NBA: canonical tricode -> (display name, extra raw aliases). A bare "LA" is
+# deliberately absent: it is ambiguous between the Clippers and the Lakers.
+_NBA_TEAMS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ATL": ("Atlanta Hawks", ("Hawks",)),
+    "BOS": ("Boston Celtics", ("Celtics",)),
+    "BKN": ("Brooklyn Nets", ("BRK", "Nets")),
+    "CHA": ("Charlotte Hornets", ("CHO", "Hornets")),
+    "CHI": ("Chicago Bulls", ("Bulls",)),
+    "CLE": ("Cleveland Cavaliers", ("CLV", "Cavaliers", "Cavs")),
+    "DAL": ("Dallas Mavericks", ("Mavericks", "Mavs")),
+    "DEN": ("Denver Nuggets", ("Nuggets",)),
+    "DET": ("Detroit Pistons", ("Pistons",)),
+    "GSW": ("Golden State Warriors", ("GS", "GOS", "Warriors")),
+    "HOU": ("Houston Rockets", ("Rockets",)),
+    "IND": ("Indiana Pacers", ("Pacers",)),
+    "LAC": ("Los Angeles Clippers", ("LA Clippers", "Clippers")),
+    "LAL": ("Los Angeles Lakers", ("LA Lakers", "Lakers")),
+    "MEM": ("Memphis Grizzlies", ("Grizzlies",)),
+    "MIA": ("Miami Heat", ("Heat",)),
+    "MIL": ("Milwaukee Bucks", ("Bucks",)),
+    "MIN": ("Minnesota Timberwolves", ("Timberwolves", "Wolves")),
+    "NOP": ("New Orleans Pelicans", ("NO", "NOR", "NOH", "Pelicans")),
+    "NYK": ("New York Knicks", ("NY", "NYN", "Knicks")),
+    "OKC": ("Oklahoma City Thunder", ("OKL", "Thunder")),
+    "ORL": ("Orlando Magic", ("Magic",)),
+    "PHI": ("Philadelphia 76ers", ("PHL", "76ers", "Sixers")),
+    "PHX": ("Phoenix Suns", ("PHO", "Suns")),
+    "POR": ("Portland Trail Blazers", ("Trail Blazers", "Blazers")),
+    "SAC": ("Sacramento Kings", ("Kings",)),
+    "SAS": ("San Antonio Spurs", ("SA", "SAN", "Spurs")),
+    "TOR": ("Toronto Raptors", ("Raptors",)),
+    "UTA": ("Utah Jazz", ("UTAH", "UTH", "Jazz")),
+    "WAS": ("Washington Wizards", ("WSH", "WSW", "Wizards")),
+}
+
+NBA_TEAM_DISPLAY = {code: name for code, (name, _extra) in _NBA_TEAMS.items()}
+NBA_TEAM_ALIASES = {
+    _compact(alias): code
+    for code, (name, extra) in _NBA_TEAMS.items()
+    for alias in (code, name, *extra)
+}
+
+
 MLB_TEAM_DISPLAY = {
     "ARI": "Arizona Diamondbacks",
     "ATL": "Atlanta Braves",
@@ -340,9 +383,11 @@ SPORTS: dict[str, SportConfig] = {
         league_id="NBA",
         app_route="NBA",
         enabled_by_default=False,
-        team_aliases={},
+        team_aliases=NBA_TEAM_ALIASES,
         market_aliases=BASKETBALL_MARKET_ALIASES,
-        opp_rank_applicable=True,
+        team_display=NBA_TEAM_DISPLAY,
+        # Same playerProps API as WNBA: no opponent rank is returned.
+        opp_rank_applicable=False,
     ),
 }
 
