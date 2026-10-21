@@ -13,6 +13,18 @@
 1. **Owner action:** with no pipeline running, run `python -m outlier_scrapers.feedback migrate-ledger` once. Until then, Windows pipeline writers refuse with that instruction. The real ledger was NOT migrated by the agent.
 2. Watch CI on PR #287 (the full core suite runs there; locally the reasoning guard blocks the CI pytest command line).
 3. Later, optional: the old copies in canonical `calibration/` (`feedback.corrupt-*`, `.recovered*`, `.fuse_hidden*`) are ~1.3 GB of strays. Prune them only by hand, once the local ledger has proven out.
+4. Interaction with PR #290 (NBA shadow auto-run): its scheduled tasks pass an explicit `--db` trial ledger, so the migration guard never blocks them. Switching them to `-SharedLedger` (default ledger) before `migrate-ledger` has run makes them raise `LedgerMigrationRequired`: migrate first.
+
+---
+
+# HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
+
+- Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.
+- `capture --only-if-due` (`outlier_nba/track/due.py`) captures only when a tip is <=30 min out with no capture in its 60-min verified window, or the slate is >12h stale (throttled by a `<ledger>.last-capture-attempt` marker).
+- Task Scheduler: `Outlier NBA Capture` (10:00 local, every 15 min for 15 h) and `Outlier NBA Settle` (06:00 daily) are REGISTERED. Both run `scripts/run_nba_shadow_hidden.vbs` from the canonical checkout, so they fail until PR 290 merges and Outlier-Quad-Sync pulls it.
+- Ledger: trial ledger `%LOCALAPPDATA%\Outlier\nba_trial_ledger.sqlite3` (copied from `%TEMP%\nba_temp_ledger.sqlite3`; `%TEMP%` is wiped at 03:00 by SystemMaintenance-CleanTempDaily). Bundles: `%LOCALAPPDATA%\Outlier\NBA`. Logs/status: `%LOCALAPPDATA%\Outlier\logs`.
+- Storage: one capture is ~175 MB (59 MB ledger + 116 MB bundle; most of it is ~2 months of future games). C: had 24 GB free. No bundle retention/pruning yet.
+- Next steps: merge PR 290 before ~18:30 ET on 10-21. Check the 06:00 10-22 settle (`nba_settle_status.json`: settlement_rows, clv_verified). If grading looks right, re-run the tasks with `-SharedLedger` (after the shared ledger moves off the cloud-filtered path).
 
 ---
 
