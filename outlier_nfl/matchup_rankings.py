@@ -158,9 +158,14 @@ class MatchupRankingsEngine:
             p.get("player") or p.get("player_name", ""): p for p in usage_players if isinstance(p, dict)
         }
         # Usage names are nflverse ``player_display_name``; the inactive list is
-        # ``full_name``. Only the normalized key joins the two (see is_player_inactive).
-        self.usage_by_key: dict[str, dict[str, Any]] = {
-            _name_key(name): p for name, p in self.usage_by_player.items() if name
+        # ``full_name``. Only the normalized key joins the two (see is_player_inactive),
+        # and only within one team: two players on the slate can share a key, so a
+        # slate-wide index would credit one team's out player with another's volume
+        # (and, when both exist, let the wrong team's entry shadow the right one).
+        self.usage_by_team_key: dict[tuple[str, str], dict[str, Any]] = {
+            (str(p.get("team") or ""), _name_key(name)): p
+            for name, p in self.usage_by_player.items()
+            if name
         }
         self.rosters = rosters
         self.tapes = tapes
@@ -389,7 +394,7 @@ class MatchupRankingsEngine:
                 pname_key = _name_key(pname)
                 for inact in team_inactives:
                     inact_key = _name_key(inact)
-                    inact_prof = self.usage_by_key.get(inact_key)
+                    inact_prof = self.usage_by_team_key.get((team, inact_key))
                     if inact_key == pname_key or inact_prof is None:
                         continue
                     if inact_prof.get("position") == "RB":
