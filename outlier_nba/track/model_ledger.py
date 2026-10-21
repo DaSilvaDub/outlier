@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS nba_model_probs (
 MAX_ALIGN_SECONDS = 900
 
 MODEL_VIEW_NAME = "nba_model_eval"
-MODEL_VIEW_SQL = f"""
+MODEL_VIEW_SQL = """
 CREATE VIEW nba_model_eval AS
 WITH first_model AS (
     SELECT * FROM (
@@ -77,8 +77,10 @@ FROM aligned a
 LEFT JOIN decisions d ON d.snapshot_id = a.snapshot_id
 LEFT JOIN settlements x ON x.decision_id = d.decision_id
 LEFT JOIN nba_clv c ON c.decision_id = d.decision_id
-WHERE a.srn = 1 AND a.snapshot_gap_seconds <= {MAX_ALIGN_SECONDS}
+WHERE a.srn = 1 AND a.snapshot_gap_seconds <= 900
 """
+if f"<= {MAX_ALIGN_SECONDS}" not in MODEL_VIEW_SQL:  # the literal above must match the constant
+    raise RuntimeError("MODEL_VIEW_SQL alignment window does not match MAX_ALIGN_SECONDS")
 
 
 def _num(value: Any) -> float | None:
