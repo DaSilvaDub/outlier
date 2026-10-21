@@ -79,7 +79,7 @@ def test_ratings_command_writes_table_and_state(tmp_path, monkeypatch, capsys) -
 
 
 def test_ratings_command_exits_three_when_results_are_stale(tmp_path, monkeypatch, capsys) -> None:
-    old = [g for g in synth_history() if g.season != "2026-27"]
+    old = [g for g in synth_history() if g.season != "2026-27" or g.start_utc.day <= 9]
     monkeypatch.setattr(team_run, "load_store_games", lambda store: old)
     _fast_params(monkeypatch)
     args = ["ratings", "--date", "2026-10-21", "--no-refresh", "--out-dir", str(tmp_path)]
@@ -113,6 +113,37 @@ def test_ratings_refresh_survives_a_block(tmp_path, monkeypatch, capsys) -> None
     args += ["--store", str(tmp_path / "s"), "--out-dir", str(tmp_path / "o")]
     assert cli.main(args) == 0
     assert "blocked" in capsys.readouterr().out
+
+
+def test_ratings_refresh_keeps_the_old_store_when_the_rebuild_has_less_history(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(espn, "refresh_recent", lambda cache, today: {})
+    monkeypatch.setattr(espn, "build_store", lambda cache, db: {})
+
+    def refuse(src, dst):
+        raise espn.StoreRegressionError("refusing to replace the installed store with less history")
+
+    monkeypatch.setattr(espn, "install_store", refuse)
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    _fast_params(monkeypatch)
+    args = ["ratings", "--date", "2026-10-21", "--cache-dir", str(tmp_path / "c")]
+    args += ["--store", str(tmp_path / "s"), "--out-dir", str(tmp_path / "o")]
+    assert cli.main(args) == 0  # still fits from the installed store
+    assert "store_not_replaced" in capsys.readouterr().out
+
+
+def test_backfill_build_exits_five_when_it_would_shrink_the_store(tmp_path, monkeypatch, capsys):
+    _seed_cache(tmp_path / "cache")
+
+    def refuse(src, dst):
+        raise espn.StoreRegressionError("less history")
+
+    monkeypatch.setattr(espn, "install_store", refuse)
+    args = ["backfill", "--stage", "build", "--cache-dir", str(tmp_path / "cache")]
+    args += ["--store", str(tmp_path / "s.sqlite3")]
+    assert cli.main(args) == 5
+    assert "store_not_replaced" in capsys.readouterr().out
 
 
 def test_run_command_passes_arguments_and_returns_the_exit_code(tmp_path, monkeypatch, capsys):

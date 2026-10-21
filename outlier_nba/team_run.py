@@ -44,6 +44,7 @@ logger = structlog.get_logger("outlier_nba.team_run")
 
 MODEL_CONFIG_PATH = paths.PROJECT_ROOT / "config" / "nba_team_model.json"
 MAX_RESULT_AGE_DAYS = 7  # newest finished game in the store vs the slate date
+OPENING_WINDOW_DAYS = 45  # days after Oct 1 in which a prior-season-only model is acceptable
 DEFAULT_DRAWS = 20_000
 FAMILY = {
     "ML": "team.ML",
@@ -80,6 +81,7 @@ class TeamState:
     season: str
     last_game_day: int
     params_source: str
+    prior_only: bool = False  # season opener: no result from this season yet
 
     @property
     def tracker(self):
@@ -110,18 +112,28 @@ def compute_team_state(
     if not usable.any():
         raise TeamStateError(f"no results before {slate_date}")
     last = int(ds.day[usable].max())
+    in_season = any(s == season for s, u in zip(ds.season, usable) if u)
+    prior_only = False
     if slate_day - last > max_age_days:
-        raise TeamStateError(
-            f"newest result is {slate_day - last} days before {slate_date} "
-            f"(limit {max_age_days}); refresh the store"
-        )
+        # The first slate after the offseason has no result from its own season: the model
+        # then runs on last season's final ratings. That is allowed only inside the opening
+        # weeks of the new season; once the season has started, stale results are an error.
+        opening = date(int(season[:4]), 10, 1).toordinal()
+        if in_season or not (0 <= slate_day - opening <= OPENING_WINDOW_DAYS):
+            raise TeamStateError(
+                f"newest result is {slate_day - last} days before {slate_date} "
+                f"(limit {max_age_days}); refresh the store"
+            )
+        prior_only = True
     past = build_dataset([g for g, u in zip(ds.games, usable) if u])
     preds = walk_forward(past, params)
     if not preds.noise.ready:
         raise TeamStateError(f"only {preds.noise.n_obs} out-of-sample games to estimate noise")
     model = TeamModel(past, params, extra_season=season)
     asof = model.fit_asof(season, slate_day)
-    return TeamState(past, model, asof, preds, params, slate_day, season, last, params_source)
+    return TeamState(
+        past, model, asof, preds, params, slate_day, season, last, params_source, prior_only
+    )
 
 
 def ratings_rows(state: TeamState) -> list[dict[str, Any]]:
@@ -152,6 +164,7 @@ def state_summary(state: TeamState) -> dict[str, Any]:
         "games_in_store": len(state.ds),
         "season_games_fitted": r.n_games,
         "params_source": state.params_source,
+        "prior_only_season_opener": state.prior_only,
         "league": {"mu": r.mu, "home_per100": r.h, "playoff_shift": r.playoff},
         "noise": {
             "n": t.n,
@@ -185,13 +198,32 @@ def _is_playoff_window(slate_date: str) -> bool:
     return d.month in (5, 6) or (d.month == 4 and d.day >= 15)
 
 
+NEUTRAL_KEYS = ("neutralSite", "neutral_site", "neutral", "isNeutral")
+
+
+def event_neutral(event: Mapping[str, Any]) -> bool | None:
+    """Venue flag from the schedule payload; None when the feed does not say."""
+    for key in NEUTRAL_KEYS:
+        if key in event and event[key] is not None:
+            return bool(event[key])
+    return None
+
+
 def event_draws(
-    state: TeamState, home: str, away: str, slate_date: str, n: int, rng: np.random.Generator
+    state: TeamState,
+    home: str,
+    away: str,
+    slate_date: str,
+    n: int,
+    rng: np.random.Generator,
+    *,
+    neutral: bool = False,
 ) -> SimDraws:
     pr = predict(
         state.asof,
         TEAM_INDEX[home],
         TEAM_INDEX[away],
+        neutral=neutral,
         playoff=_is_playoff_window(slate_date),
         sigma_p=state.tracker.sigma_p,
     )
@@ -246,13 +278,16 @@ def price_slate(
     records: Sequence[ingest.OutcomeRecord],
     capture: capture_mod.ShadowCapture,
     *,
-    slate_date: str,
     captured_at: datetime,
-    n_draws: int = DEFAULT_DRAWS,
-    seed: int = 20260101,
+    draws_by_event: Mapping[str, SimDraws | None],
+    neutral_by_event: Mapping[str, bool | None],
     promotion_path: Path = promotion.DEFAULT_PATH,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """One shadow row per quoted team-market outcome (main lines and alt rungs alike)."""
+    """One shadow row per quoted team-market outcome (main lines and alt rungs alike).
+
+    ``draws_by_event`` holds the single simulation per game that every quoted outcome and
+    the fair ladders are read from, so one outcome has one probability everywhere.
+    """
     cons = {
         str(r["outcome_id"]): float(r["market_consensus_prob"])
         for r in capture.rows
@@ -260,8 +295,6 @@ def price_slate(
     }
     price_by_outcome = {str(r["outcome_id"]): r for r in capture.rows}
     main = _main_lines(records, cons)
-    rng = np.random.default_rng(seed)
-    draws_by_event: dict[str, SimDraws | None] = {}
     rows: list[dict[str, Any]] = []
     stats: dict[str, int] = defaultdict(int)
     for rec in records:
@@ -272,20 +305,12 @@ def price_slate(
         ):
             stats["skipped_unresolved"] += 1
             continue
-        if rec.event_id not in draws_by_event:
-            try:
-                if rec.home is None or rec.away is None:
-                    raise ValueError("event teams unresolved")
-                draws_by_event[rec.event_id] = event_draws(
-                    state, rec.home, rec.away, slate_date, n_draws, rng
-                )
-            except (SimInputError, KeyError, ValueError) as exc:
-                logger.warning("event_sim_failed", event=rec.event_id, error=str(exc))
-                draws_by_event[rec.event_id] = None
-        draws = draws_by_event[rec.event_id]
+        draws = draws_by_event.get(rec.event_id)
         alt = rec.market != "ML" and rec.outcome_id not in main and rec.outcome_id in cons
         family = (ALT_FAMILY if alt else FAMILY)[rec.market] if rec.market != "ML" else FAMILY["ML"]
         flags = ["SHADOW"] + (["ALT_LINE"] if alt else [])
+        if neutral_by_event.get(rec.event_id) is None:
+            flags.append("HOME_COURT_ASSUMED")  # the schedule feed does not state the venue
         priced: team_markets.Priced | None = None
         if draws is None:
             flags.append("MODEL_UNAVAILABLE")
@@ -334,20 +359,49 @@ def price_slate(
     return rows, dict(stats)
 
 
+def simulate_events(
+    state: TeamState,
+    events: Sequence[Mapping[str, Any]],
+    slate_date: str,
+    n: int,
+    seed: int,
+) -> tuple[dict[str, SimDraws | None], dict[str, bool | None]]:
+    """One simulation per open game (None when it cannot be run) and its venue flag."""
+    rng = np.random.default_rng(seed)
+    draws: dict[str, SimDraws | None] = {}
+    neutral: dict[str, bool | None] = {}
+    for ev in events:
+        event_id = str(ev.get("eventId") or ev.get("id") or "")
+        home = resolve_team((ev.get("home") or {}).get("alias"))
+        away = resolve_team((ev.get("away") or {}).get("alias"))
+        neutral[event_id] = event_neutral(ev)
+        if home is None or away is None or home not in TEAM_INDEX or away not in TEAM_INDEX:
+            draws[event_id] = None
+            continue
+        try:
+            draws[event_id] = event_draws(
+                state, home, away, slate_date, n, rng, neutral=bool(neutral[event_id])
+            )
+        except (SimInputError, KeyError, ValueError) as exc:
+            logger.warning("event_sim_failed", event=event_id, error=str(exc))
+            draws[event_id] = None
+    return draws, neutral
+
+
 def fair_ladders(
-    state: TeamState, events: Sequence[Mapping[str, Any]], slate_date: str, n: int, seed: int
+    events: Sequence[Mapping[str, Any]], draws_by_event: Mapping[str, SimDraws | None]
 ) -> list[dict[str, Any]]:
-    """Model fair odds on a one-point grid around each event's expected values (alt lines)."""
-    rng = np.random.default_rng(seed + 1)
+    """Model fair odds on a one-point grid around each event's expected values (alt lines).
+
+    Reads the same draws the quoted outcomes were priced from.
+    """
     out: list[dict[str, Any]] = []
     for ev in events:
-        home, away = (
-            resolve_team((ev.get("home") or {}).get("alias")),
-            resolve_team((ev.get("away") or {}).get("alias")),
-        )
-        if home is None or away is None or home not in TEAM_INDEX or away not in TEAM_INDEX:
+        draws = draws_by_event.get(str(ev.get("eventId") or ev.get("id") or ""))
+        home = resolve_team((ev.get("home") or {}).get("alias"))
+        away = resolve_team((ev.get("away") or {}).get("alias"))
+        if draws is None or home is None or away is None:
             continue
-        draws = event_draws(state, home, away, slate_date, n, rng)
         mid_margin = float(np.median(draws.margin))
         mid_total = float(np.median(draws.total))
         mid_h, mid_a = float(np.median(draws.home)), float(np.median(draws.away))
@@ -373,9 +427,11 @@ def fair_ladders(
     return out
 
 
-def rows_to_csv(rows: Sequence[Mapping[str, Any]], fields: Sequence[str] = ROW_FIELDS) -> str:
+def rows_to_csv(rows: Sequence[Mapping[str, Any]], fields: Sequence[str] | None = None) -> str:
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=list(fields), lineterminator="\n")
+    writer = csv.DictWriter(
+        buf, fieldnames=list(fields if fields is not None else ROW_FIELDS), lineterminator="\n"
+    )
     writer.writeheader()
     writer.writerows(rows)
     return buf.getvalue()
@@ -446,12 +502,20 @@ def run_team_shadow(
         if not records:
             return receipt("price_team_markets", "EMPTY", reason="no team-market outcomes")
         cap = capture_mod.build_shadow_capture(records, captured_at=bundle.fetch_started)
+        draws_by_event, neutral_by_event = simulate_events(
+            state["team_state"], slate.events, ctx.slate_date, n_draws, 20260101
+        )
         rows, stats = price_slate(
-            state["team_state"], records, cap, slate_date=ctx.slate_date,
-            captured_at=bundle.fetch_started, n_draws=n_draws, promotion_path=promotion_path,
-        )  # fmt: skip
+            state["team_state"],
+            records,
+            cap,
+            captured_at=bundle.fetch_started,
+            draws_by_event=draws_by_event,
+            neutral_by_event=neutral_by_event,
+            promotion_path=promotion_path,
+        )
         writer.stage_text("team_shadow.csv", rows_to_csv(rows))
-        ladders = fair_ladders(state["team_state"], slate.events, ctx.slate_date, n_draws, 7)
+        ladders = fair_ladders(slate.events, draws_by_event)
         writer.stage_text(
             "team_fair_ladders.csv",
             rows_to_csv(ladders, list(ladders[0]) if ladders else ["event_id"]),

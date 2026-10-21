@@ -19,17 +19,18 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
-import sys
+import multiprocessing
 import time
 import zlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from http.client import HTTPException
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import structlog
@@ -244,13 +245,14 @@ class Throttle:
 
 
 def http_fetch(url: str, *, timeout: int = 30, retries: int = 2) -> dict[str, Any]:
-    if not url.startswith(ESPN_BASE + "/"):  # only ever talk to the one ESPN endpoint family
+    if urlsplit(url).scheme != "https" or not url.startswith(ESPN_BASE + "/"):
+        # only ever talk to the one ESPN endpoint family, over https
         raise EspnError(f"refusing to fetch outside {ESPN_BASE}: {url.split('?')[0]}")
     request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})  # noqa: S310
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            with urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout) as response:  # nosec B310 - https ESPN only, checked above
                 payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, dict):
                 raise EspnError(f"non-object response from {url.split('?')[0]}")
@@ -497,45 +499,78 @@ def store_counts(db_path: Path) -> dict[str, Any]:
     return {"integrity": ok, "games": games, "with_box": with_box, "gaps": gaps}
 
 
-_VERIFY_SNIPPET = (
-    "import json,sqlite3,sys;"
-    "c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True);"
-    "print(json.dumps({'integrity':c.execute('PRAGMA integrity_check').fetchone()[0],"
-    "'games':c.execute('SELECT COUNT(*) FROM games').fetchone()[0],"
-    "'with_box':c.execute('SELECT COUNT(*) FROM games WHERE home_tov IS NOT NULL').fetchone()[0],"
-    "'gaps':c.execute('SELECT COUNT(*) FROM gaps').fetchone()[0]}))"
-)
+def _count_in_fresh_interpreter(path_str: str) -> dict[str, Any]:
+    """Worker run in a spawned interpreter: opens the file read-only and counts it."""
+    return store_counts(Path(path_str))
 
 
-def verify_store_fresh_process(path: Path, python: str | None = None) -> dict[str, Any]:
-    """Count the store from a brand-new interpreter (no shared handles or page cache)."""
-    proc = subprocess.run(  # noqa: S603
-        [python or sys.executable, "-I", "-c", _VERIFY_SNIPPET, path.as_posix()],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"store verification failed: {proc.stderr.strip()[:300]}")
-    return json.loads(proc.stdout)
+def verify_store_fresh_process(path: Path) -> dict[str, Any]:
+    """Count the store from a brand-new interpreter (no shared handles or page cache).
+
+    A spawned worker (not a shell-out) so there is no command line to build or escape.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as pool:
+        return pool.submit(_count_in_fresh_interpreter, path.as_posix()).result(timeout=300)
 
 
-def install_store(tmp_db: Path, dest: Path, *, python: str | None = None) -> dict[str, Any]:
-    """Copy a locally built store into place, then re-count it; remove it on any mismatch."""
+class StoreRegressionError(RuntimeError):
+    """The new store has less history than the one it would replace."""
+
+
+def season_counts(db_path: Path) -> dict[tuple[str, int], tuple[int, int]]:
+    """``{(season, season_type): (games, games_with_box)}``."""
+    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT season, season_type, COUNT(*), SUM(home_tov IS NOT NULL) "
+            "FROM games GROUP BY season, season_type"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {(s, t): (n, b or 0) for s, t, n, b in rows}
+
+
+def check_no_regression(new_db: Path, existing: Path) -> None:
+    """Refuse a store that lost any season, game or box score the installed one has.
+
+    A rebuild from an incomplete or cleared cache is readable and passes the integrity
+    check, so coverage is compared explicitly. The installed store is left untouched.
+    """
+    if not existing.exists():
+        return
+    old, new = season_counts(existing), season_counts(new_db)
+    lost = [
+        f"{key}: games {old[key][0]}->{new.get(key, (0, 0))[0]}, "
+        f"box {old[key][1]}->{new.get(key, (0, 0))[1]}"
+        for key in sorted(old)
+        if new.get(key, (0, 0))[0] < old[key][0] or new.get(key, (0, 0))[1] < old[key][1]
+    ]
+    if lost:
+        raise StoreRegressionError(
+            "refusing to replace the installed store with less history: " + "; ".join(lost[:6])
+        )
+
+
+def install_store(tmp_db: Path, dest: Path) -> dict[str, Any]:
+    """Copy a locally built store into place, then re-count it; remove it on any mismatch.
+
+    The installed store is only replaced by one that covers at least as much history.
+    """
+    check_no_regression(tmp_db, dest)
     expected = store_counts(tmp_db)
     dest.parent.mkdir(parents=True, exist_ok=True)
     staging = dest.with_suffix(dest.suffix + ".incoming")
     shutil.copyfile(tmp_db, staging)
     try:
-        got = verify_store_fresh_process(staging, python)
+        got = verify_store_fresh_process(staging)
         if got != expected or got["integrity"] != "ok":
             raise RuntimeError(f"count mismatch after copy: expected {expected}, got {got}")
         os.replace(staging, dest)
     finally:
         if staging.exists():
             staging.unlink()
-    final = verify_store_fresh_process(dest, python)
+    final = verify_store_fresh_process(dest)
     if final != expected:
         dest.unlink()
         raise RuntimeError(f"count mismatch after install: expected {expected}, got {final}")

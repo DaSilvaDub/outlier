@@ -118,10 +118,24 @@ one simulation per game, push-aware, and writes `team_shadow.csv`, `team_fair_la
 `team_ratings.csv` and `team_model_state.json` into the run bundle. `final_prob` is the vig-free market
 probability (weight 0). A row without a usable market probability gets a blank `final_prob` and a
 `MISSING_MARKET_PROB` flag. Stale results (newest result more than 7 days old), a missing store or a cold noise
-tracker fail the required `team_state` stage and withhold publication (exit 3).
+tracker fail the required `team_state` stage and withhold publication (exit 3). The 7-day rule is
+season-aware: a season opener with no result yet from its own season (first 45 days after Oct 1)
+runs on last season's final ratings and is marked `prior_only_season_opener`; once any result from
+the season exists, or the opening window has passed, stale results fail.
+
+Venue: `event_draws` takes the schedule's neutral-site flag when the feed carries one
+(`neutralSite`, `neutral_site`, `neutral`, `isNeutral`). The Outlier schedule's fields are
+unverified, so when none is present the row is flagged `HOME_COURT_ASSUMED` rather than
+silently treated as verified. One simulation per game feeds the quoted rows and the fair ladders.
+
+`ratings`/`backfill --stage build` refuse to install a store that has fewer games or box scores in
+any (season, season type) than the installed one (`StoreRegressionError`; the installed file is
+left untouched; `backfill build` exits 5).
 
 `config/nba_promotion.json` is read only through `outlier_nba.track.promotion` and written only by its
-`evaluate`. It carries a content hash, so a hand edit makes every reader raise. A family is promoted only if
+`evaluate`. It carries a content hash, so an accidental or casual hand edit makes every reader raise. The
+hash is tamper-evident, not tamper-proof (anyone who can write the file can recompute it); the real
+controls are code review of the config and the fail-closed default. A family is promoted only if
 every key passes on supplied evidence; unknown evidence (for example no market comparison) counts as failing.
 Even a promoted family keeps units 0 because sizing is not wired.
 

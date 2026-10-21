@@ -12,6 +12,7 @@
 - `run` was not exercised against live Outlier (no credentials in this session); `ratings` was run live against ESPN.
 - `config/nba_promotion.json` is hash-guarded: only `track.promotion.evaluate` may write it. `config/nba_team_model.json` holds the tuned params (written by `backtest --write-config`). Both are un-ignored in `.gitignore`.
 - Model probabilities live in the run bundle, not the ledger.
+- Review fixes on the PR: installed store never shrinks (`StoreRegressionError`), season-opener freshness, schedule neutral flag (else `HOME_COURT_ASSUMED`), one simulation shared by rows and ladders, no `assert`/subprocess/f-string SQL (Codacy). The promotion hash is tamper-evident only.
 - Sim under-predicts totals by about 1 point; pool over-predicts home wins by 1 to 4 points per bucket. Not fixed.
 - ESPN: use the repo User-Agent (a longer one with an e-mail got a 403); date ranges return 400, so one request per day.
 

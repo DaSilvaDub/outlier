@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
@@ -181,7 +180,7 @@ def test_copy_store_verifies_counts_from_a_fresh_process(tmp_path: Path) -> None
     tmp_db = tmp_path / "tmp.sqlite3"
     stats = espn.build_store(cache, tmp_db)
     dest = tmp_path / "out" / "nba_games.sqlite3"
-    report = espn.install_store(tmp_db, dest, python=sys.executable)
+    report = espn.install_store(tmp_db, dest)
     assert report["games"] == stats["games"] and dest.exists()
 
 
@@ -191,16 +190,63 @@ def test_install_store_refuses_on_count_mismatch(tmp_path: Path, monkeypatch) ->
     espn.build_store(cache, tmp_db)
     real = espn.verify_store_fresh_process
 
-    def lying(path: Path, python: str | None = None) -> dict:
-        out = real(path, python)
+    def lying(path: Path) -> dict:
+        out = real(path)
         out["games"] += 1
         return out
 
     monkeypatch.setattr(espn, "verify_store_fresh_process", lying)
     dest = tmp_path / "out" / "nba_games.sqlite3"
     with pytest.raises(RuntimeError, match="count mismatch"):
-        espn.install_store(tmp_db, dest, python=sys.executable)
+        espn.install_store(tmp_db, dest)
     assert not dest.exists()
+
+
+def _store(tmp_path: Path, name: str, scoreboards: dict, summaries: bool = True) -> Path:
+    cache = EspnCache(tmp_path / f"cache-{name}")
+    for day, payload in scoreboards.items():
+        cache.put_scoreboard(day, payload)
+    if summaries:
+        cache.put_summary("400899374", _summary())
+    db = tmp_path / f"{name}.sqlite3"
+    espn.build_store(cache, db)
+    return db
+
+
+def _sb_other_season() -> dict:
+    payload = _sb()
+    for i, ev in enumerate(payload["events"]):
+        ev["id"] = f"other{i}"
+        ev["season"] = {"year": 2018, "type": 2, "slug": "regular-season"}
+    return payload
+
+
+def test_install_refuses_a_store_with_less_history_and_keeps_the_old_one(tmp_path: Path) -> None:
+    full = _store(tmp_path, "full", {"20170101": _sb(), "20170102": _sb_other_season()})
+    dest = tmp_path / "out" / "nba_games.sqlite3"
+    espn.install_store(full, dest)
+    before = dest.read_bytes()
+    thin = _store(tmp_path, "thin", {"20170102": _sb_other_season()})  # one season gone
+    with pytest.raises(espn.StoreRegressionError, match="less history"):
+        espn.install_store(thin, dest)
+    assert dest.read_bytes() == before  # the previous store is untouched
+
+
+def test_install_refuses_a_store_that_lost_box_scores(tmp_path: Path) -> None:
+    with_box = _store(tmp_path, "box", {"20170101": _sb()})
+    dest = tmp_path / "out" / "nba_games.sqlite3"
+    espn.install_store(with_box, dest)
+    no_box = _store(tmp_path, "nobox", {"20170101": _sb()}, summaries=False)
+    with pytest.raises(espn.StoreRegressionError, match="box"):
+        espn.install_store(no_box, dest)
+
+
+def test_install_accepts_a_store_that_grows(tmp_path: Path) -> None:
+    small = _store(tmp_path, "small", {"20170101": _sb()})
+    dest = tmp_path / "out" / "nba_games.sqlite3"
+    espn.install_store(small, dest)
+    bigger = _store(tmp_path, "bigger", {"20170101": _sb(), "20170102": _sb_other_season()})
+    assert espn.install_store(bigger, dest)["games"] > espn.store_counts(small)["games"]
 
 
 def test_load_games_returns_game_rows(tmp_path: Path) -> None:

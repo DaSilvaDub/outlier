@@ -207,7 +207,11 @@ def run_ratings(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
             built = Path(tmp) / "nba_games.sqlite3"
             espn.build_store(cache, built)
-            espn.install_store(built, args.store)
+            try:
+                espn.install_store(built, args.store)
+            except espn.StoreRegressionError as exc:
+                # a cleared or partial cache must never shrink the installed history
+                print(f"store_not_replaced: {exc}")
         logger.info("nba_ratings_refreshed", **refreshed)
     params, source = team_run.load_params()
     try:
@@ -314,7 +318,11 @@ def run_backfill(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
         built = Path(tmp) / "nba_games.sqlite3"
         espn.build_store(cache, built)
-        final = espn.install_store(built, args.store)
+        try:
+            final = espn.install_store(built, args.store)
+        except espn.StoreRegressionError as exc:
+            print(f"store_not_replaced: {exc}")
+            return 5
     print(
         json.dumps(
             {"installed": str(args.store), **final, **espn.coverage_report(args.store)},

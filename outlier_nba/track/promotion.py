@@ -6,6 +6,11 @@
 carries a hash of its own content, so a hand edit makes every reader raise
 :class:`PromotionTamperedError`: there is no way to switch a family on by editing JSON.
 
+The hash is *tamper-evident, not tamper-proof*: anyone who can write the file can also
+recompute it. It catches accidental and casual edits (and makes a hand edit show up in review
+as a mismatched hash); the real controls are code review of this module and of any change to
+the config, and the fail-closed default. Do not treat it as authentication.
+
 A family is promoted only when *every* key passes on supplied evidence, and a key whose
 evidence is unknown (``None``) counts as a failure. In particular, with no closing-line
 comparison ``oos_logloss_beats_market`` is unknown, so nothing can be promoted on model

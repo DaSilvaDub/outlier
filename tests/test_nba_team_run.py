@@ -140,11 +140,83 @@ def test_ledger_and_published_pointer_untouched(tmp_path, games, promo) -> None:
     assert manifest["context"]["mode"] in ("live", "fixture")
 
 
-def test_stale_results_withhold_publication(tmp_path, games, promo) -> None:
-    old = [g for g in games if g.season != "2026-27"]  # newest result is months old
-    result = _run(tmp_path, old, promo)
+def _stale_in_season(games):
+    """The 2026-27 season has started but its newest result is 11+ days old."""
+    return [g for g in games if g.season != "2026-27" or g.start_utc.day <= 9]
+
+
+def test_stale_in_season_results_withhold_publication(tmp_path, games, promo) -> None:
+    result = _run(tmp_path, _stale_in_season(games), promo)
     assert result.exit_code == 3 and not result.published
     assert "team_state" in (result.withheld_reason or "")
+
+
+def test_season_opener_runs_on_last_seasons_final_ratings(tmp_path, games, promo) -> None:
+    opener = [g for g in games if g.season != "2026-27"]  # no result from this season yet
+    result = _run(tmp_path, opener, promo)
+    assert result.exit_code == 0, result.withheld_reason
+    state = json.loads(
+        (tmp_path / "nba" / "runs" / result.run_id / "team_model_state.json").read_text("utf-8")
+    )
+    assert state["prior_only_season_opener"] is True
+
+
+def test_prior_only_state_is_refused_once_the_opening_window_has_passed(games) -> None:
+    opener = [g for g in games if g.season != "2026-27"]
+    with pytest.raises(team_run.TeamStateError, match="refresh the store"):
+        team_run.compute_team_state(opener, "2026-12-15", PARAMS, "given")
+    ok = team_run.compute_team_state(opener, "2026-10-21", PARAMS, "given")
+    assert ok.prior_only
+
+
+def test_neutral_flag_from_the_schedule_removes_home_court(tmp_path, games, promo) -> None:
+    sched = fx.schedule()
+    for ev in sched["events"]:
+        if ev["eventId"] == fx.EV1:
+            ev["neutralSite"] = True
+    plain = _rows(tmp_path / "a", _run(tmp_path / "a", games, promo))
+    neutral = _rows(
+        tmp_path / "b",
+        team_run.run_team_shadow(
+            fx.FakeClient(sched=sched),
+            games_loader=lambda: games,
+            nba_dir=tmp_path / "b" / "nba",
+            clock=fx.clock_at(NOW),
+            params=PARAMS,
+            n_draws=6000,
+            promotion_path=promo,
+        ),
+    )
+
+    def pick(rows):
+        return next(
+            r
+            for r in rows
+            if r["event_id"] == fx.EV1 and r["market"] == "ML" and r["side"] == "HOME"
+        )
+
+    assert float(pick(neutral)["model_prob"]) < float(pick(plain)["model_prob"]) - 0.01
+    assert "HOME_COURT_ASSUMED" not in pick(neutral)["flags"]
+    assert "HOME_COURT_ASSUMED" in pick(plain)["flags"]
+
+
+def test_quoted_outcomes_and_fair_ladders_share_one_simulation(tmp_path, games, promo) -> None:
+    result = _run(tmp_path, games, promo)
+    rows = _rows(tmp_path, result)
+    path = tmp_path / "nba" / "runs" / result.run_id / "team_fair_ladders.csv"
+    ladder = {
+        (r["ladder"], float(r["line"]), r["side"]): float(r["p_win"])
+        for r in csv.DictReader(io.StringIO(path.read_text(encoding="utf-8")))
+        if r["event_id"] == fx.EV1
+    }
+    shared = 0
+    for r in rows:
+        if r["event_id"] == fx.EV1 and r["market"] == "TOTAL" and r["line"]:
+            key = ("TOTAL", float(r["line"]), r["side"])
+            if key in ladder and float(r["model_push"]) == 0.0:
+                assert ladder[key] == pytest.approx(float(r["model_win"]), abs=5e-6)
+                shared += 1
+    assert shared >= 1
 
 
 def test_missing_store_withholds_publication(tmp_path, promo) -> None:
