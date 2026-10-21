@@ -65,3 +65,21 @@ assumed identical · **U** unverified · **X** tried, blocked or unusable.
 shadow capture unless the SBRO archive turns out to be usable; prop families can only pass that
 key prospectively. Phases 2-3 should not assume stats.nba.com tracking data until a permitted
 access path is confirmed.
+
+## 5. Phase 2 backfill findings (2026-10-21)
+
+What the historical ESPN pull taught us. All requests went to `site.api.espn.com` only, one
+day or one game per request, in bursts of 5 with a pause between bursts; `cdn.nba.com` and
+`stats.nba.com` were not touched.
+
+| Item | Status | Note |
+|---|---|---|
+| User-Agent | **V** | `outlier-results-collector/1.0` (the one `results.py` already sends) is accepted. A longer UA that included a contact e-mail address was answered with an Akamai `403 Access Denied` on the first request. The backfill uses the repo UA and stops on any 403/429. |
+| Scoreboard by day | **V** | `scoreboard?dates=YYYYMMDD`. A range (`dates=A-B`, with or without `limit`) returns `400` for this league, so the backfill is one request per calendar day (about 2,900 for ten seasons, most of them empty days). Per team it carries points, linescores (period count gives overtime), FGA, FTA, total rebounds, attendance and `neutralSite`. It does **not** carry turnovers or offensive rebounds. |
+| Summary box score | **V** | `summary?event=ID` has `offensiveRebounds`, `totalTurnovers` and the full team line, about 37 KB per game of which only the team box is cached (the rest is ~500 plays). Exact possessions need one such request per game. |
+| Season label | **V** | ESPN labels a season by its end year (`season.year=2017` is 2016-17). Season types kept: 2 regular, 3 postseason, 5 play-in; 1 (preseason) and the All-Star events are dropped and counted. |
+| Neutral sites | **V, with a hole** | `neutralSite` is set for the international games (Mexico City, London, Paris, Berlin) and the NBA Cup final. It is **not** set for the 2019-20 Orlando-bubble games after the 2020-07-30 restart (172 games); `outlier_nba.ratings.possessions.is_bubble` derives that from the date. |
+| 2020-21 crowds | **V** | 578 games carry `attendance == 0`; the whole season is treated as a stress slice. |
+| NBA Cup final | **V** | ESPN files the championship game under the regular season (so 2023-24 shows 1,231 "regular" games). It is kept as a real neutral-site game; the coverage report counts it separately. |
+| Postponements | **V** | 62 games are `STATUS_POSTPONED` in the scoreboard on their original date (COVID and weather). They are recorded as `NOT_FINAL` gaps; a rescheduled game appears again on its new date. |
+| All-Star, Rising Stars, celebrity games | **V** | 11 events with non-NBA "teams" (WEST/EAST, USA/WORLD, ...) are recorded as `UNRESOLVED_TEAM` gaps and excluded. |

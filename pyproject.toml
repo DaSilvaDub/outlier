@@ -35,6 +35,9 @@ packages = [
     "outlier_nba",
     "outlier_nba.ingest",
     "outlier_nba.market",
+    "outlier_nba.pricing",
+    "outlier_nba.ratings",
+    "outlier_nba.sim",
     "outlier_nba.track",
 ]
 

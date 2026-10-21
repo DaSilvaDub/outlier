@@ -1,7 +1,11 @@
-"""NBA CLI (Phase 1: shadow capture and settlement only).
+"""NBA CLI (Phase 1 shadow capture and settlement; Phase 2 team model).
 
     python -m outlier_nba.cli capture [--db LEDGER] [--nba-dir DIR] [--fixture]
     python -m outlier_nba.cli settle  [--db LEDGER] [--lookback-days N]
+    python -m outlier_nba.cli backfill --stage scoreboard|summary|build [--seasons A:B]
+    python -m outlier_nba.cli ratings [--date D] [--no-refresh]   # refresh results, fit as of D
+    python -m outlier_nba.cli run     [--date D] [--nba-dir DIR]  # price the slate, SHADOW only
+    python -m outlier_nba.cli backtest [--seasons A:B] [--tune-season S]
 
 Exit codes: 0 OK, 1 auth/IO failure, 3 a required stage did not pass (publication
 withheld; the bundle is kept). No reasoning-model calls anywhere in this CLI.
@@ -32,6 +36,7 @@ from outlier_scrapers import paths
 logger = structlog.get_logger("outlier_nba.cli")
 
 DEFAULT_NBA_DIR = paths.PROJECT_ROOT / "data" / "NBA"
+DEFAULT_STORE_PATH = DEFAULT_NBA_DIR / "store" / "nba_games.sqlite3"
 
 
 def _utc_now() -> datetime:
@@ -174,6 +179,148 @@ def run_settle(db_path: Path, *, lookback_days: int = 3) -> dict[str, Any]:
     return settle_nba(db_path, lookback_days=lookback_days)
 
 
+def _today_et() -> str:
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def run_ratings(args: argparse.Namespace) -> int:
+    """Refresh recent results, rebuild the store, fit the team model as of ``--date``."""
+    from datetime import date
+
+    from outlier_nba import team_run
+    from outlier_nba.ingest import espn
+
+    day = args.date or _today_et()
+    if not args.no_refresh:
+        cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
+        try:
+            refreshed = espn.refresh_recent(cache, date.fromisoformat(day))
+        except espn.BlockedError as exc:
+            print(f"blocked: {exc} (stopped; the existing store is used as is)")
+            refreshed = {}
+        with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
+            built = Path(tmp) / "nba_games.sqlite3"
+            espn.build_store(cache, built)
+            espn.install_store(built, args.store)
+        logger.info("nba_ratings_refreshed", **refreshed)
+    params, source = team_run.load_params()
+    try:
+        state = team_run.compute_team_state(
+            team_run.load_store_games(args.store), day, params, source
+        )
+    except team_run.TeamStateError as exc:
+        print(f"team_state_unavailable: {exc}")
+        return 3
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table = team_run.ratings_rows(state)
+    (out_dir / f"team_ratings_{day}.csv").write_text(
+        team_run.rows_to_csv(table, list(table[0])), encoding="utf-8"
+    )
+    summary = team_run.state_summary(state)
+    (out_dir / f"team_model_state_{day}.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    print(json.dumps(summary, sort_keys=True))
+    return EXIT_OK
+
+
+def run_team(args: argparse.Namespace) -> int:
+    from outlier_nba import team_run
+
+    from outlier_scrapers.api import OutlierApiClient
+
+    try:
+        client = OutlierApiClient()
+    except Exception as exc:
+        print(f"auth_required: {exc}")
+        return 1
+    result = team_run.run_team_shadow(
+        client,
+        games_loader=lambda: team_run.load_store_games(args.store),
+        nba_dir=args.nba_dir,
+        fixture=args.fixture,
+        slate_date=args.date,
+        n_draws=args.draws,
+    )
+    print(
+        json.dumps(
+            {**dataclasses.asdict(result), "receipts": [r.to_dict() for r in result.receipts]},
+            default=str,
+            sort_keys=True,
+        )
+    )
+    return result.exit_code
+
+
+def run_backtest_cmd(args: argparse.Namespace) -> int:
+    from outlier_nba import team_run
+    from outlier_nba.ingest import espn
+    from outlier_nba.ratings.model import TeamParams
+    from outlier_nba.track import backtest
+
+    first, _, last = str(args.seasons).partition(":")
+    games = team_run.load_store_games(args.store)
+    report = backtest.run_backtest(
+        games,
+        first_scored=first,
+        last_scored=last or first,
+        tune_season=args.tune_season,
+        n_draws=args.draws,
+        tune_params=not args.no_tune,
+        start_params=TeamParams.from_dict(team_run.load_params()[0].to_dict()),
+    )
+    report["coverage"] = espn.coverage_report(args.store)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    if args.write_config and not args.no_tune:
+        team_run.MODEL_CONFIG_PATH.write_text(
+            json.dumps(
+                {
+                    "params": report["params"],
+                    "tuned_on_through": args.tune_season,
+                    "scored_window": report["scored_seasons"],
+                },
+                indent=2,
+                sort_keys=True,
+            )  # fmt: skip
+            + "\n",
+            encoding="utf-8",
+        )
+    print(f"wrote {args.out}")
+    return EXIT_OK
+
+
+def run_backfill(args: argparse.Namespace) -> int:
+    """Network stages fill the cache; ``build`` builds in local temp, then installs + verifies."""
+    from outlier_nba.ingest import espn
+
+    cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
+    first, _, last = str(args.seasons).partition(":")
+    seasons = espn.seasons_between(first, last or first)
+    if args.stage in ("scoreboard", "summary"):
+        try:
+            print(json.dumps(espn.run_fetch(args.stage, seasons, cache), sort_keys=True))
+        except espn.BlockedError as exc:
+            print(f"blocked: {exc} (stopped; rerun later, the cache keeps what was fetched)")
+            return 4
+        return EXIT_OK
+    with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
+        built = Path(tmp) / "nba_games.sqlite3"
+        espn.build_store(cache, built)
+        final = espn.install_store(built, args.store)
+    print(
+        json.dumps(
+            {"installed": str(args.store), **final, **espn.coverage_report(args.store)},
+            sort_keys=True,
+            default=str,
+        )
+    )
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="NBA shadow capture and settlement")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -190,7 +337,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--fixture", action="store_true", help="treat the run as a fixture run (publishes)"
     )
     sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
+    bf = sub.add_parser("backfill", help="cache + store historical NBA results (ESPN public JSON)")
+    bf.add_argument("--seasons", default="2016-17:2025-26", help="FIRST:LAST season labels")
+    bf.add_argument("--stage", choices=["scoreboard", "summary", "build"], required=True)
+    bf.add_argument("--cache-dir", type=Path, default=None)
+    bf.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
+    rt = sub.add_parser("ratings", help="refresh results and fit team ratings as of a date")
+    rt.add_argument("--date", default=None, help="slate date YYYY-MM-DD (default: today, ET)")
+    rt.add_argument("--no-refresh", action="store_true", help="skip the ESPN refresh")
+    rt.add_argument("--cache-dir", type=Path, default=None)
+    rt.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
+    rt.add_argument("--out-dir", type=Path, default=DEFAULT_NBA_DIR / "model")
+    rn = sub.add_parser("run", help="price the slate from the team model (SHADOW rows only)")
+    rn.add_argument("--date", default=None, help="slate date YYYY-MM-DD (default: first tip, ET)")
+    rn.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
+    rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR)
+    rn.add_argument("--draws", type=int, default=20_000)
+    rn.add_argument("--fixture", action="store_true")
+    bk = sub.add_parser("backtest", help="walk-forward backtest of the team model")
+    bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
+    bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
+    bk.add_argument("--no-tune", action="store_true")
+    bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")
+    bk.add_argument("--draws", type=int, default=4000)
+    bk.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
+    bk.add_argument(
+        "--out", type=Path, default=DEFAULT_NBA_DIR / "backtest" / "phase2_backtest.json"
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "backfill":
+        return run_backfill(args)
+    if args.command == "ratings":
+        return run_ratings(args)
+    if args.command == "run":
+        return run_team(args)
+    if args.command == "backtest":
+        return run_backtest_cmd(args)
 
     if args.command == "settle":
         print(json.dumps(run_settle(args.db, lookback_days=args.lookback_days), sort_keys=True))
