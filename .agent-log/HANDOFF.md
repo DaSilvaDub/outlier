@@ -5,7 +5,7 @@
 ## Accomplished
 1. `nba_model_probs` + `nba_model_eval` view (first pre-tip model forecast joined to the first pre-tip market capture, its settlement and verified CLV). `run` records model rows as its last stage (`--db`, `--no-ledger`).
 2. `track/evidence.py` builds per-family `Evidence` from settled outcomes (one side per line, pushes excluded, None when uncomputable); `promote` previews, `promote --apply` lets the evaluator write.
-3. 372 NBA + daily_job tests pass; 100% coverage on the three new modules.
+3. Review round: CLV from the model-backed side, forecast matched to the market snapshot current at forecast time, game- and date-clustered intervals, minimum games / verified CLV sample, blend weight validated on later untouched dates. 397 NBA + daily_job tests pass.
 
 ## State to know about
 - Nothing can reach the promotion thresholds yet: they need 1,500 settled lines on 45 dates and a clear log-loss win over the market, and NBA capture only began this season.

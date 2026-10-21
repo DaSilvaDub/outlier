@@ -37,22 +37,47 @@ CREATE TABLE IF NOT EXISTS nba_model_probs (
 )
 """
 
+# A model forecast is compared with the market snapshot that was current when it was made:
+# the latest snapshot captured at or before the forecast, no more than this long before it.
+MAX_ALIGN_SECONDS = 900
+
 MODEL_VIEW_NAME = "nba_model_eval"
-MODEL_VIEW_SQL = """
-CREATE VIEW IF NOT EXISTS nba_model_eval AS
-SELECT e.*, m.run_id AS model_run_id, m.as_of AS model_as_of, m.family AS family,
-       m.market AS model_market, m.model_prob AS model_prob, m.model_win AS model_win,
-       m.model_push AS model_push, m.model_loss AS model_loss,
-       m.market_prob AS model_market_prob, m.model_weight AS model_weight,
-       m.final_prob AS final_prob, m.flags AS model_flags
-FROM nba_outcome_eval e
-JOIN (
-    SELECT p.*, ROW_NUMBER() OVER (
-               PARTITION BY p.event_id, p.outcome_id ORDER BY p.as_of ASC, p.run_id ASC
-           ) AS mrn
-    FROM nba_model_probs p
-) m ON m.event_id = e.event_id AND m.outcome_id = e.outcome_id
-WHERE m.mrn = 1 AND m.as_of < e.event_starts_at
+MODEL_VIEW_SQL = f"""
+CREATE VIEW nba_model_eval AS
+WITH first_model AS (
+    SELECT * FROM (
+        SELECT p.*, ROW_NUMBER() OVER (
+                   PARTITION BY p.event_id, p.outcome_id ORDER BY p.as_of ASC, p.run_id ASC
+               ) AS mrn
+        FROM nba_model_probs p
+    ) WHERE mrn = 1
+),
+aligned AS (
+    SELECT m.run_id AS model_run_id, m.as_of AS model_as_of, m.family AS family,
+           m.market AS model_market, m.model_prob AS model_prob, m.model_win AS model_win,
+           m.model_push AS model_push, m.model_loss AS model_loss,
+           m.market_prob AS model_market_prob, m.model_weight AS model_weight,
+           m.final_prob AS final_prob, m.flags AS model_flags,
+           s.snapshot_id, s.event_id, s.outcome_id, s.market_id, s.market_type, s.selection,
+           s.line, s.price, s.book, s.market_consensus_prob, s.push_prob, s.captured_at,
+           s.event_starts_at, s.data_quality_flags,
+           (julianday(m.as_of) - julianday(s.captured_at)) * 86400.0 AS snapshot_gap_seconds,
+           ROW_NUMBER() OVER (
+               PARTITION BY m.event_id, m.outcome_id
+               ORDER BY s.captured_at DESC, s.snapshot_id DESC
+           ) AS srn
+    FROM first_model m
+    JOIN market_snapshots s
+      ON s.sport = 'NBA' AND s.event_id = m.event_id AND s.outcome_id = m.outcome_id
+     AND s.captured_at <= m.as_of AND m.as_of < s.event_starts_at
+)
+SELECT a.*, d.units AS units, x.win_loss_push, x.actual_result, x.closing_price, x.clv_price,
+       c.status AS close_status, c.clv_prob
+FROM aligned a
+LEFT JOIN decisions d ON d.snapshot_id = a.snapshot_id
+LEFT JOIN settlements x ON x.decision_id = d.decision_id
+LEFT JOIN nba_clv c ON c.decision_id = d.decision_id
+WHERE a.srn = 1 AND a.snapshot_gap_seconds <= {MAX_ALIGN_SECONDS}
 """
 
 
@@ -67,6 +92,9 @@ def ensure_model_schema(conn: sqlite3.Connection) -> None:
     conn.execute(MODEL_TABLE_SQL)
     have = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'nba_outcome_eval'").fetchone()
     if have:
+        conn.execute(
+            "DROP VIEW IF EXISTS nba_model_eval"
+        )  # recreated so a changed definition applies
         conn.execute(MODEL_VIEW_SQL)
     conn.commit()
 
