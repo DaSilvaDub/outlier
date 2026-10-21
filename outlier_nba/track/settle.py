@@ -34,6 +34,9 @@ def settle_nba(
         rows, summary = results.collect_settlement_rows(
             conn, [LEAGUE], lookback_days=lookback_days, now=current, fetch_json=fetch_json
         )
+        # UPPER() to match results._pending_rows: a snapshot stored as 'nba' is
+        # pending there but would miss this map, and the KeyError below would lose
+        # the whole settle run before any settlement or CLV row was written.
         taken = {
             r["decision_id"]: r
             for r in conn.execute(
@@ -41,7 +44,7 @@ def settle_nba(
                 SELECT d.decision_id, d.snapshot_id, s.event_id, s.outcome_id,
                        s.event_starts_at, s.captured_at
                 FROM decisions d JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
-                WHERE s.sport = 'NBA'
+                WHERE UPPER(s.sport) = 'NBA'
                 """
             ).fetchall()
         }
