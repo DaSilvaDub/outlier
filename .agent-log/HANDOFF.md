@@ -1,3 +1,31 @@
+# HANDOFF - 2026-10-21 (Claude, daily automated debug review)
+
+- Branch `claude/inspiring-fermat-ovye6t`. Base: `9f9decb` (origin/master, all 5 upgrade markers present, tree clean).
+- Fix: `outlier_nba/track/settle.py` built its `taken` map with `s.sport = 'NBA'` while
+  `results._pending_rows` selects on `UPPER(s.sport)`. A snapshot stored as `'nba'` is
+  therefore pending for settlement but absent from the map, and `taken[row["decision_id"]]`
+  raised KeyError *before* `import_settlements` and `_write_clv` ran - losing the whole
+  nightly settle. Now `UPPER(s.sport) = 'NBA'`, so the two filters agree.
+- Regression test: `test_settle_tolerates_a_non_canonical_sport_case_in_the_shared_ledger`
+  in `tests/test_nba_shadow_e2e.py` (verified RED before the fix, GREEN after).
+- Reported, NOT fixed (needs a product call): `outlier_nba/cli.py` writes the
+  `.last-capture-attempt` marker *before* running the capture, so a capture that fails
+  (auth expiry, network, disk) burns the full 12h refresh throttle. On a fresh/stale ledger
+  there are no tips to drive the other branch, so the 15-min scheduler does nothing for 12h.
+  Trade-off: recording after success instead would let a run that fails *after* writing
+  ~175 MB retry every 15 min. A short failure backoff is probably the answer.
+- Sandbox limitation: PyPI is blocked by the egress policy (403 on CONNECT), so pytest/ruff/
+  mypy/pyright could not be installed and no project dependency is present. Checks were run
+  under a local minimal pytest shim plus structlog/sqlalchemy import stubs
+  (scratchpad only, nothing committed): 2581 passed, 0 genuine failures. Remaining failures
+  are all missing-SDK (openai/anthropic/google/dateutil) or ORM-stub artifacts, each
+  confirmed by hand. Lint and type checks did NOT run - CI still needs to cover them.
+- Next steps: (1) let hosted CI run real pytest/ruff/mypy on this PR; (2) decide the
+  capture-retry backoff above; (3) the two archive-legacy failures noted in the 10-20 entry
+  did not reproduce here (they look Windows/mtime-specific).
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.

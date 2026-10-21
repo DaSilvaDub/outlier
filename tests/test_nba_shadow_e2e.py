@@ -375,3 +375,22 @@ def test_eval_view_and_clv_table_exist_right_after_a_capture(tmp_path):
     conn = _db(tmp_path)
     assert conn.execute("SELECT COUNT(*) FROM nba_outcome_eval").fetchone()[0] == 23
     assert conn.execute("SELECT COUNT(*) FROM nba_clv").fetchone()[0] == 0
+
+
+def test_settle_tolerates_a_non_canonical_sport_case_in_the_shared_ledger(tmp_path):
+    """results._pending_rows matches on UPPER(sport); settle's own map must too.
+
+    A snapshot stored as 'nba' is pending for settlement but missed the
+    sport = 'NBA' map, and the KeyError lost the whole run before any
+    settlement or nba_clv row was written.
+    """
+    _capture(tmp_path, T1)
+    db = tmp_path / "ledger.sqlite3"
+    conn = _db(tmp_path)
+    conn.execute("UPDATE market_snapshots SET sport = 'nba' WHERE sport = 'NBA'")
+    conn.commit()
+
+    summary = _settle_now(db)
+    assert summary["settlement_rows"] == 23
+    assert summary["unmatched_event_count"] == 0
+    assert _db(tmp_path).execute("SELECT COUNT(*) FROM nba_clv").fetchone()[0] == 23
