@@ -151,6 +151,7 @@ class MatchupRankingsEngine:
         tapes: dict[str, Any],
         weather_records: list[dict[str, Any]],
         inactives_by_team: dict[str, list[str]] | None = None,
+        defensive_out_by_team: dict[str, list[str]] | None = None,
         date_str: str = "latest",
     ) -> None:
         self.date_str = date_str
@@ -164,6 +165,7 @@ class MatchupRankingsEngine:
         }
         self.rosters = rosters
         self.tapes = tapes
+        self.defensive_out_by_team = defensive_out_by_team or {}
         self.weather_by_event: dict[str, dict[str, Any]] = {}
         for w in weather_records:
             if isinstance(w, dict) and w.get("event_id"):
@@ -227,58 +229,27 @@ class MatchupRankingsEngine:
         keys = self.inactive_keys_by_team.get(team, set())
         return _name_key(player_name) in keys
 
-    # Maximum game-day inactive players per NFL team (R-DATA-01).
-    # Raw weekly nflverse injury feeds contain 38-51 cumulative rows per team;
-    # never treat raw injury-row counts as designated game-day inactives.
-    MAX_GAMEDAY_INACTIVES: int = 7
-
     def _opp_defensive_inactives(self, opp: str) -> list[str]:
-        """Return verified defensive starters out or deduplicated non-offensive inactives (capped at 7)."""
-        opp_tape = self.tapes.get(opp, {})
-        def_starters = opp_tape.get("defensive_starters_out")
-        if isinstance(def_starters, list) and def_starters:
-            seen_def: set[str] = set()
-            verified: list[str] = []
-            for name in def_starters:
-                key = _name_key(name)
-                if key and key not in seen_def:
-                    seen_def.add(key)
-                    verified.append(str(name))
-            return verified[: self.MAX_GAMEDAY_INACTIVES]
-
-        raw_inactives = self.inactives_by_team.get(opp, [])
+        """Only the separately verified defensive-starter list supports scoring."""
+        names = self.defensive_out_by_team.get(opp, [])
         seen: set[str] = set()
-        filtered: list[str] = []
-        for name in raw_inactives:
+        verified: list[str] = []
+        for name in names:
             key = _name_key(name)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            # Exclude known offensive skill players from opponent defensive inactive counts
-            if key in self.usage_by_key:
-                continue
-            filtered.append(str(name))
-        return filtered[: self.MAX_GAMEDAY_INACTIVES]
+            if key and key not in seen:
+                seen.add(key)
+                verified.append(str(name))
+        return verified
 
     def _format_opp_inactive_narrative(self, opp: str, unit_label: str) -> str:
-        """Format opponent defensive inactive narrative without printing raw injury-feed row counts."""
-        opp_tape = self.tapes.get(opp, {})
-        def_starters = opp_tape.get("defensive_starters_out")
-        if isinstance(def_starters, list) and def_starters:
-            capped = self._opp_defensive_inactives(opp)
-            preview = ", ".join(capped[:3])
+        verified = self._opp_defensive_inactives(opp)
+        if opp in self.defensive_out_by_team:
+            preview = ", ".join(verified[:3])
             return (
-                f"{opp} {unit_label} missing {len(capped)} verified defensive starter(s)"
+                f"{opp} {unit_label} missing {len(verified)} verified defensive starter(s)"
                 + (f" ({preview})." if preview else ".")
             )
-        raw_count = len(self.inactives_by_team.get(opp, []))
-        capped = self._opp_defensive_inactives(opp)
-        if raw_count > self.MAX_GAMEDAY_INACTIVES:
-            return (
-                f"{opp} {unit_label}: {len(capped)} capped injury listing(s), defensive status unverified "
-                f"(filtered from {raw_count} cumulative injury-report rows)."
-            )
-        return f"{opp} {unit_label}: {len(capped)} injury listing(s), defensive status unverified."
+        return f"{opp} {unit_label}: defensive starter availability unverified; no injury boost."
 
     def evaluate_qbs(self) -> list[MatchupAdvantageCandidate]:
         """Evaluate starting QBs on slate for matchup advantages."""
@@ -909,6 +880,7 @@ def generate_matchup_rankings_pipeline(
     tapes: dict[str, Any],
     weather_records: list[dict[str, Any]],
     inactives_by_team: dict[str, list[str]] | None = None,
+    defensive_out_by_team: dict[str, list[str]] | None = None,
     staged_reports_dir: Path,
     date_str: str = "latest",
     suffix: str = "latest",
@@ -930,6 +902,7 @@ def generate_matchup_rankings_pipeline(
         tapes=tapes,
         weather_records=weather_records,
         inactives_by_team=inactives_by_team,
+        defensive_out_by_team=defensive_out_by_team,
         date_str=date_str,
     )
 

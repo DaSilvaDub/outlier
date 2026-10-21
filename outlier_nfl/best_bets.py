@@ -537,6 +537,17 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
             if profile.get(key) is not None:
                 pillar.evidence[f"usage_{key}"] = profile.get(key)
 
+    # A qualifying underdog cannot pass this requirement without valid carry-share evidence.
+    if market == "RUSH_ATT" and position == "OVER":
+        team_spread, _, _ = _team_spread_and_script(src, prop.get("event_id"), team)
+        c_share = _f((profile or {}).get("carry_share"))
+        if team_spread is not None and team_spread >= UNDERDOG_RB_ATT_SPREAD:
+            if c_share is None or not 0.0 <= c_share <= 100.0:
+                pillar.status = MISSING
+                pillar.evidence["underdog_rb_carry_share_gate"] = "QUARANTINED_MISSING_CARRY_SHARE"
+                pillar.notes.append("R-PROP-02: valid season carry share is required for underdog RUSH_ATT OVER")
+                return pillar
+
     if not weekly and not profile:
         pillar.notes.append("no NGS volume or usage profile matched this player")
         if market_family(market) is None:

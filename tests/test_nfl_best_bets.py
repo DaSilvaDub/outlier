@@ -751,3 +751,18 @@ def test_wind_veto_ignores_outdoor_wind_on_schedule_confirmed_indoor_venue():
                 "forecast_status": "not_needed"}]
     pick = _pick(build_best_bets(_inputs(props=[prop], weather=weather)), "OVER")
     assert pick["pillars"]["injury_weather"]["evidence"]["injury_confidence_gate"] != "CONTRADICTS_WEATHER_WIND"
+
+
+@pytest.mark.parametrize("share", [None, float("nan"), float("inf"), -0.1, "invalid", 101])
+def test_underdog_rush_attempt_over_quarantines_invalid_carry_share(share):
+    prop = _prop("OVER", market="RUSH_ATT", line=14.5)
+    scripts = [{"event_id": "E1", "home_team": "DAL", "away_team": "PHI",
+                "home_spread": -6.5, "total": 43.5, "prop_signals": []}]
+    usage = [{"player": "A.J. Brown", "team": "PHI", "games": 5,
+              "targets_pg": 8.0, "carry_share": share}]
+    for profiles in (usage, []):
+        pick = _pick(build_best_bets(_inputs(props=[prop], scripts=scripts, usage_players=profiles)), "OVER")
+        gate = pick["pillars"]["opportunity"]
+        assert gate["status"] == "MISSING"
+        assert gate["evidence"]["underdog_rb_carry_share_gate"] == "QUARANTINED_MISSING_CARRY_SHARE"
+        assert pick["verdict"] != VALIDATED
