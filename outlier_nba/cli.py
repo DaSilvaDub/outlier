@@ -216,7 +216,11 @@ def run_ratings(args: argparse.Namespace) -> int:
     params, source = team_run.load_params()
     try:
         state = team_run.compute_team_state(
-            team_run.load_store_games(args.store), day, params, source
+            team_run.load_store_games(args.store),
+            day,
+            params,
+            source,
+            feed_receipt=team_run.load_feed_receipt(args.cache_dir),
         )
     except team_run.TeamStateError as exc:
         print(f"team_state_unavailable: {exc}")

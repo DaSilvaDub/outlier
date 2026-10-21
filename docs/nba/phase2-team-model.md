@@ -96,6 +96,11 @@ Wilson intervals.
 * Margin spread: the tracker's sigma 13.74 against a realised residual sd of 13.90 (about 1% narrow).
 * Overtime: actual 5.3% of games; predicted 5.2% (by season 4.5-6.6% actual vs 4.7-5.8% predicted).
 
+**Which predictor is live.** Shadow pricing uses the ridge + pace + noise *simulation* only; the
+Elo pool is a backtest ensemble and is not used for pricing. The out-of-sample figure that
+corresponds to the live predictor is the `sim` row (log loss 0.6256, Brier 0.2181), not the pool's
+0.6253. The two differ by 0.0004 (CI includes zero).
+
 ## Plan items that proved wrong or needed changing
 
 1. **Overtime cannot be left to ties.** A Gaussian margin ties about 43% less often than NBA games actually go to
@@ -120,11 +125,20 @@ probability (weight 0). A row without a usable market probability gets a blank `
 `MISSING_MARKET_PROB` flag. Stale results (newest result more than 7 days old), a missing store or a cold noise
 tracker fail the required `team_state` stage and withhold publication (exit 3). The 7-day rule is
 season-aware: a season opener with no result yet from its own season (first 45 days after Oct 1)
-runs on last season's final ratings and is marked `prior_only_season_opener`; once any result from
-the season exists, or the opening window has passed, stale results fail.
+runs on last season's final ratings and is marked `prior_only_season_opener`. The local store alone
+cannot tell "not started" from "feed stopped", so this is allowed only when a refresh receipt
+(`refresh_receipt.json`, written by every successful `ratings` refresh) shows a refresh within a day
+of the slate that covered the previous day and saw no final game of the new season. With no such
+receipt, or once any result from the season exists, or after the window, stale results fail.
+
+Team identity uses every field the normalizer accepts (`alias`, `abbr`, `abbreviation`, `teamName`,
+`name`, market + name) and the normalizer's own resolution of each outcome record wins. The
+`price_team_markets` stage is `FAILED` if no quoted outcome got a model probability and
+`INCOMPLETE` if any quoted game could not be simulated; both withhold publication.
 
 Venue: `event_draws` takes the schedule's neutral-site flag when the feed carries one
-(`neutralSite`, `neutral_site`, `neutral`, `isNeutral`). The Outlier schedule's fields are
+(`neutralSite`, `neutral_site`, `neutral`, `isNeutral`), parsed strictly (real booleans, 0/1 and
+true/false-style strings; anything else is treated as unknown, logged, and flagged). The Outlier schedule's fields are
 unverified, so when none is present the row is flagged `HOME_COURT_ASSUMED` rather than
 silently treated as verified. One simulation per game feeds the quoted rows and the fair ladders.
 

@@ -16,7 +16,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,13 @@ from outlier_nba.pricing import blend, team_markets
 from outlier_nba.ratings.model import AsOf, TeamModel, TeamParams, predict
 from outlier_nba.ratings.possessions import TEAM_INDEX, TEAMS, Dataset, build_dataset
 from outlier_nba.receipts import StageReceipt, receipt
-from outlier_nba.run_context import AsOfReader, RunContext, make_run_context, nba_season_for_date
+from outlier_nba.run_context import (
+    AsOfReader,
+    RunContext,
+    make_run_context,
+    nba_season_for_date,
+    try_parse_utc,
+)
 from outlier_nba.run_writer import RunWriter
 from outlier_nba.sim.engine import SimDraws, SimInputError, SimParams, simulate
 from outlier_nba.track import capture as capture_mod
@@ -64,6 +70,32 @@ ROW_FIELDS = [
     "model_weight", "final_prob", "edge_final", "edge_model_only", "flags", "board",
     "units", "actionable", "event_starts_at", "as_of",
 ]  # fmt: skip
+
+
+def load_feed_receipt(cache_root: Path | None = None) -> dict[str, Any] | None:
+    """What the last successful ESPN refresh covered, or None if there never was one."""
+    from outlier_nba.ingest.espn import EspnCache, default_cache_dir
+
+    return EspnCache(cache_root or default_cache_dir()).read_receipt()
+
+
+def opener_verified(receipt: Mapping[str, Any] | None, slate_date: str, season: str) -> bool:
+    """True only if a recent refresh covered the previous day and saw no game of ``season``.
+
+    The local store alone cannot tell "the season has not started" from "the feed stopped
+    updating"; this evidence comes from the refresh itself.
+    """
+    if not receipt:
+        return False
+    fetched = try_parse_utc(receipt.get("fetched_at"))
+    if fetched is None:
+        return False
+    slate = date.fromisoformat(slate_date)
+    if not 0 <= (slate - fetched.astimezone(UTC).date()).days <= 1:
+        return False
+    if (slate - timedelta(days=1)).strftime("%Y%m%d") not in (receipt.get("covered_days") or []):
+        return False
+    return int((receipt.get("final_games_by_season") or {}).get(season, 0)) == 0
 
 
 class TeamStateError(RuntimeError):
@@ -102,6 +134,7 @@ def compute_team_state(
     params_source: str = "given",
     *,
     max_age_days: int = MAX_RESULT_AGE_DAYS,
+    feed_receipt: Mapping[str, Any] | None = None,
 ) -> TeamState:
     if not games:
         raise TeamStateError("the games store is empty")
@@ -123,6 +156,11 @@ def compute_team_state(
             raise TeamStateError(
                 f"newest result is {slate_day - last} days before {slate_date} "
                 f"(limit {max_age_days}); refresh the store"
+            )
+        if not opener_verified(feed_receipt, slate_date, season):
+            raise TeamStateError(
+                f"no verified refresh shows {season} has not started "
+                f"(newest result {slate_day - last} days old); run `ratings` first"
             )
         prior_only = True
     past = build_dataset([g for g, u in zip(ds.games, usable) if u])
@@ -199,14 +237,63 @@ def _is_playoff_window(slate_date: str) -> bool:
 
 
 NEUTRAL_KEYS = ("neutralSite", "neutral_site", "neutral", "isNeutral")
+_TRUE = frozenset({"true", "1", "yes", "y"})
+_FALSE = frozenset({"false", "0", "no", "n"})
+
+
+def parse_flag(value: Any) -> bool | None:
+    """Strict boolean: real bools, 0/1 and the usual strings; anything else is unknown."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _TRUE:
+            return True
+        if text in _FALSE:
+            return False
+    return None
 
 
 def event_neutral(event: Mapping[str, Any]) -> bool | None:
-    """Venue flag from the schedule payload; None when the feed does not say."""
+    """Venue flag from the schedule payload; None when absent or not a recognised value."""
     for key in NEUTRAL_KEYS:
         if key in event and event[key] is not None:
-            return bool(event[key])
+            flag = parse_flag(event[key])
+            if flag is None:
+                logger.warning("neutral_flag_unparsed", key=key, value=repr(event[key])[:40])
+            return flag
     return None
+
+
+TEAM_NAME_KEYS = ("alias", "abbr", "abbreviation", "teamName", "name")
+
+
+def side_team(side: Mapping[str, Any] | None) -> str | None:
+    """Canonical tricode from a schedule side, trying every field the normalizer accepts."""
+    side = side or {}
+    for key in TEAM_NAME_KEYS:
+        team = resolve_team(side.get(key))
+        if team is not None:
+            return team
+    market, name = side.get("market"), side.get("name")
+    return resolve_team(f"{market} {name}") if market and name else None
+
+
+def event_teams(
+    events: Sequence[Mapping[str, Any]], records: Sequence[ingest.OutcomeRecord] = ()
+) -> dict[str, tuple[str, str]]:
+    """``{event_id: (home, away)}``; the normalizer's own resolution (records) wins."""
+    out: dict[str, tuple[str, str]] = {}
+    for ev in events:
+        home, away = side_team(ev.get("home")), side_team(ev.get("away"))
+        if home and away:
+            out[str(ev.get("eventId") or ev.get("id") or "")] = (home, away)
+    for rec in records:
+        if rec.home and rec.away:
+            out[rec.event_id] = (rec.home, rec.away)
+    return out
 
 
 def event_draws(
@@ -365,19 +452,22 @@ def simulate_events(
     slate_date: str,
     n: int,
     seed: int,
+    records: Sequence[ingest.OutcomeRecord] = (),
 ) -> tuple[dict[str, SimDraws | None], dict[str, bool | None]]:
     """One simulation per open game (None when it cannot be run) and its venue flag."""
     rng = np.random.default_rng(seed)
     draws: dict[str, SimDraws | None] = {}
     neutral: dict[str, bool | None] = {}
-    for ev in events:
-        event_id = str(ev.get("eventId") or ev.get("id") or "")
-        home = resolve_team((ev.get("home") or {}).get("alias"))
-        away = resolve_team((ev.get("away") or {}).get("alias"))
-        neutral[event_id] = event_neutral(ev)
-        if home is None or away is None or home not in TEAM_INDEX or away not in TEAM_INDEX:
+    teams = event_teams(events, records)
+    event_ids = [str(ev.get("eventId") or ev.get("id") or "") for ev in events]
+    event_ids += [e for e in teams if e not in event_ids]
+    by_id = {str(ev.get("eventId") or ev.get("id") or ""): ev for ev in events}
+    for event_id in event_ids:
+        neutral[event_id] = event_neutral(by_id.get(event_id, {}))
+        if event_id not in teams:
             draws[event_id] = None
             continue
+        home, away = teams[event_id]
         try:
             draws[event_id] = event_draws(
                 state, home, away, slate_date, n, rng, neutral=bool(neutral[event_id])
@@ -389,18 +479,16 @@ def simulate_events(
 
 
 def fair_ladders(
-    events: Sequence[Mapping[str, Any]], draws_by_event: Mapping[str, SimDraws | None]
+    teams: Mapping[str, tuple[str, str]], draws_by_event: Mapping[str, SimDraws | None]
 ) -> list[dict[str, Any]]:
     """Model fair odds on a one-point grid around each event's expected values (alt lines).
 
     Reads the same draws the quoted outcomes were priced from.
     """
     out: list[dict[str, Any]] = []
-    for ev in events:
-        draws = draws_by_event.get(str(ev.get("eventId") or ev.get("id") or ""))
-        home = resolve_team((ev.get("home") or {}).get("alias"))
-        away = resolve_team((ev.get("away") or {}).get("alias"))
-        if draws is None or home is None or away is None:
+    for event_id, (home, away) in teams.items():
+        draws = draws_by_event.get(event_id)
+        if draws is None:
             continue
         mid_margin = float(np.median(draws.margin))
         mid_total = float(np.median(draws.total))
@@ -418,7 +506,7 @@ def fair_ladders(
                 for side, pr in sides.items():
                     out.append(
                         {
-                            "event_id": ev.get("eventId") or ev.get("id"), "home": home, "away": away,
+                            "event_id": event_id, "home": home, "away": away,
                             "ladder": name, "line": line, "side": side,
                             "p_win": round(pr.p_win, 5), "p_push": round(pr.p_push, 5),
                             "fair_decimal": round(pr.fair_decimal, 4) if math.isfinite(pr.fair_decimal) else "",
@@ -454,6 +542,7 @@ def run_team_shadow(
     fixture: bool = False,
     params: TeamParams | None = None,
     params_source: str = "given",
+    feed_receipt_loader: Callable[[], Mapping[str, Any] | None] = load_feed_receipt,
     n_draws: int = DEFAULT_DRAWS,
     promotion_path: Path = promotion.DEFAULT_PATH,
     slate_date: str | None = None,
@@ -476,7 +565,13 @@ def run_team_shadow(
         return [r for r in ingest.raw_receipts(bundle, slate) if r.name != "player_props"]
 
     def team_state(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
-        st = compute_team_state(games_loader(), ctx.slate_date, params, params_source)
+        st = compute_team_state(
+            games_loader(),
+            ctx.slate_date,
+            params,
+            params_source,
+            feed_receipt=feed_receipt_loader(),
+        )
         state["team_state"] = st
         table = ratings_rows(st)
         writer.stage_text("team_ratings.csv", rows_to_csv(table, list(table[0])))
@@ -503,7 +598,7 @@ def run_team_shadow(
             return receipt("price_team_markets", "EMPTY", reason="no team-market outcomes")
         cap = capture_mod.build_shadow_capture(records, captured_at=bundle.fetch_started)
         draws_by_event, neutral_by_event = simulate_events(
-            state["team_state"], slate.events, ctx.slate_date, n_draws, 20260101
+            state["team_state"], slate.events, ctx.slate_date, n_draws, 20260101, records
         )
         rows, stats = price_slate(
             state["team_state"],
@@ -515,14 +610,34 @@ def run_team_shadow(
             promotion_path=promotion_path,
         )
         writer.stage_text("team_shadow.csv", rows_to_csv(rows))
-        ladders = fair_ladders(slate.events, draws_by_event)
+        ladders = fair_ladders(event_teams(slate.events, records), draws_by_event)
         writer.stage_text(
             "team_fair_ladders.csv",
             rows_to_csv(ladders, list(ladders[0]) if ladders else ["event_id"]),
         )
         writer.stage_json("team_run_summary.json", {**stats, "run_id": ctx.run_id,
                           "n_draws": n_draws, "note": "SHADOW: units 0, model weight from evaluator"})  # fmt: skip
-        return receipt("price_team_markets", "OK" if rows else "EMPTY", received=len(rows))
+        quoted = {r.event_id for r in records}
+        unmodelled = sorted(e for e in quoted if draws_by_event.get(e) is None)
+        if not stats.get("model_priced"):
+            return receipt(
+                "price_team_markets",
+                "FAILED",
+                reason="no quoted outcome received a model probability",
+                expected=len(rows),
+                received=0,
+                errors=[f"no simulation for event {e}" for e in unmodelled],
+            )
+        if unmodelled:
+            return receipt(
+                "price_team_markets",
+                "INCOMPLETE",
+                reason=f"{len(unmodelled)} of {len(quoted)} events have no model probabilities",
+                expected=len(rows),
+                received=stats["model_priced"],
+                errors=[f"no simulation for event {e}" for e in unmodelled],
+            )
+        return receipt("price_team_markets", "OK", received=len(rows))
 
     stages = [
         Stage("feeds", True, feeds),

@@ -260,6 +260,9 @@ def test_refresh_recent_refetches_days_and_only_fetches_missing_boxes(tmp_path) 
 
     th = espn.Throttle(burst=5, gap=0, pause=0, sleep=lambda s: None)
     out = espn.refresh_recent(cache, date(2017, 1, 2), days_back=1, fetch=fetch, throttle=th)
+    receipt = cache.read_receipt()
+    assert receipt["final_games_by_season"] == {"2016-17": 3}
+    assert receipt["covered_days"][-1] == "20170102"
     assert out["scoreboards"] == 2  # 20170101 re-fetched although it was cached
     assert out["summaries"] == 2  # the two finals with no cached box
     assert sum("scoreboard" in u for u in urls) == 2

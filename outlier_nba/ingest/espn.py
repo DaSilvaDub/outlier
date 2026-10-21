@@ -316,6 +316,21 @@ class EspnCache:
         }
         self._put("summary", game_id, keep)
 
+    def write_receipt(self, payload: Mapping[str, Any]) -> None:
+        """Record what the last successful refresh covered (read by the season-opener check)."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self.root / "refresh_receipt.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def read_receipt(self) -> dict[str, Any] | None:
+        try:
+            data = json.loads((self.root / "refresh_receipt.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
     def scoreboard_days(self) -> list[str]:
         folder = self.root / "scoreboard"
         return sorted(p.name.removesuffix(".json.gz") for p in folder.glob("*.json.gz"))
@@ -668,4 +683,16 @@ def refresh_recent(
     days = [(today - timedelta(days=k)).strftime("%Y%m%d") for k in range(days_back, -1, -1)]
     boards = fetch_scoreboards(days, cache, fetch, throttle, refetch=True)
     boxes = fetch_summaries(pending_summary_ids(cache, days), cache, fetch, throttle)
+    finals: dict[str, int] = {}
+    for day in days:
+        games, _gaps = parse_scoreboard(cache.get_scoreboard(day) or {})
+        for g in games:
+            finals[g.season] = finals.get(g.season, 0) + 1
+    cache.write_receipt(
+        {
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "covered_days": days,
+            "final_games_by_season": finals,
+        }
+    )
     return {"scoreboards": boards, "summaries": boxes}

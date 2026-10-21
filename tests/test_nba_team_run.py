@@ -32,9 +32,21 @@ def promo(tmp_path: Path) -> Path:
     return path
 
 
+def _receipt(**kw):
+    """A refresh receipt from the evening of 2026-10-20 that saw no 2026-27 final yet."""
+    base = {
+        "fetched_at": "2026-10-21T12:00:00+00:00",
+        "covered_days": ["20261017", "20261018", "20261019", "20261020", "20261021"],
+        "final_games_by_season": {},
+    }
+    return {**base, **kw}
+
+
 def _run(tmp_path, games, promo, **kw):
+    kw.setdefault("feed_receipt_loader", lambda: None)
+    client = kw.pop("client", None) or fx.FakeClient()
     return team_run.run_team_shadow(
-        fx.FakeClient(),
+        client,
         games_loader=lambda: games,
         nba_dir=tmp_path / "nba",
         clock=fx.clock_at(NOW),
@@ -153,7 +165,7 @@ def test_stale_in_season_results_withhold_publication(tmp_path, games, promo) ->
 
 def test_season_opener_runs_on_last_seasons_final_ratings(tmp_path, games, promo) -> None:
     opener = [g for g in games if g.season != "2026-27"]  # no result from this season yet
-    result = _run(tmp_path, opener, promo)
+    result = _run(tmp_path, opener, promo, feed_receipt_loader=_receipt)
     assert result.exit_code == 0, result.withheld_reason
     state = json.loads(
         (tmp_path / "nba" / "runs" / result.run_id / "team_model_state.json").read_text("utf-8")
@@ -164,9 +176,102 @@ def test_season_opener_runs_on_last_seasons_final_ratings(tmp_path, games, promo
 def test_prior_only_state_is_refused_once_the_opening_window_has_passed(games) -> None:
     opener = [g for g in games if g.season != "2026-27"]
     with pytest.raises(team_run.TeamStateError, match="refresh the store"):
-        team_run.compute_team_state(opener, "2026-12-15", PARAMS, "given")
-    ok = team_run.compute_team_state(opener, "2026-10-21", PARAMS, "given")
+        team_run.compute_team_state(opener, "2026-12-15", PARAMS, "given", feed_receipt=_receipt())
+    ok = team_run.compute_team_state(opener, "2026-10-21", PARAMS, "given", feed_receipt=_receipt())
     assert ok.prior_only
+
+
+def test_season_opener_without_a_verifying_refresh_fails_closed(games) -> None:
+    opener = [g for g in games if g.season != "2026-27"]
+    bad_receipts = [
+        None,
+        {},
+        _receipt(fetched_at="2026-10-15T12:00:00+00:00"),  # refresh is days old
+        _receipt(fetched_at="garbage"),
+        _receipt(covered_days=["20261001"]),  # never looked at the previous day
+        _receipt(final_games_by_season={"2026-27": 4}),  # the season has games the store lacks
+    ]
+    for receipt in bad_receipts:
+        with pytest.raises(team_run.TeamStateError, match="verified refresh"):
+            team_run.compute_team_state(opener, "2026-10-21", PARAMS, "given", feed_receipt=receipt)
+
+
+def test_a_stopped_feed_after_the_season_began_cannot_pass_as_an_opener(tmp_path, games, promo):
+    """Store has no 2026-27 results, but the refresh says 2026-27 games were played."""
+    opener = [g for g in games if g.season != "2026-27"]
+    stalled = _receipt(final_games_by_season={"2026-27": 12})
+    result = _run(tmp_path, opener, promo, feed_receipt_loader=lambda: stalled)
+    assert result.exit_code == 3 and "team_state" in (result.withheld_reason or "")
+
+
+def test_strict_boolean_parsing() -> None:
+    for value, want in [
+        (True, True), (False, False), (1, True), (0, False), ("true", True), ("False", False),
+        (" no ", False), ("Y", True), (2, None), ("maybe", None), ([], None), (None, None),
+    ]:  # fmt: skip
+        assert team_run.parse_flag(value) is want, value
+    assert team_run.event_neutral({"neutralSite": "false"}) is False
+    assert team_run.event_neutral({"neutralSite": "true"}) is True
+    assert team_run.event_neutral({"neutralSite": "unknown"}) is None
+    assert team_run.event_neutral({}) is None
+
+
+def test_string_false_does_not_make_a_game_neutral(tmp_path, games, promo) -> None:
+    sched = fx.schedule()
+    for ev in sched["events"]:
+        ev["neutralSite"] = "false"
+    rows = _rows(tmp_path, _run(tmp_path, games, promo, client=fx.FakeClient(sched=sched)))
+    ml = next(r for r in rows if r["market"] == "ML" and r["side"] == "HOME")
+    assert "HOME_COURT_ASSUMED" not in ml["flags"]
+
+
+def test_team_identity_accepts_every_field_the_normalizer_does() -> None:
+    assert team_run.side_team({"alias": "BOS"}) == "BOS"
+    assert team_run.side_team({"abbr": "NY"}) == "NYK"
+    assert team_run.side_team({"abbreviation": "GS"}) == "GSW"
+    assert team_run.side_team({"teamName": "Knicks"}) == "NYK"
+    assert team_run.side_team({"name": "Celtics"}) == "BOS"
+    assert team_run.side_team({"market": "Boston", "name": "Celtics"}) == "BOS"
+    assert team_run.side_team({"alias": "???"}) is None
+    assert team_run.side_team(None) is None
+
+
+def test_events_without_an_alias_are_still_simulated(tmp_path, games, promo) -> None:
+    sched = fx.schedule()
+    for ev in sched["events"]:
+        for side in ("home", "away"):
+            ev[side] = {"abbr": ev[side]["alias"], "teamId": ev[side]["teamId"]}
+    result = _run(tmp_path, games, promo, client=fx.FakeClient(sched=sched))
+    assert result.exit_code == 0, result.withheld_reason
+    rows = _rows(tmp_path, result)
+    assert any(r["model_prob"] for r in rows)
+
+
+def test_stage_fails_when_no_row_gets_a_model_probability(tmp_path, games, promo, monkeypatch):
+    monkeypatch.setattr(
+        team_run,
+        "simulate_events",
+        lambda state, events, *a, **k: ({str(e["eventId"]): None for e in events}, {}),
+    )
+    result = _run(tmp_path, games, promo)
+    assert result.exit_code == 3 and not result.published
+    assert "price_team_markets=FAILED" in (result.withheld_reason or "")
+
+
+def test_stage_is_incomplete_when_some_events_have_no_simulation(
+    tmp_path, games, promo, monkeypatch
+):
+    real = team_run.simulate_events
+
+    def partial(state, events, slate_date, n, seed, records=()):
+        draws, neutral = real(state, events, slate_date, n, seed, records)
+        draws[fx.EV2] = None  # one of the two open games cannot be modelled
+        return draws, neutral
+
+    monkeypatch.setattr(team_run, "simulate_events", partial)
+    result = _run(tmp_path, games, promo)
+    assert result.exit_code == 3 and not result.published
+    assert "price_team_markets=INCOMPLETE" in (result.withheld_reason or "")
 
 
 def test_neutral_flag_from_the_schedule_removes_home_court(tmp_path, games, promo) -> None:
