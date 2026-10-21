@@ -132,6 +132,26 @@ def test_invalid_normalized_rows_withhold_everything_already_staged(tmp_path, pr
     _assert_gated(tmp_path, run, before, good["run_id"])
 
 
+def test_failed_matchup_rankings_withholds_publication(tmp_path, pregame, monkeypatch):
+    """Rankings run after the publish decision; its required FAILED receipt must
+    still keep the run out of every dated/latest file and pointer (F03)."""
+    from outlier_nfl import matchup_rankings
+
+    good, before = pregame
+
+    def boom(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("synthetic rankings failure")
+
+    monkeypatch.setattr(matchup_rankings, "generate_matchup_rankings_pipeline", boom)
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR))
+    assert run["status"] == "FAILED"
+    r = _receipt(run, "matchup_rankings")
+    assert (r["required"], r["status"]) == (True, "FAILED")
+    assert "matchup_rankings=FAILED" in run["publication_reason"]
+    # Best bets, alt-floor exports and reports were staged for publication first.
+    _assert_gated(tmp_path, run, before, good["run_id"])
+
+
 def test_genuinely_empty_scheduled_slate_is_ok_with_zero_rows(tmp_path):
     run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), clock="2026-10-06T15:00:00+00:00",
                day="2026-10-06")

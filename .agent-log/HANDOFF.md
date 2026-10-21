@@ -1,12 +1,12 @@
 # HANDOFF - 2026-10-21 (Codex, PR 282 blend ruling and integration)
 
-**Last commit before this policy follow-up**: `b5406af` (master integrated).
+**Last policy commit**: `c832634`. NFL integration: `bf0aab99da22b6340d3b914a401cfec4305caf47`.
 **PR**: https://github.com/DaSilvaDub/outlier/pull/282
 **Files touched**: probability_blend.py, test_probability_blend.py, test_feedback.py, this handoff.
 
 - Adopted market weight 1.0/model weight 0.0 for missing or failed chronological holdouts; legacy 0.75 caller values cannot bypass this rule. Successful holdouts keep the scored train-only weight.
 - Apply the segment fallback before existing prior shrinkage: a validated global prior can still contribute to a segment.
-- Regression coverage includes failed global/segment holdouts, no holdout, legacy floor inputs and successful train-only weights. Independent review found no merge blocker and passed 36 focused tests; ruff and mypy (105 files) pass.
+- Regression coverage includes failed global/segment holdouts, no holdout, legacy floor inputs and successful train-only weights. Targeted offline suite passed 136 tests. Independent review found no merge blocker and passed 36 focused tests; ruff and mypy (105 files) pass.
 - Existing saved blend artifacts are unchanged and remain compatible; a subsequent fit/rebuild applies the new rule. config/blend_promotion.json remains shadow. No paid/live reasoning, calibration rewrite or wagering promotion.
 - Canonical dirty NFL/calibration/report work was preserved; all implementation occurred in the existing PR worktree.
 
@@ -42,6 +42,58 @@
    - `nightly_audit.ps1` never runs `compute-drawdown`.
    - `slate_strategy` is missing from `refresh_plan.REFRESH_TASKS`.
    - `so_eval` and `learned_multiplier_promotion_signal` don't dedupe captures either.
+
+---
+
+# HANDOFF - 2026-10-21 (Codex, PR 281 integration)
+
+- Last reviewed fix commit SHA: 144a4d8f2188fb79273303e6e3a91b6577f88485.
+- Integrated current origin/master into fix/nfl-inactive-join-and-rankings-gate; resolved only the handoff conflict, preserving both NFL and NBA entries. No product-code conflict or extra product edit.
+- Offline validation after integration: affected alt-floor, matchup, stage-gate and rankings modules 91 passed; pipeline and archive-writer modules 21 passed (112 total). No live or paid provider calls.
+- Review: no blocker in the inactive-name key or rankings publication re-gate; failed required rankings withhold all staged publication and dated/latest pointers.
+- Files touched by resolution: .agent-log/HANDOFF.md. Inherited origin/master fixture whitespace remains unchanged.
+- Next steps: wait for hosted CI on the integrated PR head, then merge PR https://github.com/DaSilvaDub/outlier/pull/281 if green.
+
+---
+
+# HANDOFF — 2026-10-20 (Claude, NFL inactive-name join + rankings publish re-gate)
+
+**Branch**: `fix/nfl-inactive-join-and-rankings-gate` · **Base**: `daa71fb` · **PR**: see `gh pr list --head fix/nfl-inactive-join-and-rankings-gate`
+
+## Accomplished
+1. **Inactive-player name join (alt floors + matchup)**. `alt_floors.py` had a local
+   `_name_key` that only stripped non-letters, and `matchup.build_matchup_script`
+   (`_eligible`, plus the `inactive` set passed to `_role_player`) used `.strip().lower()`.
+   "Kenneth Walker III" vs injury-list "Kenneth Walker" never matched, so an inactive
+   player could be ranked/recommended. Both modules now import `tape_nflverse._name_key`
+   (suffix + punctuation aware, same key PR #268 put in `matchup_rankings`). `_role_player`
+   re-keys its inactive set, so raw names or keys both work. Corrected the 2026-10-15
+   entry below that claimed alt floors already used the shared key.
+2. **Matchup-rankings FAILED now withholds publication**. The publish decision ran
+   before the (required) `matchup_rankings` receipt existed, so a rankings crash still
+   committed dated/latest files and pointers while the log said "nothing published".
+   `pipeline.run` now re-gates after rankings: any failing required receipt calls
+   `writer.withhold_publication()` and sets `publication_reason` (rankings stays
+   required — `receipt()` default, CLI already exits 3 on it).
+3. Tests (each verified RED before the fix): `test_inactive_join_ignores_name_suffixes_and_punctuation`
+   (alt floors), `test_inactive_tape_rb1_matches_across_name_suffixes` /
+   `test_inactive_depth_chart_rb1_skipped_across_name_suffixes` (matchup),
+   `test_failed_matchup_rankings_withholds_publication` (pipeline path, stage gates).
+
+## State to know about
+- Pre-existing on clean `origin/master` (not this branch): `test_nfl_archive_legacy.py::
+  test_row_order_inside_one_copy_does_not_change_the_result` and
+  `::test_copy_order_does_not_change_the_check_output` fail locally (output differs on
+  mtime-dated files), and `test_nfl_snapshot_diff.py::test_capture_is_deterministic[A|B]` fails
+  when pytest runs with a custom `--basetemp` (absolute `run_dir` not masked). Offline NFL
+  suite on this branch: 1100 passed, only those 4 failing. Ruff E402s in `pipeline.py` / `test_nfl_alt_floors.py` are pre-existing.
+- Canonical checkout has uncommitted NFL calibration-rule edits (alt_floors hit-rate floor,
+  matchup clock bleed) on `feat/week6-postgame-calibration-rules`; they sit near
+  `floor_inventory_reason` and may need a trivial rebase over this PR.
+
+## Next steps
+1. Review/merge this PR.
+2. Triage the two archive-legacy test failures on master.
 
 ---
 
@@ -128,6 +180,10 @@
    `alt_floors._inactive_keys:211` and `tape_nflverse._depth_roles:555` all use
    `_name_key`. Both joins (the filter and the RB vacated-backfield lookup) now key on
    `tape_nflverse._name_key`. 3 regression tests, each verified failing pre-fix.
+   *Correction (2026-10-20, Claude):* `alt_floors` did **not** use the shared key — it
+   had a local `_name_key` that only stripped non-letters, so "Kenneth Walker III" never
+   matched "Kenneth Walker"; `matchup._eligible`/`_role_player` used `.strip().lower()`.
+   Both now import `tape_nflverse._name_key` (see the 2026-10-20 entry).
 2. **Daily debug review** of changes since 2026-10-10 (PRs #263, #266 and the
    2026-10-11 matchup-rankings integration). The PR #263 snap-count fix in
    `scorecard.py` reviewed clean: the snap-counts `team`/`player` columns go through the

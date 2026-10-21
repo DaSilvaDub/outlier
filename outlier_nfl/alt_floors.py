@@ -24,6 +24,7 @@ from typing import Any
 
 from outlier_nfl.config import normalize_team
 from outlier_nfl.roster import get_team_depth_chart
+from outlier_nfl.tape_nflverse import _name_key
 
 logger = logging.getLogger("outlier_nfl.alt_floors")
 
@@ -155,10 +156,6 @@ def _finite_odds(odds: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return val if math.isfinite(val) and val != 0 else None
-
-
-def _name_key(name: Any) -> str:
-    return re.sub(r"[^a-z]", "", str(name or "").lower())
 
 
 def _parse_utc(raw: Any) -> datetime | None:
