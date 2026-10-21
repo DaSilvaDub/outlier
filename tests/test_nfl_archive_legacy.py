@@ -688,11 +688,23 @@ def _snap_at_lines(nfl: Path, rows: list[tuple[int, str]], mtime: str) -> None:
 DET_1063_1067 = range(1063, 1068)
 
 
-def test_the_five_labels_are_the_ones_in_the_real_rows():
+SEVEN_LABELS = {
+    "FIRST_TD": "First TD Scorer",
+    "FIRST_TEAM_RECEPTION": "First Team Reception",
+    "FIRST_TEAM_TOUCHDOWN": "First Team TD Scorer",
+    "LAST_TOUCHDOWN": "Last TD Scorer",
+    "MOST_PASSING_YARDS": "Most Passing Yards",
+    "MOST_RECEIVING_YARDS": "Most Receiving Yards",
+    "MOST_RUSHING_YARDS": "Most Rushing Yards",
+}
+
+
+def test_the_seven_labels_cover_the_ones_in_the_real_rows():
     assert al.MARKET_LABEL_AS_PLAYER == "unrecoverable_row:market_label_as_player"
+    assert al.MULTI_PLAYER_MARKET_LABELS == SEVEN_LABELS
     labels = {(r["market"], r["player_name"]) for r in (json.loads(t) for _, t in _real_rows())
-              if r["player_name"] in al.MULTI_PLAYER_MARKET_LABELS.values()}
-    assert labels == set(al.MULTI_PLAYER_MARKET_LABELS.items())
+              if r["player_name"] in SEVEN_LABELS.values()}
+    assert labels and labels <= set(al.MULTI_PLAYER_MARKET_LABELS.items())
 
 
 def test_det_first_team_reception_lines_1063_1067_are_set_aside_not_refused(tree, capsys):
@@ -774,7 +786,7 @@ def test_a_real_player_in_a_multi_player_market_gets_the_normal_check(tree):
     ("First Team Reception ", "FIRST_TEAM_RECEPTION"),  # trailing space
     ("First TD Scorer", "FIRST_TEAM_RECEPTION"),        # another market's label
     ("First Team Reception", "first_team_reception"),   # market not on the list as written
-    ("Anytime TD Scorer", "ANYTIME_TD"),                # not one of the five markets
+    ("Anytime TD Scorer", "ANYTIME_TD"),                # not one of the listed markets
 ])
 def test_only_the_exact_market_label_pair_is_set_aside(tree, name, market):
     nfl, reports = tree
@@ -813,3 +825,82 @@ def test_real_subset_sets_aside_the_15_label_keys(tree, slate, lost_rows, lost_k
 def test_check_prints_line_numbers_as_ranges():
     assert nfl_archive._ranges([1063, 1064, 1065, 1066, 1067, 1291, 1293]) == "1063-1067,1291,1293"
     assert nfl_archive._ranges([]) == ""
+
+
+
+# Real rows from the same archived file (archive/legacy/b08596eb.../
+# nfl_prop_snapshots_2026-09-29.jsonl), "<line number> <row>" verbatim:
+# 5467-5468 ATL @ NO Most Passing Yards, 10541-10545 DET @ CAR Most Rushing Yards
+# (10541 Fanatics +215 and 10544 Fanatics +10000 share the CAR key the 10a rerun
+# refused Oct 4 on), 21539-21545 ATL @ NO Most Rushing Yards (21539 Fanatics -550
+# and 21541 Fanatics +10000 share the ATL key it refused Oct 5 on).
+YARDS_EXTRACT = REAL_EXTRACT.parent / "legacy_most_yards_rows_2026-09-29.txt"
+
+
+def _yards_rows(lines: range) -> list[tuple[int, str]]:
+    out = []
+    for text in YARDS_EXTRACT.read_text(encoding="utf-8").splitlines():
+        n, row = text.split(" ", 1)
+        if int(n) in lines:
+            out.append((int(n), row))
+    return out
+
+
+CAR_KEY_LINES = (10541, 10544)
+
+
+@pytest.mark.parametrize("slate,lines,market,label,game", [
+    ("2026-10-04", range(10541, 10546), "MOST_RUSHING_YARDS", "Most Rushing Yards",
+     ("05cd570bc7ad0f6493e9e1388095741bf2d05ead", "DET @ CAR")),
+    ("2026-10-05", range(21539, 21546), "MOST_RUSHING_YARDS", "Most Rushing Yards",
+     ("23a2e7817d5c4b313d5f0960ff102293b8f0cd2c", "ATL @ NO")),
+    ("2026-10-05", range(5467, 5469), "MOST_PASSING_YARDS", "Most Passing Yards",
+     ("23a2e7817d5c4b313d5f0960ff102293b8f0cd2c", "ATL @ NO")),
+], ids=["oct4_car_rushing", "oct5_atl_rushing", "oct5_atl_passing"])
+def test_real_most_yards_label_rows_are_set_aside_not_refused(tree, slate, lines, market,
+                                                              label, game):
+    nfl, reports = tree
+    rows = _yards_rows(lines)
+    assert len(rows) == len(lines)
+    parsed = [json.loads(t) for _, t in rows]
+    assert {(r["market"], r["player_name"]) for r in parsed} == {(market, label)}
+    assert all(al.market_label_as_player(r) for r in parsed)
+    _snap_at_lines(nfl, rows, "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, (slate,), reports)
+    st = al.legacy_status(nfl, slate)
+    assert st.status == "legacy_regradable" and st.refused_reason is None
+    u = st.unrecoverable_rows
+    distinct = len({t for _, t in rows})  # a byte-identical repeat is one row
+    assert (u["rows"], u["by_market"], u["keys_kept"]) == (distinct, {market: distinct}, 0)
+    assert u["by_game"] == [{"event_id": game[0], "matchup": game[1], "rows": distinct}]
+    (nums,) = u["lines"].values()
+    assert nums == list(lines)
+    assert st.snapshot_rows["pre_kickoff"] == 0
+
+
+def test_the_car_rows_are_the_refused_fanatics_215_vs_10000_pair():
+    a, b = (json.loads(t) for n, t in _yards_rows(range(10541, 10546)) if n in CAR_KEY_LINES)
+    assert (a["books"]["fanatics"], b["books"]["fanatics"]) == (215, 10000)
+    assert all(r["team"] == "CAR" and r["taken_at"] == "2026-10-04T03:28:08.815374+00:00"
+               for r in (a, b))
+
+
+@pytest.mark.parametrize("name,market", [
+    ("most rushing yards", "MOST_RUSHING_YARDS"),     # not the exact label
+    ("Most Rushing Yards ", "MOST_RUSHING_YARDS"),    # trailing space
+    ("Most Rushing Yds", "MOST_RUSHING_YARDS"),       # near-miss label
+    ("Most Passing Yards", "MOST_RUSHING_YARDS"),     # the other new market's label
+    ("Chuba Hubbard", "MOST_RUSHING_YARDS"),          # a real player name
+    ("Most Rushing Yards", "MOST_RUSHING_YARDS_1H"),  # a market not on the list
+])
+def test_a_near_miss_on_the_real_car_rows_still_refuses_the_slate(tree, name, market):
+    nfl, reports = tree
+    rows = [(n, json.dumps(_named(t, name, market=market)))
+            for n, t in _yards_rows(range(10541, 10546)) if n in CAR_KEY_LINES]
+    assert not any(al.market_label_as_player(json.loads(t)) for _, t in rows)
+    _snap_at_lines(nfl, rows, "2026-10-10T12:00:00Z")
+    al.record_legacy(nfl, ("2026-10-04",), reports)
+    st = al.legacy_status(nfl, "2026-10-04")
+    assert st.status == "refused" and st.unrecoverable_rows == {}
+    assert st.refused_reason.endswith(": book 'fanatics' price 215 vs 10000") or \
+        st.refused_reason.endswith(": book 'fanatics' price 10000 vs 215")
