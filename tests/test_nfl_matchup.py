@@ -761,3 +761,26 @@ def test_underdog_rush_mismatch_triggers_clock_bleed_and_blocks_dome_over():
     # Without clock bleed, DAL 28, TB 21 + 3.5 = 24.5 -> total ~ 52.5
     # With -3.0 pt clock bleed, total is reduced
     assert (script.home_score + script.away_score) <= 50.0
+
+
+def test_inactive_tape_rb1_matches_across_name_suffixes():
+    """Injury list says "Kenneth Walker", tape says "Kenneth Walker III": the
+    inactive RB must not carry a rush signal (shared tape_nflverse._name_key)."""
+    from outlier_nfl.matchup import build_matchup_script
+
+    tape = {
+        "CAR": {"rush_defense": 35.0, "opp_rush_yards_allowed": 165.0},
+        "SEA": {"rush_offense": 85.0, "rush_yards": 180.0, "rb1": "Kenneth Walker III"},
+    }
+    script = build_matchup_script("e", "CAR", "SEA", [], tape, injuries=["Kenneth Walker"])
+    rush = [s for s in script.prop_signals if s.tag == "MATCHUP_RUSH_MISMATCH"]
+    assert "Kenneth Walker III" not in {s.player_name for s in rush}
+
+
+def test_inactive_depth_chart_rb1_skipped_across_name_suffixes():
+    """_role_player shares the keyed inactive set: a suffix-only spelling
+    difference still falls through to the next healthy back."""
+    from outlier_nfl.matchup import _role_player
+
+    tape = {"rb1": "Kenneth Walker III"}
+    assert _role_player(tape, "SEA", "rb1", {"kenneth walker"}) != "Kenneth Walker III"

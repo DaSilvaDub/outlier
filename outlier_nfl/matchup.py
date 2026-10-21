@@ -22,7 +22,7 @@ from outlier_nfl.calibration import attach_empirical_model_p, primary_spread, pr
 from outlier_nfl.models import NflGameLine, NflPlayerProp
 from outlier_nfl.roster import NFL_2026_FULL_DEPTH_CHARTS, get_team_depth_chart
 from outlier_nfl.run_context import RunContext, SourceRecord, try_parse_utc
-from outlier_nfl.tape_nflverse import TAPE_MAX_AGE_DAYS, tape_team_lists
+from outlier_nfl.tape_nflverse import TAPE_MAX_AGE_DAYS, _name_key, tape_team_lists
 
 logger = logging.getLogger("outlier_nfl.matchup")
 
@@ -321,10 +321,10 @@ def _role_player(
     candidate is inactive the depth-chart default comes back and the caller's
     eligibility check drops it.
     """
-    out = set(inactive)
+    out = {_name_key(n) for n in inactive}
 
     def active(name: str | None) -> bool:
-        return bool(name) and str(name).strip().lower() not in out
+        return bool(name) and _name_key(name) not in out
 
     named = _text(tape, role)
     if active(named):
@@ -596,7 +596,7 @@ def build_matchup_script(
     home_unit = _unit_score(home_tape)
     away_unit = _unit_score(away_tape)
     ctx = _market_context(game_lines, home, away)
-    inactive = {name.strip().lower() for name in (injuries or []) if name}
+    inactive = {_name_key(name) for name in (injuries or []) if name}
 
     signals: list[PropSignal] = []
     mismatches: list[str] = []
@@ -623,7 +623,7 @@ def build_matchup_script(
     def _eligible(name: str | None) -> str | None:
         if not name:
             return None
-        if name.strip().lower() in inactive:
+        if _name_key(name) in inactive:
             return None
         return name
 
