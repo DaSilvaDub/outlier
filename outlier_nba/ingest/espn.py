@@ -63,6 +63,10 @@ class EspnError(RuntimeError):
     pass
 
 
+class NotFoundError(EspnError):
+    """404: ESPN has no such resource (a box score that was never published)."""
+
+
 class BlockedError(EspnError):
     """403/429: stop the whole run rather than retry into a block."""
 
@@ -252,6 +256,8 @@ def http_fetch(url: str, *, timeout: int = 30, retries: int = 2) -> dict[str, An
         except HTTPError as exc:
             if exc.code in (403, 429):
                 raise BlockedError(f"HTTP {exc.code} from {url.split('?')[0]}") from exc
+            if exc.code == 404:
+                raise NotFoundError(f"HTTP 404 from {url.split('?')[0]}") from exc
             last = exc
         except (OSError, ValueError, EspnError, HTTPException) as exc:  # IncompleteRead etc.
             last = exc
@@ -344,7 +350,11 @@ def fetch_summaries(
     for game_id in game_ids:
         if cache.get_summary(game_id) is not None:
             continue
-        cache.put_summary(game_id, fetch(f"{ESPN_BASE}/summary?event={game_id}"))
+        try:
+            payload = fetch(f"{ESPN_BASE}/summary?event={game_id}")
+        except NotFoundError:
+            payload = {}  # cached as "no box score" so the gap is reported, not retried forever
+        cache.put_summary(game_id, payload)
         made += 1
         throttle.wait()
     return made

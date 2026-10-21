@@ -1,3 +1,27 @@
+# HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
+
+**Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
+
+## Accomplished
+1. ESPN backfill 2016-17 to 2025-26 (12,850 games, every regular season complete), cached, built in local temp, copied to `data/NBA/store/nba_games.sqlite3` and re-counted from a fresh process. Gaps are listed in the doc (340 early games with empty ESPN team stats, 71 postponed, bubble games not flagged neutral by ESPN).
+2. `outlier_nba/ratings/` (possessions, ridge per-100 with home term/decay/prior/stress column, Elo+MOV), `pace.py`, `sim/engine.py` (team layer, one set of draws for margin/total/team totals), `pricing/` (push-aware ML/spread/total/team total/alt lines, blend), `track/{backtest,tune,metrics,promotion}.py`.
+3. Walk-forward backtest 2018-19 to 2025-26 (n=10,229): pool log loss 0.6253 vs Elo 0.6270 vs ridge 0.6258 vs constant home court 0.6870. Pool beats Elo by 0.0017 (CI 0.0009 to 0.0024); ridge and sim are indistinguishable from the pool. No closing lines exist for history, so no market claim.
+4. CLI: `ratings`, `run` (SHADOW rows, units 0, model weight 0 via the evaluator), `backtest`, `backfill`. `daily_job` untouched (default leagues MLB,WNBA).
+
+## State to know about
+- `run` was not exercised against live Outlier (no credentials in this session); `ratings` was run live against ESPN.
+- `config/nba_promotion.json` is hash-guarded: only `track.promotion.evaluate` may write it. `config/nba_team_model.json` holds the tuned params (written by `backtest --write-config`). Both are un-ignored in `.gitignore`.
+- Model probabilities live in the run bundle, not the ledger.
+- Sim under-predicts totals by about 1 point; pool over-predicts home wins by 1 to 4 points per bucket. Not fixed.
+- ESPN: use the repo User-Agent (a longer one with an e-mail got a 403); date ranges return 400, so one request per day.
+
+## Next steps
+1. First authenticated `python -m outlier_nba.cli run` into a temp bundle; inspect `team_shadow.csv`.
+2. Join bundle model probabilities to `nba_outcome_eval` so the evaluator has evidence; schedule `ratings` then `run` daily.
+3. Level-trend term for totals; rest/travel features; a second tuning season.
+
+---
+
 # HANDOFF - 2026-10-21 (Codex, PR 281 integration)
 
 - Last reviewed fix commit SHA: 144a4d8f2188fb79273303e6e3a91b6577f88485.

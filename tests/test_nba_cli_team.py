@@ -324,3 +324,16 @@ def test_http_fetch_retries_a_truncated_body(monkeypatch) -> None:
     monkeypatch.setattr(espn, "urlopen", opener)
     assert espn.http_fetch("https://site.api.espn.com/x") == {"ok": 1}
     assert len(calls) == 2
+
+
+def test_missing_box_score_is_cached_as_a_gap_not_a_crash(tmp_path) -> None:
+    cache = espn.EspnCache(tmp_path)
+
+    def gone(url: str) -> dict:
+        raise espn.NotFoundError("404")
+
+    th = espn.Throttle(burst=5, gap=0, pause=0, sleep=lambda s: None)
+    assert espn.fetch_summaries(["g1"], cache, gone, th) == 1
+    assert cache.get_summary("g1") is not None
+    assert espn.fetch_summaries(["g1"], cache, gone, th) == 0
+    assert espn.parse_summary_box(cache.get_summary("g1")) == {}
