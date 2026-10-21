@@ -17,6 +17,8 @@ dependencies = [
     "structlog>=24.1.0",
     "SQLAlchemy>=2.0.0",
     "psycopg2-binary>=2.9.0",
+    # outlier_nba joint simulation (plan D2); pure-Python is impractical at scale.
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +28,15 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["outlier_scrapers", "outlier_nfl", "outlier_nfl.external"]
+packages = [
+    "outlier_scrapers",
+    "outlier_nfl",
+    "outlier_nfl.external",
+    "outlier_nba",
+    "outlier_nba.ingest",
+    "outlier_nba.market",
+    "outlier_nba.track",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,7 +72,7 @@ ignore_errors = true
 
 
 [tool.pyright]
-include = ["outlier_scrapers", "outlier_nfl"]
+include = ["outlier_scrapers", "outlier_nfl", "outlier_nba"]
 exclude = [
     "**/__pycache__",
     "outlier_scrapers/normalizer.py",

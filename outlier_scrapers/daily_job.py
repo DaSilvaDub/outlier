@@ -35,6 +35,45 @@ logger = logging.getLogger(__name__)
 SUCCESS_OVERALL_STATUSES = ("ok", "degraded", "partial", "full")
 
 
+NBA_SHADOW_LEAGUE = "NBA"
+
+
+def split_nba_shadow(leagues: list[str]) -> tuple[list[str], bool]:
+    """Separate the NBA shadow-capture request from the leagues the pack pipeline builds.
+
+    NBA is Phase 1 (shadow capture and settlement only), so it never enters the pack,
+    desk or sizing path; ``--leagues MLB,WNBA,NBA`` runs the unchanged MLB/WNBA pipeline
+    plus :func:`run_nba_shadow`. The default (``MLB,WNBA``) does not include it.
+    """
+    return [lg for lg in leagues if lg != NBA_SHADOW_LEAGUE], NBA_SHADOW_LEAGUE in leagues
+
+
+def run_nba_shadow(feedback_db: Path | None = None) -> bool:
+    """Capture the NBA slate as SHADOW ledger rows, then settle prior nights.
+
+    Never raises and never changes the MLB/WNBA run's exit code: a failure is logged
+    and returned as False.
+    """
+    try:
+        from outlier_nba import cli as nba_cli
+
+        db = feedback_db or feedback.DEFAULT_DB_PATH
+        capture = nba_cli.run_capture(
+            OutlierApiClient(), db_path=db, nba_dir=nba_cli.DEFAULT_NBA_DIR
+        )
+        settled = nba_cli.run_settle(db)
+        logger.info(
+            "NBA shadow: capture=%s published=%s settled=%s",
+            capture.status,
+            capture.published,
+            settled.get("settlement_rows"),
+        )
+        return capture.exit_code == 0
+    except Exception as exc:
+        logger.error("NBA shadow capture failed: %s", exc)
+        return False
+
+
 def perform_auth_check(leagues: list[str]) -> bool:
     try:
         client = OutlierApiClient()
@@ -651,6 +690,7 @@ def main(argv: list[str] | None = None) -> int:
         args.date = datetime.now().astimezone().date().isoformat()
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
+    leagues, nba_shadow = split_nba_shadow(leagues)
 
     load_environment()
     lock_dir = _acquire_writer_lock()
@@ -678,7 +718,11 @@ def main(argv: list[str] | None = None) -> int:
                 t30_result.reason,
             )
             return 0
-        return _run_locked_pipeline(args, leagues)
+        # With NBA as the only league there is no pack pipeline to run.
+        exit_code = _run_locked_pipeline(args, leagues) if (leagues or not nba_shadow) else 0
+        if nba_shadow:
+            run_nba_shadow(args.feedback_db)
+        return exit_code
     finally:
         _release_writer_lock(lock_dir)
 

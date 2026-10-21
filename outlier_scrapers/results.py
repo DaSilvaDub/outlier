@@ -34,7 +34,10 @@ MLB_API_BASE_URL = "https://statsapi.mlb.com/api/v1"
 SPORT_PATHS = {
     "MLB": "baseball/mlb",
     "WNBA": "basketball/wnba",
+    "NBA": "basketball/nba",
 }
+# Leagues graded from an ESPN basketball box score (same label set).
+BASKETBALL_SPORTS = frozenset({"WNBA", "NBA"})
 DEFAULT_OUTPUT_DIR = (
     Path(__file__).resolve().parents[1] / "calibration" / "settlements" / "generated"
 )
@@ -46,6 +49,12 @@ TEAM_ALIASES = {
     "CONN": "CON",
     "CWS": "CWS",
     "GSV": "GS",
+    # Outlier NBA tricodes -> ESPN NBA abbreviations (ESPN uses GS/NO/NY/SA/UTAH).
+    "GSW": "GS",
+    "NOP": "NO",
+    "NYK": "NY",
+    "SAS": "SA",
+    "UTA": "UTAH",
     "KCR": "KC",
     "LAS": "LA",
     "LVA": "LV",
@@ -331,6 +340,21 @@ def _mlb_events(
     return events
 
 
+_NAME_SUFFIXES = ("III", "II", "IV", "JR", "SR")
+
+
+def _strip_name_suffix(token: str) -> str:
+    """Drop a trailing generational suffix from a compact name token (JARENJACKSONJR -> JARENJACKSON).
+
+    The remainder must still look like a first + last name, so a short token that merely
+    ends in these letters is left alone.
+    """
+    for suffix in _NAME_SUFFIXES:
+        if token.endswith(suffix) and len(token) >= len(suffix) + 8:
+            return token[: -len(suffix)]
+    return token
+
+
 def _player_boxscore_key(event: FinalEvent, selection: str) -> str | None:
     """Resolve one boxscore player key for a selection, or None if ambiguous."""
     raw_name = selection.split(" - ", 1)[0].strip()
@@ -338,6 +362,14 @@ def _player_boxscore_key(event: FinalEvent, selection: str) -> str | None:
     full = _token(raw_name)
     if full and full in event.players:
         return full
+    # One feed writes "Jaren Jackson Jr." and the other "Jaren Jackson": compare with the
+    # generational suffix removed on both sides, and never pick between two such matches.
+    bare = _strip_name_suffix(full)
+    suffix_matches = [name for name in event.players if _strip_name_suffix(name) == bare]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0]
+    if len(suffix_matches) > 1:
+        return None
     if len(parts) < 2:
         return None
     first = _token(parts[0])
@@ -409,7 +441,7 @@ def _side_result(actual: float, line: float, side: str) -> str:
 
 def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | None:
     token = _token(market)
-    if sport == "WNBA":
+    if sport in BASKETBALL_SPORTS:
         components = {
             "POINTS": ("PTS",),
             "PTS": ("PTS",),
@@ -437,11 +469,17 @@ def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | 
             "RA": ("REB", "AST"),
             "PTSREBAST": ("PTS", "REB", "AST"),
             "PRA": ("PTS", "REB", "AST"),
+            "POINTSREBOUNDSASSISTS": ("PTS", "REB", "AST"),
+            "STEALSBLOCKS": ("STL", "BLK"),
+            "SB": ("STL", "BLK"),
         }
         keys = components.get(token)
-        if token in {"DOUBLEDOUBLE", "DD"}:
+        if token in {"TRIPLEDOUBLE", "TD", "DOUBLEDOUBLE", "DD"}:
             categories = [stats.get(key) for key in ("PTS", "REB", "AST", "STL", "BLK")]
-            return float(sum(value is not None and value >= 10 for value in categories) >= 2)
+            if any(value is None for value in categories):
+                return None  # a box score missing a category cannot prove "no double"
+            needed = 3 if token in {"TRIPLEDOUBLE", "TD"} else 2
+            return float(sum(value >= 10 for value in categories if value is not None) >= needed)
         if not keys:
             return None
         values: list[float] = []

@@ -1,3 +1,26 @@
+# HANDOFF — 2026-10-20 (Claude, NBA Phases 0–1: foundations + shadow capture)
+
+**Branch**: `claude/nba-phase01` (stacked on `claude/nba-master-pipeline-fusion-cc1443`, PR #284 docs-only) · **PR**: see `gh pr list --head claude/nba-phase01`
+
+## Accomplished
+1. Phase 0. NBA registry: 30 teams with aliases and display names, including LA/Los Angeles variants and vendor codes (GS/NY/NO/SA/UTAH/WSH); `opp_rank_applicable=False`; still `enabled_by_default=False`. `results.py` grades NBA through the existing ESPN basketball path: PTS/REB/AST/3PTS, combos, S+B, DD and now TD. `outlier_nba/`: `identity` (one suffix/punctuation-insensitive name key), `run_context` (as-of cutoff; only live/fixture publish), `receipts` + `run_writer` + `pipeline`. The receipt log is sealed before the publication decision, so any required FAILED receipt withholds everything; this is tested on the pipeline path. numpy added to dependencies; `outlier_nba*` added to packages and the pyright include. Data-source spike: `docs/nba/data-sources.md`.
+2. Phase 1. `ingest/outlier.py` (reuses `OutlierApiClient` and the shared normalizer), `market/devig.py` (multiplicative, Shin with arb fallback, power; clean-room), `market/consensus.py` (per-book devig, median, renormalize, `thin_market` < 3 books, placeholder drop, DFS books excluded), `market/ladders.py` (integer-line push from adjacent half-lines). `track/capture.py` writes every game, team-total and prop/ladder rung to the shared ledger with `sport='NBA'`, board `SHADOW`, units 0, never actionable. `track/views.py` adds the `nba_outcome_eval` view (first pre-tip capture per outcome). `track/settle.py` + `track/clv.py` settle through `results.py`; CLV only from a close ≤60 min pre-tip, otherwise `close_unverified`.
+3. `daily_job --leagues MLB,WNBA,NBA` runs the unchanged MLB/WNBA pipeline plus a non-fatal NBA shadow capture + settle; the default is unchanged. `python -m outlier_nba.cli capture|settle` are the standalone entry points.
+4. A fixture slate is captured three times, settled, and read through the view in `tests/test_nba_shadow_e2e.py`.
+
+## State to know about
+- **No live Outlier read was made.** Outlier session credentials are off limits to this session, so the NBA payload shapes are verified only from the stored WNBA/MLB raw feeds. The first authenticated `python -m outlier_nba.cli capture --db <temp.sqlite3>` is the real verification; the full-game `periodLabel` values for NBA are the likeliest surprise (unknown labels are skipped, fail-closed, and counted in `slate_summary.json`).
+- The 2026-27 season opened **today** (2026-10-20, per ESPN), so every day without capture is lost prop history.
+- Build large ledger writes in local temp and copy them in; the default `--db` is the shared ledger (D3), which sits behind the cloud-sync filter.
+- Side-effecting stages (the ledger write) must stay last in the stage list: a stage that fails after it would withhold publication but not undo the write.
+- stats.nba.com timed out and cdn.nba.com returned 403 to a plain client; neither was worked around. Phase 2/3 lineup, shot-chart and tracking data has no confirmed free source.
+
+## Next steps
+1. Run one authenticated capture into a temp ledger, inspect `slate_summary.json`, then schedule `--leagues MLB,WNBA,NBA`.
+2. Phase 2 (team model), starting with a decision on the historical closing-line source (D4).
+
+---
+
 # HANDOFF — 2026-10-20 (Claude, NBA master pipeline plan)
 
 **Branch**: `claude/nba-master-pipeline-fusion-cc1443` · **PR**: see `gh pr list --head claude/nba-master-pipeline-fusion-cc1443` (docs only)
