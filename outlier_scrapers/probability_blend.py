@@ -30,15 +30,12 @@ DIMENSIONS = (
 # dimension keyed by those columns, so they are quarantined before fitting.
 _CORRUPT_COLUMN_VALUES = {"50.0", "25.0", "75.0"}
 
-# Until a segment demonstrates an out-of-sample Brier improvement over the
-# market-only baseline, its learned weight is floored here rather than
-# trusted at its raw in-sample fit. fit_weight_artifact has no chronological
-# holdout of its own history, so this is the safety margin against
-# overriding the market on noise.
-DEFAULT_MARKET_WEIGHT_FLOOR = 0.75
+# Missing or failed chronological holdout evidence permits no model weight.
+# A successful holdout unlocks the train-only weight that was actually scored.
+DEFAULT_MARKET_WEIGHT_FLOOR = 1.0
 DEFAULT_HOLDOUT_FRACTION = 0.2
 # Minimum rows required on each side of the chronological split before an
-# out-of-sample verdict is trusted at all; below this, the floor applies.
+# out-of-sample verdict is trusted at all; below this, use market-only.
 MIN_HOLDOUT_SAMPLES = 20
 
 
@@ -222,8 +219,8 @@ def _evaluate_oos(
     """Fit on the earlier slice, score the later slice against the market baseline.
 
     Returns None when there isn't enough data on both sides of the split to
-    trust a verdict; callers must treat that as "no OOS evidence" and floor
-    the weight rather than trust the in-sample fit.
+    trust a verdict; callers must treat that as "no OOS evidence" and use
+    market-only rather than trust the in-sample fit.
     """
     train_pairs, holdout_pairs = _chronological_split(timestamped_pairs, holdout_fraction)
     if len(train_pairs) < min_samples or len(holdout_pairs) < MIN_HOLDOUT_SAMPLES:
@@ -244,7 +241,10 @@ def _evaluate_oos(
 
 
 def _apply_floor(fit: dict[str, Any], floor: float, holdout: dict[str, Any] | None) -> dict[str, Any]:
-    """Publish a weight the holdout actually backs, or floor it.
+    """Publish a weight the holdout actually backs, or use market-only.
+
+    ``floor`` is retained for compatibility with existing callers, but a
+    lower legacy value cannot grant model weight without OOS improvement.
 
     When the holdout split shows improvement, the published weight must be
     the train-only fit that was scored against the holdout
@@ -262,12 +262,11 @@ def _apply_floor(fit: dict[str, Any], floor: float, holdout: dict[str, Any] | No
             "market_weight": round(validated, 8),
             "model_weight": round(1.0 - validated, 8),
         }
-    floored = max(float(fit["market_weight"]), floor)
     return {
         **fit,
         "raw_market_weight": fit["market_weight"],
-        "market_weight": round(floored, 8),
-        "model_weight": round(1.0 - floored, 8),
+        "market_weight": 1.0,
+        "model_weight": 0.0,
     }
 
 

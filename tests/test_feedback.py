@@ -306,9 +306,9 @@ def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
     artifact = feedback.fit_blend_weights(db_path, output, min_samples=2, prior_strength=0)
     assert output.exists()
     assert artifact["status"] == "active"
-    # Both rows share one captured_at, so there's no chronological holdout to
-    # prove OOS improvement; the market-weight floor applies (Phase 1).
-    assert artifact["global"]["market_weight"] == pytest.approx(0.75)
+    # Two rows cannot establish OOS improvement; no model weight is authorized.
+    assert artifact["global"]["market_weight"] == 1.0
+    assert artifact["global"]["model_weight"] == 0.0
     assert artifact["dimensions"]["league"]["WNBA"]["n"] == 2
 
 

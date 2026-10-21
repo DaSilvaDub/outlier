@@ -1,3 +1,19 @@
+# HANDOFF - 2026-10-21 (Codex, PR 282 blend ruling and integration)
+
+**Last commit before this policy follow-up**: `b5406af` (master integrated).
+**PR**: https://github.com/DaSilvaDub/outlier/pull/282
+**Files touched**: probability_blend.py, test_probability_blend.py, test_feedback.py, this handoff.
+
+- Adopted market weight 1.0/model weight 0.0 for missing or failed chronological holdouts; legacy 0.75 caller values cannot bypass this rule. Successful holdouts keep the scored train-only weight.
+- Apply the segment fallback before existing prior shrinkage: a validated global prior can still contribute to a segment.
+- Regression coverage includes failed global/segment holdouts, no holdout, legacy floor inputs and successful train-only weights. Independent review found no merge blocker and passed 36 focused tests; ruff and mypy (105 files) pass.
+- Existing saved blend artifacts are unchanged and remain compatible; a subsequent fit/rebuild applies the new rule. config/blend_promotion.json remains shadow. No paid/live reasoning, calibration rewrite or wagering promotion.
+- Canonical dirty NFL/calibration/report work was preserved; all implementation occurred in the existing PR worktree.
+
+**Next steps**: Require green hosted CI on updated head, then merge #282 after #281. #284 already merged at b636cf239ad64fc0e8d82e2ff1f77e1242ccf7ca. Do not treat historical handoff requests below as still pending.
+
+---
+
 # HANDOFF — 2026-10-20 (Claude, outlier_scrapers evaluation/gating audit fixes)
 
 **Branch**: `fix/core-eval-gating-audit` · **PR**: https://github.com/DaSilvaDub/outlier/pull/282 (open)
