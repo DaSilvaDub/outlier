@@ -243,6 +243,10 @@ def recompute_settlement_clv(
     behind. Each flagged row is re-resolved against a genuinely distinct
     local snapshot or, failing that, the line-movement export; if neither
     yields a real close the row is cleared to unknown rather than left wrong.
+
+    NBA settlements are excluded: ``outlier_nba`` only records a close that is a later
+    snapshot inside the 60-minute pre-tip window, so an unchanged price there is a real
+    close, not the take standing in for itself.
     """
     summary = {"inspected": 0, "corrected": 0, "cleared": 0, "unchanged": 0}
     conn = _connect(Path(db_path))
@@ -256,6 +260,7 @@ def recompute_settlement_clv(
                    s.captured_at
             FROM settlements t
             JOIN market_snapshots s ON s.snapshot_id = t.snapshot_id
+            WHERE UPPER(s.sport) <> 'NBA'
             """
         ).fetchall()
         bogus_rows = []
