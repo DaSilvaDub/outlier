@@ -168,7 +168,7 @@ def build_shadow_capture(
         "two_sided": 0,
         "one_sided": 0,
         "thin_market": 0,
-        "no_price": 0,
+        "no_price_skipped": 0,
         "unorientable": sum(1 for r in records if orientation(r) is None),
     }
     for (_event, _market), rungs in _group_rungs(records).items():
@@ -182,6 +182,10 @@ def build_shadow_capture(
         for x, pair in rungs.items():
             cons = per_rung[x]
             for side, rec in pair.items():
+                if _best_price(rec) is None:
+                    # priced only by DFS pick'em books (or not at all): nothing to record
+                    stats["no_price_skipped"] += 1
+                    continue
                 stats["outcomes"] += 1
                 capture.rows.append(
                     _row(rec, side, x, cons, ladder, pair, captured_at, method, stats)
@@ -237,9 +241,6 @@ def _row(
     elif x is not None:
         push = 0.0
     best = _best_price(rec)
-    if best is None:
-        stats["no_price"] += 1
-        flags.append("NO_PRICE")
     edge = None
     if p_side is not None and best is not None:
         implied = american_to_prob(best[1])
@@ -306,8 +307,10 @@ def write_to_ledger(
     work_dir.mkdir(parents=True, exist_ok=True)
     (work_dir / "candidates.csv").write_text(rows_to_csv(rows), encoding="utf-8")
     feedback.initialize_database(db_path)
+    from outlier_nba.track.views import ensure_nba_schema
+
     with sqlite3.connect(db_path) as conn:
-        conn.execute(METHOD_TABLE_SQL)
+        ensure_nba_schema(conn)  # nba_clv, method table and the one-row-per-outcome view
     stats = capture_pack(
         work_dir, db_path, recorded_pack_path=recorded_path, source_filename="candidates.csv"
     )
