@@ -38,6 +38,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _iso(value: Any) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value)
+
+
 def _slate_date(slate: ingest.Slate, as_of: datetime) -> str:
     """Eastern date of the first open tip (NBA slates are named by US evening date)."""
     from zoneinfo import ZoneInfo
@@ -189,6 +193,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.choices["capture"].add_argument(
         "--fixture", action="store_true", help="treat the run as a fixture run (publishes)"
     )
+    sub.choices["capture"].add_argument(
+        "--only-if-due",
+        action="store_true",
+        help="skip unless a tip within 60 min lacks a verified-window capture (scheduler use)",
+    )
     sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
     args = parser.parse_args(argv)
 
@@ -200,6 +209,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         # fixture runs publish, so they must never write the shared ledger
         print("--fixture requires an explicit non-default --db")
         return 2
+
+    if args.only_if_due:
+        from outlier_nba.track.due import capture_due
+
+        due = capture_due(args.db, _utc_now())
+        if not due.due:
+            print(
+                json.dumps(
+                    {"skipped": True, **dataclasses.asdict(due)}, default=_iso, sort_keys=True
+                )
+            )
+            return EXIT_OK
+        logger.info("nba_capture_due", reason=due.reason)
 
     from outlier_scrapers.api import OutlierApiClient
 
