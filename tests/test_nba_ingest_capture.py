@@ -227,3 +227,16 @@ def test_unorientable_outcomes_are_counted_in_the_capture_summary():
     odd = dataclasses.replace(slate.records[0], side="YES")
     capture = build_shadow_capture([odd, *slate.records[1:]], captured_at=NOW)
     assert capture.summary["unorientable"] == 1
+
+
+def test_outcomes_priced_only_by_dfs_books_are_not_captured():
+    import dataclasses
+
+    _bundle, slate = _slate()
+    dfs_only = dataclasses.replace(
+        slate.records[0], quotes=(("PrizePicks", 100), ("Underdog", -137))
+    )
+    capture = build_shadow_capture([dfs_only, *slate.records[1:]], captured_at=NOW)
+    assert dfs_only.outcome_id not in {r["outcome_id"] for r in capture.rows}
+    assert capture.summary["no_price_skipped"] == 1
+    assert not any(r["price"] == "" for r in capture.rows)

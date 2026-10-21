@@ -368,3 +368,10 @@ def test_post_cutoff_records_are_dropped_by_the_normalize_stage(tmp_path):
     )
     assert summary["rejected_post_cutoff"] == 1
     assert _db(tmp_path).execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0] == 22
+
+
+def test_eval_view_and_clv_table_exist_right_after_a_capture(tmp_path):
+    _capture(tmp_path, T1)
+    conn = _db(tmp_path)
+    assert conn.execute("SELECT COUNT(*) FROM nba_outcome_eval").fetchone()[0] == 23
+    assert conn.execute("SELECT COUNT(*) FROM nba_clv").fetchone()[0] == 0
