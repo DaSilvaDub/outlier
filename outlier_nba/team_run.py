@@ -274,7 +274,8 @@ def price_slate(
             continue
         if rec.event_id not in draws_by_event:
             try:
-                assert rec.home is not None and rec.away is not None
+                if rec.home is None or rec.away is None:
+                    raise ValueError("event teams unresolved")
                 draws_by_event[rec.event_id] = event_draws(
                     state, rec.home, rec.away, slate_date, n_draws, rng
                 )
@@ -344,9 +345,8 @@ def fair_ladders(
             resolve_team((ev.get("home") or {}).get("alias")),
             resolve_team((ev.get("away") or {}).get("alias")),
         )
-        if home not in TEAM_INDEX or away not in TEAM_INDEX:
+        if home is None or away is None or home not in TEAM_INDEX or away not in TEAM_INDEX:
             continue
-        assert home is not None and away is not None
         draws = event_draws(state, home, away, slate_date, n, rng)
         mid_margin = float(np.median(draws.margin))
         mid_total = float(np.median(draws.total))

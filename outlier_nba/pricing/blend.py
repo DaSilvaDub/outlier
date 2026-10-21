@@ -33,11 +33,11 @@ def final_probability(p_model: float | None, p_market: float | None, weight: flo
         flags.append("MISSING_MARKET_PROB")
     if weight > 0.0 and not _usable(p_model):
         flags.append("MISSING_MODEL_PROB")
-    if flags:
+    if flags or p_market is None:
         return FinalProb(None, tuple(flags))
-    assert p_market is not None
     if weight == 0.0:
         return FinalProb(float(p_market))
-    assert p_model is not None
+    if p_model is None:  # unreachable once flagged above; keeps the types honest
+        return FinalProb(None, ("MISSING_MODEL_PROB",))
     z = weight * _logit(p_model) + (1.0 - weight) * _logit(p_market)
     return FinalProb(1.0 / (1.0 + math.exp(-z)))

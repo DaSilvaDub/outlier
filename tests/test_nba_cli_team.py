@@ -183,7 +183,7 @@ def test_http_fetch_stops_on_403_and_429(monkeypatch) -> None:
     for code in (403, 429):
         monkeypatch.setattr(espn, "urlopen", deny(code))
         with pytest.raises(espn.BlockedError):
-            espn.http_fetch("https://site.api.espn.com/x?y=1")
+            espn.http_fetch(espn.ESPN_BASE + "/x?y=1")
 
 
 def test_http_fetch_returns_json_and_sends_the_repo_user_agent(monkeypatch) -> None:
@@ -201,7 +201,7 @@ def test_http_fetch_returns_json_and_sends_the_repo_user_agent(monkeypatch) -> N
         return Resp(b'{"events": []}')
 
     monkeypatch.setattr(espn, "urlopen", opener)
-    assert espn.http_fetch("https://site.api.espn.com/x") == {"events": []}
+    assert espn.http_fetch(espn.ESPN_BASE + "/x") == {"events": []}
     assert seen["ua"] == espn.USER_AGENT == "outlier-results-collector/1.0"
 
 
@@ -213,7 +213,7 @@ def test_http_fetch_gives_up_after_retries(monkeypatch) -> None:
 
     monkeypatch.setattr(espn, "urlopen", broken)
     with pytest.raises(espn.EspnError, match="request failed"):
-        espn.http_fetch("https://site.api.espn.com/x", retries=1)
+        espn.http_fetch(espn.ESPN_BASE + "/x", retries=1)
 
 
 def test_refresh_recent_refetches_days_and_only_fetches_missing_boxes(tmp_path) -> None:
@@ -322,7 +322,7 @@ def test_http_fetch_retries_a_truncated_body(monkeypatch) -> None:
         return Resp(b'{"ok": 1}')
 
     monkeypatch.setattr(espn, "urlopen", opener)
-    assert espn.http_fetch("https://site.api.espn.com/x") == {"ok": 1}
+    assert espn.http_fetch(espn.ESPN_BASE + "/x") == {"ok": 1}
     assert len(calls) == 2
 
 
@@ -337,3 +337,10 @@ def test_missing_box_score_is_cached_as_a_gap_not_a_crash(tmp_path) -> None:
     assert cache.get_summary("g1") is not None
     assert espn.fetch_summaries(["g1"], cache, gone, th) == 0
     assert espn.parse_summary_box(cache.get_summary("g1")) == {}
+
+
+def test_http_fetch_refuses_urls_outside_the_espn_endpoint() -> None:
+    with pytest.raises(espn.EspnError, match="refusing"):
+        espn.http_fetch("https://stats.nba.com/stats/x")
+    with pytest.raises(espn.EspnError, match="refusing"):
+        espn.http_fetch("file:///etc/passwd")

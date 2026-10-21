@@ -244,7 +244,9 @@ class Throttle:
 
 
 def http_fetch(url: str, *, timeout: int = 30, retries: int = 2) -> dict[str, Any]:
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    if not url.startswith(ESPN_BASE + "/"):  # only ever talk to the one ESPN endpoint family
+        raise EspnError(f"refusing to fetch outside {ESPN_BASE}: {url.split('?')[0]}")
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})  # noqa: S310
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -395,6 +397,16 @@ _GAME_COLS = [
 ]  # fmt: skip
 
 
+INSERT_GAME = (
+    "INSERT INTO games (game_id, season, season_type, start_utc, home, away, home_pts, away_pts, "
+    "periods, ot_periods, neutral, attendance, note, home_fga, home_fta, home_reb, home_oreb, "
+    "home_tov, away_fga, away_fta, away_reb, away_oreb, away_tov) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+if INSERT_GAME.count("?") != len(_GAME_COLS):  # a schema edit must fail at import, not at insert
+    raise RuntimeError("INSERT_GAME placeholders do not match _GAME_COLS")
+
+
 def _merge_box(row: GameRow, box: Mapping[str, Mapping[str, int | None]]) -> GameRow:
     values: dict[str, Any] = {}
     for side in ("home", "away"):
@@ -435,11 +447,7 @@ def build_store(cache: EspnCache, db_path: Path) -> dict[str, int]:
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(SCHEMA)
-        marks = ",".join("?" for _ in _GAME_COLS)
-        conn.executemany(
-            f"INSERT INTO games ({','.join(_GAME_COLS)}) VALUES ({marks})",  # noqa: S608
-            [_row_values(g) for g in ordered],
-        )
+        conn.executemany(INSERT_GAME, [_row_values(g) for g in ordered])
         conn.executemany(
             "INSERT INTO gaps VALUES (?, ?, ?)", [(g["kind"], g["key"], g["detail"]) for g in gaps]
         )
