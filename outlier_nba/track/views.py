@@ -14,8 +14,8 @@ from outlier_nba.track.capture import METHOD_TABLE_SQL
 from outlier_nba.track.clv import SCHEMA_SQL as CLV_SCHEMA_SQL
 
 EVAL_VIEW_NAME = "nba_outcome_eval"
-EVAL_VIEW_SQL = f"""
-CREATE VIEW IF NOT EXISTS {EVAL_VIEW_NAME} AS
+EVAL_VIEW_SQL = """
+CREATE VIEW IF NOT EXISTS nba_outcome_eval AS
 SELECT * FROM (
     SELECT s.snapshot_id, s.event_id, s.outcome_id, s.market_id, s.market_type, s.selection,
            s.line, s.price, s.book, s.market_consensus_prob, s.push_prob, s.captured_at,
