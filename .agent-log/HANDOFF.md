@@ -1,3 +1,14 @@
+# HANDOFF - 2026-10-22 (Claude, NBA ledger collection turned on)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- Live `capture` + `run` wrote a dedicated local ledger `C:/Users/dasil/outlier_nba_data/ledger/feedback.sqlite3` (14,580 snapshots / 70 games incl. 9,554 player-prop rows; 4,977 model rows; 4,603 joined at a 73 s gap; integrity ok; zero staking). Deliberately NOT the shared `calibration/` ledger (281 MB, sync filter, three corruptions); `--db` switches it. See `docs/nba/phase2-evidence.md`, "Daily collection".
+- `scripts/nba_shadow_daily.ps1` runs ratings > capture > run > settle > promote preview in one command (tested live).
+- Nothing settles until captured games finish; check `promote` after the first full night.
+- Open decision for the owner: when to merge the local NBA ledger into the shared one (D3), and whether to schedule the script (I did not create a scheduled task).
+
+---
+
 # HANDOFF - 2026-10-22 (Claude, NBA totals bias + first live shadow run)
 
 **Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
