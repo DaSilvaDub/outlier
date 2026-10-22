@@ -1,3 +1,12 @@
+# HANDOFF — 2026-10-22 (Codex, NFL Master Betting Pipeline V2 — Patriots at Bears)
+
+- Last Commit SHA: `9f9decb84a42dbce6d20aa6199dc0d6123dbcea` (product checkout before this coordination-only handoff; no source-code changes).
+- Files touched: generated `reports/NFL/2026-10-22_Master_Betting_Pipeline_V2.md`; pipeline artifacts under `data/NFL/runs/2026-10-22-20261022T231236Z-e1042caf/`; `.agent-log/HANDOFF.md`.
+- Run: `status=OK`, `publication=published`, run id `2026-10-22-20261022T231236Z-e1042caf`; official bet gate 0 VALIDATED / 150 PROVISIONAL / 499 REJECTED. Report and game script are saved under `reports/NFL/`.
+- Limits: no calibrated drive Monte Carlo model ran; candidate probability deltas are marked uncalibrated; 0 props had quote history; 1,020 conflicting quotes were dropped. Final verdict: NO BET.
+- Next steps: none unless requested. Any later value check must refresh prices and injury status; do not promote provisional/actionable flags to approved bets.
+
+---
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.
