@@ -217,3 +217,39 @@ def test_level_correction_cuts_the_lag_behind_a_scoring_level_shift(ds_shift) ->
     assert (on["bias"][late] > 0).all()
     # the same amount is added to both teams, so who is favoured cannot change
     assert np.allclose(on["exp_margin"][season], off["exp_margin"][season], atol=1e-9)
+
+
+def test_pace_component_is_not_counted_twice_in_the_simulated_total() -> None:
+    """sigma_e/rho must describe the efficiency noise left after the pace term is removed."""
+    from outlier_nba.ratings.model import NoiseTracker
+    from outlier_nba.sim.engine import SimParams, simulate
+
+    rng = np.random.default_rng(3)
+    n, sp, beta, se, e_h, e_a = 6000, 0.05, -150.0, 11.0, 114.0, 112.0  # an exaggerated link
+    z0, zh, za = (rng.standard_normal(n) for _ in range(3))
+    eff_h = e_h + beta * sp * z0 + se * zh
+    eff_a = e_a + beta * sp * z0 + se * za
+    truth = 99.0 * np.exp(sp * z0) * (eff_h + eff_a) / 100.0
+
+    tracker = NoiseTracker()
+    for i in range(n):
+        raw_h, raw_a = eff_h[i] - e_h, eff_a[i] - e_a
+        tracker.update(
+            raw_h, raw_a, sp * z0[i], 0.0, 1.0, 1.0, False, raw_eff_resid=0.5 * (raw_h + raw_a)
+        )
+    assert tracker.beta_pe == pytest.approx(beta, rel=0.1)
+    assert tracker.sigma_e == pytest.approx(se, rel=0.05)  # not sqrt(se^2 + (beta*sp)^2) = 13.3
+
+    def total_sd(sigma_p: float, sigma_e: float, rho: float, beta_pe: float) -> float:
+        params = SimParams.single(
+            log_poss=np.log(99.0), sigma_p=sigma_p, e_home=e_h, e_away=e_a, sigma_e=sigma_e,
+            rho=rho, ot_ratio=1.0, beta_pe=beta_pe,
+        )  # fmt: skip
+        return float(simulate(params, 60000, np.random.default_rng(4)).total.std())
+
+    # the simulation fed the tracker's estimates must spread like one fed the true parameters
+    # (overtime points are in both, so only a double-counted pace term can separate them)
+    assert total_sd(
+        tracker.sigma_p, tracker.sigma_e, tracker.rho, tracker.beta_pe
+    ) == pytest.approx(total_sd(sp, se, 0.0, beta), rel=0.03)
+    assert truth.std() > 0  # the generating process itself has the spread being matched

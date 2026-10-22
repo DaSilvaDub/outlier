@@ -411,7 +411,13 @@ def test_sbro_backtest_needs_enough_games_per_season_unless_partial_is_allowed(
     monkeypatch.setattr(sbro, "load_market", lambda seasons, games: ({"g": object()}, report))
     monkeypatch.setattr(espn, "coverage_report", lambda store: {})
     monkeypatch.setattr(
-        backtest, "run_backtest", lambda *a, **k: {"params": {}, "scored_seasons": []}
+        backtest,
+        "run_backtest",
+        lambda *a, **k: {
+            "params": {},
+            "scored_seasons": [],
+            "market_lines": {"available": True, "n": 10},
+        },
     )
     base = _bt_args(tmp_path, "--sbro", "--seasons", "2018-19:2018-19")
     assert cli.main(base) == 6
@@ -485,3 +491,45 @@ def test_backfill_all_runs_every_stage_in_order_and_stops_when_blocked(
         str(other),
     ]
     assert cli.main(args) == 4 and not other.exists()
+
+
+def test_backtest_creates_the_output_directory_before_writing_either_file(tmp_path, monkeypatch):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    report = {"seasons": {"2018-19": {"cached": True, "matched": 900}}}
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(sbro, "load_market", lambda seasons, games: ({"g": object()}, report))
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    monkeypatch.setattr(
+        backtest,
+        "run_backtest",
+        lambda *a, **k: {
+            "params": {},
+            "scored_seasons": [],
+            "market_lines": {"available": True, "n": 5},
+        },
+    )
+    out = tmp_path / "does" / "not" / "exist" / "r.json"
+    args = ["backtest", "--no-tune", "--sbro", "--seasons", "2018-19:2018-19", "--out", str(out)]
+    assert cli.main(args) == 0
+    assert out.exists() and (out.parent / "sbro_manifest.json").exists()
+
+
+def test_closing_lines_that_match_no_scored_game_fail_the_run(tmp_path, monkeypatch, capsys):
+    """Rows parsed from a CSV but for games nobody scored: nothing was compared, so not success."""
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    path = tmp_path / "close.csv"
+    path.write_text(
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+        "no-such-game,2025-26,2025-12-01,BOS,NYK,-150,130,-3.5,220.5,219,-3,\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "r.json"
+    args = ["backtest", "--no-tune", "--closing-csv", str(path), "--draws", "200"]
+    args += ["--seasons", "2025-26:2025-26", "--tune-season", "2024-25", "--out", str(out)]
+    assert cli.main(args) == 6
+    assert "closing_lines_unavailable" in capsys.readouterr().out
+    assert not out.exists()  # no report that looks like a market comparison happened

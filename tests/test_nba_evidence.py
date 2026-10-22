@@ -511,3 +511,13 @@ def test_run_command_threads_the_ledger_choice_through(tmp_path, monkeypatch) ->
     assert seen["ledger_db"] == db
     cli.main(["run", "--no-ledger", "--nba-dir", str(tmp_path)])
     assert seen["ledger_db"] is None
+
+
+def test_an_empty_horizon_with_ledger_recording_is_a_clean_empty_run(
+    tmp_path, games, promo
+) -> None:
+    result = _model_run(tmp_path, games, promo, T1, horizon_hours=1.0)
+    assert result.exit_code == 0, result.withheld_reason
+    statuses = {r.name: r.status for r in result.receipts}
+    assert statuses["price_team_markets"] == "EMPTY" and statuses["model_ledger"] == "EMPTY"
+    assert not (tmp_path / "ledger.sqlite3").exists()  # nothing to record, nothing created

@@ -138,9 +138,9 @@ class NoiseTracker:
     ) -> None:
         """Fold in one finished game. Residuals are actual minus the pre-game prediction.
 
-        ``e_h``/``e_a`` are residuals of the *corrected* forecast (they feed the spread
-        estimates); ``raw_eff_resid`` is the mean residual of the uncorrected one (it feeds
-        the level correction).
+        ``e_h``/``e_a`` are residuals of the level-corrected forecast; the pace component is
+        removed here before they feed the spread and correlation estimates. ``raw_eff_resid`` is
+        the mean residual of the uncorrected forecast (it feeds the level correction).
         """
         d = 0.5 ** (1.0 / self.halflife)
         density = None
@@ -157,7 +157,14 @@ class NoiseTracker:
             self.s_bias += raw_eff_resid
             self.bias_n += 1.0
             self.bias_obs += 1
+        # beta from earlier games only (this game is not folded in yet). The pace component of
+        # the efficiency residual is modelled explicitly in the simulation, so the spread and
+        # correlation it is given must describe what is left once that component is removed;
+        # otherwise the component would be counted twice.
+        beta = self.beta_pe
         self.s_pe += pace_resid * 0.5 * (e_h + e_a)
+        e_h -= beta * pace_resid
+        e_a -= beta * pace_resid
         if density is not None:
             self.s_density += density
             self.n_ot += float(ot)  # counted only where a density was accumulated

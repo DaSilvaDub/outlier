@@ -325,12 +325,19 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
         tune_params=not args.no_tune,
         start_params=TeamParams.from_dict(team_run.load_params()[0].to_dict()),
     )
+    if market_lines is not None:
+        compared = report.get("market_lines") or {}
+        if not compared.get("available") or not compared.get("n"):
+            # lines were supplied but none matched a scored game: nothing was compared
+            note = compared.get("note", "no scored game has a closing line")
+            print(f"closing_lines_unavailable: {note}")
+            return 6
     report["coverage"] = espn.coverage_report(args.store)
+    args.out.parent.mkdir(parents=True, exist_ok=True)  # before either output is written
     if sbro_report is not None:
         report["sbro_join"] = sbro_report
         manifest = args.out.with_name("sbro_manifest.json")
         manifest.write_text(json.dumps(sbro_report, indent=2, sort_keys=True), encoding="utf-8")
-    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if args.write_config and not args.no_tune:
         team_run.MODEL_CONFIG_PATH.write_text(

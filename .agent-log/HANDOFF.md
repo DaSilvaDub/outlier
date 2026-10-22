@@ -1,3 +1,10 @@
+# HANDOFF - 2026-10-22 (Claude, PR #294 review round 3)
+
+- Fixed: pace component no longer double counted (sigma_e/rho measured after removing the pace term; simulated total sd 19.0 vs realised 18.7); empty pricing horizon with ledger recording is a clean EMPTY run; `backtest` creates the output directory before writing either file; a closing-line comparison that matches no scored game exits 6 with no report (SBRO and CSV paths).
+- A reviewer reported a mypy failure; `python -m mypy outlier_nba` passes here (41 files), so I could not reproduce it. If it is a different invocation (tests, whole repo), send the command.
+
+---
+
 # HANDOFF - 2026-10-22 (Claude, NBA ledger collection turned on)
 
 **Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).

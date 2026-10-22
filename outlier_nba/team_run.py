@@ -631,6 +631,7 @@ def run_team_shadow(
 
     def price(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
         records = state["records"]
+        state["shadow_rows"] = []  # the ledger stage reads this even when nothing was priced
         if not records:
             return receipt("price_team_markets", "EMPTY", reason="no team-market outcomes")
         cap = capture_mod.build_shadow_capture(records, captured_at=bundle.fetch_started)
@@ -687,6 +688,8 @@ def run_team_shadow(
             return receipt(
                 "model_ledger", "EMPTY", reason=f"skipped: {ctx.mode} run is bundle-only"
             )
+        if not state.get("shadow_rows"):
+            return receipt("model_ledger", "EMPTY", reason="no priced rows to record")
         stats = record_model_probs(ledger_db, state["shadow_rows"], ctx.run_id)  # type: ignore[arg-type]
         return receipt("model_ledger", "OK", received=stats["model_rows"])
 

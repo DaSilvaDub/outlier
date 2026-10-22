@@ -119,7 +119,10 @@ Wilson intervals.
 * **Total spread.** The simulation treated pace and efficiency as independent; empirically a game that runs faster than
   expected is less efficient per possession (correlation -0.16, about -31 points per 100 per unit of log-possession
   surprise). Adding that term (estimated out of sample) narrows the simulated total's standard deviation from 20.2 to
-  19.2 against a realised 18.7; the mean and the margin are unchanged.
+  19.0 against a realised 18.7; the mean and the margin are unchanged. The efficiency spread (`sigma_e`) and the
+  correlation between the two teams' noise are measured on residuals *after* the pace component is removed;
+  measuring them before and then adding the pace term again would count that component twice (a regression test
+  with an exaggerated link catches it).
 * Margin spread: the tracker's sigma 13.74 against a realised residual sd of 13.90 (about 1% narrow).
 * Overtime: actual 5.3% of games; predicted 5.2% (by season 4.5-6.6% actual vs 4.7-5.8% predicted).
 
