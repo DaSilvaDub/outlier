@@ -1,3 +1,44 @@
+# HANDOFF - 2026-10-22 (Claude, daily debug review)
+
+- Branch `claude/inspiring-fermat-fsdlng`, base `9f9decb`. One code change: corrected the
+  stale `--only-if-due` help text in `outlier_nba/cli.py` (said "within 60 min"; `due.DEFAULT_LEAD`
+  has been 30 min since da2e29a, with the 60-min window a separate condition).
+- Offline checks on `9f9decb`: pytest 2105 passed / 51 skipped / 0 genuine failures;
+  mypy clean on `outlier_scrapers`, `outlier_nfl`, `outlier_nba`; pyright clean (only
+  missing-dependency diagnostics); `ruff check --select E4,E7,E9,F` shows only the known
+  pre-existing E402/F401 noise. No reasoning-model or provider calls.
+- Sandbox limits: pypi.org is 403 through the agent proxy, so no deps could be installed.
+  The run used a cached pytest 9.1.1 on py3.13 plus a scratchpad-only `structlog` stub.
+  30 test modules could not be imported (sqlalchemy 24, google-genai 2, anthropic 2,
+  openai 1, python-dateutil 1) and were not exercised — among them test_pack*, test_pass_*,
+  test_verdict_*, test_feedback, test_storage, test_schema.
+- Could NOT reproduce the two failures the 2026-10-21 handoff lists as failing on master:
+  `test_nfl_archive_legacy.py::test_row_order_inside_one_copy_does_not_change_the_result`,
+  `::test_copy_order_does_not_change_the_check_output`, and
+  `test_nfl_snapshot_diff.py::test_capture_is_deterministic[A|B]` (also with a custom
+  `--basetemp`). 80 passed on Linux. Treat them as Windows/platform-specific, not code bugs.
+- NEW finding, unfixed (needs a ruling): `.worktrees/test-pr97/` is a 4 MB, 364-file stale
+  copy of the whole repo, tracked in git since merge 5d74df1 (PR #219). It is not a real
+  git worktree (`git worktree list` shows only the main tree). 363 of its paths duplicate
+  live paths and **127 differ in content**, including `outlier_scrapers/pack.py`,
+  `daily_job.py`, `cards.py`, `api.py`, plus its own `CLAUDE.md`, `AGENTS.md`, `.claude/`,
+  `.github/` and `.ruff_cache`. Only `dashboard.html` is unique to it. This is the
+  d05eb21 failure mode in reverse (a second, divergent copy an ent can grep or edit by
+  mistake) and it makes repo-wide ruff/grep/scanners double-report. Recommended:
+  `git rm -r --cached .worktrees` + `git rm -r .worktrees` (keeping `dashboard.html` if it
+  is still wanted) and add `.worktrees/` to `.gitignore` next to `copilot-worktrees/`.
+  Not done here: deleting 364 tracked files is the user's call.
+- Still open from yesterday: PR #291 ("settle matches the ledger's sport case") fixes a
+  latent `KeyError` in `settle_nba` — `_pending_rows` matches `UPPER(s.sport)` while the
+  `taken` map matches `s.sport = 'NBA'`. Unreachable today (capture hardcodes `"NBA"`),
+  but merge it. Also unverified from here: the 06:00 10-22 NBA settle on the Windows box
+  (`nba_settle_status.json`: settlement_rows, clv_verified) — no access to %LOCALAPPDATA%.
+- Cosmetic, left alone: `make typecheck` prints `unused section(s): module =
+  ['outlier_scrapers.refresh']` because `[tool.mypy] exclude` already covers refresh.py;
+  removing the override would change behaviour when the file is passed explicitly.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.

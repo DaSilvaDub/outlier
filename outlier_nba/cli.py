@@ -196,7 +196,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.choices["capture"].add_argument(
         "--only-if-due",
         action="store_true",
-        help="skip unless a tip within 60 min lacks a verified-window capture (scheduler use)",
+        help="skip unless a tip within 30 min lacks a capture in its 60-min verified-close "
+        "window, or the slate is >12h stale (scheduler use)",
     )
     sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
     args = parser.parse_args(argv)
