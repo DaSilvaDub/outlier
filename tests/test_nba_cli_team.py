@@ -428,3 +428,60 @@ def test_closing_csv_backtest_fails_on_an_empty_file(tmp_path, monkeypatch, caps
     empty.write_text("game_id,season,date,home,away,ml_home,ml_away\n", encoding="utf-8")
     assert cli.main(_bt_args(tmp_path, "--closing-csv", str(empty))) == 6
     assert "no usable rows" in capsys.readouterr().out
+
+
+def test_ratings_refuses_to_bootstrap_a_store_from_a_few_recent_days(tmp_path, monkeypatch, capsys):
+    """A fresh checkout has no history; a 5-day refresh must not be installed as the store."""
+    _seed_cache(tmp_path / "cache")  # three games: nothing like a history
+    monkeypatch.setattr(espn, "refresh_recent", lambda cache, today: {})
+    store = tmp_path / "store" / "nba_games.sqlite3"
+    args = ["ratings", "--date", "2026-10-22", "--cache-dir", str(tmp_path / "cache")]
+    args += ["--store", str(store), "--out-dir", str(tmp_path / "o")]
+    assert cli.main(args) == 3
+    out = capsys.readouterr().out
+    assert "history_missing" in out and "backfill --stage all" in out
+    assert not store.exists()  # nothing was installed to masquerade as history
+
+
+def test_too_little_history_error_says_how_to_build_it() -> None:
+    few = [g for g in synth_history() if g.season == "2026-27"]
+    with pytest.raises(team_run.TeamStateError) as err:
+        team_run.compute_team_state(few, "2026-10-22", team_run.TeamParams(lam=20.0), "t")
+    msg = str(err.value)
+    assert f"holds {len(few)} games" in msg and "backfill --stage all" in msg
+
+
+def test_backfill_all_runs_every_stage_in_order_and_stops_when_blocked(
+    tmp_path, monkeypatch, capsys
+):
+    calls: list[str] = []
+
+    def fake_fetch(stage, seasons, cache):
+        calls.append(stage)
+        return {"requested": 1, "todo": 1}
+
+    monkeypatch.setattr(espn, "run_fetch", fake_fetch)
+    _seed_cache(tmp_path / "cache")
+    store = tmp_path / "s.sqlite3"
+    args = ["backfill", "--stage", "all", "--cache-dir", str(tmp_path / "cache")]
+    args += ["--store", str(store), "--seasons", "2016-17:2016-17"]
+    assert cli.main(args) == 0
+    assert calls == ["scoreboard", "summary"] and store.exists()  # then it built and installed
+    out = capsys.readouterr().out
+    assert '"scoreboard"' in out and '"summary"' in out and '"installed"' in out
+
+    def blocked(stage, seasons, cache):
+        raise espn.BlockedError("HTTP 429")
+
+    monkeypatch.setattr(espn, "run_fetch", blocked)
+    other = tmp_path / "other.sqlite3"
+    args = [
+        "backfill",
+        "--stage",
+        "all",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+        "--store",
+        str(other),
+    ]
+    assert cli.main(args) == 4 and not other.exists()

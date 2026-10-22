@@ -207,6 +207,15 @@ def run_ratings(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
             built = Path(tmp) / "nba_games.sqlite3"
             espn.build_store(cache, built)
+            if built.exists() and not args.store.exists():
+                held = espn.store_counts(built)["games"]
+                if held < espn.MIN_BOOTSTRAP_GAMES:
+                    # a few refreshed days are not a history; installing them would mask the gap
+                    print(
+                        f"history_missing: the cache holds {held} games and there is no "
+                        f"installed store (need {espn.MIN_BOOTSTRAP_GAMES}); {espn.BOOTSTRAP_HINT}"
+                    )
+                    return 3
             try:
                 espn.install_store(built, args.store)
             except espn.StoreRegressionError as exc:
@@ -368,12 +377,17 @@ def run_backfill(args: argparse.Namespace) -> int:
     cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
     first, _, last = str(args.seasons).partition(":")
     seasons = espn.seasons_between(first, last or first)
-    if args.stage in ("scoreboard", "summary"):
+    stages = ["scoreboard", "summary", "build"] if args.stage == "all" else [args.stage]
+    for stage in stages:
+        if stage == "build":
+            break
         try:
-            print(json.dumps(espn.run_fetch(args.stage, seasons, cache), sort_keys=True))
+            result = espn.run_fetch(stage, seasons, cache)
+            print(json.dumps(result if len(stages) == 1 else {stage: result}, sort_keys=True))
         except espn.BlockedError as exc:
             print(f"blocked: {exc} (stopped; rerun later, the cache keeps what was fetched)")
             return 4
+    if "build" not in stages:
         return EXIT_OK
     with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
         built = Path(tmp) / "nba_games.sqlite3"
@@ -416,7 +430,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
     bf = sub.add_parser("backfill", help="cache + store historical NBA results (ESPN public JSON)")
     bf.add_argument("--seasons", default="2016-17:2025-26", help="FIRST:LAST season labels")
-    bf.add_argument("--stage", choices=["scoreboard", "summary", "build"], required=True)
+    bf.add_argument(
+        "--stage",
+        choices=["scoreboard", "summary", "build", "all"],
+        required=True,
+        help="'all' runs scoreboard, summary and build in order (each stage resumes)",
+    )
     bf.add_argument("--cache-dir", type=Path, default=None)
     bf.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
     rt = sub.add_parser("ratings", help="refresh results and fit team ratings as of a date")

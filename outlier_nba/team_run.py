@@ -167,7 +167,12 @@ def compute_team_state(
     past = build_dataset([g for g, u in zip(ds.games, usable) if u])
     preds = walk_forward(past, params)
     if not preds.noise.ready:
-        raise TeamStateError(f"only {preds.noise.n_obs} out-of-sample games to estimate noise")
+        from outlier_nba.ingest.espn import BOOTSTRAP_HINT
+
+        raise TeamStateError(
+            f"only {preds.noise.n_obs} out-of-sample games to estimate noise: the store holds "
+            f"{len(games)} games and the model needs about two seasons of history; {BOOTSTRAP_HINT}"
+        )
     model = TeamModel(past, params, extra_season=season)
     asof = model.fit_asof(season, slate_day)
     return TeamState(
