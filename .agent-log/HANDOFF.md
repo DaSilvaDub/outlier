@@ -1,3 +1,13 @@
+# HANDOFF - 2026-10-22 (Claude, NBA first-run bootstrap)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- An authenticated `ratings`/`run` on a fresh checkout failed with `team_state_unavailable: only 0 out-of-sample games`: the store and the ESPN cache are local (gitignored), so a new checkout has no history and `ratings` installed a 5-day store. Reproduced, then fixed: `ratings` exits 3 `history_missing` instead of installing a first store under 2,500 games; the `team_state` error names the game count and the fix; `backfill --stage all` runs scoreboard, summary and build.
+- Setup options are in `docs/nba/phase2-team-model.md` ("First-time setup"). A ready copy of the store and the caches is at `C:/Users/dasil/outlier_nba_data/` (`store/nba_games.sqlite3`, `cache/espn_cache`, `cache/sbro_cache`); use `OUTLIER_NBA_CACHE=C:/Users/dasil/outlier_nba_data/cache` and `--store C:/Users/dasil/outlier_nba_data/store/nba_games.sqlite3`.
+- Environment trap: the Bash tool virtualizes `%LOCALAPPDATA%` writes, so the cache I built there was invisible to real processes (only 20 files on the real disk). Copied to a real path and verified with PowerShell.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2c: model vs historical closing lines)
 
 **Branch**: `claude/nba-phase2-market-backtest` (stacked on `claude/nba-phase2-evidence`, PR #293). Report: `docs/nba/phase2-market-backtest.md`.

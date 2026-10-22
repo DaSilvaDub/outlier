@@ -37,6 +37,20 @@ Everything here is **SHADOW**: units 0, never actionable, model blend weight 0.
 * Fetch was 5 requests per burst with a pause, repo User-Agent, stop on 403/429. Total about 16k requests. The store
   was built in local temp, copied in, and re-counted from a fresh interpreter (integrity ok, counts match).
 
+## First-time setup on a new checkout or machine
+
+The history is **not** in git: the games store (`data/NBA/store/nba_games.sqlite3`, 2 MB) and the ESPN cache (about
+16k small files, 31 MB, default `%LOCALAPPDATA%/outlier_nba/espn_cache`) are local. A checkout without them cannot fit
+the model: `ratings` then finds no out-of-sample games, and (before this was fixed) it installed a 5-day store that hid
+the gap. Now:
+
+* `python -m outlier_nba.cli backfill --stage all` builds everything (scoreboard, then box scores, then the store);
+  about 16k polite requests, several hours, resumable, stops on 403/429.
+* or copy the store and the cache from a machine that has them and point at the cache with `OUTLIER_NBA_CACHE`
+  (the *parent* of `espn_cache`), and at the store with `--store`.
+* `ratings` refuses (exit 3, `history_missing`) to install a first store holding fewer than 2,500 games, and the
+  `team_state` stage message names the game count and the command above.
+
 ## Backtest
 
 Daily refit; a game is predicted only from games on earlier Eastern dates. Hyperparameters tuned on
