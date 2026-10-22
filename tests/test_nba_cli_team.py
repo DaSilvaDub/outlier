@@ -378,3 +378,53 @@ def test_http_fetch_refuses_urls_outside_the_espn_endpoint() -> None:
         espn.http_fetch("https://stats.nba.com/stats/x")
     with pytest.raises(espn.EspnError, match="refusing"):
         espn.http_fetch("file:///etc/passwd")
+
+
+def _bt_args(tmp_path, *extra):
+    return ["backtest", "--out", str(tmp_path / "r.json"), "--no-tune", *extra]
+
+
+def test_sbro_backtest_fails_when_no_closing_line_game_matched(tmp_path, monkeypatch, capsys):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    called = []
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(
+        sbro, "load_market",
+        lambda seasons, games: ({}, {"seasons": {s: {"cached": False} for s in seasons}}),
+    )  # fmt: skip
+    monkeypatch.setattr(backtest, "run_backtest", lambda *a, **k: called.append(1) or {})
+    assert cli.main(_bt_args(tmp_path, "--sbro", "--allow-partial")) == 6
+    assert "closing_lines_unavailable" in capsys.readouterr().out
+    assert not called and not (tmp_path / "r.json").exists()  # no report claiming a comparison
+
+
+def test_sbro_backtest_needs_enough_games_per_season_unless_partial_is_allowed(
+    tmp_path, monkeypatch, capsys
+):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    report = {"seasons": {"2018-19": {"cached": True, "matched": 30}}}
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(sbro, "load_market", lambda seasons, games: ({"g": object()}, report))
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    monkeypatch.setattr(
+        backtest, "run_backtest", lambda *a, **k: {"params": {}, "scored_seasons": []}
+    )
+    base = _bt_args(tmp_path, "--sbro", "--seasons", "2018-19:2018-19")
+    assert cli.main(base) == 6
+    assert "only 30 matched games" in capsys.readouterr().out
+    assert cli.main([*base, "--allow-partial"]) == 0
+    saved = json.loads((tmp_path / "r.json").read_text())
+    assert saved["sbro_join"]["coverage_problems"]  # the shortfall travels with the report
+    assert (tmp_path / "sbro_manifest.json").exists()
+
+
+def test_closing_csv_backtest_fails_on_an_empty_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    empty = tmp_path / "c.csv"
+    empty.write_text("game_id,season,date,home,away,ml_home,ml_away\n", encoding="utf-8")
+    assert cli.main(_bt_args(tmp_path, "--closing-csv", str(empty))) == 6
+    assert "no usable rows" in capsys.readouterr().out

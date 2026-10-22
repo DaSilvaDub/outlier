@@ -293,6 +293,18 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
         market_lines, sbro_report = sbro.load_market(
             espn.seasons_between(first, last or first), games
         )
+        problems = sbro.coverage_problems(sbro_report, args.min_season_games)
+        if problems and (not market_lines or not args.allow_partial):
+            print("closing_lines_unavailable: " + "; ".join(problems))
+            return 6  # a run asked to compare with the market must not pass without doing so
+        sbro_report["coverage_problems"] = problems
+    elif args.closing_csv is not None:
+        from outlier_nba.market import closing
+
+        market_lines = closing.lines_from_csv(args.closing_csv)
+        if not market_lines:
+            print(f"closing_lines_unavailable: no usable rows in {args.closing_csv}")
+            return 6
     report = backtest.run_backtest(
         games,
         first_scored=first,
@@ -306,6 +318,8 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
     report["coverage"] = espn.coverage_report(args.store)
     if sbro_report is not None:
         report["sbro_join"] = sbro_report
+        manifest = args.out.with_name("sbro_manifest.json")
+        manifest.write_text(json.dumps(sbro_report, indent=2, sort_keys=True), encoding="utf-8")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if args.write_config and not args.no_tune:
@@ -430,6 +444,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
     bk.add_argument("--no-tune", action="store_true")
     bk.add_argument("--sbro", action="store_true", help="compare with cached SBRO closing lines")
+    bk.add_argument(
+        "--closing-csv", type=Path, default=None, help="closing lines from a CSV instead"
+    )
+    bk.add_argument("--min-season-games", type=int, default=400, help="matched games per season")
+    bk.add_argument(
+        "--allow-partial", action="store_true", help="proceed despite coverage problems"
+    )
     sf = sub.add_parser("sbro-fetch", help="cache SBRO season pages (private research only)")
     sf.add_argument("--seasons", default="2018-19:2022-23", help="FIRST:LAST season labels")
     bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")

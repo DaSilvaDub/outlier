@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from outlier_nba.ingest.sbro import MarketLine, market_probability
+from outlier_nba.market.closing import MarketLine, market_probability
 from outlier_nba.ratings.possessions import Dataset
 from outlier_nba.track import metrics
 
@@ -66,7 +66,7 @@ def market_report(
         return {"available": False, "n": 0, "note": "no scored game has a closing line"}
     idx = np.flatnonzero(ok)
     y = (ds.hp > ds.ap).astype(np.float64)[idx]
-    ln = [lines[ids[i]] for i in idx]
+    ln = [lines[str(ids[i])] for i in idx]
     mkt = np.array([m.p_home_ml for m in ln])
     mult = np.array(
         [market_probability(m.ml_home, m.ml_away, "multiplicative") or np.nan for m in ln]
@@ -81,6 +81,16 @@ def market_report(
         "market_shin": _summ(mkt, y),
         "market_multiplicative": _summ(mult, y),
         **{name: _summ(p[idx], y) for name, p in models.items()},
+    }
+    neutral = np.array([m.neutral for m in ln])
+    out["by_venue"] = {
+        name: {
+            "n": int(mask.sum()),
+            "market": metrics.log_loss(mkt[mask], y[mask]),
+            **{k: metrics.log_loss(models[k][idx][mask], y[mask]) for k in models},
+        }
+        for name, mask in (("ordinary", ~neutral), ("neutral", neutral))
+        if mask.any()
     }
     out["gain_over_market"] = {name: _gain(mkt, p[idx], y, days) for name, p in models.items()}
     out["by_season"] = {

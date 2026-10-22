@@ -4,12 +4,14 @@
 
 ## Accomplished
 1. `ingest/sbro.py` parses Sportsbook Reviews Online season pages (private research only, owner-approved; Terms forbid reuse without consent) and joins to ESPN games on date, teams and both scores (0 mismatches). `track/market_compare.py` compares the model with the closing moneyline, spread and total on the same games; `backtest --sbro`, `sbro-fetch`.
-2. **Result: the closing market beats the model every season.** 5,431 games (2018-19 to 2022-23): home-win log loss market 0.6115 vs simulation 0.6320 (gap -0.0205, CI excludes zero by game and by date); spread MAE 10.28 vs 10.67; total MAE 14.33 vs 14.79; simulated totals 1.8 low on these games. Blending the simulation into the market with a prior-seasons weight (0.15-0.20): +0.0005, CI spans zero.
+2. **Result: the closing market beats the model every season.** 5,604 games incl. 173 neutral-site (2018-19 to 2022-23): home-win log loss market 0.6128 vs simulation 0.6338 (gap -0.0210, CI excludes zero by game and by date); spread MAE 10.26 vs 10.67; total MAE 14.39 vs 14.83; simulated totals 1.8 low on these games. Blend with a prior-seasons weight: +0.0006, CI spans zero.
+3. Review round: `backtest --sbro` exits 6 if a requested season is uncached or matches < 400 games (no report written); provider-independent `market/closing.py` + `--closing-csv`; neutral-site path (oriented from ESPN, verified by scores) and venue split; page validation before caching; manifest (`sbro_manifest.json`, page hashes + per-season counts); year rollover fix that dated the bubble correctly.
 
 ## State to know about
 - The raw pages are cached under `%LOCALAPPDATA%/outlier_nba/sbro_cache`, outside git; only aggregates are published.
 - The archive ends in 2022-23 (partial); the close has no stated book or time.
 - Consequence: model weight 0 is correct; the promotion gate would not pass this model.
+- **Open decision for the owner:** SBRO's Terms forbid use without written consent, which was not requested. Drop the source or obtain consent if that matters; the code no longer depends on it.
 
 ## Next steps
 1. Test whether availability/rest information closes any of the gap (the market prices injuries; this model does not).

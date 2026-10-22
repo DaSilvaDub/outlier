@@ -106,10 +106,22 @@ def test_unparseable_games_are_skipped_and_counted_not_repaired() -> None:
         + _row("1020", "2", "N", "Dallas", "95", "4", "3", "-110"),
     )
     games, skipped = sbro.parse_season(page, "2018-19")
-    assert len(games) == 1
+    assert [g["neutral"] for g in games] == [False, True]  # the N pair is a neutral game now
     assert skipped["total_not_identifiable"] == 1 and skipped["unknown_team"] == 1
     assert skipped["missing_moneyline_or_score"] == 1
-    assert skipped["not_a_visitor_home_pair"] >= 1
+
+
+def test_a_stray_row_that_pairs_with_nothing_is_skipped() -> None:
+    page = _page(_row("1016", "1", "V", "Boston", "99", "210", "211", "-110"))
+    games, skipped = sbro.parse_season(page, "2018-19")
+    assert games == [] and skipped == {}  # a lone trailing row is not even a candidate pair
+    page = _page(
+        _row("1016", "1", "H", "Boston", "99", "4", "3", "-110"),
+        _row("1016", "2", "H", "Dallas", "98", "4", "3", "-110"),
+        _row("1016", "3", "V", "Atlanta", "90", "210", "211", "100"),
+    )
+    games, skipped = sbro.parse_season(page, "2018-19")
+    assert games == [] and skipped["not_a_pair"] >= 1
 
 
 def test_moneyline_devig_sums_to_one_and_orders_correctly() -> None:
@@ -169,8 +181,9 @@ def test_fetch_is_one_request_per_uncached_season_and_refuses_other_hosts(tmp_pa
         return "<html></html>"
 
     th = sbro.Throttle(burst=1, gap=0, pause=0, sleep=lambda s: None)
-    assert sbro.fetch_seasons(["2018-19", "2019-20"], cache=tmp_path, fetch=fetch, throttle=th) == 2
-    assert sbro.fetch_seasons(["2018-19"], cache=tmp_path, fetch=fetch, throttle=th) == 0
+    kw = {"cache": tmp_path, "fetch": fetch, "throttle": th, "min_games": 0}
+    assert sbro.fetch_seasons(["2018-19", "2019-20"], **kw) == 2
+    assert sbro.fetch_seasons(["2018-19"], **kw) == 0
     assert len(calls) == 2 and all(u.startswith(sbro.BASE) for u in calls)
     assert sbro.read_cached("2018-19", tmp_path) == "<html></html>"
     assert sbro.read_cached("2020-21", tmp_path) is None
@@ -180,7 +193,8 @@ def test_fetch_is_one_request_per_uncached_season_and_refuses_other_hosts(tmp_pa
 
 def test_corrupt_cached_page_is_a_miss(tmp_path: Path) -> None:
     sbro.fetch_seasons(["2018-19"], cache=tmp_path, fetch=lambda u: "x" * 1000,
-                       throttle=sbro.Throttle(burst=1, gap=0, pause=0, sleep=lambda s: None))  # fmt: skip
+                       throttle=sbro.Throttle(burst=1, gap=0, pause=0, sleep=lambda s: None),
+                       min_games=0)  # fmt: skip
     path = tmp_path / "2018-19.html.gz"
     path.write_bytes(path.read_bytes()[:12])
     assert sbro.read_cached("2018-19", tmp_path) is None
@@ -207,7 +221,9 @@ def test_load_market_reports_per_season_joins(tmp_path: Path) -> None:
     games = [_espn_game("g1", datetime(2018, 10, 17, 1, 0, tzinfo=UTC), "BOS", "PHI", 105, 87)]
     lines, report = sbro.load_market(["2018-19", "2019-20"], games, tmp_path)
     assert set(lines) == {"g1"}
-    assert report["2018-19"]["matched"] == 1 and report["2019-20"] == {"cached": False}
+    assert report["parser_version"] == sbro.PARSER_VERSION
+    assert report["seasons"]["2018-19"]["matched"] == 1
+    assert report["seasons"]["2019-20"] == {"cached": False}
 
 
 # --------------------------------------------------------------------- comparison
@@ -294,3 +310,165 @@ def test_total_and_margin_errors_compare_model_with_the_market_line() -> None:
     assert out["total"]["model_mae"] == pytest.approx(0.0)  # a perfect model
     assert out["total"]["market_mae"] > 1.0 and out["total"]["market_bias"] != 0.0
     assert out["margin"]["model_mae"] == pytest.approx(0.0)
+
+
+# ------------------------------------------------- page validation, neutral sites, coverage
+
+
+def _many_pages(n: int) -> str:
+    rows = [
+        _pair(
+            f"{10 + (i // 28) % 3:02d}{1 + i % 28:02d}",
+            "Atlanta",
+            "Boston",
+            "90",
+            "100",
+            "210",
+            "211",
+            "4",
+            "3",
+            "120",
+            "-140",
+        )
+        for i in range(n)
+    ]
+    return _page(*rows)
+
+
+def test_a_placeholder_page_is_rejected_and_never_cached(tmp_path: Path) -> None:
+    th = sbro.Throttle(burst=1, gap=0, pause=0, sleep=lambda s: None)
+    for html in ("<html>Just a moment...</html>", _page(), _many_pages(5)):
+        with pytest.raises(sbro.SbroError, match="parsed to"):
+            sbro.fetch_seasons(["2018-19"], cache=tmp_path, fetch=lambda u, h=html: h, throttle=th)
+    assert not list(tmp_path.glob("*.html.gz"))
+    assert (
+        sbro.fetch_seasons(
+            ["2018-19"],
+            cache=tmp_path,
+            fetch=lambda u: _many_pages(sbro.MIN_PAGE_GAMES),
+            throttle=th,
+        )
+        == 1
+    )
+
+
+def test_neutral_site_games_are_oriented_from_espn_and_verified_by_score() -> None:
+    # two N rows, no home team: Atlanta (favourite, holds the spread) vs Dallas, 99-90
+    page = _page(
+        _row("1016", "1", "N", "Dallas", "90", "211", "212", "150"),
+        _row("1016", "2", "N", "Atlanta", "99", "4", "3.5", "-170"),
+    )
+    parsed, _ = sbro.parse_season(page, "2018-19")
+    assert parsed[0]["neutral"] and parsed[0]["favourite"] == "b"
+    tip = datetime(2018, 10, 17, 1, 0, tzinfo=UTC)
+    atl_home = [_espn_game("n1", tip, "ATL", "DAL", 99, 90)]
+    dal_home = [_espn_game("n2", tip, "DAL", "ATL", 90, 99)]
+    lines, stats = sbro.match_games(parsed, atl_home)
+    assert stats["matched"] == 1 and stats["matched_neutral"] == 1
+    a = lines["n1"]
+    assert a.neutral and a.spread_home == -3.5 and (a.ml_home, a.ml_away) == (-170, 150)
+    b = sbro.match_games(parsed, dal_home)[0]["n2"]  # ESPN lists Dallas as home this time
+    assert b.neutral and b.spread_home == 3.5 and (b.ml_home, b.ml_away) == (150, -170)
+    assert a.p_home_ml > 0.5 > b.p_home_ml
+    wrong = [_espn_game("n3", tip, "ATL", "DAL", 99, 91)]  # one point off: not the same game
+    assert sbro.match_games(parsed, wrong)[1]["score_mismatch"] == 1
+
+
+def test_coverage_problems_name_every_gap() -> None:
+    ok = {"cached": True, "matched": 900}
+    report = {
+        "seasons": {
+            "2018-19": ok,
+            "2019-20": {"cached": False},
+            "2020-21": {"cached": True, "matched": 12},
+        }
+    }
+    problems = sbro.coverage_problems(report, 400)
+    assert any("2019-20" in p and "not cached" in p for p in problems)
+    assert any("2020-21" in p and "only 12" in p for p in problems)
+    assert sbro.coverage_problems({"seasons": {"2018-19": ok}}, 400) == []
+    empty = sbro.coverage_problems({"seasons": {"2018-19": {"cached": False}}}, 400)
+    assert empty[0].startswith("no closing-line games matched")
+
+
+def test_load_market_records_a_reproducibility_manifest_without_content(tmp_path: Path) -> None:
+    page = _page(
+        _pair(
+            "1016",
+            "Philadelphia",
+            "Boston",
+            "87",
+            "105",
+            "208.5",
+            "211.5",
+            "5",
+            "4.5",
+            "170",
+            "-200",
+        ),
+        _row("1017", "1", "N", "Utah", "99", "210", "211", "120")
+        + _row("1017", "2", "N", "Miami", "101", "3", "2", "-140"),
+    )
+    with gzip.open(tmp_path / "2018-19.html.gz", "wt", encoding="utf-8") as fh:
+        fh.write(page)
+    games = [
+        _espn_game("g1", datetime(2018, 10, 17, 1, 0, tzinfo=UTC), "BOS", "PHI", 105, 87),
+        _espn_game("g2", datetime(2018, 10, 18, 1, 0, tzinfo=UTC), "MIA", "UTA", 101, 99),
+    ]
+    lines, report = sbro.load_market(["2018-19"], games, tmp_path)
+    info = report["seasons"]["2018-19"]
+    assert len(info["html_sha256"]) == 64 and info["parsed"] == 2 and info["parsed_neutral"] == 1
+    assert info["matched"] == 2 and info["matched_neutral"] == 1
+    assert "Boston" not in repr(report) and lines["g2"].neutral and not lines["g1"].neutral
+
+
+# ----------------------------------------------------- provider-independent source
+
+
+def test_closing_lines_can_come_from_a_csv(tmp_path: Path) -> None:
+    from outlier_nba.market import closing
+
+    path = tmp_path / "close.csv"
+    path.write_text(
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+        "g1,2018-19,2018-10-16,BOS,PHI,-200,170,-4.5,211.5,208.5,-5,\n"
+        "g2,2018-19,2018-10-17,MIA,UTA,-140,120,,,,,true\n"
+        "g3,2018-19,2018-10-18,MIA,UTA,0,120,,,,,\n",
+        encoding="utf-8",
+    )
+    lines = closing.lines_from_csv(path)
+    assert set(lines) == {"g1", "g2"}  # g3 has an unusable price
+    assert lines["g1"].spread_home == -4.5 and 0.6 < lines["g1"].p_home_ml < 0.7
+    assert lines["g2"].spread_home is None and lines["g2"].neutral
+
+
+def test_the_report_runs_on_any_provider_and_splits_neutral_from_ordinary() -> None:
+    ds, lines, market, model = _synthetic(edge=0.0)
+    flagged = {
+        gid: sbro.MarketLine(**{**ln.__dict__, "neutral": i % 10 == 0})
+        for i, (gid, ln) in enumerate(lines.items())
+    }
+    out = mc.market_report(
+        ds, flagged, {"sim": model}, np.full(len(ds), 3.0), np.full(len(ds), 221.0),
+        ["2017-18", "2018-19"],
+    )  # fmt: skip
+    venues = out["by_venue"]
+    assert set(venues) == {"ordinary", "neutral"}
+    assert venues["neutral"]["n"] + venues["ordinary"]["n"] == out["n"]
+    assert venues["neutral"]["n"] == pytest.approx(out["n"] / 10, abs=2)
+
+
+def test_dates_roll_over_once_so_the_bubble_months_land_in_2020() -> None:
+    """2019-20 ran from October 2019 to October 2020; a month rule would misdate August-October."""
+    page = _page(
+        _pair("1022", "Utah", "Miami", "99", "101", "210", "211", "4", "3", "120", "-140"),
+        _pair("0115", "Utah", "Miami", "99", "101", "210", "211", "4", "3", "120", "-140"),
+        _pair("0307", "Utah", "Miami", "99", "101", "210", "211", "4", "3", "120", "-140"),
+        _pair("0731", "Utah", "Miami", "99", "101", "210", "211", "4", "3", "120", "-140"),
+        _pair("1008", "Utah", "Miami", "99", "101", "210", "211", "4", "3", "120", "-140"),
+    )
+    days = [g["day"] for g in sbro.parse_season(page, "2019-20")[0]]
+    assert days == [
+        date(2019, 10, 22), date(2020, 1, 15), date(2020, 3, 7), date(2020, 7, 31), date(2020, 10, 8)
+    ]  # fmt: skip
