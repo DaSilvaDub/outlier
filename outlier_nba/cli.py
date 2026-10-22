@@ -265,6 +265,7 @@ def run_team(args: argparse.Namespace) -> int:
         fixture=args.fixture,
         slate_date=args.date,
         n_draws=args.draws,
+        horizon_hours=args.horizon_hours,
         ledger_db=None if args.no_ledger else args.db,
     )
     print(
@@ -449,6 +450,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     rn.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
     rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR / "team")
     rn.add_argument("--draws", type=int, default=20_000)
+    rn.add_argument(
+        "--horizon-hours", type=float, default=36.0, help="price only games starting this soon"
+    )
     rn.add_argument("--fixture", action="store_true")
     rn.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH, help="ledger for model rows")
     rn.add_argument(

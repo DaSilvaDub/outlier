@@ -53,6 +53,10 @@ MODEL_CONFIG_PATH = paths.PROJECT_ROOT / "config" / "nba_team_model.json"
 MAX_RESULT_AGE_DAYS = 7  # newest finished game in the store vs the slate date
 OPENING_WINDOW_DAYS = 45  # days after Oct 1 in which a prior-season-only model is acceptable
 DEFAULT_DRAWS = 20_000
+# Only games starting within this many hours are priced. The schedule runs for months, but the
+# ratings are as of now and far-out quotes are thin; a forecast made weeks ahead would also
+# become the "first pre-tip forecast" the promotion evidence is built on.
+DEFAULT_HORIZON_HOURS = 36.0
 FAMILY = {
     "ML": "team.ML",
     "SPREAD": "team.SPREAD",
@@ -69,7 +73,7 @@ ROW_FIELDS = [
     "away", "home", "team", "selection", "book", "price", "model_prob", "model_win",
     "model_push", "model_loss", "model_se", "model_fair_decimal", "market_prob",
     "model_weight", "final_prob", "edge_final", "edge_model_only", "flags", "board",
-    "units", "actionable", "event_starts_at", "as_of",
+    "units", "actionable", "event_starts_at", "as_of", "venue",
 ]  # fmt: skip
 
 
@@ -262,6 +266,10 @@ def parse_flag(value: Any) -> bool | None:
     return None
 
 
+def _venue(neutral: bool | None) -> str:
+    return "unknown" if neutral is None else "neutral" if neutral else "home"
+
+
 def event_neutral(event: Mapping[str, Any]) -> bool | None:
     """Venue flag from the schedule payload; None when absent or not a recognised value."""
     for key in NEUTRAL_KEYS:
@@ -444,6 +452,7 @@ def price_slate(
             "flags": ";".join(dict.fromkeys(flags)),
             "board": "SHADOW", "units": 0, "actionable": "false",
             "event_starts_at": rec.tip.isoformat(), "as_of": captured_at.isoformat(),
+            "venue": _venue(neutral_by_event.get(rec.event_id)),
         }  # fmt: skip
         stats["rows"] += 1
         stats["model_priced"] += priced is not None
@@ -550,6 +559,7 @@ def run_team_shadow(
     params_source: str = "given",
     feed_receipt_loader: Callable[[], Mapping[str, Any] | None] = load_feed_receipt,
     ledger_db: Path | None = None,
+    horizon_hours: float | None = DEFAULT_HORIZON_HOURS,
     n_draws: int = DEFAULT_DRAWS,
     promotion_path: Path = promotion.DEFAULT_PATH,
     slate_date: str | None = None,
@@ -592,11 +602,27 @@ def run_team_shadow(
             for r in slate.records
             if r.kind in ("GAME", "TEAM")
         ]
-        state["records"] = [
+        admitted = [
             row["rec"] for row in reader.admit(stamped, stamp_key="captured_at", tip_key="tip")
         ]
+        cutoff = None if horizon_hours is None else ctx.as_of_utc + timedelta(hours=horizon_hours)
+        state["records"] = [r for r in admitted if cutoff is None or r.tip <= cutoff]
+        near = {r.event_id for r in state["records"]}
+        state["events"] = [
+            e
+            for e in slate.events
+            if str(e.get("eventId") or e.get("id") or "") in near or cutoff is None
+        ]
+        state["beyond_horizon"] = len(admitted) - len(state["records"])
         return receipt(
-            "normalize", "OK" if state["records"] else "EMPTY", received=len(state["records"])
+            "normalize",
+            "OK" if state["records"] else "EMPTY",
+            received=len(state["records"]),
+            reason=(
+                f"{state['beyond_horizon']} outcomes start beyond the {horizon_hours}h horizon"
+                if state["beyond_horizon"]
+                else None
+            ),
         )
 
     def price(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
@@ -605,7 +631,7 @@ def run_team_shadow(
             return receipt("price_team_markets", "EMPTY", reason="no team-market outcomes")
         cap = capture_mod.build_shadow_capture(records, captured_at=bundle.fetch_started)
         draws_by_event, neutral_by_event = simulate_events(
-            state["team_state"], slate.events, ctx.slate_date, n_draws, 20260101, records
+            state["team_state"], state["events"], ctx.slate_date, n_draws, 20260101, records
         )
         rows, stats = price_slate(
             state["team_state"],
@@ -618,13 +644,14 @@ def run_team_shadow(
         )
         state["shadow_rows"] = rows
         writer.stage_text("team_shadow.csv", rows_to_csv(rows))
-        ladders = fair_ladders(event_teams(slate.events, records), draws_by_event)
+        ladders = fair_ladders(event_teams(state["events"], records), draws_by_event)
         writer.stage_text(
             "team_fair_ladders.csv",
             rows_to_csv(ladders, list(ladders[0]) if ladders else ["event_id"]),
         )
         writer.stage_json("team_run_summary.json", {**stats, "run_id": ctx.run_id,
-                          "n_draws": n_draws, "note": "SHADOW: units 0, model weight from evaluator"})  # fmt: skip
+                          "n_draws": n_draws,
+                          "horizon_hours": horizon_hours, "beyond_horizon": state["beyond_horizon"], "note": "SHADOW: units 0, model weight from evaluator"})  # fmt: skip
         quoted = {r.event_id for r in records}
         unmodelled = sorted(e for e in quoted if draws_by_event.get(e) is None)
         if not stats.get("model_priced"):

@@ -381,3 +381,41 @@ def test_state_for_a_new_season_with_no_games_uses_the_prior_chain(games) -> Non
     )
     assert state.asof.rating.n_games == 0
     assert abs(float(state.asof.rating.off.sum())) > 0  # carried from the prior season, not zero
+
+
+def test_only_games_inside_the_horizon_are_priced(tmp_path, games, promo) -> None:
+    # NOW is 17:30Z: EV1 tips at 23:30Z (6h away), EV2 at 02:00Z the next day (8.5h away)
+    near = _run(tmp_path / "a", games, promo, horizon_hours=7.0)
+    rows = _rows(tmp_path / "a", near)
+    assert {r["event_id"] for r in rows} == {fx.EV1}
+    summary = json.loads(
+        (tmp_path / "a" / "nba" / "runs" / near.run_id / "team_run_summary.json").read_text("utf-8")
+    )
+    assert summary["beyond_horizon"] > 0 and summary["horizon_hours"] == 7.0
+    ladder = tmp_path / "a" / "nba" / "runs" / near.run_id / "team_fair_ladders.csv"
+    assert {r["event_id"] for r in csv.DictReader(io.StringIO(ladder.read_text("utf-8")))} == {
+        fx.EV1
+    }
+    both = _rows(tmp_path / "b", _run(tmp_path / "b", games, promo))  # default horizon: 36h
+    assert {r["event_id"] for r in both} == {fx.EV1, fx.EV2}
+
+
+def test_nothing_inside_the_horizon_is_an_empty_run_not_a_failure(tmp_path, games, promo) -> None:
+    result = _run(tmp_path, games, promo, horizon_hours=1.0)
+    assert result.exit_code == 0
+    price = next(r for r in result.receipts if r.name == "price_team_markets")
+    assert price.status == "EMPTY"
+
+
+def test_rows_say_whether_the_venue_is_known(tmp_path, games, promo) -> None:
+    sched = fx.schedule()
+    for ev in sched["events"]:
+        if ev["eventId"] == fx.EV1:
+            ev["neutralSite"] = False
+        elif ev["eventId"] == fx.EV2:
+            ev["neutralSite"] = True
+    rows = _rows(tmp_path, _run(tmp_path, games, promo, client=fx.FakeClient(sched=sched)))
+    venue = {r["event_id"]: r["venue"] for r in rows}
+    assert venue == {fx.EV1: "home", fx.EV2: "neutral"}
+    plain = _rows(tmp_path / "p", _run(tmp_path / "p", games, promo))
+    assert {r["venue"] for r in plain} == {"unknown"}
