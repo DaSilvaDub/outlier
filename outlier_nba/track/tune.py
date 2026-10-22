@@ -38,6 +38,7 @@ GRIDS: dict[str, dict[str, Sequence[float]]] = {
         "p_carry": (0.0, 0.3, 0.5, 0.7, 0.9),
     },
     "noise": {"noise_halflife": (500.0, 1000.0, 2000.0, 4000.0, 1e12)},
+    "level": {"bias_halflife": (100.0, 200.0, 400.0, 800.0, 1600.0, 1e12)},
     "elo": {
         "elo_k": (8.0, 12.0, 16.0, 20.0, 28.0, 36.0),
         "elo_hfa": (40.0, 70.0, 100.0, 130.0),
@@ -50,6 +51,7 @@ COMPONENTS = {
     "pace": ("pace",),
     "elo": ("elo",),
     "noise": ("ratings", "pace"),
+    "level": ("ratings", "pace"),
 }
 
 
@@ -63,6 +65,11 @@ def _objective(kind: str, ds: Dataset, params: TeamParams, target: np.ndarray) -
         err = np.log(ds.poss48[ok]) - preds["log_poss"][ok]
         return float(np.mean(err**2))
     y = (ds.hp > ds.ap).astype(np.float64)
+    if kind == "level":  # one-step-ahead error of the mean per-100 efficiency, overtime-agnostic
+        ok = target & preds.ready & ~np.isnan(ds.poss)
+        actual = 0.5 * (ds.hp + ds.ap) / ds.poss * 100.0
+        predicted = 0.5 * (preds["e_home"] + preds["e_away"])
+        return float(np.mean((actual[ok] - predicted[ok]) ** 2))
     if kind == "noise":  # calibration of the Gaussian-margin probability the tracker feeds
         ok = target & preds.ready
         p = norm_cdf(preds["exp_margin"][ok] / preds["sigma_margin"][ok])
@@ -113,6 +120,6 @@ def tune_all(
     if any(s > tune_season for s in ds.season):
         raise ValueError(f"tuning data must end at {tune_season}; found later seasons")
     params, trails = start, {}
-    for kind in ("ratings", "pace", "noise", "elo"):
+    for kind in ("ratings", "pace", "noise", "level", "elo"):
         params, trails[kind] = tune_component(kind, ds, params, tune_season=tune_season)
     return params, trails

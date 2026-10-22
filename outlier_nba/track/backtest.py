@@ -32,7 +32,7 @@ logger = structlog.get_logger("outlier_nba.backtest")
 FArr = NDArray[np.float64]
 FIELDS = (
     "e_home", "e_away", "log_poss", "sigma_p", "sigma_e", "rho", "ot_ratio",
-    "sigma_margin", "sigma_total", "exp_margin", "exp_total", "elo_p",
+    "sigma_margin", "sigma_total", "exp_margin", "exp_total", "elo_p", "bias", "beta_pe",
 )  # fmt: skip
 MIN_FIT_GAMES = 150  # a first-ever season has no prior, so its earliest fits are not trusted
 TOTAL_BASELINE_WINDOW = 1000
@@ -74,7 +74,7 @@ def walk_forward(
     use_r, use_p, use_e = "ratings" in components, "pace" in components, "elo" in components
     model = TeamModel(ds, params, use_ratings=use_r, use_pace=use_p)
     elo = EloTable(EloParams(params.elo_k, params.elo_hfa, params.elo_carry, params.elo_mov_exp))
-    tracker = NoiseTracker(halflife=params.noise_halflife)
+    tracker = NoiseTracker(halflife=params.noise_halflife, bias_halflife=params.bias_halflife)
     track_noise = use_r and use_p
     starts = np.flatnonzero(np.r_[True, ds.day[1:] != ds.day[:-1]])
     ends = np.r_[starts[1:], n]
@@ -86,20 +86,24 @@ def walk_forward(
         )
         sig_p = tracker.sigma_p if tracker.ready else 0.0
         day_preds = {}
+        # the level correction is the mean residual of everything predicted before today
+        bias = params.bias_weight * tracker.level_bias if (track_noise and trusted) else 0.0
         for i in range(s, e):
             h, a = int(ds.home[i]), int(ds.away[i])
             neutral, playoff = bool(ds.neutral[i]), bool(ds.stype[i] == 3)
             if asof is not None:
                 pr = predict(asof, h, a, neutral=neutral, playoff=playoff, sigma_p=sig_p)
                 day_preds[i] = pr
-                out["e_home"][i], out["e_away"][i] = pr.e_home, pr.e_away
+                out["e_home"][i], out["e_away"][i] = pr.e_home + bias, pr.e_away + bias
                 out["log_poss"][i], out["exp_margin"][i] = pr.log_poss, pr.exp_margin
-                out["exp_total"][i] = pr.exp_total
+                out["exp_total"][i] = pr.exp_total + 2.0 * bias * pr.poss / 100.0
+                out["bias"][i] = bias
             if use_e:
                 out["elo_p"][i] = elo.prob_home(h, a, neutral=neutral, season=season)
             if track_noise and trusted and tracker.ready:
                 out["sigma_p"][i], out["sigma_e"][i] = tracker.sigma_p, tracker.sigma_e
                 out["rho"][i], out["ot_ratio"][i] = tracker.rho, tracker.ot_ratio
+                out["beta_pe"][i] = tracker.beta_pe
                 out["sigma_margin"][i], out["sigma_total"][i] = (
                     tracker.sigma_margin,
                     tracker.sigma_total,
@@ -113,14 +117,17 @@ def walk_forward(
                 )  # fmt: skip
             if track_noise and trusted and i in day_preds and not np.isnan(ds.poss[i]):
                 pr = day_preds[i]
+                raw_h = ds.hp[i] / ds.poss[i] * 100.0 - pr.e_home
+                raw_a = ds.ap[i] / ds.poss[i] * 100.0 - pr.e_away
                 tracker.update(
-                    e_h=ds.hp[i] / ds.poss[i] * 100.0 - pr.e_home,
-                    e_a=ds.ap[i] / ds.poss[i] * 100.0 - pr.e_away,
+                    e_h=raw_h - bias,
+                    e_a=raw_a - bias,
                     pace_resid=math.log(ds.poss48[i]) - pr.log_poss,
                     exp_margin=pr.exp_margin,
                     m_res=(ds.hp[i] - ds.ap[i]) - pr.exp_margin,
-                    t_res=(ds.hp[i] + ds.ap[i]) - pr.exp_total,
+                    t_res=(ds.hp[i] + ds.ap[i]) - (pr.exp_total + 2.0 * bias * pr.poss / 100.0),
                     ot=bool(ds.ot[i] > 0),
+                    raw_eff_resid=0.5 * (raw_h + raw_a),
                 )
     return Predictions(out, ready, tracker, elo if use_e else None)
 
@@ -133,7 +140,9 @@ def run_sim(
 ) -> dict[str, FArr]:
     """Simulate the selected games; unselected / not-ready games stay NaN."""
     n = len(select)
-    out: dict[str, FArr] = {k: np.full(n, np.nan) for k in ("p_home", "margin", "total", "p_ot")}
+    out: dict[str, FArr] = {
+        k: np.full(n, np.nan) for k in ("p_home", "margin", "total", "p_ot", "total_sd")
+    }
     idx = np.flatnonzero(select & preds.ready)
     rng = np.random.default_rng(seed)
     for lo in range(0, len(idx), chunk):
@@ -142,12 +151,13 @@ def run_sim(
             log_poss=preds["log_poss"][sel], sigma_p=preds["sigma_p"][sel],
             e_home=preds["e_home"][sel], e_away=preds["e_away"][sel],
             sigma_e=preds["sigma_e"][sel], rho=preds["rho"][sel],
-            ot_ratio=preds["ot_ratio"][sel],
+            ot_ratio=preds["ot_ratio"][sel], beta_pe=preds["beta_pe"][sel],
         )  # fmt: skip
         d = simulate(params, n_draws, rng)
         out["p_home"][sel] = (d.margin > 0).mean(axis=1)
         out["margin"][sel] = d.margin.mean(axis=1)
         out["total"][sel] = d.total.mean(axis=1)
+        out["total_sd"][sel] = d.total.std(axis=1)
         out["p_ot"][sel] = (d.ot > 0).mean(axis=1)
     return out
 

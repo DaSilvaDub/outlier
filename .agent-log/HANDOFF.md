@@ -1,3 +1,14 @@
+# HANDOFF - 2026-10-22 (Claude, NBA totals bias + first live shadow run)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- First live shadow run published (exit 0, all required stages OK) using a temporary junction to the canonical session folder (no credentials read or copied; removed afterwards). Added a 36h pricing horizon (`run --horizon-hours`) and a `venue` column; the Outlier schedule carries a neutral-site field.
+- Totals: the ~1 point low bias was an efficiency level lag (pace unbiased), non-stationary. Fix: out-of-sample level correction (EW mean of the model's own earlier per-100 residuals, half-life 200 tuned on 2016-17..2017-18, applied from 200 games of history) plus a pace-efficiency term (beta about -31 per unit log-possession surprise) in the simulation. Total bias -1.02 -> +0.28, total MAE 14.79 -> 14.77, sim total sd 20.2 -> 19.2 (realised 18.7); win probability and margin unchanged. Details in `docs/nba/phase2-team-model.md`.
+- Still true: the closing market beats the model (see `docs/nba/phase2-market-backtest.md`); model weight stays 0.
+- Not done: the shadow run has not written the ledger yet (`--no-ledger` was used); do that alongside `capture`/`settle` for a few days before `promote`.
+
+---
+
 # HANDOFF - 2026-10-22 (Claude, NBA first-run bootstrap)
 
 **Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).

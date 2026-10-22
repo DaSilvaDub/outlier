@@ -63,7 +63,9 @@ By venue: ordinary games (n = 5,431) market .6115 vs simulation .6320; neutral-s
 bubble) market .6518 vs simulation .6882. The neutral sample is small, so read it as direction only.
 
 Point forecasts, same games: market spread MAE 10.26 vs simulated margin 10.67; market total MAE 14.39 vs simulated
-total 14.83. The simulated total runs 1.8 points low on these games (market 0.5 low).
+total 14.78. After the 2026-10-22 level correction the simulated total is centred on these games (bias -0.09; it was
+-1.8 before, the market is -0.51), but the market's total is still more accurate than the model's, and the
+win-probability comparison below is unchanged.
 
 Blending the simulation into the market with a weight fitted on earlier seasons (0.15 to 0.20) gives a log-loss gain
 of +0.0006 with a date-clustered interval of [-0.0007, +0.0019] on 4,292 games: indistinguishable from zero.

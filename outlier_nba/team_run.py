@@ -222,6 +222,8 @@ def state_summary(state: TeamState) -> dict[str, Any]:
             "sigma_margin": t.sigma_margin,
             "sigma_total": t.sigma_total,
             "ot_ratio": t.ot_ratio,
+            "level_bias_per100": state.params.bias_weight * t.level_bias,
+            "pace_efficiency_beta": t.beta_pe,
         },
     }
 
@@ -329,10 +331,12 @@ def event_draws(
         sigma_p=state.tracker.sigma_p,
     )
     t = state.tracker
+    bias = state.params.bias_weight * t.level_bias  # same correction the backtest applied
     return simulate(
         SimParams.single(
-            log_poss=pr.log_poss, sigma_p=t.sigma_p, e_home=pr.e_home, e_away=pr.e_away,
-            sigma_e=t.sigma_e, rho=t.rho, ot_ratio=t.ot_ratio,
+            log_poss=pr.log_poss, sigma_p=t.sigma_p, e_home=pr.e_home + bias,
+            e_away=pr.e_away + bias, sigma_e=t.sigma_e, rho=t.rho, ot_ratio=t.ot_ratio,
+            beta_pe=t.beta_pe,
         ),
         n,
         rng,
