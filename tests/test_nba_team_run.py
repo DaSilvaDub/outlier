@@ -341,6 +341,7 @@ def test_a_promoted_family_blends_the_model_in(tmp_path, games, promo) -> None:
             "team.ML": promotion.Evidence(
                 n_settled=5000, distinct_dates=120, calibration_gap=0.01,
                 oos_logloss_beats_market=True, median_clv=0.01, fitted_weight=0.2,
+                n_games=900, clv_n=400, clv_dates=60, clv_coverage=0.9,
             )
         },
         promo,

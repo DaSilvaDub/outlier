@@ -256,6 +256,7 @@ def run_team(args: argparse.Namespace) -> int:
         fixture=args.fixture,
         slate_date=args.date,
         n_draws=args.draws,
+        ledger_db=None if args.no_ledger else args.db,
     )
     print(
         json.dumps(
@@ -302,6 +303,27 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
     print(f"wrote {args.out}")
+    return EXIT_OK
+
+
+def run_promote(args: argparse.Namespace) -> int:
+    """Evidence from settled shadow outcomes; the evaluator alone decides (and writes)."""
+    from outlier_nba.track import evidence as ev_mod
+    from outlier_nba.track import promotion
+
+    evidence = ev_mod.build_evidence(args.db)
+    if not evidence:
+        print(json.dumps({"families": 0, "note": "no settled model forecasts in the ledger yet"}))
+        return EXIT_OK
+    decide = promotion.evaluate if args.apply else promotion.preview
+    decisions = decide(evidence, args.config or promotion.DEFAULT_PATH)
+    print(
+        json.dumps(
+            {"applied": args.apply, "evidence": ev_mod.describe(evidence), "decisions": decisions},
+            sort_keys=True,
+            default=str,
+        )
+    )
     return EXIT_OK
 
 
@@ -372,9 +394,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     rn = sub.add_parser("run", help="price the slate from the team model (SHADOW rows only)")
     rn.add_argument("--date", default=None, help="slate date YYYY-MM-DD (default: first tip, ET)")
     rn.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
-    rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR)
+    rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR / "team")
     rn.add_argument("--draws", type=int, default=20_000)
     rn.add_argument("--fixture", action="store_true")
+    rn.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH, help="ledger for model rows")
+    rn.add_argument(
+        "--no-ledger", action="store_true", help="bundle only; do not record in the ledger"
+    )
+    pm = sub.add_parser("promote", help="build promotion evidence from settled shadow outcomes")
+    pm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    pm.add_argument("--apply", action="store_true", help="let the evaluator write the decision")
+    pm.add_argument("--config", type=Path, default=None, help="promotion file (default: config/)")
     bk = sub.add_parser("backtest", help="walk-forward backtest of the team model")
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
@@ -392,7 +422,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "ratings":
         return run_ratings(args)
     if args.command == "run":
+        if args.fixture and not args.no_ledger and args.db == paths.FEEDBACK_DB_PATH:
+            print("--fixture requires an explicit non-default --db (or --no-ledger)")
+            return 2
         return run_team(args)
+    if args.command == "promote":
+        return run_promote(args)
     if args.command == "backtest":
         return run_backtest_cmd(args)
 

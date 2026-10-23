@@ -12,6 +12,7 @@ import sqlite3
 
 from outlier_nba.track.capture import METHOD_TABLE_SQL
 from outlier_nba.track.clv import SCHEMA_SQL as CLV_SCHEMA_SQL
+from outlier_nba.track.model_ledger import ensure_model_schema
 
 EVAL_VIEW_NAME = "nba_outcome_eval"
 EVAL_VIEW_SQL = """
@@ -40,3 +41,4 @@ def ensure_nba_schema(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
     conn.execute(EVAL_VIEW_SQL)
     conn.commit()
+    ensure_model_schema(conn)  # the model-probability table and its join view
