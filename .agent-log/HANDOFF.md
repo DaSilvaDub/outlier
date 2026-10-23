@@ -1,3 +1,14 @@
+# HANDOFF — 2026-10-23 (Claude, daily automated debug review)
+
+- Last Commit SHA: `b4d615b` on `claude/inspiring-fermat-bafkzy`. PR: https://github.com/DaSilvaDub/outlier/pull/298
+- Files touched: `outlier_scrapers/daily_job.py` (guard the post-`kill()` wait in `orchestrate_login`), `tests/test_daily_job.py` (regression test `test_orchestrate_login_survives_a_login_child_that_never_dies`; `_setup_orchestrate_login` gained an optional `proc`).
+- Bug: 918c417's login termination ladder left its final `login_proc.wait(timeout=...)` after `kill()` unguarded, so a child that outlives the kill raised `subprocess.TimeoutExpired` out of `orchestrate_login` and `_ensure_authenticated` (no handler at `daily_job.py:485`), aborting the daily pipeline with a traceback instead of the clean "Authentication failed. Aborting pipeline." path. Verified RED, then fixed.
+- Verification: `tests/test_daily_job.py` 55 passed; full offline suite 2860 passed / 25 failed / 6 errors; `mypy outlier_scrapers outlier_nfl` clean (131 files); pyright clean apart from unresolved third-party imports; `ruff --select E4,E7,E9,F` clean on both changed files; `compileall` clean. All 25 failures and 6 errors trace to unavailable third-party packages, not to repo code. No reasoning model, desk runner or paid provider call was invoked.
+- **Cloud-sandbox blocker for future runs:** the cloud environment's network policy answers **403 for pypi.org**, so no project dependency installs and `pytest` cannot collect a single test out of the box (`conftest.py` imports `outlier_scrapers.portfolio` -> `structlog`). This run worked around it with throwaway stand-ins for `structlog`, `sqlalchemy` and `dateutil` on `PYTHONPATH` outside the checkout — nothing committed. Permanent fixes would be allowing pypi.org in the environment's network policy or vendoring a wheel cache. Until then, treat hosted CI as the authority for test results from cloud sessions.
+- Not changed, for the record: (a) when the login child is never reaped, `daily_job.py:157` logs "Login process exited with code None" — cosmetic; (b) `_expected_pack_slate_date` re-reads `games_status_latest.json` from disk although `build_pack_with_coverage` already holds `feed_health_by_league` — reviewed as correct, just duplicated.
+- Next steps: review/merge PR 298. PR 295 (daily debug review 2026-10-22) is still open and unmerged. Paid reasoning remains off.
+
+---
 # HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
 
 - Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
