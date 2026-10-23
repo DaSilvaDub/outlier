@@ -152,7 +152,16 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
                 login_proc.kill()
             except OSError as exc:
                 logger.warning("Could not kill stalled login process: %s", exc)
-            login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
+            try:
+                login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                # Nothing left to escalate to. Letting this propagate would
+                # abort the pipeline with a traceback instead of the
+                # authentication-failure path _ensure_authenticated expects.
+                logger.error(
+                    "Login process survived the kill; abandoning it as an orphan "
+                    "and treating the login as failed."
+                )
     if login_proc.returncode != 0:
         logger.error(f"Login process exited with code {login_proc.returncode}")
         success = False
