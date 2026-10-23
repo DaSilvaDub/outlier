@@ -358,11 +358,26 @@ def select_date(
 def _expected_pack_slate_date(leagues: Sequence[str], requested: str | None) -> str:
     """Select the pack date from feed event timestamps before projection joins."""
 
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    target_day = requested or today
+    # Empty-slate producers preserve their last non-empty cards, which may be
+    # dated for a future slate. Those cards must not move today's expected pack
+    # date when the producer's fresh status confirms there are no games today.
+    # Keep the existing fallback behavior for explicitly requested non-today
+    # dates, since the producer status only describes the current slate.
+    slate_leagues = [league.strip().upper() for league in leagues if league.strip()]
+    if target_day == today:
+        now = datetime.now(timezone.utc)
+        slate_leagues = [
+            league
+            for league in slate_leagues
+            if not feed_health.league_has_confirmed_empty_slate(league, now=now)
+        ]
+        if not slate_leagues:
+            return target_day
+
     proxy_rows: list[dict[str, Any]] = []
-    for raw_league in leagues:
-        league = raw_league.strip().upper()
-        if not league:
-            continue
+    for league in slate_leagues:
         league_root = paths.league_paths(league)
         normalized = league_root.normalized
         cards_dir = league_root.root / "cards"
