@@ -1,3 +1,12 @@
+# HANDOFF — 2026-10-23 (Codex, daily pipeline status and pack freshness)
+
+- Last product commit SHA: `70bd7dd3a53200f9689aa974582c7831f9c6aa1e` on `fix/daily-pipeline-status-freshness`.
+- Files touched: `scripts/run_daily_pipeline.ps1` now records process status separately from partial desk/publication status, derives pack artifact freshness from the manifest, and includes the identity audit artifact timestamp and freshness.
+- Verification: PowerShell parser and `git diff --check` passed. Pipeline and local test suites were not run; PR checks are pending.
+- PR: https://github.com/DaSilvaDub/outlier/pull/299. Next steps: review hosted checks and merge only when requested.
+
+---
+
 # HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
 
 - Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
