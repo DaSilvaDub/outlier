@@ -867,6 +867,20 @@ class NflPipeline:
             "matchup_scripts_count": len(matchup_scripts),
             "matchup_tagged_props_count": len(matchup_prop_records),
             "best_bets_counts": best_bets.get("counts", {}),
+            # Keep a small, non-rejected preview in the returned run summary so
+            # callers (including the CLI) receive actual picks, not only feed counts.
+            "best_bets_preview": [
+                {
+                    key: pick.get(key)
+                    for key in (
+                        "rank", "verdict", "player_name", "market", "position", "line",
+                        "matchup", "best_odds", "best_book", "final_p", "edge",
+                        "ev_per_unit", "gaps",
+                    )
+                }
+                for pick in best_bets.get("picks", [])
+                if pick.get("verdict") in {"VALIDATED", "PROVISIONAL"}
+            ][:10],
             "best_bets_error": best_bets.get("error"),
             "alt_floors": alt_floors_summary,
             "alt_floors_count": alt_floors_summary.get("count", 0),
@@ -1268,6 +1282,9 @@ def main() -> int:
         if summary.get("window"):
             print(f"Kickoff Window:         {summary.get('window')}")
         print(f"Status:                 {summary.get('status')}")
+        print(f"Publication:            {summary.get('publication', 'unknown')}")
+        if summary.get("publication_reason"):
+            print(f"Publication Reason:     {summary['publication_reason']}")
         print(f"Events Count:           {summary.get('events_count')}")
         print(f"Game Lines Count:       {summary.get('game_lines_count')}")
         print(f"  - Spreads:            {summary.get('spreads_count')}")
@@ -1279,6 +1296,49 @@ def main() -> int:
         print(f"Tier-1 Actionable:      {summary.get('tier_1_actionable_count')}")
         print(f"Matchup Scripts:        {summary.get('matchup_scripts_count')}")
         print(f"Matchup-Tagged Props:   {summary.get('matchup_tagged_props_count')}")
+        counts = summary.get("best_bets_counts") or {}
+        print("-" * 60)
+        print(
+            "TRACED BEST BETS:       "
+            f"{counts.get('VALIDATED', 0)} validated | "
+            f"{counts.get('PROVISIONAL', 0)} provisional | "
+            f"{counts.get('REJECTED', 0)} rejected"
+        )
+        if summary.get("best_bets_error"):
+            print(f"Best Bets Error:        {summary['best_bets_error']}")
+        else:
+            preview = summary.get("best_bets_preview") or []
+            if not preview:
+                print("No validated or provisional Best Bets candidates for this slate.")
+            for pick in preview:
+                description = (
+                    f"{pick.get('player_name')} {pick.get('market')} {pick.get('line')}"
+                    f" ({pick.get('matchup') or 'matchup unavailable'})"
+                )
+                odds = pick.get("best_odds")
+                odds_text = f"{odds:+d}" if isinstance(odds, int) else str(odds or "N/A")
+                edge = pick.get("edge")
+                edge_text = f"{edge:+.1%}" if isinstance(edge, (int, float)) else "N/A"
+                ev = pick.get("ev_per_unit")
+                ev_text = f"{ev:+.3f}" if isinstance(ev, (int, float)) else "N/A"
+                final_p = pick.get("final_p")
+                probability_text = f"{final_p:.1%}" if isinstance(final_p, (int, float)) else "N/A"
+                print(
+                    f"  #{pick.get('rank')} {pick.get('verdict')}: {description} | "
+                    f"{odds_text} {pick.get('best_book') or ''} | "
+                    f"P {probability_text} | edge {edge_text} | EV/u {ev_text}"
+                )
+                gaps = pick.get("gaps") or []
+                if gaps:
+                    print(f"      Gaps: {', '.join(str(gap) for gap in gaps[:4])}")
+        if summary.get("run_dir"):
+            run_dir = Path(summary["run_dir"])
+            print(f"Run Bundle:             {run_dir}")
+            if summary.get("best_bets_error"):
+                print("Best Bets artifacts:    not written because tracing failed")
+            else:
+                print(f"Best Bets Report:       {run_dir / 'nfl_best_bets.md'}")
+                print(f"Best Bets Data:         {run_dir / 'nfl_best_bets.json'}")
         if summary.get("game_script_file"):
             print(f"Game Script Generated:  {summary.get('game_script_file')}")
         if summary.get("starting_qbs"):

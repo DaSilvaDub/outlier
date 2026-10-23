@@ -1,3 +1,11 @@
+# HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
+
+- Last Commit SHA: pending this handoff commit.
+- Files touched: `outlier_nfl/pipeline.py` returns a top-10 VALIDATED/PROVISIONAL Best Bets preview and the CLI prints verdict counts, each candidate's price/probability/edge/EV and gaps, publication status, and run bundle artifact paths. A Best Bets trace failure is explicitly shown as an artifact-generation failure.
+- Verification: `python -m py_compile outlier_nfl/pipeline.py` and `git diff --check -- outlier_nfl/pipeline.py` passed; no test suite or live pipeline run was executed.
+- Next steps: commit/push branch and open PR; run the fixture-based CLI only if requested. Paid reasoning remains off.
+
+---
 # HANDOFF — 2026-10-22 (Codex, NFL Master Betting Pipeline V2 — Patriots at Bears)
 
 - Last Commit SHA: `9f9decb84a42dbce6d20aa6199dc0d6123dbcea` (product checkout before this coordination-only handoff; no source-code changes).
