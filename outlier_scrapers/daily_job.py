@@ -36,6 +36,8 @@ SUCCESS_OVERALL_STATUSES = ("ok", "degraded", "partial", "full")
 
 
 NBA_SHADOW_LEAGUE = "NBA"
+LOGIN_PROCESS_EXIT_GRACE_SECONDS = 90
+LOGIN_PROCESS_TERMINATE_GRACE_SECONDS = 5
 
 
 def split_nba_shadow(leagues: list[str]) -> tuple[list[str], bool]:
@@ -130,7 +132,27 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
     cmd = [sys.executable, "-m", "outlier_scrapers.login", "--headless", "--timeout", "150"]
     login_proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
     success = tail_otp_status_and_fetch(attempt_timestamp)
-    login_proc.wait()
+    try:
+        login_proc.wait(timeout=LOGIN_PROCESS_EXIT_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "Login process did not exit within %s seconds after the authentication wait; stopping it.",
+            LOGIN_PROCESS_EXIT_GRACE_SECONDS,
+        )
+        success = False
+        try:
+            login_proc.terminate()
+        except OSError as exc:
+            logger.warning("Could not terminate stalled login process: %s", exc)
+        try:
+            login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            logger.error("Login process ignored termination; killing it.")
+            try:
+                login_proc.kill()
+            except OSError as exc:
+                logger.warning("Could not kill stalled login process: %s", exc)
+            login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
     if login_proc.returncode != 0:
         logger.error(f"Login process exited with code {login_proc.returncode}")
         success = False

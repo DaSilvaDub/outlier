@@ -46,6 +46,17 @@
 
 ---
 
+
+---
+
+# HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
+
+- Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
+- Files touched: `outlier_nfl/pipeline.py` returns a top-10 VALIDATED/PROVISIONAL Best Bets preview and the CLI prints verdict counts, each candidate's price/probability/edge/EV and gaps, publication status, and run bundle artifact paths. A Best Bets trace failure is explicitly shown as an artifact-generation failure.
+- Verification: `python -m py_compile outlier_nfl/pipeline.py` and `git diff --check -- outlier_nfl/pipeline.py` passed; no test suite or live pipeline run was executed.
+- PR: https://github.com/DaSilvaDub/outlier/pull/296. Next steps: review/merge PR; paid reasoning remains off.
+
+---
 # HANDOFF — 2026-10-22 (Codex, NFL Master Betting Pipeline V2 — Patriots at Bears)
 
 - Last Commit SHA: `9f9decb84a42dbce6d20aa6199dc0d6123dbcea` (product checkout before this coordination-only handoff; no source-code changes).
@@ -1519,3 +1530,13 @@ this sandbox cannot import.
 - Fix: test_daily_job autouse fixture redirects feedback.DEFAULT_DB_PATH + probability_blend.DEFAULT_WEIGHTS_PATH to tmp_path; test_nfl_calibration passes reports_dir. New conftest guard _no_writes_to_real_tracked_artifacts fails any test that changes a git-tracked file under calibration/ or reports/ (fail-only).
 - Full offline suite: 2628 passed; 4 failures pre-exist on master (2 multiprocess contention, 2 test_capture_is_deterministic). Use a short --basetemp on Windows: long paths cause spurious FileNotFoundError (MAX_PATH).
 - Next steps: decide whether feedback_db.DEFAULT_DB_PATH (absolute path to canonical's production ledger) is intentional; consider making NflPipeline.run reports_dir default non-cwd-relative; merge #208's packs/ guard alongside the new one.
+
+---
+
+# HANDOFF — 2026-10-22 (Codex, MLB/WNBA empty-slate publication)
+
+- Last product commit SHA: `918c4178bd90e2b4cb85177417ad63d9367a880a`.
+- PR: https://github.com/DaSilvaDub/outlier/pull/297.
+- Files touched: `outlier_scrapers/pack.py` (ignore stale retained-card dates for freshly confirmed empty current-day slates); `outlier_scrapers/daily_job.py` (bound and stop a stalled headless login helper); `tests/test_daily_job.py` (subprocess fake accepts timeout).
+- Verification: `git diff --check` passed. The canonical local/data-only MLB/WNBA pipeline completed with wrapper status `ok`; `packs/2026-10-22/manifest.json` has `overall=ok`, `profile=local`, `pack_rows=0`, expected for the confirmed empty slate. No reasoning models were invoked. Test suite not run.
+- Next steps: review CI and merge PR #297.

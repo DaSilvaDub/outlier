@@ -332,7 +332,7 @@ class _FakeLoginProc:
     def __init__(self, returncode: int):
         self.returncode = returncode
 
-    def wait(self):
+    def wait(self, timeout=None):
         return self.returncode
 
 
