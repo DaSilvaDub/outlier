@@ -56,6 +56,7 @@ function Write-Err($msg)  { Write-Host "[sync] $msg" -ForegroundColor Red }
 # Exit codes (verify-sync.ps1 checks these after every invocation):
 #   0 = success   1 = target is not a readable git repo   2 = validation failed
 #   3 = fetch failed, so origin/master cannot be trusted
+#   4 = alignment failed; preserve/reconcile local work before retrying
 $CanonicalRoot = 'C:\Users\dasil\Dev\GitHub\outlier'
 
 if (-not $RepoRoot) { $RepoRoot = $CanonicalRoot }
@@ -167,10 +168,21 @@ if ($ValidateOnly) {
 # 3. Force the tree to origin/master (what agents want: identical state)
 Write-Info "Resetting to origin/master (force sync)..."
 if ($Force -or (git status --porcelain | Measure-Object).Count -eq 0) {
-  git reset --hard origin/master 2>$null
+  git reset --hard $target
 } else {
   Write-Warn "Dirty tree detected. Using checkout -B (safer). Pass -Force to hard reset."
-  git checkout -B master origin/master 2>$null
+  git checkout -B master $target
+}
+$alignExit = $LASTEXITCODE
+if ($alignExit -ne 0) {
+  Write-Err "FATAL: git alignment failed (exit $alignExit). Local changes were not discarded."
+  Write-Err "Preserve or reconcile the conflicting work, then re-run report-sync.ps1."
+  exit 4
+}
+$alignedHead = git rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $alignedHead -ne $target) {
+  Write-Err "FATAL: HEAD did not reach the fetched target $target. A concurrent session may be moving HEAD."
+  exit 4
 }
 
 # 4. Explicitly materialize the critical files that caused the original invisibility bug
