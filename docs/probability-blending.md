@@ -31,7 +31,6 @@ and artifact version is retained in the pack and permanent ledger.
 
 ```powershell
 python -m outlier_scrapers.feedback fit-blend `
-  --db calibration/feedback.sqlite3 `
   --output calibration/blend_weights.json `
   --min-samples 30 `
   --prior-strength 30

@@ -107,6 +107,13 @@ from outlier_scrapers.feedback_recovery import (
     recover_corrupted_database,
 )
 
+# --- feedback_migration: move the ledger out of the synced checkout -------
+from outlier_scrapers.feedback_migration import (
+    LedgerMigrationError,
+    migrate_ledger,
+)
+from outlier_scrapers.paths import LedgerMigrationRequired
+
 # --- feedback_settlement: settlement import and CLV -----------------------
 from outlier_scrapers.feedback_settlement import (
     compute_clv_line,
@@ -272,6 +279,9 @@ __all__ = [
     "_salvage_rows_directly",
     "_insert_recovered_row",
     "recover_corrupted_database",
+    "LedgerMigrationError",
+    "LedgerMigrationRequired",
+    "migrate_ledger",
     "compute_clv_line",
     "compute_clv_price",
     "find_distinct_closing_snapshot",
@@ -422,6 +432,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     recover_parser.add_argument("--corrupted", type=Path, required=True)
     recover_parser.add_argument("--output", type=Path, required=True)
 
+    migrate_parser = subparsers.add_parser(
+        "migrate-ledger",
+        help="Move the ledger out of the cloud-synced checkout into local data (idempotent).",
+    )
+    migrate_parser.add_argument(
+        "--source", type=Path, default=None, help="Default: the in-repo calibration ledger."
+    )
+    migrate_parser.add_argument(
+        "--dest", type=Path, default=None, help=r"Default: %%LOCALAPPDATA%%\outlier\calibration."
+    )
+
     recompute_clv_parser = subparsers.add_parser(
         "recompute-clv",
         help="Recompute settlement CLV where the recorded close was actually the take.",
@@ -524,6 +545,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "recover":
             recover_stats = recover_corrupted_database(args.corrupted, args.output)
             print(json.dumps(recover_stats.__dict__, sort_keys=True))
+        elif args.command == "migrate-ledger":
+            migration = migrate_ledger(args.source, args.dest)
+            print(json.dumps(migration.__dict__, sort_keys=True))
         elif args.command == "recompute-clv":
             clv_summary = recompute_settlement_clv(args.db, dry_run=args.dry_run)
             print(json.dumps(clv_summary, sort_keys=True))
@@ -532,7 +556,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.db, cutoff_days=args.cutoff_days, dry_run=args.dry_run
             )
             print(json.dumps(retention_stats.__dict__, sort_keys=True))
-    except (FeedbackError, OSError, sqlite3.Error, ValueError) as exc:
+    except (
+        FeedbackError,
+        LedgerMigrationError,
+        LedgerMigrationRequired,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
         logger.error("Feedback tool failed: %s", exc)
         return 1
     return 0
