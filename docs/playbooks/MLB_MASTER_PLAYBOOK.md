@@ -4,7 +4,7 @@ Status: provisional; initialized 2026-10-24 from the 2026-10-23 TB at MIL audit.
 
 ## Current operating rules
 
-1. **Starting pitcher identity:** reconcile each pitcher prop to the confirmed starter and the market's participant/void terms. If identity or role is unresolved, exclude it from candidate publication, preserve a diagnostic record, and assign zero units.
+1. **Starting pitcher identity:** reconcile each pitcher prop to the confirmed starter and the market's participant/void terms. Under the current contract, retain identity-mismatched or unconfirmed rows as diagnostic candidates with the disqualifying flag; downstream gates must keep them non-actionable and at zero units. A separate diagnostic-only export could replace candidate-row visibility only through an intentional code and test change.
 2. **Market identity:** retain operator/book, exact market type and settlement definition, selection, line, quote timestamp, and source ID. Keep two-way and three-way markets separate. Do not merge quotes solely because their display labels look similar.
 3. **Freshness and liquidity:** stale, thin-liquidity, and reverse-movement flags remain visible and require the existing stand-down/review gate. A small estimated edge cannot override them without current verifiable prices and policy support.
 4. **Probability provenance:** display market-derived, independent predictive, and blended probabilities separately. Do not label a devigged market probability as a player-specific projection. Where required predictive inputs are absent or components materially disagree, prohibit EV promotion and keep zero stake.
@@ -22,7 +22,7 @@ Status: provisional; initialized 2026-10-24 from the 2026-10-23 TB at MIL audit.
 
 ### CHANGE
 
-- Exclude identity-mismatched pitcher props before candidate export, with a separate diagnostic record.
+- Evaluate whether identity-mismatched props should move to a separate diagnostic-only output. Until that contract change is implemented and tested, preserve current candidate visibility and the fail-closed stand-down gate.
 - Canonicalize quote identity and settlement definition.
 - Report correlated same-game candidates as a cluster and separate candidate outcomes from approved/wagered results.
 - Preserve and display probability components before any EV calculation.
@@ -39,7 +39,7 @@ All rules below are **PROVISIONAL**, supported by one game only. No rule is REPE
 
 | Rule ID | Evidence | Minimum validation |
 |---|---|---|
-| MLB-SP-IDENTITY-01 | Rasmussen SO candidate did not match actual TB starter; existing gate flagged mismatch | 200 pitcher starts, 0 escaped identity mismatches |
+| MLB-SP-IDENTITY-01 | Rasmussen SO row remained visible with a mismatch flag and was stood down; current behavior is intentional | Over at least 200 pitcher starts, verify every mismatched/unconfirmed row stays visible for diagnostics, non-actionable, and `STAND_DOWN` at zero units |
 | MLB-MKT-QUOTE-01 | Different MIL moneyline/total quote definitions and missing book metadata | 200 game snapshots, measure duplicate/collision and quote reconciliation failures |
 | MLB-MKT-MOVE-01 | Stale/thin/reverse movement flags present on three candidates | Prospective timestamped CLV and outcome study by market, flagged versus unflagged |
 | MLB-PROB-01 | Devigged, independent, and blended probabilities were inconsistent/incomplete | At least 200 graded forecasts per market segment with chronological holdout; report Brier, log loss, calibration |

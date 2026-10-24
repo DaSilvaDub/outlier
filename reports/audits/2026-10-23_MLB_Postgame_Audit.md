@@ -1,8 +1,6 @@
 # 2026-10-23 MLB Postgame Audit — TB at MIL
 
-Audit date: 2026-10-24  
-Frozen source: `packs/2026-10-23/` (candidate snapshot at 2026-10-23 17:10 ET; pack manifest later marked `PARTIAL`).  
-Game: Tampa Bay Rays at Milwaukee Brewers, World Series Game 1, MLB game 849805.  
+Audit date: 2026-10-24. Frozen source: `packs/2026-10-23/` (candidate snapshot at 2026-10-23 17:10 ET; pack manifest later marked `PARTIAL`). Game: Tampa Bay Rays at Milwaukee Brewers, World Series Game 1, MLB game 849805.
 Scope: all seven saved candidate rows, including flagged and Board B rows. None was `actionable=true`; all corresponding decision records show `STAND_DOWN`, 0 units. This audits forecast direction and line settlement separately from actual betting. No wager execution/stake evidence was present.
 
 ## 1. Verified Game Result and Key Facts
@@ -28,7 +26,7 @@ Pregame identity issue: the saved candidate names Rasmussen as the Tampa Bay str
 | MIL three-way moneyline HOME | -150; book absent; 17:10:17 ET | MIL won 3–2 | WIN (direction only) | Board B; probability absent; actionable=false | Final score | Direction hit; no independent probability, price-source book, or stake. Three-way market settlement terms not preserved. |
 | TB–MIL three-way total UNDER 6.5 | -115; book absent; 17:10:17 ET | 5 total runs | WIN (direction only) | Board B; probability absent; actionable=false | Final score | Under direction settled below 6.5. Exact book/rules missing; no wager evidence. |
 | Jacob Misiorowski strikeouts UNDER 6.5 | +125, Novig; 17:10:21 ET | 3 strikeouts | WIN (direction and line) | A_FLAGGED; blended p=47.86%; independent p=63.39%; actionable=false | Official pitching line | Threshold beat by 3.5. It was shadow/audit-only and flagged `missing_predictive_signal`; no stake. Probability-source disagreement needs investigation before crediting the forecast. |
-| Milwaukee team total UNDER 3.5 | +106, Novig; 17:10:24 ET | MIL scored 3 | WIN (direction and line) | A_FLAGGED; `model_prob` 50.00%, saved final blend about 49.39%; LOW quality; actionable=false | Official score | Won by half a run; flagged stale/reverse movement/thin liquidity, independent model absent, team-total fair-total separation absent. |
+| Milwaukee team total UNDER 3.5 | +106, Novig; 17:10:24 ET | MIL scored 3 | WIN (direction and line) | A_FLAGGED; `candidates.csv` final blend 50.00% (`outlier_devig`); `team_totals.csv` final blend 49.39% (book-median devig blended with recency); LOW quality; actionable=false | Official score | Won by half a run; the saved artifacts disagree on probability/EV. Also flagged stale/reverse movement/thin liquidity, independent model absent, and team-total fair-total separation absent. |
 | TB–MIL full-game total OVER 6.5 | -105, TheScore Bet; 17:10:24 ET | 5 total runs | LOSS (direction and line) | A_FLAGGED; p=51.99%; actionable=false | Official score | Two runs short. Saved line movement was 5.5 open to 6.5 current, with reverse movement flag and public-money divergence; it was correctly stood down. |
 | MIL moneyline HOME | -170, Novig; 17:10:24 ET | MIL won 3–2 | WIN (direction and line) | A_FLAGGED; p=63.44%; actionable=false | Final score | Direction hit, but saved edge was only 0.76 percentage points versus raw implied probability, with stale/thin-liquidity/reverse-movement flags; correctly stood down. |
 
@@ -36,16 +34,16 @@ Pregame identity issue: the saved candidate names Rasmussen as the Tampa Bay str
 
 ## 4. Internal Contradictions and Pregame Factual Errors
 
-- **Starter identity mismatch:** Rasmussen SO over 3.5 appeared despite the actual TB starter being Nick Martinez. The pack itself had `pitcher_identity_mismatch` and identity audit fail-closed. The row nevertheless appeared in `candidates.csv`; it was blocked downstream. Operationally, a mismatched identity should be excluded before candidate publication, not merely marked non-actionable.
+- **Starter identity mismatch:** Rasmussen SO over 3.5 remained visible despite Nick Martinez starting for TB. The pack had `pitcher_identity_mismatch`, identity audit fail-closed, and the decision was `STAND_DOWN` at zero units. Retaining the flagged row in the candidate artifact is intentional diagnostic visibility, not a defect by itself. A separate diagnostic-only output would be a deliberate contract change requiring code and test updates.
 - **Conflicting Milwaukee moneyline expressions:** one row is a bookless three-way HOME -150 quote and another is a Novig standard moneyline HOME -170. They are not interchangeable. No saved linkage explains the different settlement semantics or timestamp difference.
 - **Totals duplication/direction conflict:** under 6.5 three-way at -115 and over 6.5 at -105 refer to different quote sources/market definitions, and the over row is flagged for movement against. Treating these as two independent forecasts would double-count one game thesis.
-- **Model versus price ambiguity:** Misiorowski UNDER has `outlier_devig` p=45.91%, an independent-model p=63.39%, and final blend p=47.86%. Its observed win does not resolve the disagreement. Team-total UNDER has no independent model and explicit source/fair-total quality failures.
+- **Model versus price ambiguity:** Misiorowski UNDER has `outlier_devig` p=45.91%, an independent-model p=63.39%, and final blend p=47.86%. Its observed win does not resolve the disagreement. Team-total UNDER has no independent model and explicit source/fair-total quality failures; additionally, `candidates.csv` records final_blended_prob=50.00% and edge_pct=3.00% while `team_totals.csv` records final_blended_prob=49.39% and edge_pct=1.74%. These are different probability/EV artifacts, not a single reconciled estimate.
 - **No explicit projected final score or written pregame rationale** was present in the frozen source. The game result cannot be used to invent or backfill either.
 - **Date representation:** candidate event start is 2026-10-24 00:00 UTC, corresponding to the Oct. 23 Milwaukee local game date; this is not a game-date error.
 
 ## 5. What the Pipeline Predicted Correctly and Why
 
-The three unambiguous actionable-market threshold directions that settled were Misiorowski UNDER 6.5 (3 K), MIL team total UNDER 3.5 (3 runs), and MIL moneyline (win); each direction was correct. The bookless three-way MIL home and under-total rows also matched the result direction. However, process evidence is weak: these rows were all non-actionable, multiple had no usable model probability or quality flags, and all outcomes arose from a single correlated game. The correct decisions were the `STAND_DOWN` gates, not an established edge from the hits.
+The three unambiguous standard two-way market threshold directions that settled were Misiorowski UNDER 6.5 (3 K), MIL team total UNDER 3.5 (3 runs), and MIL moneyline (win); each direction was correct. The bookless three-way MIL home and under-total rows also matched the result direction. However, process evidence is weak: these rows were all non-actionable, multiple had no usable model probability or quality flags, and all outcomes arose from a single correlated game. The correct decisions were the `STAND_DOWN` gates, not an established edge from the hits.
 
 The team under and full-game over are directly dependent scoring exposures in the same game; the Milwaukee side is also correlated with its team scoring. Do not treat the wins as independent observations.
 
@@ -59,7 +57,7 @@ Rasmussen OVER 3.5 is not a loss; it is ungradable because Rasmussen did not pit
 
 - **Starting pitching/workload:** both actual starters lasted five innings. Misiorowski threw 78 pitches and struck out three; Martinez threw 73 and struck out five. Misiorowski UNDER 6.5 won comfortably; the saved distribution mean was 5.25 K with variance 7.54, median 5, but this sample does not validate that projection model.
 - **Identity and role:** the expected TB pitcher was wrong in one candidate. In postseason rotation context, starter identity can change independently of a regular-season rotation expectation. The exact reason this row got emitted is not established by this one audit.
-- **Scoring:** MIL scored twice in the first and once in the seventh; TB scored in the fourth and ninth. Five total runs settled both under 6.5 rows in the direction of under and defeated over 6.5. No extra innings.
+- **Scoring:** MIL scored twice in the first and once in the seventh; TB scored in the fourth and ninth. Five total runs settled the game-total UNDER 6.5 as a win and the game-total OVER 6.5 as a loss; MIL's separate team-total UNDER 3.5 also won. No extra innings.
 - **Bullpen:** AP reports MIL relievers Uribe and Ashby combined for five strikeouts across three scoreless innings before Megill. This is descriptive, not enough to infer a reusable bullpen edge.
 - No verified weather, lineup-order audit, or pregame bullpen availability record was found in the frozen artifacts. No conclusion is drawn about those factors.
 
@@ -71,18 +69,18 @@ Rasmussen OVER 3.5 is not a loss; it is ungradable because Rasmussen did not pit
 | MIL 3-way HOME | p absent; -150, book absent | Cannot calculate EV | Direction hit; price/settlement definition not sufficiently preserved. |
 | Under 6.5 (3-way) | p absent; -115, book absent | Cannot calculate EV | Direction hit; no trusted probability or source. |
 | Misiorowski U6.5 | final blend p=.4786; +125 | Break-even 44.44%; EV ≈ +0.077/unit under saved blend | Hypothetical only; A_FLAGGED, missing predictive signal, blended probability conflict, 0 units. |
-| MIL TT U3.5 | saved final blend ≈.4939; +106 | Break-even 48.54%; EV ≈ +0.017/unit under saved blend | Hypothetical only; ~1.74-point edge, low-quality/source-integrity flags and no independent model; 0 units. |
+| MIL TT U3.5 | `candidates.csv`: final blend .5000, `edge_pct` .0300; `team_totals.csv`: final blend .4939, `edge_pct` .0174; +106 | Break-even 48.54%; using `team_totals.csv`, probability gap ≈0.85 percentage points and EV ≈ +0.017/unit | Pack artifacts conflict: `candidates.csv` records Outlier devig at 50.00% and +0.030 EV/unit, while `team_totals.csv` records a 49.39% blended probability and +0.0174 EV/unit. Neither value should be silently substituted for the other. Both are hypothetical; low-quality/source-integrity flags and no independent model; 0 units. |
 | Total O6.5 | p=.5199; -105 | Break-even 51.22%; EV ≈ +0.015/unit on saved p | Hypothetical only; small apparent edge, line movement against, flagged, 0 units. Lost. |
-| MIL ML | p=.6344; -170 | Break-even 62.96%; EV ≈ +0.008/unit on saved p | Hypothetical only; tiny apparent edge, stale/thin-liquidity/reverse-movement flags, 0 units. Won. |
+| MIL ML | p=.6344; -170 | Break-even 62.96%; probability gap ≈0.48 percentage points; `edge_pct` / EV ≈ +0.0076/unit | Hypothetical only; tiny apparent probability gap, stale/thin-liquidity/reverse-movement flags, 0 units. Won. |
 
-EV calculations use the preserved probability and price as if both were valid and available at the same time; they do not establish realized EV. No reliable closing quote series or comparable closing market was available, so CLV is ungraded. There is no stake/transaction record; no ROI, units won, or portfolio performance is reported. The two totals and two MIL moneyline rows must not be treated as independent bets.
+`edge_pct` is expected value per unit under the pipeline sizing formula; it is not the probability gap against break-even. For example, +106 at p=.4939 gives about +1.74% EV per unit, while the probability gap over 48.54% break-even is about 0.85 percentage points. EV calculations use the preserved probability and price as if both were valid and available at the same time; they do not establish realized EV. No reliable closing quote series or comparable closing market was available, so CLV is ungraded. There is no stake/transaction record; no ROI, units won, or portfolio performance is reported. The two totals and two MIL moneyline rows must not be treated as independent bets.
 
 ## 9. New and Updated Sport-Specific Betting Rules
 
 | Rule ID | Sport | Signal or failure | Updated rule | Application | Evidence strength | Validation method |
 |---|---|---|---|---|---|---|
-| MLB-SP-IDENTITY-01 | MLB | Candidate pitcher differs from confirmed starter | Exclude the prop from published candidates until player identity, scheduled role, and market participant/void rules reconcile; retain a diagnostic record with zero units. | Rasmussen row should not survive into user-facing candidate list. | PROVISIONAL (one case; gate detected mismatch) | Audit 100% of pitcher props against confirmed starter feeds at snapshot time; count false joins and escaped mismatches over at least 200 starts. |
-| MLB-MKT-QUOTE-01 | MLB | Duplicate/contradictory quotes and missing book | Preserve canonical market settlement type, operator/book, quote timestamp, and source ID; dedupe equivalent outcomes and isolate three-way from two-way markets. | MIL -150/-170 ML and total quotes stay separate until reconciled. | PROVISIONAL | Reconcile market IDs and terms on 200 game snapshots; track duplicate candidates and price mismatch rate. |
+| MLB-SP-IDENTITY-01 | MLB | Candidate pitcher differs from confirmed starter | Current contract: retain mismatch rows for diagnostics with a disqualifying flag; enforce non-actionable / `STAND_DOWN` / zero units downstream. Any change to hide them from candidate output requires an explicit code and test change. | Rasmussen row remained visible and was correctly blocked; visibility alone is not a recommendation. | PROVISIONAL (one case; existing gate and test support current behavior) | Across at least 200 starts, verify all mismatched/unconfirmed rows remain diagnosable and none becomes actionable or receives positive units. |
+| MLB-MKT-QUOTE-01 | MLB | Duplicate/contradictory quotes and missing book | Preserve canonical market settlement type, operator/book, quote timestamp, and source ID; dedupe equivalent outcomes and isolate three-way from two-way markets. | MIL -150/-170 ML and the three-way total rows stay separate until reconciled. | PROVISIONAL | Reconcile market IDs and terms on 200 game snapshots; track duplicate candidates and price mismatch rate. |
 | MLB-MKT-MOVE-01 | MLB | Candidate flags reverse movement/stale or thin liquidity | Keep these flags as hard review/stand-down inputs; do not let a small model edge override them without current verified quotes and explicit policy. | Applied to O6.5, MIL TT U3.5, MIL ML. | PROVISIONAL (one game; consistent with existing gate) | Prospective shadow log with timestamped open/current/close prices, liquidity, and CLV; compare flagged vs unflagged by market. |
 | MLB-PROB-01 | MLB | Blended and independent probabilities disagree | Show component probabilities and source; block EV claims/actionability when required independent predictive input is missing or disagreement exceeds the existing policy threshold. | Misiorowski U6.5 and team total. | PROVISIONAL | Freeze pregame component probabilities and evaluate Brier/log loss by market with chronological holdout, minimum 200 graded forecasts per segment. |
 
@@ -90,26 +88,19 @@ No rule is promoted to REPEATED or VALIDATED. No WNBA rule change.
 
 ## 10. Updated MLB Master Playbook — KEEP / CHANGE / REMOVE
 
-No pre-existing MLB master playbook document was found in the repository, so this audit creates a **provisional starting playbook** at `docs/playbooks/MLB_MASTER_PLAYBOOK.md`. It does not claim prior rules were reinforced or contradicted when no versioned rule source exists.
+No pre-existing MLB master playbook document was found in the repository, so this audit creates a **provisional starting playbook** at [`docs/playbooks/MLB_MASTER_PLAYBOOK.md`](../../docs/playbooks/MLB_MASTER_PLAYBOOK.md). That file is the authoritative KEEP / CHANGE / REMOVE list and change history; this section records its status: one game, seven candidate rows, zero actionable plays, validation pending. It does not claim prior rules were reinforced or contradicted when no versioned rule source exists.
 
 ### KEEP
 
-- Preserve fail-closed pitcher identity checks and zero-stake stand-down for mismatches.
-- Keep the current actionable/quality gates. This board had zero actionable candidates and zero-unit decisions; do not infer approval from board grade or a winning result.
-- Preserve original line, price, book, timestamp, probability source, and market settlement type for each candidate.
+See the authoritative playbook's KEEP section. This audit is consistent with retaining fail-closed identity checks, actionability gates, and immutable quote provenance.
 
 ### CHANGE
 
-- Promote pitcher identity mismatch handling from “flag and downstream stand-down” to “exclude from candidate publication pending role reconciliation,” while retaining a diagnostic row.
-- Require a canonical, quote-level market key and source metadata so different moneyline/total definitions cannot silently appear as equivalent recommendations.
-- In reports, present correlated same-game rows as one thesis cluster and report actionable count separately from retrospective directional record.
-- Record all component probabilities and explain unsupported/market-derived inputs before computing or displaying EV.
+See the authoritative playbook's CHANGE section. This audit supports retaining current visible-and-stand-down handling unless a separately reviewed code and test change establishes another contract.
 
 ### REMOVE
 
-- Do not call proxy-market devig probability a player-specific strikeout forecast or treat it as proof of positive EV.
-- Do not treat board tier, hit-rate support, market movement, or one settled result as a stand-alone predictive edge.
-- Do not count non-actionable candidate outcomes as placed-bet record or bankroll return.
+See the authoritative playbook's REMOVE section; no rule is promoted on this single-game result.
 
 ### Change history
 
@@ -119,7 +110,7 @@ No pre-existing MLB master playbook document was found in the repository, so thi
 
 | Priority | Pipeline improvement | Problem addressed | Implementation | Validation metric |
 |---|---|---|---|---|
-| 1 | Block mismatched pitchers before candidate export | Rasmussen row emitted despite identity mismatch | Resolve prop participant to confirmed starter/role at snapshot; quarantine unresolved joins before `candidates.csv`. | Escaped mismatch count; target 0 across at least 200 starts. |
+| 1 | Preserve and clearly surface the identity stand-down contract | A mismatched starter row is diagnostic output and could be mistaken for a recommendation | Keep the flagged row visible under the current contract; ensure every output surface makes it non-actionable / `STAND_DOWN` / zero units. A diagnostic-only export requires a reviewed code and test change. | Across at least 200 starts, target zero mismatched rows promoted to actionable or positive units; confirm diagnostic visibility. |
 | 2 | Canonicalize market identity and settlement | Separate -150 3-way and -170 moneyline rows; missing books | Key by event, market type, period, settlement type, selection, line, operator, and quote timestamp. | Duplicate/equivalent market collision rate and quote audit failure rate. |
 | 3 | Enforce quote freshness/liquidity policy in published recommendation surfaces | Stale/thin/reverse-movement flags on three candidates | Show current quote age and gate eligibility against existing policy; do not suppress diagnostics. | Stand-down leakage rate; timestamped CLV for eligible and flagged shadow rows. |
 | 4 | Surface probability provenance and disagreement | Devig, independent, and blended probabilities differ materially | Publish probability components, model version, source integrity, and deterministic discrepancy gate. | Brier/log loss and calibration by market/source on chronological out-of-sample set. |
