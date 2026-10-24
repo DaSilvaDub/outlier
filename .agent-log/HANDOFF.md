@@ -1,3 +1,11 @@
+# HANDOFF - 2026-10-24 (Claude, second shadow pass + first settlement)
+
+- Re-ran `scripts/nba_shadow_daily.ps1` (live): ratings > capture > run > settle > promote all OK; the first 14 games settled (28,367 outcomes). Samples are tiny (ML log loss model 0.687 vs market 0.629 on 14 games); promotion fails every key on sample size, as expected.
+- **Finding: CLV cannot be verified at once-a-day capture** (0 of 28,367 verified; a close must be within 60 minutes of tip). Added `-CaptureOnly` to the script for near-tip snapshots. Needs scheduling through the evening game window (owner decision; no task created).
+- The three stacked PRs (#292 > #293 > #294) have master merged in and are mergeable.
+
+---
+
 # HANDOFF - 2026-10-22 (Claude, PR #294 review round 3)
 
 - Fixed: pace component no longer double counted (sigma_e/rho measured after removing the pace term; simulated total sd 19.0 vs realised 18.7); empty pricing horizon with ledger recording is a clean EMPTY run; `backtest` creates the output directory before writing either file; a closing-line comparison that matches no scored game exits 6 with no report (SBRO and CSV paths).

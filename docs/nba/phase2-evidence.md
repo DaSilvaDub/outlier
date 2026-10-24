@@ -62,6 +62,18 @@ rows), 4,977 model rows for the 14 games inside the 36-hour horizon, 4,603 of th
 had nothing to do yet because no captured game had finished. Expect real counts after the first full night, and
 nothing close to the promotion thresholds for months.
 
+**First settlement (2026-10-24).** The second pass settled the first finished games: 14 games, 28,367 captured
+outcomes. On the 14 moneylines the model's log loss is 0.687 against the market's 0.629, and on 15 main-line total
+overs the model averaged 0.41 against the market's 0.50 while 27% of them hit; those samples are far too small to
+say anything beyond "the pipeline works end to end". Promotion evidence shows 2 dates and 14 games, so every key
+fails for sample size, as expected.
+
+**Closing-line value could not be measured: 0 of 28,367 verified.** A close counts only if a snapshot was taken
+within 60 minutes before that game's tip, and the full daily pass runs once, hours earlier. The CLV promotion key
+therefore cannot pass at that cadence. `scripts/nba_shadow_daily.ps1 -CaptureOnly` takes just a snapshot (and
+settles prior nights) so it can be scheduled through the evening game window, for example every 30 minutes, to give
+each game a verified close. It does not refit or reprice. No scheduled task has been created.
+
 Login: run from a checkout that has `config/.outlier_session`, or pass `-SessionDir` (the script links the folder in
 for the run and removes the link afterwards; it never reads or copies the credentials).
 

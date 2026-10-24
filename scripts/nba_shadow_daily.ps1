@@ -8,6 +8,11 @@
   a sync filter and has corrupted before. Everything is SHADOW (units 0). Nothing here sizes a bet and no
   reasoning model is called.
 
+  -CaptureOnly takes just a market snapshot (capture) and settles prior nights. Closing-line value needs a
+  snapshot within 60 minutes before each game's tip, and the full pass runs once a day, hours earlier, so no
+  close can be verified from it alone. Schedule -CaptureOnly through the evening game window (for example every
+  30 minutes) to give each game a verified close. It does not refit or reprice anything.
+
   Outlier login: run from a checkout that has config\.outlier_session, or pass -SessionDir (the canonical
   checkout's config\.outlier_session). With -SessionDir and no session folder in this checkout, a directory
   junction is created for the duration of the run and removed afterwards (never the target); the
@@ -22,7 +27,8 @@ param(
   [string]$Ledger = '',
   [string]$SessionDir = '',
   [string]$Date = '',
-  [int]$Draws = 20000
+  [int]$Draws = 20000,
+  [switch]$CaptureOnly
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -56,15 +62,19 @@ function Invoke-Step([string]$Name, [string[]]$CliArgs) {
 }
 
 try {
-  $ratings = @('ratings', '--store', $store)
-  if ($Date) { $ratings += @('--date', $Date) }
-  Invoke-Step 'ratings (refresh results, fit as of today)' $ratings
+  if (-not $CaptureOnly) {
+    $ratings = @('ratings', '--store', $store)
+    if ($Date) { $ratings += @('--date', $Date) }
+    Invoke-Step 'ratings (refresh results, fit as of today)' $ratings
+  }
   Invoke-Step 'capture (market snapshots into the ledger)' @('capture', '--db', $Ledger, '--nba-dir', (Join-Path $env:TEMP 'nba_runs_capture'))
-  $run = @('run', '--db', $Ledger, '--store', $store, '--draws', $Draws, '--nba-dir', (Join-Path $env:TEMP 'nba_runs'))
-  if ($Date) { $run += @('--date', $Date) }
-  Invoke-Step 'run (price the slate, record model probabilities)' $run
+  if (-not $CaptureOnly) {
+    $run = @('run', '--db', $Ledger, '--store', $store, '--draws', $Draws, '--nba-dir', (Join-Path $env:TEMP 'nba_runs'))
+    if ($Date) { $run += @('--date', $Date) }
+    Invoke-Step 'run (price the slate, record model probabilities)' $run
+  }
   Invoke-Step 'settle (prior nights)' @('settle', '--db', $Ledger)
-  Invoke-Step 'promote (preview only; writes nothing)' @('promote', '--db', $Ledger)
+  if (-not $CaptureOnly) { Invoke-Step 'promote (preview only; writes nothing)' @('promote', '--db', $Ledger) }
 } finally {
   if ($madeLink) { [System.IO.Directory]::Delete($link) }   # removes the junction only, never the target
 }
