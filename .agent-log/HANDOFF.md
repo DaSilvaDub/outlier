@@ -1,3 +1,32 @@
+# HANDOFF — 2026-10-24 (Claude, daily debug review — feed-health empty-slate date)
+
+- **Last Commit SHA**: `67c101d` on `claude/inspiring-fermat-e00ibn`. **PR**: https://github.com/DaSilvaDub/outlier/pull/301
+- **Files touched**: `outlier_scrapers/feed_health.py`, `tests/test_feed_health.py`.
+- **Fix**: `league_has_confirmed_empty_slate()` trusted any fresh (<=6 h) `status=ok` /
+  `target_event_count=0` games status as proof that *today* is empty, without checking the
+  status's own `target_date`. A late run on a genuinely empty day D still counts as fresh in
+  the small hours of D+1, and an explicit `--date <future>` run writes a clean zero for six
+  hours. All four call sites act on it: `_expected_pack_slate_date` drops the league from
+  slate-date resolution, and `pack.py` / `pack_context.py` / `daily_job.py` each waive the
+  feed-health safety gate — so a real outage on a day with games is logged as "no scheduled
+  games today". Now the status's `target_date` must be the local day being asked about;
+  a missing `target_date` fails closed (the check can only tighten the gate, never waive more).
+- **Verification**: `tests/test_feed_health.py` 38 passed; full suite 2108 passed / 51 skipped;
+  mypy clean on `outlier_scrapers outlier_nfl` (131 files); pyright clean on `feed_health.py`;
+  ruff (project E4/E7/E9/F) clean on both changed files. The three new tests were each confirmed
+  RED before the fix. No reasoning models or provider calls.
+- **Sandbox limitation**: PyPI is unreachable under this environment's network policy, so
+  `sqlalchemy`, `openai`, `anthropic`, `google-genai`, `numpy` and `python-dateutil` are absent
+  and every remaining test failure/error traces to one of them. `structlog` was supplied as a
+  local import stub (outside the repo, on `PYTHONPATH`) only to get past `tests/conftest.py`.
+  CI is the authoritative run for the dependency-gated modules — it is green on master at `6ca2194`.
+- **Next steps**: review/merge PR 301. Note the open-PR backlog is large — #298 (the
+  2026-10-23 daily-review fix for a kill-proof login child in `daily_job.orchestrate_login`)
+  and #299 are both still unmerged against current master, so that login crash is still live
+  in `master`. Paid reasoning remains off.
+
+---
+
 # HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
 
 - Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
