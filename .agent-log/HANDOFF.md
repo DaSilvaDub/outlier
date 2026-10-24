@@ -1489,3 +1489,18 @@ this sandbox cannot import.
 - Files touched: `outlier_scrapers/pack.py` (ignore stale retained-card dates for freshly confirmed empty current-day slates); `outlier_scrapers/daily_job.py` (bound and stop a stalled headless login helper); `tests/test_daily_job.py` (subprocess fake accepts timeout).
 - Verification: `git diff --check` passed. The canonical local/data-only MLB/WNBA pipeline completed with wrapper status `ok`; `packs/2026-10-22/manifest.json` has `overall=ok`, `profile=local`, `pack_rows=0`, expected for the confirmed empty slate. No reasoning models were invoked. Test suite not run.
 - Next steps: review CI and merge PR #297.
+
+# HANDOFF — 2026-10-24 (Codex, MLB postgame audit)
+
+- Last Commit SHA: `37bc7f14966f008759a92b69eccdb22ffa4eb41f` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`, `docs/playbooks/MLB_MASTER_PLAYBOOK.md`.
+- Next steps: review the provisional starter-identity, quote-integrity, movement, and probability-provenance rules against future timestamped MLB slates; no WNBA change because this frozen pack had no WNBA games. No reasoning provider or tests were run. JSON ledger parses; the new files pass `git diff --check`.
+
+# HANDOFF — 2026-10-24 (Codex, PR #300 review fixes)
+
+- Last Commit SHA: `4b33ef503525d2c62b19c8103d293c7f6168ac78` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `docs/playbooks/MLB_MASTER_PLAYBOOK.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`.
+- Review changes: document current identity mismatch behavior (diagnostic candidate retained, downstream stand-down); distinguish `edge_pct` EV/unit from probability gap; call out the `candidates.csv` vs `team_totals.csv` MIL team-total probability/EV discrepancy; clarify game-total vs team-total settlements; link the playbook as authoritative; add missing ledger rule IDs; remove Markdown trailing whitespace.
+- Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
+- Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
+
