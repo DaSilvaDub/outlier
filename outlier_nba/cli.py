@@ -207,6 +207,15 @@ def run_ratings(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
             built = Path(tmp) / "nba_games.sqlite3"
             espn.build_store(cache, built)
+            if built.exists() and not args.store.exists():
+                held = espn.store_counts(built)["games"]
+                if held < espn.MIN_BOOTSTRAP_GAMES:
+                    # a few refreshed days are not a history; installing them would mask the gap
+                    print(
+                        f"history_missing: the cache holds {held} games and there is no "
+                        f"installed store (need {espn.MIN_BOOTSTRAP_GAMES}); {espn.BOOTSTRAP_HINT}"
+                    )
+                    return 3
             try:
                 espn.install_store(built, args.store)
             except espn.StoreRegressionError as exc:
@@ -256,6 +265,7 @@ def run_team(args: argparse.Namespace) -> int:
         fixture=args.fixture,
         slate_date=args.date,
         n_draws=args.draws,
+        horizon_hours=args.horizon_hours,
         ledger_db=None if args.no_ledger else args.db,
     )
     print(
@@ -268,6 +278,15 @@ def run_team(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def run_sbro_fetch(args: argparse.Namespace) -> int:
+    from outlier_nba.ingest import espn, sbro
+
+    first, _, last = str(args.seasons).partition(":")
+    made = sbro.fetch_seasons(espn.seasons_between(first, last or first))
+    print(json.dumps({"requested": made, "cache": str(sbro.cache_dir())}))
+    return EXIT_OK
+
+
 def run_backtest_cmd(args: argparse.Namespace) -> int:
     from outlier_nba import team_run
     from outlier_nba.ingest import espn
@@ -276,17 +295,49 @@ def run_backtest_cmd(args: argparse.Namespace) -> int:
 
     first, _, last = str(args.seasons).partition(":")
     games = team_run.load_store_games(args.store)
+    market_lines = None
+    sbro_report = None
+    if args.sbro:
+        from outlier_nba.ingest import sbro
+
+        market_lines, sbro_report = sbro.load_market(
+            espn.seasons_between(first, last or first), games
+        )
+        problems = sbro.coverage_problems(sbro_report, args.min_season_games)
+        if problems and (not market_lines or not args.allow_partial):
+            print("closing_lines_unavailable: " + "; ".join(problems))
+            return 6  # a run asked to compare with the market must not pass without doing so
+        sbro_report["coverage_problems"] = problems
+    elif args.closing_csv is not None:
+        from outlier_nba.market import closing
+
+        market_lines = closing.lines_from_csv(args.closing_csv)
+        if not market_lines:
+            print(f"closing_lines_unavailable: no usable rows in {args.closing_csv}")
+            return 6
     report = backtest.run_backtest(
         games,
         first_scored=first,
         last_scored=last or first,
+        market_lines=market_lines,
         tune_season=args.tune_season,
         n_draws=args.draws,
         tune_params=not args.no_tune,
         start_params=TeamParams.from_dict(team_run.load_params()[0].to_dict()),
     )
+    if market_lines is not None:
+        compared = report.get("market_lines") or {}
+        if not compared.get("available") or not compared.get("n"):
+            # lines were supplied but none matched a scored game: nothing was compared
+            note = compared.get("note", "no scored game has a closing line")
+            print(f"closing_lines_unavailable: {note}")
+            return 6
     report["coverage"] = espn.coverage_report(args.store)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)  # before either output is written
+    if sbro_report is not None:
+        report["sbro_join"] = sbro_report
+        manifest = args.out.with_name("sbro_manifest.json")
+        manifest.write_text(json.dumps(sbro_report, indent=2, sort_keys=True), encoding="utf-8")
     args.out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     if args.write_config and not args.no_tune:
         team_run.MODEL_CONFIG_PATH.write_text(
@@ -334,12 +385,17 @@ def run_backfill(args: argparse.Namespace) -> int:
     cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
     first, _, last = str(args.seasons).partition(":")
     seasons = espn.seasons_between(first, last or first)
-    if args.stage in ("scoreboard", "summary"):
+    stages = ["scoreboard", "summary", "build"] if args.stage == "all" else [args.stage]
+    for stage in stages:
+        if stage == "build":
+            break
         try:
-            print(json.dumps(espn.run_fetch(args.stage, seasons, cache), sort_keys=True))
+            result = espn.run_fetch(stage, seasons, cache)
+            print(json.dumps(result if len(stages) == 1 else {stage: result}, sort_keys=True))
         except espn.BlockedError as exc:
             print(f"blocked: {exc} (stopped; rerun later, the cache keeps what was fetched)")
             return 4
+    if "build" not in stages:
         return EXIT_OK
     with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
         built = Path(tmp) / "nba_games.sqlite3"
@@ -382,7 +438,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
     bf = sub.add_parser("backfill", help="cache + store historical NBA results (ESPN public JSON)")
     bf.add_argument("--seasons", default="2016-17:2025-26", help="FIRST:LAST season labels")
-    bf.add_argument("--stage", choices=["scoreboard", "summary", "build"], required=True)
+    bf.add_argument(
+        "--stage",
+        choices=["scoreboard", "summary", "build", "all"],
+        required=True,
+        help="'all' runs scoreboard, summary and build in order (each stage resumes)",
+    )
     bf.add_argument("--cache-dir", type=Path, default=None)
     bf.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
     rt = sub.add_parser("ratings", help="refresh results and fit team ratings as of a date")
@@ -396,6 +457,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     rn.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
     rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR / "team")
     rn.add_argument("--draws", type=int, default=20_000)
+    rn.add_argument(
+        "--horizon-hours", type=float, default=36.0, help="price only games starting this soon"
+    )
     rn.add_argument("--fixture", action="store_true")
     rn.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH, help="ledger for model rows")
     rn.add_argument(
@@ -409,6 +473,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
     bk.add_argument("--no-tune", action="store_true")
+    bk.add_argument("--sbro", action="store_true", help="compare with cached SBRO closing lines")
+    bk.add_argument(
+        "--closing-csv", type=Path, default=None, help="closing lines from a CSV instead"
+    )
+    bk.add_argument("--min-season-games", type=int, default=400, help="matched games per season")
+    bk.add_argument(
+        "--allow-partial", action="store_true", help="proceed despite coverage problems"
+    )
+    sf = sub.add_parser("sbro-fetch", help="cache SBRO season pages (private research only)")
+    sf.add_argument("--seasons", default="2018-19:2022-23", help="FIRST:LAST season labels")
     bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")
     bk.add_argument("--draws", type=int, default=4000)
     bk.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
@@ -419,6 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "backfill":
         return run_backfill(args)
+    if args.command == "sbro-fetch":
+        return run_sbro_fetch(args)
     if args.command == "ratings":
         return run_ratings(args)
     if args.command == "run":

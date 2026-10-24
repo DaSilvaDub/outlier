@@ -56,7 +56,7 @@ assumed identical · **U** unverified · **X** tried, blocked or unusable.
 
 | Candidate | Status | Note |
 |---|---|---|
-| Sportsbook Reviews Online NBA odds archive | U | Page returns 200; the archive links were not machine-readable in this fetch, and season coverage was not confirmed (believed to end around 2022-23). Needs a manual look before relying on it. |
+| Sportsbook Reviews Online NBA odds archive | **V, restricted** | Season pages (`/scoresoddsarchives/nba-odds-YYYY-YY`) are machine-readable HTML tables with scores, open/close total and spread and both moneylines; coverage 2007-08 to 2022-23 (2022-23 is partial). Its Terms forbid use or reproduction without written consent; the owner chose **private research** use on 2026-10-21; the site's consent was not obtained, so this remains the owner's call. The evaluation is provider-independent (`market/closing.py`, `--closing-csv`). The "close" has no stated book or time. Results: `docs/nba/phase2-market-backtest.md`. |
 | ESPN `pickcenter` per game | V (coarse) | Single book, no close timestamp, depth of history unverified. |
 | Paid odds-history APIs | not used | Out of scope by instruction. |
 | Prospective capture | **V by construction** | `outlier_nba` Phase 1 stores every market snapshot with a fetch timestamp; this is the only source of verified-timestamp closes and of any prop history (U4). |

@@ -1,3 +1,71 @@
+# HANDOFF - 2026-10-24 (Claude, second shadow pass + first settlement)
+
+- Re-ran `scripts/nba_shadow_daily.ps1` (live): ratings > capture > run > settle > promote all OK; the first 14 games settled (28,367 outcomes). Samples are tiny (ML log loss model 0.687 vs market 0.629 on 14 games); promotion fails every key on sample size, as expected.
+- **Finding: CLV cannot be verified at once-a-day capture** (0 of 28,367 verified; a close must be within 60 minutes of tip). Added `-CaptureOnly` to the script for near-tip snapshots. Needs scheduling through the evening game window (owner decision; no task created).
+- The three stacked PRs (#292 > #293 > #294) have master merged in and are mergeable.
+
+---
+
+# HANDOFF - 2026-10-22 (Claude, PR #294 review round 3)
+
+- Fixed: pace component no longer double counted (sigma_e/rho measured after removing the pace term; simulated total sd 19.0 vs realised 18.7); empty pricing horizon with ledger recording is a clean EMPTY run; `backtest` creates the output directory before writing either file; a closing-line comparison that matches no scored game exits 6 with no report (SBRO and CSV paths).
+- A reviewer reported a mypy failure; `python -m mypy outlier_nba` passes here (41 files), so I could not reproduce it. If it is a different invocation (tests, whole repo), send the command.
+
+---
+
+# HANDOFF - 2026-10-22 (Claude, NBA ledger collection turned on)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- Live `capture` + `run` wrote a dedicated local ledger `C:/Users/dasil/outlier_nba_data/ledger/feedback.sqlite3` (14,580 snapshots / 70 games incl. 9,554 player-prop rows; 4,977 model rows; 4,603 joined at a 73 s gap; integrity ok; zero staking). Deliberately NOT the shared `calibration/` ledger (281 MB, sync filter, three corruptions); `--db` switches it. See `docs/nba/phase2-evidence.md`, "Daily collection".
+- `scripts/nba_shadow_daily.ps1` runs ratings > capture > run > settle > promote preview in one command (tested live).
+- Nothing settles until captured games finish; check `promote` after the first full night.
+- Open decision for the owner: when to merge the local NBA ledger into the shared one (D3), and whether to schedule the script (I did not create a scheduled task).
+
+---
+
+# HANDOFF - 2026-10-22 (Claude, NBA totals bias + first live shadow run)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- First live shadow run published (exit 0, all required stages OK) using a temporary junction to the canonical session folder (no credentials read or copied; removed afterwards). Added a 36h pricing horizon (`run --horizon-hours`) and a `venue` column; the Outlier schedule carries a neutral-site field.
+- Totals: the ~1 point low bias was an efficiency level lag (pace unbiased), non-stationary. Fix: out-of-sample level correction (EW mean of the model's own earlier per-100 residuals, half-life 200 tuned on 2016-17..2017-18, applied from 200 games of history) plus a pace-efficiency term (beta about -31 per unit log-possession surprise) in the simulation. Total bias -1.02 -> +0.28, total MAE 14.79 -> 14.77, sim total sd 20.2 -> 19.2 (realised 18.7); win probability and margin unchanged. Details in `docs/nba/phase2-team-model.md`.
+- Still true: the closing market beats the model (see `docs/nba/phase2-market-backtest.md`); model weight stays 0.
+- Not done: the shadow run has not written the ledger yet (`--no-ledger` was used); do that alongside `capture`/`settle` for a few days before `promote`.
+
+---
+
+# HANDOFF - 2026-10-22 (Claude, NBA first-run bootstrap)
+
+**Branch**: `claude/nba-phase2-market-backtest` (top of the #292 > #293 > #294 stack).
+
+- An authenticated `ratings`/`run` on a fresh checkout failed with `team_state_unavailable: only 0 out-of-sample games`: the store and the ESPN cache are local (gitignored), so a new checkout has no history and `ratings` installed a 5-day store. Reproduced, then fixed: `ratings` exits 3 `history_missing` instead of installing a first store under 2,500 games; the `team_state` error names the game count and the fix; `backfill --stage all` runs scoreboard, summary and build.
+- Setup options are in `docs/nba/phase2-team-model.md` ("First-time setup"). A ready copy of the store and the caches is at `C:/Users/dasil/outlier_nba_data/` (`store/nba_games.sqlite3`, `cache/espn_cache`, `cache/sbro_cache`); use `OUTLIER_NBA_CACHE=C:/Users/dasil/outlier_nba_data/cache` and `--store C:/Users/dasil/outlier_nba_data/store/nba_games.sqlite3`.
+- Environment trap: the Bash tool virtualizes `%LOCALAPPDATA%` writes, so the cache I built there was invisible to real processes (only 20 files on the real disk). Copied to a real path and verified with PowerShell.
+
+---
+
+# HANDOFF - 2026-10-21 (Claude, NBA Phase 2c: model vs historical closing lines)
+
+**Branch**: `claude/nba-phase2-market-backtest` (stacked on `claude/nba-phase2-evidence`, PR #293). Report: `docs/nba/phase2-market-backtest.md`.
+
+## Accomplished
+1. `ingest/sbro.py` parses Sportsbook Reviews Online season pages (private research only, owner-approved; Terms forbid reuse without consent) and joins to ESPN games on date, teams and both scores (0 mismatches). `track/market_compare.py` compares the model with the closing moneyline, spread and total on the same games; `backtest --sbro`, `sbro-fetch`.
+2. **Result: the closing market beats the model every season.** 5,604 games incl. 173 neutral-site (2018-19 to 2022-23): home-win log loss market 0.6128 vs simulation 0.6338 (gap -0.0210, CI excludes zero by game and by date); spread MAE 10.26 vs 10.67; total MAE 14.39 vs 14.83; simulated totals 1.8 low on these games. Blend with a prior-seasons weight: +0.0006, CI spans zero.
+3. Review round: `backtest --sbro` exits 6 if a requested season is uncached or matches < 400 games (no report written); provider-independent `market/closing.py` + `--closing-csv`; neutral-site path (oriented from ESPN, verified by scores) and venue split; page validation before caching; manifest (`sbro_manifest.json`, page hashes + per-season counts); year rollover fix that dated the bubble correctly.
+
+## State to know about
+- The raw pages are cached under `%LOCALAPPDATA%/outlier_nba/sbro_cache`, outside git; only aggregates are published.
+- The archive ends in 2022-23 (partial); the close has no stated book or time.
+- Consequence: model weight 0 is correct; the promotion gate would not pass this model.
+- **Open decision for the owner:** SBRO's Terms forbid use without written consent, which was not requested. Drop the source or obtain consent if that matters; the code no longer depends on it.
+
+## Next steps
+1. Test whether availability/rest information closes any of the gap (the market prices injuries; this model does not).
+2. Fix the totals bias; authenticated run.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2b: model probabilities + promotion evidence)
 
 **Branch**: `claude/nba-phase2-evidence` (stacked on `claude/nba-phase2-team-model`, PR #292). Doc: `docs/nba/phase2-evidence.md`.
