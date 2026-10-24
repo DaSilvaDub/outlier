@@ -97,11 +97,17 @@ def open_events(schedule: Mapping[str, Any], as_of: datetime) -> list[dict[str, 
     return out
 
 
-def fetch_raw(client: NbaClient, *, clock: Any, as_of: datetime | None = None) -> RawBundle:
-    """Read-only fetch of schedule, player props (with alt ladders) and event markets."""
+def fetch_raw(
+    client: NbaClient, *, clock: Any, as_of: datetime | None = None, include_props: bool = True
+) -> RawBundle:
+    """Read-only fetch of schedule, player props (with alt ladders) and event markets.
+
+    ``include_props=False`` skips the (large) player-prop pull for callers that price only
+    team markets; ``props`` is then an empty payload rather than missing.
+    """
     started = clock()
     schedule = client.fetch_schedule("NBA")
-    props = client.fetch_player_props("NBA")
+    props = client.fetch_player_props("NBA") if include_props else {"props": []}
     event_markets: dict[str, list[dict[str, Any]]] = {}
     errors: dict[str, str] = {}
     for event in open_events(schedule, as_of or started):
