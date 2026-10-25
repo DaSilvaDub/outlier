@@ -724,8 +724,9 @@ def league_has_confirmed_empty_slate(league: str, *, now: datetime) -> bool:
 
     The producer's own status file, written fresh on every run regardless of
     whether it found games, is the trustworthy signal instead. It is trusted
-    here only when it is itself fresh: a stale or missing status proves the
-    check hasn't run recently, not that today is empty.
+    here only when it is itself fresh and describes today: a stale or missing
+    status proves the check hasn't run recently, not that today is empty, and
+    a zero-event run aimed at some other day says nothing about this one.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -736,6 +737,13 @@ def league_has_confirmed_empty_slate(league: str, *, now: datetime) -> bool:
     if payload.get("status") != "ok":
         return False
     if _number(payload.get("target_event_count")) != 0:
+        return False
+    # The producer records the day it actually counted. A fresh zero-event run
+    # aimed at another day -- last night's run for an empty yesterday, still
+    # inside the freshness window, or an explicit ``--date`` run for a future
+    # slate -- must not be read as "today has no games", or today's real slate
+    # is dropped from the pack date and today's feed-health gate is waived.
+    if str(payload.get("target_date") or "") != now.astimezone().date().isoformat():
         return False
     try:
         generated_at = _parse_timestamp(payload.get("generated_at"))
