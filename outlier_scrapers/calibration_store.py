@@ -67,12 +67,20 @@ def sha256_file(path: Path) -> str:
     return sha256_bytes(Path(path).read_bytes())
 
 
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
 def _is_link(path: Path) -> bool:
     if path.is_symlink():
         return True
-    # Windows junctions are not symlinks to os.path.islink, but is_junction exists on 3.12+.
-    is_junction = getattr(path, "is_junction", None)
-    return bool(is_junction and is_junction())
+    # A Windows junction is a reparse point but not a symlink, and Path.is_junction only
+    # exists on Python 3.12+ (requires-python is 3.11), so read the attribute directly.
+    # st_file_attributes exists on Windows only; elsewhere this is 0.
+    try:
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def refuse_links(path: Path) -> None:
@@ -225,6 +233,8 @@ def publish_version(
     }
     temporary = pointer.with_name(pointer.name + ".tmp")
     temporary.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    replace_file(temporary, pointer)
+    # History first: a crash between the two leaves a history line for a pointer that
+    # was not moved, never a moved pointer with no history.
     _append_history(live_path, body)
+    replace_file(temporary, pointer)
     return version

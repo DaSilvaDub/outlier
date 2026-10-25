@@ -205,3 +205,39 @@ def test_ledger_in_a_temporary_dir_is_still_writable(tmp_path):
     assert db.exists()
     with sqlite3.connect(db) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] >= 1
+
+
+def test_windows_junction_is_detected_without_path_is_junction(tmp_path, monkeypatch):
+    """Python 3.11 has no Path.is_junction: a reparse-point attribute must be enough."""
+    junction = tmp_path / "calibration"
+    junction.mkdir()
+    real_lstat = os.lstat
+
+    class _Stat:
+        def __init__(self, inner):
+            self._inner = inner
+
+        st_file_attributes = 0x400
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def fake_lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        return _Stat(result) if Path(path) == junction else result
+
+    monkeypatch.setattr(calibration_store.os, "lstat", fake_lstat)
+    with pytest.raises(calibration_store.CalibrationWriteRefused, match="symlink or junction"):
+        probability_blend.write_weight_artifact(BLEND, junction / "blend_weights.json")
+
+
+def test_crash_between_history_and_pointer_never_leaves_a_pointer_without_history(tmp_path):
+    live = _live(tmp_path)
+
+    def crash(src, dst):
+        raise RuntimeError("crash before pointer replace")
+
+    with pytest.raises(RuntimeError):
+        calibration_store.publish_version(BLEND, live, replace_file=crash)
+    assert not calibration_store.pointer_path(live).exists()
+    assert (live.parent / calibration_store.POINTER_HISTORY_NAME).exists()
