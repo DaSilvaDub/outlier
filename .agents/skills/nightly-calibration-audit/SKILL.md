@@ -12,7 +12,7 @@ This skill is designed to run automatically at the end of every night to ensure 
 
 1. **Collect and Grade Completed Game Results**
    - Run `python -m outlier_scrapers.results` to fetch final scores and player box scores from MLB Stats API and ESPN WNBA, automatically settling pending ledger records.
-   - Verify that completed games for the target slate are graded into `calibration/feedback.sqlite3`.
+   - Verify that completed games for the target slate are graded into the feedback ledger (`paths.FEEDBACK_DB_PATH`, i.e. `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3`).
 
 2. **Check for Underlying Math Bugs via Feedback Report**
    - Run `python -m outlier_scrapers.feedback report` to generate the latest portfolio metrics.
@@ -20,8 +20,8 @@ This skill is designed to run automatically at the end of every night to ensure 
    - **Verification**: Compare the ROI of `PLAY` decisions versus the `would_have_flat_pnl`. If the dynamic Kelly sizing is severely underperforming a flat betting strategy (e.g., negative ROI while flat betting is positive), this indicates a probability math bug or over-sizing issue on push-capable lines. 
 
 3. **Check Game Results / Extract Data Pipeline for the Day**
-   - Verify that the ledger has been successfully settled for the day's games in `calibration/feedback.sqlite3`.
-   - If anomalies are found in the report, inspect `calibration/feedback.sqlite3` or run the pipeline `python -m outlier_scrapers.daily_job --date <today>` to ensure data extraction aligns with the game results.
+   - Verify that the ledger has been successfully settled for the day's games in the feedback ledger (`paths.FEEDBACK_DB_PATH`).
+   - If anomalies are found in the report, inspect the ledger at `paths.FEEDBACK_DB_PATH` or run the pipeline `python -m outlier_scrapers.daily_job --date <today>` to ensure data extraction aligns with the game results.
 
 4. **Recalibrate the Models**
    - Run `python -m outlier_scrapers.feedback fit-blend` to re-tune `blend_weights.json`.

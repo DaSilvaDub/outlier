@@ -44,6 +44,26 @@
 - Next steps: none unless requested. Any later value check must refresh prices and injury status; do not promote provisional/actionable flags to approved bets.
 
 ---
+
+# HANDOFF — 2026-10-21 (Claude, feedback ledger moved to local data)
+
+**Branch**: `fix/feedback-ledger-local-data` · **Commit**: `78f3f25` · **PR**: https://github.com/DaSilvaDub/outlier/pull/287
+
+## Accomplished
+- The ledger default is now `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3`. It is still shared by every worktree and is off the cloud-synced checkout, which corrupted it on 08-22, 08-25, 09-01 and 10-21. Resolution: `OUTLIER_FEEDBACK_DB` > local data > canonical `calibration/` > `PROJECT_ROOT` (CI / cloud unchanged). Reports stay in the repo.
+- `paths.require_migrated_ledger` makes writers, the enforce gate and the SO diagnose script raise `LedgerMigrationRequired` instead of starting an empty local ledger.
+- New `python -m outlier_scrapers.feedback migrate-ledger`: backup-API copy, integrity_check, row counts on 4 tables, then the original is archived as `feedback.migrated-<date>.sqlite3`. Idempotent and resumable.
+- `initialize_database` no longer leaks its connection.
+- 37 new or updated tests; 770 passed across the related modules.
+
+## Next steps
+1. **Owner action:** with no pipeline running, run `python -m outlier_scrapers.feedback migrate-ledger` once. Until then, Windows pipeline writers refuse with that instruction. The real ledger was NOT migrated by the agent.
+2. Watch CI on PR #287 (the full core suite runs there; locally the reasoning guard blocks the CI pytest command line).
+3. Later, optional: the old copies in canonical `calibration/` (`feedback.corrupt-*`, `.recovered*`, `.fuse_hidden*`) are ~1.3 GB of strays. Prune them only by hand, once the local ledger has proven out.
+4. Interaction with PR #290 (NBA shadow auto-run): its scheduled tasks pass an explicit `--db` trial ledger, so the migration guard never blocks them. Switching them to `-SharedLedger` (default ledger) before `migrate-ledger` has run makes them raise `LedgerMigrationRequired`: migrate first.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.

@@ -7,6 +7,7 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -548,8 +549,13 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     from outlier_scrapers.feedback_capture import _validate_decision_snapshot_identities
 
     db_path = Path(db_path)
+    # Every writer passes through here; never create an empty local ledger while
+    # the pre-migration one still holds the history.
+    paths.require_migrated_ledger(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    # closing(): sqlite3's context manager only commits; without an explicit close
+    # the connection lingered until GC with its WAL frames uncheckpointed.
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         prior_schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.execute("PRAGMA foreign_keys = ON")

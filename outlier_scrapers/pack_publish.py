@@ -140,6 +140,8 @@ def _retry_rmtree(path: Path, retries: int = 10, delay: float = 0.1) -> None:
 
 def _feedback_db_path() -> Path:
     """The ledger the enforce gate counts shadow days in, read at call time."""
+    # An unmigrated ledger would otherwise read as "0 shadow days", not as a move.
+    paths.require_migrated_ledger(paths.FEEDBACK_DB_PATH)
     return paths.FEEDBACK_DB_PATH
 
 
