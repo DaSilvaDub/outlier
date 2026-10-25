@@ -29,6 +29,35 @@
 
 ---
 
+# HANDOFF — 2026-10-24 (Claude, daily debug review — feed-health empty-slate date)
+
+- **Last Commit SHA**: `67c101d` on `claude/inspiring-fermat-e00ibn`. **PR**: https://github.com/DaSilvaDub/outlier/pull/301
+- **Files touched**: `outlier_scrapers/feed_health.py`, `tests/test_feed_health.py`.
+- **Fix**: `league_has_confirmed_empty_slate()` trusted any fresh (<=6 h) `status=ok` /
+  `target_event_count=0` games status as proof that *today* is empty, without checking the
+  status's own `target_date`. A late run on a genuinely empty day D still counts as fresh in
+  the small hours of D+1, and an explicit `--date <future>` run writes a clean zero for six
+  hours. All four call sites act on it: `_expected_pack_slate_date` drops the league from
+  slate-date resolution, and `pack.py` / `pack_context.py` / `daily_job.py` each waive the
+  feed-health safety gate — so a real outage on a day with games is logged as "no scheduled
+  games today". Now the status's `target_date` must be the local day being asked about;
+  a missing `target_date` fails closed (the check can only tighten the gate, never waive more).
+- **Verification**: `tests/test_feed_health.py` 38 passed; full suite 2108 passed / 51 skipped;
+  mypy clean on `outlier_scrapers outlier_nfl` (131 files); pyright clean on `feed_health.py`;
+  ruff (project E4/E7/E9/F) clean on both changed files. The three new tests were each confirmed
+  RED before the fix. No reasoning models or provider calls.
+- **Sandbox limitation**: PyPI is unreachable under this environment's network policy, so
+  `sqlalchemy`, `openai`, `anthropic`, `google-genai`, `numpy` and `python-dateutil` are absent
+  and every remaining test failure/error traces to one of them. `structlog` was supplied as a
+  local import stub (outside the repo, on `PYTHONPATH`) only to get past `tests/conftest.py`.
+  CI is the authoritative run for the dependency-gated modules — it is green on master at `6ca2194`.
+- **Next steps**: review/merge PR 301. Note the open-PR backlog is large — #298 (the
+  2026-10-23 daily-review fix for a kill-proof login child in `daily_job.orchestrate_login`)
+  and #299 are both still unmerged against current master, so that login crash is still live
+  in `master`. Paid reasoning remains off.
+
+---
+
 # HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
 
 - Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
@@ -1520,3 +1549,18 @@ this sandbox cannot import.
 - Files touched: `outlier_scrapers/pack.py` (ignore stale retained-card dates for freshly confirmed empty current-day slates); `outlier_scrapers/daily_job.py` (bound and stop a stalled headless login helper); `tests/test_daily_job.py` (subprocess fake accepts timeout).
 - Verification: `git diff --check` passed. The canonical local/data-only MLB/WNBA pipeline completed with wrapper status `ok`; `packs/2026-10-22/manifest.json` has `overall=ok`, `profile=local`, `pack_rows=0`, expected for the confirmed empty slate. No reasoning models were invoked. Test suite not run.
 - Next steps: review CI and merge PR #297.
+
+# HANDOFF — 2026-10-24 (Codex, MLB postgame audit)
+
+- Last Commit SHA: `37bc7f14966f008759a92b69eccdb22ffa4eb41f` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`, `docs/playbooks/MLB_MASTER_PLAYBOOK.md`.
+- Next steps: review the provisional starter-identity, quote-integrity, movement, and probability-provenance rules against future timestamped MLB slates; no WNBA change because this frozen pack had no WNBA games. No reasoning provider or tests were run. JSON ledger parses; the new files pass `git diff --check`.
+
+# HANDOFF — 2026-10-24 (Codex, PR #300 review fixes)
+
+- Last Commit SHA: `4b33ef503525d2c62b19c8103d293c7f6168ac78` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `docs/playbooks/MLB_MASTER_PLAYBOOK.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`.
+- Review changes: document current identity mismatch behavior (diagnostic candidate retained, downstream stand-down); distinguish `edge_pct` EV/unit from probability gap; call out the `candidates.csv` vs `team_totals.csv` MIL team-total probability/EV discrepancy; clarify game-total vs team-total settlements; link the playbook as authoritative; add missing ledger rule IDs; remove Markdown trailing whitespace.
+- Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
+- Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
+
