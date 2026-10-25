@@ -1,3 +1,37 @@
+# HANDOFF - 2026-10-25 (Gemini/Antigravity, NFL Week 6 Calibration & Pipeline Refinements)
+
+- **Last Commit SHA**: `609c755` on `feat/week6-postgame-calibration-rules`. **PR**: https://github.com/DaSilvaDub/outlier/pull/304
+- **Files touched**:
+  - `outlier_nfl/matchup.py`
+  - `outlier_nfl/best_bets.py`
+  - `outlier_nfl/alt_floors.py`
+  - `outlier_nfl/matchup_rankings.py`
+  - `outlier_nfl/calibration.py`
+  - `.agents/AGENTS.md`
+  - `.agents/skills/nfl-game-script/SKILL.md`
+  - `.agents/skills/postgame-prediction-audit/SKILL.md`
+  - `reports/NFL/2026-10-15_to_2026-10-19_Week6_Postgame_Audit.md`
+  - `tests/test_nfl_matchup.py`
+  - `tests/test_nfl_best_bets.py`
+  - `tests/test_nfl_alt_floors.py`
+  - `tests/test_nfl_matchup_rankings.py`
+- **Accomplished**:
+  1. `R-TOT-01`: Dynamic 2nd-Half Clock-Bleed haircut (-1.0 drive per team, -18% 2H scoring haircut when abs(1H margin) >= 10.0).
+  2. `R-PROP-01`: Ban PASS_COMP / PASS_ATT UNDER on +6.0 or greater underdogs and in SHOOTOUT scripts (>= 51.0 total).
+  3. `R-PROP-02`: Require >= 65% carry share before recommending RUSH_ATT OVER on road underdogs of +4.5 or greater.
+  4. `R-PROP-05`: Raised ALPHA_WR1_SCRIPT_PROOF threshold to >= 28% target share.
+  5. `R-ALT-01`: Strict L5 >= 80% and L10 >= 70% floor filters in `alt_floors.py`.
+  6. `REMOVE #1`: Express low-total/high-wind unders via 1H Unders; capped weather under exposure at 1.0u split 75% 1H / 25% FG.
+  7. `REMOVE #2` / `R-PROP-04`: Never override WEATHER_WIND (>= 12 mph) or SHOOTOUT tags with hit rates; hard-blocks LONG_REC, LONG_PASS, and PASS_YDS >= 275.5 OVERs in wind.
+  8. `REMOVE #3` / `R-DATA-01`: Filtered injury rows to true defensive starters / capped gameday inactives at <= 7. Synchronized Scenario 1 front-runner to projected winner.
+  9. `R-INJ-01`: Classified early in-game exits (e.g. McLaurin MNF) as LOSS (INJURY EXIT).
+  10. Verification: 176 passed in unit tests (`tests/test_nfl_*`).
+- **Next steps**:
+  - Review and merge PR #304 into `master`.
+  - Next NFL slate run will automatically apply the updated filters, ceilings, and clock-bleed modeling.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
