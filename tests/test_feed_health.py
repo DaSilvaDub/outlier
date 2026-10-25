@@ -33,6 +33,11 @@ def _stamp(value: datetime = NOW) -> str:
     return value.isoformat()
 
 
+def _local_day(value: datetime = NOW) -> str:
+    """The local calendar day of ``value``, as games.py writes ``target_date``."""
+    return value.astimezone().date().isoformat()
+
+
 def _seed_healthy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LeaguePaths:
     paths = _paths(tmp_path)
     monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
@@ -752,12 +757,65 @@ def test_league_has_confirmed_empty_slate_when_games_status_is_fresh_and_zero(
             "status": "ok",
             "generated_at": _stamp(),
             "record_count": 0,
+            "target_date": _local_day(),
             "target_event_count": 0,
             "preserved_previous_latest": True,
         },
     )
 
     assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is True
+
+
+def test_league_has_confirmed_empty_slate_rejects_another_day_s_zero_event_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Last night's run for an empty yesterday is still fresh but proves nothing.
+
+    games.py runs late on a genuinely empty day D, writing a clean zero-event
+    status for D. The pipeline then runs in the small hours of D+1, inside the
+    6-hour freshness window, on a day with a full slate. Trusting that status
+    would drop D+1's league from the pack slate date and waive its feed-health
+    gate.
+    """
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
+    yesterday = (NOW.astimezone().date() - timedelta(days=1)).isoformat()
+    _write(
+        paths.reports / "games_status_latest.json",
+        {
+            "league": "MLB",
+            "status": "ok",
+            "generated_at": _stamp(NOW - timedelta(hours=3)),
+            "record_count": 0,
+            "target_date": yesterday,
+            "target_event_count": 0,
+            "preserved_previous_latest": True,
+        },
+    )
+
+    assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is False
+
+
+def test_league_has_confirmed_empty_slate_rejects_a_future_dated_zero_event_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit `--date <future>` run finds no games yet; today is unaffected."""
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
+    tomorrow = (NOW.astimezone().date() + timedelta(days=1)).isoformat()
+    _write(
+        paths.reports / "games_status_latest.json",
+        {
+            "league": "MLB",
+            "status": "ok",
+            "generated_at": _stamp(),
+            "record_count": 0,
+            "target_date": tomorrow,
+            "target_event_count": 0,
+        },
+    )
+
+    assert feed_health.league_has_confirmed_empty_slate("MLB", now=NOW) is False
 
 
 def test_league_has_confirmed_empty_slate_rejects_a_stale_status(
@@ -785,6 +843,7 @@ def test_league_has_confirmed_empty_slate_rejects_a_stale_status(
         ("nonzero_events", False),
         ("error_status", False),
         ("missing_field", False),
+        ("missing_target_date", False),
         ("no_file", False),
     ],
 )
@@ -797,6 +856,7 @@ def test_league_has_confirmed_empty_slate_requires_a_clean_zero_event_status(
         "league": "MLB",
         "status": "ok",
         "generated_at": _stamp(),
+        "target_date": _local_day(),
         "target_event_count": 0,
     }
     if mutation == "nonzero_events":
@@ -805,6 +865,8 @@ def test_league_has_confirmed_empty_slate_requires_a_clean_zero_event_status(
         payload["status"] = "error"
     elif mutation == "missing_field":
         del payload["target_event_count"]
+    elif mutation == "missing_target_date":
+        del payload["target_date"]
     if mutation != "no_file":
         _write(paths.reports / "games_status_latest.json", payload)
 
