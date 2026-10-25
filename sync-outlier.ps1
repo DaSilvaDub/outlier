@@ -156,9 +156,9 @@ if ($ValidateOnly) {
 
   $ok = $hasPlayerId -and $hasRankRoundRobin -and $hasLock -and $hasCHeader
   if ($ok) {
-    Write-Info "VALIDATE: OK — pipeline upgrade (pack + daily changes) is present via GitHub."
+    Write-Info "VALIDATE: OK - pipeline upgrade (pack + daily changes) is present via GitHub."
   } else {
-    Write-Err "VALIDATE: FAIL — upgrade markers missing. Run without -ValidateOnly or check remote."
+    Write-Err "VALIDATE: FAIL - upgrade markers missing. Run without -ValidateOnly or check remote."
     exit 2
   }
   exit 0
