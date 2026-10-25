@@ -88,12 +88,17 @@ def _no_writes_to_real_tracked_artifacts():
 
 
 # The resolved production ledger (paths.FEEDBACK_DB_PATH, which honours
-# OUTLIER_FEEDBACK_DB), the canonical checkout's ledger, and this checkout's own
-# copy. No test may open any of them.
+# OUTLIER_FEEDBACK_DB), the local-data ledger, the canonical checkout's
+# pre-migration ledger, and this checkout's own copy. No test may open any of them.
 REAL_LEDGER_PATHS = tuple(
     dict.fromkeys(
         [
             paths.FEEDBACK_DB_PATH,
+            *(
+                [paths.local_calibration_dir() / paths.FEEDBACK_DB_NAME]
+                if paths.local_calibration_dir() is not None
+                else []
+            ),
             paths.CANONICAL_CALIBRATION_DIR / "feedback.sqlite3",
             paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3",
         ]

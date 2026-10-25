@@ -1,14 +1,63 @@
-# HANDOFF — 2026-10-23 (Claude, daily automated debug review)
+# HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
-- Last Commit SHA: `b4d615b` on `claude/inspiring-fermat-bafkzy`. PR: https://github.com/DaSilvaDub/outlier/pull/298
-- Files touched: `outlier_scrapers/daily_job.py` (guard the post-`kill()` wait in `orchestrate_login`), `tests/test_daily_job.py` (regression test `test_orchestrate_login_survives_a_login_child_that_never_dies`; `_setup_orchestrate_login` gained an optional `proc`).
-- Bug: 918c417's login termination ladder left its final `login_proc.wait(timeout=...)` after `kill()` unguarded, so a child that outlives the kill raised `subprocess.TimeoutExpired` out of `orchestrate_login` and `_ensure_authenticated` (no handler at `daily_job.py:485`), aborting the daily pipeline with a traceback instead of the clean "Authentication failed. Aborting pipeline." path. Verified RED, then fixed.
-- Verification: `tests/test_daily_job.py` 55 passed; full offline suite 2860 passed / 25 failed / 6 errors; `mypy outlier_scrapers outlier_nfl` clean (131 files); pyright clean apart from unresolved third-party imports; `ruff --select E4,E7,E9,F` clean on both changed files; `compileall` clean. All 25 failures and 6 errors trace to unavailable third-party packages, not to repo code. No reasoning model, desk runner or paid provider call was invoked.
-- **Cloud-sandbox blocker for future runs:** the cloud environment's network policy answers **403 for pypi.org**, so no project dependency installs and `pytest` cannot collect a single test out of the box (`conftest.py` imports `outlier_scrapers.portfolio` -> `structlog`). This run worked around it with throwaway stand-ins for `structlog`, `sqlalchemy` and `dateutil` on `PYTHONPATH` outside the checkout — nothing committed. Permanent fixes would be allowing pypi.org in the environment's network policy or vendoring a wheel cache. Until then, treat hosted CI as the authority for test results from cloud sessions.
-- Not changed, for the record: (a) when the login child is never reaped, `daily_job.py:157` logs "Login process exited with code None" — cosmetic; (b) `_expected_pack_slate_date` re-reads `games_status_latest.json` from disk although `build_pack_with_coverage` already holds `feed_health_by_league` — reviewed as correct, just duplicated.
-- Next steps: review/merge PR 298. PR 295 (daily debug review 2026-10-22) is still open and unmerged. Paid reasoning remains off.
+**Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
+
+## Accomplished
+1. ESPN backfill 2016-17 to 2025-26 (12,850 games, every regular season complete), cached, built in local temp, copied to `data/NBA/store/nba_games.sqlite3` and re-counted from a fresh process. Gaps are listed in the doc (340 early games with empty ESPN team stats, 71 postponed, bubble games not flagged neutral by ESPN).
+2. `outlier_nba/ratings/` (possessions, ridge per-100 with home term/decay/prior/stress column, Elo+MOV), `pace.py`, `sim/engine.py` (team layer, one set of draws for margin/total/team totals), `pricing/` (push-aware ML/spread/total/team total/alt lines, blend), `track/{backtest,tune,metrics,promotion}.py`.
+3. Walk-forward backtest 2018-19 to 2025-26 (n=10,229): pool log loss 0.6253 vs Elo 0.6270 vs ridge 0.6258 vs constant home court 0.6870. Pool beats Elo by 0.0017 (CI 0.0009 to 0.0024); ridge and sim are indistinguishable from the pool. No closing lines exist for history, so no market claim.
+4. CLI: `ratings`, `run` (SHADOW rows, units 0, model weight 0 via the evaluator), `backtest`, `backfill`. `daily_job` untouched (default leagues MLB,WNBA).
+
+## State to know about
+- `run` was not exercised against live Outlier (no credentials in this session); `ratings` was run live against ESPN.
+- `config/nba_promotion.json` is hash-guarded: only `track.promotion.evaluate` may write it. `config/nba_team_model.json` holds the tuned params (written by `backtest --write-config`). Both are un-ignored in `.gitignore`.
+- Model probabilities live in the run bundle, not the ledger.
+- Review fixes on the PR: installed store never shrinks (`StoreRegressionError`), season-opener freshness, schedule neutral flag (else `HOME_COURT_ASSUMED`), one simulation shared by rows and ladders, no `assert`/subprocess/f-string SQL (Codacy). The promotion hash is tamper-evident only. Second review round: team identity via all normalizer fields, `price_team_markets` FAILED/INCOMPLETE when games have no model probability, season-opener exception needs a verifying refresh receipt, strict neutral-flag parsing. Live pricing uses the simulation only (backtest `sim` row), not the Elo pool.
+- Sim under-predicts totals by about 1 point; pool over-predicts home wins by 1 to 4 points per bucket. Not fixed.
+- ESPN: use the repo User-Agent (a longer one with an e-mail got a 403); date ranges return 400, so one request per day.
+
+## Next steps
+1. First authenticated `python -m outlier_nba.cli run` into a temp bundle; inspect `team_shadow.csv`.
+2. Join bundle model probabilities to `nba_outcome_eval` so the evaluator has evidence; schedule `ratings` then `run` daily.
+3. Level-trend term for totals; rest/travel features; a second tuning season.
 
 ---
+
+
+---
+
+
+---
+
+# HANDOFF — 2026-10-24 (Claude, daily debug review — feed-health empty-slate date)
+
+- **Last Commit SHA**: `67c101d` on `claude/inspiring-fermat-e00ibn`. **PR**: https://github.com/DaSilvaDub/outlier/pull/301
+- **Files touched**: `outlier_scrapers/feed_health.py`, `tests/test_feed_health.py`.
+- **Fix**: `league_has_confirmed_empty_slate()` trusted any fresh (<=6 h) `status=ok` /
+  `target_event_count=0` games status as proof that *today* is empty, without checking the
+  status's own `target_date`. A late run on a genuinely empty day D still counts as fresh in
+  the small hours of D+1, and an explicit `--date <future>` run writes a clean zero for six
+  hours. All four call sites act on it: `_expected_pack_slate_date` drops the league from
+  slate-date resolution, and `pack.py` / `pack_context.py` / `daily_job.py` each waive the
+  feed-health safety gate — so a real outage on a day with games is logged as "no scheduled
+  games today". Now the status's `target_date` must be the local day being asked about;
+  a missing `target_date` fails closed (the check can only tighten the gate, never waive more).
+- **Verification**: `tests/test_feed_health.py` 38 passed; full suite 2108 passed / 51 skipped;
+  mypy clean on `outlier_scrapers outlier_nfl` (131 files); pyright clean on `feed_health.py`;
+  ruff (project E4/E7/E9/F) clean on both changed files. The three new tests were each confirmed
+  RED before the fix. No reasoning models or provider calls.
+- **Sandbox limitation**: PyPI is unreachable under this environment's network policy, so
+  `sqlalchemy`, `openai`, `anthropic`, `google-genai`, `numpy` and `python-dateutil` are absent
+  and every remaining test failure/error traces to one of them. `structlog` was supplied as a
+  local import stub (outside the repo, on `PYTHONPATH`) only to get past `tests/conftest.py`.
+  CI is the authoritative run for the dependency-gated modules — it is green on master at `6ca2194`.
+- **Next steps**: review/merge PR 301. Note the open-PR backlog is large — #298 (the
+  2026-10-23 daily-review fix for a kill-proof login child in `daily_job.orchestrate_login`)
+  and #299 are both still unmerged against current master, so that login crash is still live
+  in `master`. Paid reasoning remains off.
+
+---
+
 # HANDOFF — 2026-10-22 (Codex, NFL pipeline result visibility)
 
 - Last Commit SHA: `fc1f077` (pipeline fix; pushed to `fix/nfl-cli-return-results`).
@@ -26,6 +75,26 @@
 - Next steps: none unless requested. Any later value check must refresh prices and injury status; do not promote provisional/actionable flags to approved bets.
 
 ---
+
+# HANDOFF — 2026-10-21 (Claude, feedback ledger moved to local data)
+
+**Branch**: `fix/feedback-ledger-local-data` · **Commit**: `78f3f25` · **PR**: https://github.com/DaSilvaDub/outlier/pull/287
+
+## Accomplished
+- The ledger default is now `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3`. It is still shared by every worktree and is off the cloud-synced checkout, which corrupted it on 08-22, 08-25, 09-01 and 10-21. Resolution: `OUTLIER_FEEDBACK_DB` > local data > canonical `calibration/` > `PROJECT_ROOT` (CI / cloud unchanged). Reports stay in the repo.
+- `paths.require_migrated_ledger` makes writers, the enforce gate and the SO diagnose script raise `LedgerMigrationRequired` instead of starting an empty local ledger.
+- New `python -m outlier_scrapers.feedback migrate-ledger`: backup-API copy, integrity_check, row counts on 4 tables, then the original is archived as `feedback.migrated-<date>.sqlite3`. Idempotent and resumable.
+- `initialize_database` no longer leaks its connection.
+- 37 new or updated tests; 770 passed across the related modules.
+
+## Next steps
+1. **Owner action:** with no pipeline running, run `python -m outlier_scrapers.feedback migrate-ledger` once. Until then, Windows pipeline writers refuse with that instruction. The real ledger was NOT migrated by the agent.
+2. Watch CI on PR #287 (the full core suite runs there; locally the reasoning guard blocks the CI pytest command line).
+3. Later, optional: the old copies in canonical `calibration/` (`feedback.corrupt-*`, `.recovered*`, `.fuse_hidden*`) are ~1.3 GB of strays. Prune them only by hand, once the local ledger has proven out.
+4. Interaction with PR #290 (NBA shadow auto-run): its scheduled tasks pass an explicit `--db` trial ledger, so the migration guard never blocks them. Switching them to `-SharedLedger` (default ledger) before `migrate-ledger` has run makes them raise `LedgerMigrationRequired`: migrate first.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.
@@ -158,7 +227,13 @@
 
 # HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
 
-**Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
+**Branch**: `claude/inspiring-fermat-sq82jn` · **PR #268 merged** as `785ef42` · **follow-up PR**: https://github.com/DaSilvaDub/outlier/pull/271 (open, commit `6a64e56`)
+
+> **Read this first if you touch `matchup_rankings.py`:** PR #268 was merged from
+> `0e69635`, one commit *before* the review-nit fix was pushed, so `f12cea1` did not land.
+> Master has the `_name_key` inactive join but **not** the team-scoped usage index. PR #271
+> replays that one commit on top of the merge. Until #271 lands, the vacated-backfield
+> lookup on master can still credit one team's out RB with another team's carries.
 
 ## Accomplished
 1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
@@ -208,8 +283,18 @@
    `backfield_vacated_boost` accumulates up to +0.60 per out RB, so two out RBs can more
    than double a projection.
 
+## Review outcome (2026-10-16)
+The author reviewed #268: **APPROVE at 0e69635, no blockers**, 4 nits. Nit 1 was a real
+correctness gap (slate-wide usage index → cross-team volume leak) and is fixed in PR #271,
+keyed on `(team, name key)` rather than a team check on the resolved profile, which would
+have turned the false match into a lost boost when both teams carry the key. The other
+three needed no code and are answered on #268: the 2026-09-13 fixture slate renders
+byte-identically (its tape has no `inactive` block, so `injury_report()` returns `None`);
+a public `_name_key` alias is a repo-wide rename across 3 existing call sites, offered as a
+follow-up; the #265 overlap in the same two files is for whoever drives that PR.
+
 ## Next steps
-1. Drive PR #268 to green and merge.
+1. Review and merge PR #271 — it carries the fix #268's merge raced past.
 2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
 3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
    `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
@@ -1500,3 +1585,18 @@ this sandbox cannot import.
 - Files touched: `outlier_scrapers/pack.py` (ignore stale retained-card dates for freshly confirmed empty current-day slates); `outlier_scrapers/daily_job.py` (bound and stop a stalled headless login helper); `tests/test_daily_job.py` (subprocess fake accepts timeout).
 - Verification: `git diff --check` passed. The canonical local/data-only MLB/WNBA pipeline completed with wrapper status `ok`; `packs/2026-10-22/manifest.json` has `overall=ok`, `profile=local`, `pack_rows=0`, expected for the confirmed empty slate. No reasoning models were invoked. Test suite not run.
 - Next steps: review CI and merge PR #297.
+
+# HANDOFF — 2026-10-24 (Codex, MLB postgame audit)
+
+- Last Commit SHA: `37bc7f14966f008759a92b69eccdb22ffa4eb41f` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`, `docs/playbooks/MLB_MASTER_PLAYBOOK.md`.
+- Next steps: review the provisional starter-identity, quote-integrity, movement, and probability-provenance rules against future timestamped MLB slates; no WNBA change because this frozen pack had no WNBA games. No reasoning provider or tests were run. JSON ledger parses; the new files pass `git diff --check`.
+
+# HANDOFF — 2026-10-24 (Codex, PR #300 review fixes)
+
+- Last Commit SHA: `4b33ef503525d2c62b19c8103d293c7f6168ac78` on `docs/mlb-postgame-audit-playbook-2026-10-23`.
+- Files touched: `docs/playbooks/MLB_MASTER_PLAYBOOK.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit.md`, `reports/audits/2026-10-23_MLB_Postgame_Audit_Ledger.json`.
+- Review changes: document current identity mismatch behavior (diagnostic candidate retained, downstream stand-down); distinguish `edge_pct` EV/unit from probability gap; call out the `candidates.csv` vs `team_totals.csv` MIL team-total probability/EV discrepancy; clarify game-total vs team-total settlements; link the playbook as authoritative; add missing ledger rule IDs; remove Markdown trailing whitespace.
+- Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
+- Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
+

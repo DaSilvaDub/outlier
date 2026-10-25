@@ -1,0 +1,49 @@
+{
+  "config_hash": "3c062f4405f35185b472b6f4305fb17d0421a47ad63ebc977e43a88ff37d9e31",
+  "families": {
+    "team.ALT_SPREAD": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.ALT_TEAM_TOTAL": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.ALT_TOTAL": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.ML": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.SPREAD": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.TEAM_TOTAL": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    },
+    "team.TOTAL": {
+      "last_evidence": null,
+      "model_weight": 0.0,
+      "status": "shadow"
+    }
+  },
+  "max_model_weight": 0.25,
+  "schema": 1,
+  "thresholds": {
+    "max_abs_calibration_gap": 0.03,
+    "min_distinct_dates": 45,
+    "min_settled_outcomes": 1500,
+    "require_median_clv_non_negative": true,
+    "require_oos_logloss_beat_market": true
+  }
+}

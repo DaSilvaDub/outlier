@@ -29,6 +29,8 @@ original_write_pack.py
 config/*
 !config/.gitkeep
 !config/blend_promotion.json
+!config/nba_promotion.json
+!config/nba_team_model.json
 config/outlier_session.json
 config/.outlier_session/
 config/api_bearer_token.txt

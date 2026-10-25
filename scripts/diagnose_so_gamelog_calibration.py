@@ -6,7 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from outlier_scrapers.paths import resolve_feedback_db_path
+from outlier_scrapers.paths import require_migrated_ledger, resolve_feedback_db_path
 
 GAMELOG = "so-starter-gamelog-v1"
 DIAGNOSIS_JSON = (
@@ -32,7 +32,9 @@ def _is_so(selection: str, market_type: str) -> bool:
 def main() -> None:
     # Resolve at run time so OUTLIER_FEEDBACK_DB is honored even when it is set
     # after outlier_scrapers.paths was imported.
-    conn = sqlite3.connect(resolve_feedback_db_path())
+    db_path = resolve_feedback_db_path()
+    require_migrated_ledger(db_path)  # a bare connect would create an empty file
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cols = {r[1] for r in conn.execute("PRAGMA table_info(market_snapshots)")}
     hash_expr = (

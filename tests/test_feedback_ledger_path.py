@@ -21,18 +21,53 @@ from scripts import diagnose_so_gamelog_calibration as diagnose
 
 @pytest.fixture
 def canonical(tmp_path, monkeypatch):
+    """No LOCALAPPDATA (CI / cloud sandbox), a fake canonical dir and checkout."""
     canonical_dir = tmp_path / "canonical" / "calibration"
     monkeypatch.setattr(paths, "CANONICAL_CALIBRATION_DIR", canonical_dir)
     monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "checkout")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
     return canonical_dir
 
 
-def test_env_var_wins_over_everything(canonical, monkeypatch, tmp_path):
+@pytest.fixture
+def local_appdata(canonical, monkeypatch, tmp_path):
+    """A Windows-like host: LOCALAPPDATA points at tmp_path."""
+    appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(appdata))
+    return appdata / "outlier" / "calibration"
+
+
+def test_env_var_wins_over_everything(local_appdata, canonical, monkeypatch, tmp_path):
     canonical.mkdir(parents=True)
+    local_appdata.mkdir(parents=True)
     override = tmp_path / "elsewhere" / "ledger.sqlite3"
     monkeypatch.setenv("OUTLIER_FEEDBACK_DB", str(override))
 
     assert paths.resolve_feedback_db_path() == override
+
+
+def test_local_data_dir_wins_over_canonical(local_appdata, canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    canonical.mkdir(parents=True)
+
+    # Chosen even before it exists: the ledger moved, the directory is created on init.
+    assert paths.resolve_feedback_db_path() == local_appdata / "feedback.sqlite3"
+
+
+def test_blank_local_appdata_is_ignored(canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", "   ")
+    canonical.mkdir(parents=True)
+
+    assert paths.local_calibration_dir() is None
+    assert paths.resolve_feedback_db_path() == canonical / "feedback.sqlite3"
+
+
+def test_report_dir_stays_in_repo_with_local_data(local_appdata, canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_REPORT_DIR", raising=False)
+    canonical.mkdir(parents=True)
+
+    assert paths.resolve_feedback_report_dir() == canonical / "reports" / "latest"
 
 
 def test_canonical_ledger_used_when_its_directory_exists(canonical, monkeypatch):

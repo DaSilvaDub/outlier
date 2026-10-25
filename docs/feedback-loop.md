@@ -8,8 +8,8 @@ events; it never calls a reasoning model for settlement.
 ## What is captured automatically
 
 `python -m outlier_scrapers.pack` now writes `opportunities.csv` before the
-top-N ranking step and then captures the pack into
-`calibration/feedback.sqlite3`. The database is local/ignored and contains:
+top-N ranking step and then captures the pack into the feedback ledger,
+`paths.FEEDBACK_DB_PATH`. The database is local, never committed, and contains:
 
 - `market_snapshots`: every pregame opportunity, including non-selected rows,
   the final pack selection state, exact outcome/line identity, probabilities,
@@ -225,10 +225,55 @@ set-based indexed operation, and line-movement exports are parsed once per
 sport, so consolidated ledgers do not execute three close queries and two JSON
 loads per settlement.
 
-## Recovering a corrupted ledger
+## Where the ledger lives
+
+On Windows the ledger is `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3`,
+outside the checkout. The canonical checkout sits behind a cloud-sync filter that
+truncated large SQLite writes and corrupted the in-repo ledger four times
+(2026-08-22, 08-25, 09-01, 10-21). Resolution order, all in
+`outlier_scrapers/paths.py`:
+
+1. `OUTLIER_FEEDBACK_DB`
+2. `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3` (when `LOCALAPPDATA` is set)
+3. the canonical checkout's `calibration\feedback.sqlite3`
+4. `PROJECT_ROOT/calibration/feedback.sqlite3` (Linux CI, cloud sandboxes)
+
+Every worktree resolves to the same file. SQLite's `-wal`/`-shm` sidecars sit
+next to it. Feedback reports did not move; they stay in
+`calibration/reports/latest`.
+
+### Migrating from the in-repo ledger (once)
+
+With no pipeline running:
 
 ```powershell
-python -m outlier_scrapers.feedback recover --corrupted calibration\feedback.sqlite3.corrupted --output calibration\feedback.sqlite3
+python -m outlier_scrapers.feedback migrate-ledger
+```
+
+It copies the old ledger with SQLite's backup API, runs `PRAGMA integrity_check`
+on the copy, and compares row counts for `market_snapshots`, `decisions`,
+`settlements` and `pack_snapshot_memberships`. Only after all of that passes is
+the original renamed to `calibration\feedback.migrated-<date>.sqlite3` (kept;
+nothing is deleted) and the copy put in place. A second run reports
+`already_migrated`. The command refuses to overwrite an existing local ledger,
+and it refuses while the old file still has a non-empty `-wal`, which means a
+pipeline is running or the last one stopped uncleanly.
+
+Until the migration runs, every writer (`feedback_db.initialize_database`) and
+the enforce gate raise `LedgerMigrationRequired` instead of creating an empty
+local ledger. They do the same if the local ledger goes missing after a
+migration. A 0-byte file at the local path (what a bare `sqlite3.connect` leaves)
+counts as missing. If a run dies after archiving the original, the verified copy
+is left as `feedback.sqlite3.migrating`; re-running the command re-verifies it
+against the archive and finishes. `--source` and `--dest` override the two paths.
+
+## Recovering a corrupted ledger
+
+Recover into a scratch path, check the result, then swap it in as the local
+ledger:
+
+```powershell
+python -m outlier_scrapers.feedback recover --corrupted "$env:LOCALAPPDATA\outlier\calibration\feedback.sqlite3" --output "$env:TEMP\feedback.recovered.sqlite3"
 ```
 
 Tries the `sqlite3` CLI's `.recover` first (it survives page-level corruption
