@@ -241,3 +241,59 @@ def test_crash_between_history_and_pointer_never_leaves_a_pointer_without_histor
         calibration_store.publish_version(BLEND, live, replace_file=crash)
     assert not calibration_store.pointer_path(live).exists()
     assert (live.parent / calibration_store.POINTER_HISTORY_NAME).exists()
+
+
+COMMITTED_CALIBRATION = Path(__file__).resolve().parents[1] / "calibration"
+
+
+def test_committed_weights_load_exactly_as_the_raw_files(tmp_path):
+    """No pointer yet: readers return the committed files' own content, as on master."""
+    for name, loader in (
+        ("blend_weights.json", probability_blend.load_weight_artifact),
+        ("stake_calibration.json", stake_calibration.load_stake_calibration_artifact),
+    ):
+        copy = tmp_path / name
+        copy.write_bytes((COMMITTED_CALIBRATION / name).read_bytes())
+        assert loader(copy) == json.loads(copy.read_text(encoding="utf-8"))
+
+
+def test_daily_refit_next_to_committed_weights_leaves_them_untouched(tmp_path, monkeypatch):
+    from outlier_scrapers import daily_job
+
+    live = tmp_path / "blend_weights.json"
+    live.write_bytes((COMMITTED_CALIBRATION / "blend_weights.json").read_bytes())
+    committed_hash = hashlib.sha256(live.read_bytes()).hexdigest()
+    db = tmp_path / "feedback.sqlite3"
+    db.write_text("", encoding="utf-8")
+    refit = {**BLEND, "eligible_samples": 123, "model_version": "blend-lock-test"}
+
+    def fit_through_the_real_writer(db_path, output_path):
+        probability_blend.write_weight_artifact(refit, output_path)
+        return refit
+
+    monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", fit_through_the_real_writer)
+    stats = daily_job.refit_blend_weights(db, live)
+
+    assert stats["status"] == "ok"
+    assert hashlib.sha256(live.read_bytes()).hexdigest() == committed_hash
+    pointer = calibration_store.read_pointer(live)
+    assert pointer["version_file"].startswith("versions/blend_weights/blend_weights.")
+    assert probability_blend.load_weight_artifact(live) == refit
+
+
+@pytest.mark.parametrize("error", [
+    calibration_store.CalibrationWriteRefused("refused"),
+    calibration_store.CalibrationVersionError("bad pointer"),
+])
+def test_daily_refit_aborts_on_a_refused_write_or_bad_pointer(tmp_path, monkeypatch, error):
+    from outlier_scrapers import daily_job
+
+    db = tmp_path / "feedback.sqlite3"
+    db.write_text("", encoding="utf-8")
+
+    def fail(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", fail)
+    with pytest.raises(type(error)):
+        daily_job.refit_blend_weights(db, tmp_path / "blend_weights.json")

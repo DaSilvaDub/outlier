@@ -15,6 +15,8 @@ from outlier_scrapers import calibration_store, paths
 
 SCHEMA_VERSION = 1
 _TRANSIENT_WINERRORS = {5, 32}
+# Fixed at import from OUTLIER_CALIBRATION_DIR (tests/conftest.py sets it before any
+# outlier import); changing the env var later does not move this default.
 DEFAULT_WEIGHTS_PATH = calibration_store.calibration_dir() / "blend_weights.json"
 DIMENSIONS = (
     "league",

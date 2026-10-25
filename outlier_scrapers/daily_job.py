@@ -304,8 +304,12 @@ def refit_blend_weights(
 
     The fitted artifact only improves as settlements accumulate, so it is
     refitted every run instead of whenever someone remembers to call
-    ``feedback fit-blend`` by hand. Failure is non-fatal: the pack falls back to
-    the previous artifact (or to market-only) rather than skipping a slate.
+    ``feedback fit-blend`` by hand. An ordinary fit failure (I/O, SQLite, bad
+    data) is non-fatal: the pack falls back to the previous artifact (or to
+    market-only) rather than skipping a slate. A refused write or a bad
+    calibration pointer (``CalibrationWriteRefused``, ``CalibrationVersionError``)
+    is deliberately *not* caught: the run aborts instead of continuing on weights
+    nobody can vouch for.
     """
 
     db = db_path or feedback.DEFAULT_DB_PATH

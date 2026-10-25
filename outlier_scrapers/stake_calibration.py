@@ -24,10 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from outlier_scrapers import calibration_store, paths, probability_blend
+from outlier_scrapers import calibration_store, probability_blend
 from outlier_scrapers.sizing import compute_full_kelly
 
 SCHEMA_VERSION = 1
+# Fixed at import from OUTLIER_CALIBRATION_DIR (see probability_blend.DEFAULT_WEIGHTS_PATH).
 DEFAULT_ARTIFACT_PATH = calibration_store.calibration_dir() / "stake_calibration.json"
 DEFAULT_SOURCE_PROBABILITY_COLUMN = "final_blended_prob"
 DEFAULT_MIN_SAMPLES = 30
