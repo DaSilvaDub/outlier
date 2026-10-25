@@ -783,3 +783,24 @@ def test_inactive_join_ignores_name_suffixes_and_punctuation(listed, quoted):
         row, book="HARDROCK", odds=-300, target_book="HARDROCK",
         inactive_by_team={"SEA": [listed]})
     assert reason == "inactive_player"
+
+
+def test_r_alt_01_rejects_low_l5_or_l10_hit_rate_from_actionable_ranking():
+    """R-ALT-01: enforce strict L5 >= 80% and L10 >= 70% minimum in alt_floors."""
+    low_l5_props = _snap._floor_pair()
+    low_l5_props[1]["l5_hit_rate"] = 0.40
+    top3, master, inventory = _scan(low_l5_props)
+    assert master == []
+    assert top3["RUSH_YDS"] == []
+    assert len(inventory) == 1
+    assert inventory[0].inventory_reason == "insufficient_hit_rate"
+    assert inventory[0].actionable is False
+
+    low_l10_props = _snap._floor_pair()
+    low_l10_props[1]["l10_hit_rate"] = 0.60
+    top3_b, master_b, inventory_b = _scan(low_l10_props)
+    assert master_b == []
+    assert top3_b["RUSH_YDS"] == []
+    assert len(inventory_b) == 1
+    assert inventory_b[0].inventory_reason == "insufficient_hit_rate"
+    assert inventory_b[0].actionable is False

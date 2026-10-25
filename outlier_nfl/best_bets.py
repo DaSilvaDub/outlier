@@ -84,6 +84,17 @@ ASSUMED_OVERROUND = 1.0476  # -110 / -110 two-way market, used only when one sid
 QUARTER_KELLY = 0.25
 MAX_STAKE = 0.02  # bankroll fraction
 
+# Week 6 Postgame Calibration Rules (R-PROP-01, R-PROP-02, R-PROP-04, R-PROP-05)
+UNDERDOG_PASS_UNDER_BAN_SPREAD = 6.0  # R-PROP-01: ban PASS_COMP/PASS_ATT UNDER on +6.0+ dogs
+SHOOTOUT_TOTAL_THRESHOLD = 51.0  # R-PROP-01: ban PASS_COMP/PASS_ATT UNDER in >= 51.0 total scripts
+UNDERDOG_RB_ATT_MIN_CARRY_SHARE = 0.65  # R-PROP-02: require >= 65% carry share on road/underdog RB RUSH_ATT OVER
+UNDERDOG_RB_ATT_SPREAD = 4.5  # R-PROP-02: underdog spread threshold (+4.5 or greater)
+ALPHA_WR1_MIN_TARGET_SHARE = 0.28  # R-PROP-05: ALPHA_WR1_SCRIPT_PROOF requires >= 28% target share
+WEATHER_HIGH_PASS_YDS_LINE = 275.5  # R-PROP-04: active WEATHER_WIND blocks PASS_YDS/PASS_RUSH_YDS OVER >= 275.5
+PASS_COMP_ATT_MARKETS = frozenset(
+    {"PASS_COMP", "PASSING_COMPLETIONS", "PASS_ATT", "PASSING_ATTEMPTS"}
+)
+
 SIDES = ("OVER", "UNDER")
 
 PASS_MARKETS = frozenset(
@@ -349,6 +360,31 @@ def _side_sign(position: str) -> int:
     return 1 if position == "OVER" else -1
 
 
+def _team_spread_and_script(
+    src: _Sources, event_id: Any, team: str | None
+) -> tuple[float | None, float | None, str]:
+    """Return (team_spread, game_total, script_type) for ``team`` in ``event_id``.
+
+    ``team_spread > 0`` means ``team`` is an underdog of ``+team_spread`` points.
+    """
+    script = src.scripts.get(str(event_id or ""))
+    if not isinstance(script, Mapping):
+        return None, None, ""
+    home_team = str(script.get("home_team") or "").strip().upper()
+    away_team = str(script.get("away_team") or "").strip().upper()
+    home_spread = _f(script.get("home_spread"))
+    total = _f(script.get("total"))
+    script_type = str(script.get("script_type") or "").strip().upper()
+    team_norm = str(team or "").strip().upper()
+    team_spread: float | None = None
+    if home_spread is not None and team_norm:
+        if team_norm == home_team:
+            team_spread = home_spread
+        elif team_norm == away_team:
+            team_spread = -home_spread
+    return team_spread, total, script_type
+
+
 def _signal_matches_market(sig: PropSignal, prop_market: str) -> bool:
     sig_mkt = str(sig.market).upper()
     if sig_mkt == prop_market:
@@ -357,6 +393,11 @@ def _signal_matches_market(sig: PropSignal, prop_market: str) -> bool:
         return prop_market in ("RUSH_REC_YDS", "LONG_RUSH")
     if sig.tag in ("VACATED_TARGETS", "MATCHUP_COVERAGE_LEAK") and sig_mkt == "REC_YDS":
         return prop_market in ("RUSH_REC_YDS", "LONG_REC", "REC")
+    if sig.tag in ("WEATHER_WIND", "WEATHER_WIND_HIGH", "WEATHER_WET"):
+        if sig_mkt == "REC_YDS" and prop_market in ("LONG_REC", "REC"):
+            return True
+        if sig_mkt == "PASS_YDS" and prop_market in ("PASS_RUSH_YDS",):
+            return True
     return False
 
 
@@ -511,6 +552,28 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
     if pillar.evidence.get("role_collapse") and position == "OVER":
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume under half of the player's average")
+
+    # R-PROP-05: Alpha WR1 Target-Share Threshold (>= 28% target share)
+    if profile and market in REC_MARKETS:
+        t_share = _f(profile.get("target_share"))
+        if t_share is not None:
+            t_norm = t_share / 100.0 if t_share > 1.0 else t_share
+            pillar.evidence["alpha_wr1_script_proof"] = bool(t_norm >= ALPHA_WR1_MIN_TARGET_SHARE)
+            pillar.evidence["alpha_wr1_min_target_share"] = ALPHA_WR1_MIN_TARGET_SHARE
+
+    # R-PROP-02: Underdog RB Attempt Overs require >= 65% carry share on +4.5 or greater underdogs
+    if market == "RUSH_ATT" and position == "OVER" and profile:
+        team_spread, _, _ = _team_spread_and_script(src, prop.get("event_id"), team)
+        c_share = _f(profile.get("carry_share"))
+        if team_spread is not None and team_spread >= UNDERDOG_RB_ATT_SPREAD and c_share is not None:
+            c_norm = c_share / 100.0 if c_share > 1.0 else c_share
+            if c_norm < UNDERDOG_RB_ATT_MIN_CARRY_SHARE:
+                pillar.status = CONTRADICTS
+                pillar.evidence["underdog_rb_carry_share_gate"] = "REJECTED_COMMITTEE"
+                pillar.notes.append(
+                    f"R-PROP-02: underdog RB (+{team_spread:.1f}) RUSH_ATT OVER requires "
+                    f">= {UNDERDOG_RB_ATT_MIN_CARRY_SHARE:.0%} carry share (actual {c_norm:.1%})"
+                )
     return pillar
 
 
@@ -569,6 +632,19 @@ def _matchup(
     if pillar.status == VERIFIED and pillar.delta <= CONTRADICT_DELTA:
         pillar.status = CONTRADICTS
         pillar.notes.append("matchup evidence leans against this side")
+
+    # R-PROP-01: Ban PASS_COMP UNDER and PASS_ATT UNDER on +6.0+ underdogs and in SHOOTOUT scripts (>= 51.0 total)
+    if market in PASS_COMP_ATT_MARKETS and position == "UNDER":
+        team_spread, total, script_type = _team_spread_and_script(src, prop.get("event_id"), team)
+        is_heavy_dog = team_spread is not None and team_spread >= UNDERDOG_PASS_UNDER_BAN_SPREAD
+        is_shootout = script_type == "SHOOTOUT" or (total is not None and total >= SHOOTOUT_TOTAL_THRESHOLD)
+        if is_heavy_dog or is_shootout:
+            pillar.status = CONTRADICTS
+            pillar.evidence["underdog_pass_under_ban"] = True
+            pillar.notes.append(
+                "R-PROP-01: underdog QB pass completion/attempt UNDER banned in +6.0+ deficit "
+                "or shootout script (>= 51.0 total)"
+            )
     return pillar
 
 
@@ -647,6 +723,27 @@ def _injury_weather(
         pillar.evidence["injury_confidence_gate"] = "CONTRADICTS"
         pillar.status = CONTRADICTS
         pillar.notes.append("weather/injury adjustments lean against this side")
+    elif (
+        position == "OVER"
+        and weather
+        and (
+            any(t in ("WEATHER_WIND", "WEATHER_WIND_HIGH") for t in (weather.get("tags") or ()))
+            or (_f(weather.get("wind_mph")) or 0.0) >= 12.0
+        )
+        and (
+            str(prop.get("market") or "").upper() in ("LONG_REC", "LONG_PASS")
+            or (
+                str(prop.get("market") or "").upper() in ("PASS_YDS", "PASS_RUSH_YDS")
+                and (_f(prop.get("line")) or 0.0) >= WEATHER_HIGH_PASS_YDS_LINE
+            )
+        )
+    ):
+        pillar.evidence["injury_confidence_gate"] = "CONTRADICTS_WEATHER_WIND"
+        pillar.status = CONTRADICTS
+        pillar.notes.append(
+            "R-PROP-04: active WEATHER_WIND (>= 12 mph) blocks explosive pass/receiving OVERs "
+            "regardless of historical hit rate"
+        )
     elif is_questionable:
         pillar.evidence["injury_confidence_gate"] = "QUARANTINED_QUESTIONABLE"
         pillar.status = ESTIMATED

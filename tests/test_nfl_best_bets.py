@@ -617,3 +617,128 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
 
+
+def test_r_prop_01_bans_underdog_qb_pass_comp_and_att_under():
+    """R-PROP-01: Ban PASS_COMP UNDER and PASS_ATT UNDER on +6.0+ underdogs and in SHOOTOUT scripts."""
+    qb_comp_under = _prop(
+        "UNDER",
+        player_name="Aaron Rodgers",
+        player_id="p_ar",
+        team="PIT",
+        opponent="TB",
+        market="PASS_COMP",
+        line=20.5,
+        odds=-110,
+        implied=52.381,
+        l5_hit_rate=0.80,
+        l10_hit_rate=0.80,
+        season_hit_rate=0.75,
+    )
+    scripts = [{
+        "event_id": "E1",
+        "home_team": "TB",
+        "away_team": "PIT",
+        "home_spread": -7.5,  # PIT is +7.5 underdog (>= +6.0)
+        "total": 44.5,
+        "script_type": "COMPETITIVE",
+        "prop_signals": [],
+    }]
+    payload = build_best_bets(_inputs(props=[qb_comp_under], scripts=scripts))
+    pick = _pick(payload, "UNDER")
+    assert pick["pillars"]["matchup"]["status"] == CONTRADICTS
+    assert pick["pillars"]["matchup"]["evidence"]["underdog_pass_under_ban"] is True
+    assert pick["verdict"] == REJECTED
+
+
+def test_r_prop_02_requires_65_pct_carry_share_for_underdog_rb_rush_att_over():
+    """R-PROP-02: Require >= 65% carry share before recommending RUSH_ATT OVER on +4.5+ underdogs."""
+    rb_att_over = _prop(
+        "OVER",
+        player_name="Tony Pollard",
+        player_id="p_tp",
+        team="TEN",
+        opponent="IND",
+        market="RUSH_ATT",
+        line=14.5,
+        odds=-110,
+        implied=52.381,
+        l5_hit_rate=0.80,
+        l10_hit_rate=0.80,
+        season_hit_rate=0.75,
+    )
+    scripts = [{
+        "event_id": "E1",
+        "home_team": "IND",
+        "away_team": "TEN",
+        "home_spread": -6.5,  # TEN is +6.5 road underdog (>= +4.5)
+        "total": 43.5,
+        "script_type": "FRONT_RUNNER_GRIND",
+        "prop_signals": [],
+    }]
+    usage = [{
+        "player": "Tony Pollard",
+        "team": "TEN",
+        "games": 5,
+        "target_share": 0.10,
+        "carry_share": 0.54,  # < 0.65 threshold
+        "targets_pg": 3.5,
+        "carries_pg": 14.0,
+    }]
+    payload = build_best_bets(_inputs(props=[rb_att_over], scripts=scripts, usage_players=usage))
+    pick = _pick(payload, "OVER")
+    assert pick["pillars"]["opportunity"]["status"] == CONTRADICTS
+    assert pick["pillars"]["opportunity"]["evidence"]["underdog_rb_carry_share_gate"] == "REJECTED_COMMITTEE"
+    assert pick["verdict"] == REJECTED
+
+
+def test_r_prop_04_weather_wind_blocks_long_rec_over_despite_80_pct_hit_rate():
+    """R-PROP-04 / REMOVE #2: Never override active WEATHER_WIND with raw 80% L5/L10 hit rates."""
+    long_rec = _prop(
+        "OVER",
+        player_name="Ryan Flournoy",
+        player_id="p_rf",
+        team="DAL",
+        opponent="PHI",
+        market="LONG_REC",
+        line=16.5,
+        odds=-110,
+        implied=52.381,
+        l5_hit_rate=0.80,
+        l10_hit_rate=0.80,
+        season_hit_rate=0.75,
+    )
+    windy = [{
+        "event_id": "E1",
+        "venue": "outdoor",
+        "wind_mph": 15.0,
+        "pass_adjustment": -0.06,
+        "tags": ["WEATHER_WIND"],
+        "forecast_status": "ok",
+        "venue_source": "schedule",
+        "hours_in_window": 4,
+    }]
+    payload = build_best_bets(_inputs(props=[long_rec], weather=windy))
+    pick = _pick(payload, "OVER")
+    assert pick["pillars"]["injury_weather"]["status"] == CONTRADICTS
+    assert pick["pillars"]["injury_weather"]["evidence"]["injury_confidence_gate"] == "CONTRADICTS_WEATHER_WIND"
+    assert pick["verdict"] == REJECTED
+
+
+def test_r_prop_05_alpha_wr1_script_proof_requires_28_pct_target_share():
+    """R-PROP-05: Raise ALPHA_WR1_SCRIPT_PROOF threshold to >= 28% target share."""
+    # Default _inputs uses A.J. Brown with target_share=0.27 (< 0.28)
+    pick_27 = _pick(build_best_bets(_inputs()), "OVER")
+    assert pick_27["pillars"]["opportunity"]["evidence"]["alpha_wr1_script_proof"] is False
+
+    usage_30 = [{
+        "player": "A.J. Brown",
+        "team": "PHI",
+        "games": 3,
+        "target_share": 0.30,
+        "carry_share": 0.0,
+        "targets_pg": 9.5,
+        "carries_pg": 0.0,
+    }]
+    pick_30 = _pick(build_best_bets(_inputs(usage_players=usage_30)), "OVER")
+    assert pick_30["pillars"]["opportunity"]["evidence"]["alpha_wr1_script_proof"] is True
+

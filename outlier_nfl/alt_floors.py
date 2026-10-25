@@ -51,6 +51,11 @@ MAX_STRAIGHT_ODDS: int = -250
 PLAY_TYPE_STRAIGHT = "STRAIGHT"
 PLAY_TYPE_PARLAY = "PARLAY_ONLY"
 
+# Hard Rock Alternate Floor Filter (R-ALT-01): require L5 >= 80% and L10 >= 70%
+# minimum hit-rate convergence so 20%-60% L5 candidates are never ranked.
+MIN_FLOOR_L5_HIT_RATE: float = 0.80
+MIN_FLOOR_L10_HIT_RATE: float = 0.70
+
 DEFAULT_MIN_LINES: dict[str, float] = {
     "PASS_YDS": 149.5,
     "RUSH_YDS": 34.5,
@@ -208,6 +213,18 @@ def floor_inventory_reason(
     out = {_name_key(n) for n in (inactive_by_team or {}).get(team, [])}
     if _name_key(row.get("player_name")) in out:
         return "inactive_player"
+    l5_raw = row.get("l5_hit_rate")
+    l10_raw = row.get("l10_hit_rate")
+    if l5_raw is not None or l10_raw is not None:
+        try:
+            l5_val = float(l5_raw or 0.0)
+            l10_val = float(l10_raw or 0.0)
+        except (TypeError, ValueError):
+            return "insufficient_hit_rate"
+        l5_norm = l5_val / 100.0 if l5_val > 1.0 else l5_val
+        l10_norm = l10_val / 100.0 if l10_val > 1.0 else l10_val
+        if l5_norm < MIN_FLOOR_L5_HIT_RATE or l10_norm < MIN_FLOOR_L10_HIT_RATE:
+            return "insufficient_hit_rate"
     return None
 
 
@@ -343,6 +360,10 @@ def discover_alt_floor_candidates(
         l5 = float(row.get("l5_hit_rate") or 0.0)
         l10 = float(row.get("l10_hit_rate") or 0.0)
         season = float(row.get("season_hit_rate") or 0.0)
+        l5_norm = l5 / 100.0 if l5 > 1.0 else l5
+        l10_norm = l10 / 100.0 if l10 > 1.0 else l10
+        if reason is None and (l5_norm < MIN_FLOOR_L5_HIT_RATE or l10_norm < MIN_FLOOR_L10_HIT_RATE):
+            reason = "insufficient_hit_rate"
         # No quote is no price evidence: never an invented 0.50 (F23).
         implied_p = american_to_implied(b_odds) if b_odds is not None else None
         play_type = (

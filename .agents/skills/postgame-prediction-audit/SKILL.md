@@ -123,3 +123,20 @@ Deliver the final audit structured as follows:
 - Level: Low / Medium / High
 - Supporting Data & Gaps: ...
 ```
+
+## Week 6 Calibration Audit Rules (R-INJ-01 & Modeling Refinements)
+1. **In-Game Injury Exit Attribution (R-INJ-01):**
+   - When auditing player props where the athlete suffered an early in-game exit (e.g. Terry McLaurin in MNF-3 leaving after Q1 on pace to clear), explicitly grade and classify the outcome as `LOSS (INJURY EXIT)` rather than attributing the miss to model sizing, scheme misread, or flawed pregame projections.
+2. **2nd-Half Clock-Bleed Verification (R-TOT-01):**
+   - When auditing game totals in blowouts (|1H margin| >= 10.0), evaluate whether full-game pace suffered 2nd-half clock bleed (-1.0 drive per team).
+3. **Underdog QB Volume Guard (R-PROP-01):**
+   - Check that underdog QBs (+6.0 or higher) in pass-heavy negative scripts or shootouts (>= 51.0) were never recommended for PASS_COMP or PASS_ATT UNDERs.
+4. **Underdog RB Carry Share Threshold (R-PROP-02):**
+   - Verify that road underdog RBs (+4.5 or higher) recommended for RUSH_ATT OVER possessed >= 65% carry share.
+5. **Alpha Target Share Audit (R-PROP-05):**
+   - Confirm that pass-catchers treated as script-proof solo alphas command >= 28% target share.
+6. **Alternate Floor Validation (R-ALT-01):**
+   - Ensure all recommended alternate floor ladders satisfied L5 >= 80% and L10 >= 70% hit rates.
+7. **Weather Under Correlation Audit (REMOVE #1):**
+   - Check that foul weather games did not stack correlated full-game and team-total unders on top of 1H unders.
+```
