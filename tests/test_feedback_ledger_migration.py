@@ -267,6 +267,38 @@ def test_migrate_does_not_overwrite_an_earlier_archive(layout):
     assert earlier.read_bytes() == b"earlier archive"
 
 
+def test_resume_verifies_against_the_newest_same_day_archive(layout, monkeypatch):
+    """The day's second archive is ``-2``, which sorts before the first by name.
+
+    paths.archived_ledgers must still report it last, or the resume compares the
+    staged copy against the *earlier* archive, refuses, and leaves the only live
+    ledger in the .migrating file.
+    """
+    legacy, local = layout
+    _seed(legacy, snapshots=1)
+    legacy.rename(legacy.with_name("feedback.migrated-2026-10-21.sqlite3"))
+    _seed(legacy, snapshots=4)
+    real_promote = feedback_migration._promote_staging
+
+    def crash(*args):
+        raise KeyboardInterrupt  # dies after archiving, before the copy goes live
+
+    monkeypatch.setattr(feedback_migration, "_promote_staging", crash)
+    with pytest.raises(KeyboardInterrupt):
+        migrate_ledger(today=TODAY)
+    assert [p.name for p in paths.archived_ledgers(legacy.parent)] == [
+        "feedback.migrated-2026-10-21.sqlite3",
+        "feedback.migrated-2026-10-21-2.sqlite3",
+    ]
+
+    monkeypatch.setattr(feedback_migration, "_promote_staging", real_promote)
+    result = migrate_ledger(today=TODAY)
+
+    assert result.archived_as.endswith("feedback.migrated-2026-10-21-2.sqlite3")
+    assert _count(local) == 4
+    assert not local.with_name("feedback.sqlite3.migrating").exists()
+
+
 def test_migrate_aborts_on_row_count_mismatch(layout, monkeypatch):
     legacy, local = layout
     _seed(legacy)
