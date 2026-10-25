@@ -10,11 +10,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 
-# The canonical checkout's calibration directory. calibration/*.sqlite3 is
-# gitignored, so a PROJECT_ROOT-relative ledger would give every worktree its own
-# empty copy; local runs from any worktree share this one instead.
-CANONICAL_CALIBRATION_DIR = Path(r"C:\Users\dasil\Dev\GitHub\outlier\calibration")
-
 FEEDBACK_DB_NAME = "feedback.sqlite3"
 MIGRATE_LEDGER_COMMAND = "python -m outlier_scrapers.feedback migrate-ledger"
 
@@ -41,15 +36,43 @@ def local_calibration_dir() -> Path | None:
     return Path(base) / "outlier" / "calibration"
 
 
+def main_checkout_root() -> Path:
+    """The main checkout this one belongs to, found from git, never hardcoded.
+
+    In a linked worktree ``.git`` is a file naming ``<main>/.git/worktrees/<name>``;
+    the main checkout is three levels up from that. In a normal checkout, or when
+    nothing can be read, it is ``PROJECT_ROOT`` itself. Used only to *find* the
+    pre-migration ledger; no code writes into it.
+    """
+    dot_git = PROJECT_ROOT / ".git"
+    if dot_git.is_file():
+        try:
+            text = dot_git.read_text(encoding="utf-8").strip()
+        except OSError:
+            return PROJECT_ROOT
+        if text.startswith("gitdir:"):
+            gitdir = Path(text.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (PROJECT_ROOT / gitdir).resolve()
+            if gitdir.parent.name == "worktrees":
+                return gitdir.parent.parent.parent
+    return PROJECT_ROOT
+
+
 def _repo_calibration_dir() -> Path:
-    """The canonical checkout's calibration dir when present, else this checkout's."""
-    if CANONICAL_CALIBRATION_DIR.is_dir():
-        return CANONICAL_CALIBRATION_DIR
+    """The calibration dir: ``OUTLIER_CALIBRATION_DIR`` or this checkout's own.
+
+    There is no hardcoded path to another checkout. A run from any worktree
+    reads and writes its own ``calibration/`` (or the directory it was told to).
+    """
+    override = os.environ.get("OUTLIER_CALIBRATION_DIR", "").strip()
+    if override:
+        return Path(override)
     return PROJECT_ROOT / "calibration"
 
 
 def _resolve_calibration_path(env_var: str, relative: Path) -> Path:
-    """Env override, else the canonical checkout when present, else this checkout."""
+    """Env override, else this checkout's calibration dir."""
     override = os.environ.get(env_var, "").strip()
     if override:
         return Path(override)
@@ -57,8 +80,15 @@ def _resolve_calibration_path(env_var: str, relative: Path) -> Path:
 
 
 def legacy_feedback_db_path() -> Path:
-    """Where the ledger lived before it moved to local data (in-repo calibration/)."""
-    return _repo_calibration_dir() / FEEDBACK_DB_NAME
+    """Where the ledger lived before it moved to local data (in-repo calibration/).
+
+    That is the main checkout's calibration dir (found through git, so a worktree
+    still sees the one real pre-migration ledger), or ``OUTLIER_CALIBRATION_DIR``.
+    """
+    override = os.environ.get("OUTLIER_CALIBRATION_DIR", "").strip()
+    if override:
+        return Path(override) / FEEDBACK_DB_NAME
+    return main_checkout_root() / "calibration" / FEEDBACK_DB_NAME
 
 
 def resolve_feedback_db_path() -> Path:

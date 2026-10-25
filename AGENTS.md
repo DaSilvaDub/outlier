@@ -24,6 +24,10 @@
 
 This rule is duplicated in `docs/ENT-SYNC-GLOBAL-PROMPT.md` (harness system-prompt block), `CLAUDE.md`, `GROK.md`, and the desk skill. Keep them in sync when changing the rule.
 
+## HOUSE RULE — Never write `calibration\` or `data\` (ALL ENTS)
+
+Do **not** write, overwrite, delete or regenerate anything under `calibration\` or `data\` (blend weights, stake calibration, `feedback.sqlite3`, ledgers, pointers) from an agent session. Do pipeline work, tests and branch switches in a **separate git worktree**, never in the main checkout the user and scheduled tasks use. Calibration weights are write-once versions behind a pointer (`outlier_scrapers/calibration_store.py`); only a deliberate refit or restore creates a new version, and it never overwrites an old one. Tests set `OUTLIER_CALIBRATION_DIR` to a temp dir and refuse real `calibration\` writes.
+
 ## EXPORTED PROMPT HANDOFF (ALL ENTS)
 
 When the user explicitly asks in the current turn to analyze generated Outlier prompts, route `Desk1_Automated` master prompts to `.agents/skills/analyze-outlier-generic-prompts/SKILL.md` and save under `BETTING REPORTS\GENERIC\YYYY-MM-DD`. Route `Desk2_Manual` or `paste_*.md` prompts to `.agents/skills/analyze-outlier-sequential-prompts/SKILL.md`, enforce Q → R → W → X → S, and save under `BETTING REPORTS\SEQUENTIAL\YYYY-MM-DD`. Use the current agent's native model. A prompt appearing on disk does not itself authorize reasoning.

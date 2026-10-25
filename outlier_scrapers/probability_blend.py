@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from outlier_scrapers import paths
+from outlier_scrapers import calibration_store, paths
 
 SCHEMA_VERSION = 1
 _TRANSIENT_WINERRORS = {5, 32}
-DEFAULT_WEIGHTS_PATH = paths.PROJECT_ROOT / "calibration" / "blend_weights.json"
+DEFAULT_WEIGHTS_PATH = calibration_store.calibration_dir() / "blend_weights.json"
 DIMENSIONS = (
     "league",
     "market_type",
@@ -394,16 +394,20 @@ def _retry_replace(src: Path, dst: Path, retries: int = 10, delay: float = 0.1) 
 
 
 def write_weight_artifact(artifact: Mapping[str, Any], output_path: Path) -> Path:
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_suffix(f"{output_path.suffix}.tmp")
-    temporary.write_text(json.dumps(dict(artifact), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _retry_replace(temporary, output_path)
-    return output_path
+    """Save ``artifact`` as a new write-once version and point readers at it.
+
+    ``output_path`` names the live artifact (``blend_weights.json``); it is never
+    overwritten. Returns the version file that now holds the artifact.
+    """
+    return calibration_store.publish_version(
+        artifact, Path(output_path), replace_file=_retry_replace, source="probability_blend"
+    )
 
 
 def load_weight_artifact(path: Path = DEFAULT_WEIGHTS_PATH) -> dict[str, Any] | None:
-    path = Path(path)
+    # A pointer to a missing or altered version raises CalibrationVersionError on
+    # purpose: silently falling back to older weights is how versions got lost.
+    path = calibration_store.resolve_artifact_path(Path(path))
     if not path.exists():
         return None
     try:

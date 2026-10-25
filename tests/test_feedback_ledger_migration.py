@@ -21,11 +21,12 @@ TODAY = date(2026, 10, 21)
 
 @pytest.fixture
 def layout(tmp_path, monkeypatch):
-    """Fake canonical calibration dir + LOCALAPPDATA; returns (legacy, local) ledger paths."""
-    canonical = tmp_path / "canonical" / "calibration"
+    """Fake checkout calibration dir + LOCALAPPDATA; returns (legacy, local) ledger paths."""
+    checkout = tmp_path / "checkout"
+    canonical = checkout / "calibration"
     canonical.mkdir(parents=True)
-    monkeypatch.setattr(paths, "CANONICAL_CALIBRATION_DIR", canonical)
-    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "checkout")
+    monkeypatch.setattr(paths, "PROJECT_ROOT", checkout)
+    monkeypatch.delenv("OUTLIER_CALIBRATION_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
     monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
     local = tmp_path / "AppData" / "Local" / "outlier" / "calibration" / "feedback.sqlite3"

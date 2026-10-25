@@ -1,11 +1,22 @@
+param(
+    # Required on purpose: the scheduled run must name the checkout it runs in, so it
+    # can never silently run in (and write calibration\ and data\ of) a checkout
+    # that agents or an editor are also using.
+    [Parameter(Mandatory = $true)][string]$RepoRoot
+)
+
 $ErrorActionPreference = "Stop"
 
 # Local daily pack + export. Paid reasoning stays off.
-# Install once (08:00 local, change /ST as needed):
+# Install once (08:00 local, change /ST as needed). Point -RepoRoot at a checkout
+# reserved for scheduled runs (a separate worktree), not the one used for editing:
 #   schtasks /Create /TN "Outlier Daily Pipeline" /SC DAILY /ST 08:00 /RL LIMITED /F `
-#     /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\dasil\Dev\GitHub\outlier\scripts\run_daily_pipeline.ps1"
+#     /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File <RepoRoot>\scripts\run_daily_pipeline.ps1 -RepoRoot <RepoRoot>"
 
-$repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
+if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot "outlier_scrapers"))) {
+    throw "RepoRoot '$RepoRoot' is not an outlier checkout (no outlier_scrapers folder)."
+}
+$repoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $alertsDir = Join-Path $repoRoot "calibration\alerts"
 $statusPath = Join-Path $alertsDir "daily_pipeline_status.json"
 
