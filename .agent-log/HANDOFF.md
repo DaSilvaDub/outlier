@@ -176,13 +176,16 @@
 
 # HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
 
-**Branch**: `claude/inspiring-fermat-sq82jn` · **PR #268 merged** as `785ef42` · **follow-up PR**: https://github.com/DaSilvaDub/outlier/pull/271 (open, commit `6a64e56`)
+**Branch**: `claude/inspiring-fermat-sq82jn` · **PR #268 merged** as `785ef42` · **PR #271 merged** as `03a24ea`
 
-> **Read this first if you touch `matchup_rankings.py`:** PR #268 was merged from
-> `0e69635`, one commit *before* the review-nit fix was pushed, so `f12cea1` did not land.
-> Master has the `_name_key` inactive join but **not** the team-scoped usage index. PR #271
-> replays that one commit on top of the merge. Until #271 lands, the vacated-backfield
-> lookup on master can still credit one team's out RB with another team's carries.
+> **Both parts landed — resolved, kept for the record.** #268 merged from `0e69635`, one
+> commit *before* the review-nit fix was pushed, so for a while master had the `_name_key`
+> inactive join but not the team-scoped usage index. #271 replayed that commit on top of
+> the merge and is now in. Verified on `03a24ea`: `usage_by_team_key` is present at
+> `matchup_rankings.py:165`/`:397` and `test_vacated_backfield_boost_does_not_cross_teams`
+> is in the test module. Nothing from this session is unmerged.
+> Lesson for the next agent: a merge can race a push, so after a PR merges, check that
+> *your last commit* is in the merge, not just that the PR closed.
 
 ## Accomplished
 1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
@@ -243,7 +246,7 @@ a public `_name_key` alias is a repo-wide rename across 3 existing call sites, o
 follow-up; the #265 overlap in the same two files is for whoever drives that PR.
 
 ## Next steps
-1. Review and merge PR #271 — it carries the fix #268's merge raced past.
+1. ~~Review and merge PR #271~~ — merged as `03a24ea`.
 2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
 3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
    `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.
