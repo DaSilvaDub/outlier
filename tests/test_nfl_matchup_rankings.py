@@ -277,3 +277,37 @@ def test_vacated_backfield_boost_survives_a_name_spelling_difference():
     with_partner_out = charbonnet(_seattle_engine({"SEA": ["Kenneth Walker"]}))
     everyone_active = charbonnet(_seattle_engine(None))
     assert with_partner_out > everyone_active
+
+
+def test_vacated_backfield_boost_does_not_cross_teams():
+    """An out player's volume must come from his own team's usage profile.
+
+    Two players on a slate can share a normalized name key, so a slate-wide
+    usage index credited one team's inactive RB with another team's carries.
+    """
+    def engine(usage_players: list[dict]) -> MatchupRankingsEngine:
+        return MatchupRankingsEngine(
+            props=[],
+            matchup_scripts=[
+                {"home_team": "SEA", "away_team": "ARI", "event_id": "e_ari_sea",
+                 "total": 44.0, "home_spread": -3.0}
+            ],
+            usage_players=usage_players,
+            rosters={},
+            tapes={"ARI": {"opp_rush_yards_allowed": 120.0},
+                   "SEA": {"opp_rush_yards_allowed": 120.0}},
+            weather_records=[],
+            # Ruled out on SEA, but only ARI carries a usage profile for the name.
+            inactives_by_team={"SEA": ["Chris Rodriguez"]},
+            date_str="2026-10-18",
+        )
+
+    sea_rb = {"player": "Zach Charbonnet", "team": "SEA", "position": "RB",
+              "rush_yds_pg": 26.0, "carries_pg": 6.0}
+    ari_homonym = {"player": "Chris Rodriguez Jr.", "team": "ARI", "position": "RB",
+                   "rush_yds_pg": 70.0, "carries_pg": 15.0}
+
+    def charbonnet(e: MatchupRankingsEngine) -> float:
+        return {c.player: c for c in e.evaluate_rbs()}["Zach Charbonnet"].matchup_proj
+
+    assert charbonnet(engine([sea_rb, ari_homonym])) == charbonnet(engine([sea_rb]))
