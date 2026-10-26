@@ -68,6 +68,7 @@ LEGACY_ROLES = (LEGACY_ROLE, HELPER_ROLE)
 ROLES = (*PREGAME_ROLES, NFLVERSE_ROLE, TAPE_ROLE, *LEGACY_ROLES)
 REQUIRED_SLATE_ROLES = tuple(PREGAME_ROLES)
 SOURCES = ("outlier_api", "run_writer", "nflverse", "tape", "legacy_disk")
+RECORDED_VIA = ("pipeline", "catch_up")
 
 _SLATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(_[A-Za-z0-9_-]+)?$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -102,6 +103,10 @@ class ArchiveEntry:
     # exist only under runs/<run_id>/ (the writer skips copying them). Raw inputs
     # are archived under their own roles and never listed here.
     bundle_only: list[str] | None = None
+    # Who recorded this entry: ``pipeline`` (the run itself, right after commit) or
+    # ``catch_up`` (an operator or script, later). ``None`` marks an entry recorded
+    # before this field existed; the rebuild reports it as ``archived_late``.
+    recorded_via: str | None = None
 
     def key(self) -> tuple[str, str]:
         return (self.role, self.path)
@@ -185,8 +190,11 @@ def parse_entry(raw: Any) -> ArchiveEntry:
         if not (isinstance(bundle_only, list) and bundle_only
                 and all(isinstance(m, str) and m for m in bundle_only)):
             raise ArchiveError(f"bundle_only must be a non-empty list of strings: {bundle_only!r}")
+    recorded_via = raw.get("recorded_via")
+    if recorded_via is not None and recorded_via not in RECORDED_VIA:
+        raise ArchiveError(f"recorded_via must be one of {list(RECORDED_VIA)}, got {recorded_via!r}")
     return ArchiveEntry(
-        missing_raw=missing_raw, bundle_only=bundle_only,
+        missing_raw=missing_raw, bundle_only=bundle_only, recorded_via=recorded_via,
         slate=slate, role=role, path=path, sha256=sha, size=size,
         captured_at=_aware(raw.get("captured_at"), "captured_at"), source=source,
         season=season, run_id=run_id, fetched_at=fetched_at,
@@ -251,6 +259,7 @@ def record_file(
     season: Any, captured_at: Any, run_id: str | None = None, fetched_at: str | None = None,
     original_path: str | None = None, mtime: str | None = None,
     missing_raw: list[str] | None = None, bundle_only: list[str] | None = None,
+    recorded_via: str | None = None,
 ) -> tuple[ArchiveEntry, bool]:
     """Append one entry for ``path``. Returns ``(entry, newly_recorded)``.
 
@@ -272,6 +281,7 @@ def record_file(
         "original_path": original_path, "mtime": mtime,
         **({"missing_raw": list(missing_raw)} if missing_raw else {}),
         **({"bundle_only": list(bundle_only)} if bundle_only else {}),
+        **({"recorded_via": recorded_via} if recorded_via else {}),
     })
     mpath = manifest_path(root)
     mpath.parent.mkdir(parents=True, exist_ok=True)
@@ -308,7 +318,8 @@ def _empty_result() -> RecordResult:
 
 
 def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
-               *, published: bool | None = None) -> RecordResult:
+               *, published: bool | None = None,
+               recorded_via: str = "catch_up") -> RecordResult:
     """Record a committed run bundle's pregame feeds and its manifest.
 
     The run manifest is recorded last. Raw files that could not be archived are
@@ -318,6 +329,9 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
 
     Each raw file must still match the sha256 the run manifest sealed, so a file
     edited after the run is never archived as that run's capture.
+
+    ``recorded_via`` is stamped on every new entry. The pipeline passes ``pipeline``
+    when it archives its own committed run; everything else is a ``catch_up``.
     """
     root = Path(nfl_dir)
     run_dir = root / "runs" / run_id
@@ -365,7 +379,8 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
                 root, f, role=role, slate=slate_key, season=season, captured_at=captured,
                 run_id=run_id, source="run_writer" if role == "run_manifest" else "outlier_api",
                 missing_raw=list(result.missing) if role == "run_manifest" else None,
-                bundle_only=bundle_only if role == "run_manifest" else None)
+                bundle_only=bundle_only if role == "run_manifest" else None,
+                recorded_via=recorded_via)
         except ArchiveConflict as exc:
             result.conflicts.append(str(exc))
             continue
@@ -373,7 +388,8 @@ def record_run(nfl_dir: Path | str, run_id: str, slate: str | None = None,
             result.missing.append(f"{run_id}/{name}: {exc}")
             continue
         (result.recorded if new else result.already).append(entry)
-    _record_run_tape(root, run_id, manifest, slate_key, season, captured, result)
+    _record_run_tape(root, run_id, manifest, slate_key, season, captured, result,
+                     recorded_via)
     return result
 
 
@@ -401,7 +417,8 @@ def _tape_candidates(root: Path) -> list[Path]:
 
 
 def _record_run_tape(root: Path, run_id: str, manifest: dict[str, Any], slate: Any,
-                     season: Any, captured: Any, result: RecordResult) -> None:
+                     season: Any, captured: Any, result: RecordResult,
+                     recorded_via: str | None = None) -> None:
     """Copy the tape this run admitted into ``archive/tape/<sha256>/<name>``.
 
     The run manifest's ``sources`` holds the admitted tape's sha256
@@ -424,7 +441,8 @@ def _record_run_tape(root: Path, run_id: str, manifest: dict[str, Any], slate: A
         try:
             _write_once(dest, data)
             entry, new = record_file(root, dest, role=TAPE_ROLE, slate=slate, season=season,
-                                     captured_at=captured, run_id=run_id, source="tape")
+                                     captured_at=captured, run_id=run_id, source="tape",
+                                     recorded_via=recorded_via)
         except ArchiveConflict as exc:
             result.conflicts.append(str(exc))
             return
