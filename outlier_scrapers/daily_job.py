@@ -241,10 +241,15 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
 
 
 def run_pack(
-    leagues: list[str], target_date: str | None = None, feedback_db: Path | None = None
+    leagues: list[str],
+    target_date: str | None = None,
+    feedback_db: Path | None = None,
+    run_id: str | None = None,
 ) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
+    if run_id:
+        args.extend(["--run-id", run_id])
     if target_date:
         args.extend(["--date", target_date])
     if feedback_db:
@@ -259,12 +264,13 @@ def run_pack(
 def ingest_pending_settlements(
     inbox_dir: Path | None = None,
     db_path: Path | None = None,
+    run_id: str | None = None,
 ) -> dict | None:
     """Import result-feed CSVs before building the next slate."""
     inbox = inbox_dir or PROJECT_ROOT / "calibration" / "settlements" / "inbox"
     db = db_path or feedback.DEFAULT_DB_PATH
     try:
-        stats = feedback.import_settlement_inbox(inbox, db)
+        stats = feedback.import_settlement_inbox(inbox, db, run_id=run_id)
     except (OSError, csv.Error, feedback.FeedbackError, ValueError) as exc:
         logger.error("Settlement ingestion failed: %s", exc)
         return None
@@ -283,6 +289,7 @@ def collect_completed_results(
     output_dir: Path | None = None,
     *,
     lookback_days: int = 3,
+    run_id: str | None = None,
 ) -> dict:
     """Grade completed ledger rows without blocking a new-slate refresh on feed downtime."""
     db = db_path or feedback.DEFAULT_DB_PATH
@@ -293,6 +300,7 @@ def collect_completed_results(
             leagues=leagues,
             lookback_days=lookback_days,
             output_dir=output,
+            run_id=run_id,
         )
     except (
         OSError,
@@ -462,6 +470,7 @@ def _run_pre_pack_maintenance(
             args.feedback_db,
             args.results_output,
             lookback_days=args.results_lookback_days,
+            run_id=getattr(args, "run_id", None),
         )
 
     settlement_stats = {
@@ -474,7 +483,9 @@ def _run_pre_pack_maintenance(
         "updated_count": 0,
     }
     if not args.skip_settlement_ingest:
-        imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
+        imported = ingest_pending_settlements(
+            args.settlement_inbox, args.feedback_db, run_id=getattr(args, "run_id", None)
+        )
         if imported is None:
             return 1, result_collection, settlement_stats, {}, {}
         settlement_stats = imported
@@ -525,7 +536,12 @@ def _desk_steps_for_profile(profile: str) -> list[str]:
 def _run_pack_and_desk(
     args: argparse.Namespace, leagues: list[str]
 ) -> tuple[Path | None, str, int | None]:
-    pack_dir = run_pack(leagues, target_date=args.date, feedback_db=args.feedback_db)
+    pack_dir = run_pack(
+        leagues,
+        target_date=args.date,
+        feedback_db=args.feedback_db,
+        run_id=getattr(args, "run_id", None),
+    )
     if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
         return None, args.analysis_profile, None
@@ -598,7 +614,7 @@ def _finalize_run(
 
     manifest = pack_manifest.build_manifest_v2(
         pack_dir,
-        run_id=f"{pack_dir.name}-{int(time.time())}",
+        run_id=getattr(args, "run_id", None) or f"{pack_dir.name}-{int(time.time())}",
         timestamp=datetime.now(timezone.utc).isoformat(),
         leagues=leagues,
         profile=profile,
@@ -627,7 +643,13 @@ def _finalize_run(
     return final_code
 
 
+def _new_run_id(target_date: str | None) -> str:
+    day = target_date or datetime.now().astimezone().date().isoformat()
+    return f"{day}-{int(time.time())}"
+
+
 def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
+    args.run_id = _new_run_id(args.date)
     early, result_collection, settlement_stats, feedback_maintenance, blend_refit = (
         _run_pre_pack_maintenance(args, leagues)
     )
@@ -751,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
                     t30_pack_dir,
                     feedback_db=args.feedback_db or feedback.DEFAULT_DB_PATH,
                     force=args.force_t30,
+                    run_id=f"t30-{_new_run_id(None)}",
                 )
             except Exception as exc:
                 logger.error("T-30 repricing failed: %s", exc)
