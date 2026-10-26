@@ -30,7 +30,7 @@ def test_restored_versions_load_the_committed_values(tmp_path):
         assert loader(tmp_path / name) == json.loads(_committed(name).decode("utf-8"))
         pointer = calibration_store.read_pointer(tmp_path / name)
         assert pointer["run_id"] == restore.RUN_ID
-        assert pointer["source"].startswith(f"git:{restore.COMMITTED_BLOBS[name]}")
+        assert pointer["source"] == f"git:{restore.COMMITTED_BLOBS[name]}"
 
 
 def test_restore_never_writes_the_live_files_and_is_idempotent(tmp_path):
@@ -46,7 +46,12 @@ def test_restore_never_writes_the_live_files_and_is_idempotent(tmp_path):
 
 
 def test_restore_refuses_a_blob_that_is_not_the_committed_one(tmp_path, monkeypatch):
-    monkeypatch.setitem(restore.COMMITTED_BLOBS, "blend_weights.json", "0000000")
+    # the right 7-character prefix is not enough: the whole blob id must match
+    monkeypatch.setitem(
+        restore.COMMITTED_BLOBS,
+        "blend_weights.json",
+        restore.COMMITTED_BLOBS["blend_weights.json"][:7] + "0" * 33,
+    )
     with pytest.raises(restore.RestoreError, match="expected the committed"):
         restore.restore(REPO, "HEAD", tmp_path)
     assert not (tmp_path / "versions").exists()

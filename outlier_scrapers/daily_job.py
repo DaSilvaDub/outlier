@@ -19,7 +19,9 @@ from .otp_fetcher import fetch_and_write_otp
 from . import pack
 from . import feedback
 from . import probability_blend
+from . import stake_calibration
 from . import feed_health
+from . import calibration_store
 from . import pack_manifest
 from . import refresh_plan
 from . import results
@@ -606,6 +608,12 @@ def _finalize_run(
             "settlement_ingest": settlement_stats,
             "result_collection": result_collection,
             "blend_refit": blend_refit,
+            "calibration": calibration_store.run_record(
+                {
+                    "blend_weights": probability_blend.DEFAULT_WEIGHTS_PATH,
+                    "stake_calibration": stake_calibration.DEFAULT_ARTIFACT_PATH,
+                }
+            ),
             "feedback_maintenance": feedback_maintenance,
             "desk_feedback": desk_feedback,
         },

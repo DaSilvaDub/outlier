@@ -167,7 +167,65 @@ def resolve_artifact_path(live_path: Path) -> Path:
             f"Calibration version {version} does not match its pointer hash "
             f"(pointer {pointer['sha256'][:12]}, file {actual[:12]})."
         )
+    if not _in_history(live_path, pointer):
+        raise CalibrationVersionError(
+            f"Calibration pointer {pointer_path(live_path)} names {pointer['version_file']} "
+            f"({actual[:12]}), which {POINTER_HISTORY_NAME} never recorded as published. "
+            "Only a version published through publish_version is accepted."
+        )
     return version
+
+
+def _in_history(live_path: Path, pointer: Mapping[str, Any]) -> bool:
+    history = Path(live_path).parent / POINTER_HISTORY_NAME
+    if not history.is_file():
+        return False
+    for number, line in enumerate(history.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise CalibrationVersionError(f"{history} line {number} is not JSON: {exc}") from exc
+        if (
+            isinstance(entry, dict)
+            and entry.get("version_file") == pointer["version_file"]
+            and entry.get("sha256") == pointer["sha256"]
+        ):
+            return True
+    return False
+
+
+def run_record(live_paths: Mapping[str, Path]) -> dict[str, Any]:
+    """What each calibration artifact was for a run, for the run's manifest.
+
+    Never raises: a pointer that fails verification is recorded as ``invalid`` with
+    the reason (the readers already refuse it; the manifest must still be written).
+    """
+    record: dict[str, Any] = {"directory": str(calibration_dir()), "artifacts": {}}
+    for label, live in live_paths.items():
+        live = Path(live)
+        entry: dict[str, Any]
+        try:
+            pointer = read_pointer(live)
+            resolved = resolve_artifact_path(live)
+            if pointer is not None:
+                entry = {
+                    "status": "pointer",
+                    "sha256": pointer["sha256"],
+                    "version_file": pointer["version_file"],
+                    "published_at": pointer.get("published_at"),
+                    "published_by_run_id": pointer.get("run_id"),
+                    "source": pointer.get("source"),
+                }
+            elif resolved.is_file():
+                entry = {"status": "legacy_live_file", "sha256": sha256_file(resolved)}
+            else:
+                entry = {"status": "missing"}
+        except CalibrationVersionError as exc:
+            entry = {"status": "invalid", "error": str(exc)}
+        record["artifacts"][label] = entry
+    return record
 
 
 def current_sha256(live_path: Path) -> str | None:
