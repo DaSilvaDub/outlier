@@ -27,6 +27,11 @@ REAL_CALIBRATION_DIRS = tuple(
 BLEND = {"schema_version": probability_blend.SCHEMA_VERSION, "status": "active", "global": {"n": 1}}
 
 
+def _tree(directory: Path) -> list[str]:
+    """Every file under ``directory`` (empty when it does not exist yet)."""
+    return sorted(str(p) for p in directory.rglob("*")) if directory.exists() else []
+
+
 def _live(tmp_path: Path) -> Path:
     return tmp_path / "calibration" / "blend_weights.json"
 
@@ -44,11 +49,12 @@ def test_blend_write_to_real_calibration_is_refused_and_creates_nothing(real_dir
 
 @pytest.mark.parametrize("real_dir", REAL_CALIBRATION_DIRS, ids=str)
 def test_stake_write_to_real_calibration_is_refused(real_dir):
+    before = _tree(real_dir / "versions")
     with pytest.raises(calibration_store.CalibrationWriteRefused):
         stake_calibration.write_stake_calibration_artifact(
             {"schema_version": 1, "status": "active"}, real_dir / "stake_calibration.json"
         )
-    assert not (real_dir / "versions" / "stake_calibration").exists()
+    assert _tree(real_dir / "versions") == before
 
 
 @pytest.mark.parametrize("real_dir", REAL_CALIBRATION_DIRS, ids=str)
@@ -75,6 +81,7 @@ def test_tests_run_against_a_temporary_calibration_dir():
 
 def test_symlinked_calibration_dir_pointing_at_real_dir_is_refused(tmp_path):
     real_dir = REAL_CALIBRATION_DIRS[0]
+    before = _tree(real_dir / "versions")
     link = tmp_path / "calibration"
     try:
         os.symlink(real_dir, link, target_is_directory=True)
@@ -82,9 +89,7 @@ def test_symlinked_calibration_dir_pointing_at_real_dir_is_refused(tmp_path):
         pytest.skip("symlinks unavailable")
     with pytest.raises(calibration_store.CalibrationWriteRefused):
         probability_blend.write_weight_artifact(BLEND, link / "blend_weights.json")
-    assert not (real_dir / "versions" / "blend_weights").exists() or not any(
-        (real_dir / "versions" / "blend_weights").glob("*")
-    )
+    assert _tree(real_dir / "versions") == before
 
 
 # --- write-once versions and the pointer ------------------------------------------

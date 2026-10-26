@@ -1,0 +1,8 @@
+{
+  "published_at": "2026-10-26T00:35:58.024837+00:00",
+  "run_id": "restore-committed-weights",
+  "schema_version": 1,
+  "sha256": "d99785acf02c1ad2f801a297e58ff14b5b74d9c1b45dfafe458438cfb623dff6",
+  "source": "git:3e313d73f8976129b64d4384520520d2c9db48f6",
+  "version_file": "versions/blend_weights/blend_weights.d99785acf02c.json"
+}
