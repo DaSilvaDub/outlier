@@ -378,6 +378,15 @@ def test_missing_archived_weather_is_missing_and_labelled():
     assert inputs.refused == ["weather"]
 
 
+def test_only_an_admitted_tape_withholds_the_injury_label():
+    """``archived`` is the one tape value that explains nothing: the replay used it."""
+    base = {"nflverse": "pinned", "weather": "archived"}
+    assert "evidence_changed:injury_weather" not in rb.context_labels({**base, "tape": "archived"})
+    for value in ("archived_refused", "unavailable"):
+        labels = rb.context_labels({**base, "tape": value})
+        assert labels["evidence_changed:injury_weather"] == ["evidence_changed:injury"], value
+
+
 # --- archived tape role (#258) ----------------------------------------------------------
 
 def _tape_source(nfl: Path, m: dict[str, Any]) -> dict[str, Any]:
@@ -580,6 +589,35 @@ def test_unstamped_archived_tape_with_a_fresh_copy_is_refused_and_labelled(tmp_p
     m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
     src = _tape_source(nfl, m)
     assert src["status"] == "REFUSED" and "after as_of" in src["reason"]
+    # Staged but not admitted: the manifest must not claim the tape as evidence used.
+    assert m["evidence_sources"]["tape"] == "archived_refused"
+
+
+def test_refused_archived_tape_labels_injury_like_a_missing_one(tmp_path):
+    """A staged tape the replay refuses must still explain the injury pillar.
+
+    The original's unstamped tape lists Mahomes Out (injury pillar CONTRADICTS) and
+    is archived, so the rebuild stages it -- but its bytes carry no date and the
+    staged copy's mtime is the rebuild's own clock, so phase 1's point-in-time gate
+    refuses it and the pillar becomes MISSING. Those differences are caused by the
+    rebuild having no usable tape, so they carry ``evidence_changed:injury``
+    exactly as they do when nothing was archived.
+    """
+    tape_body = snap.frozen_tape(FIXTURES_DIR)  # unstamped: no as_of/fetched_at_utc
+    tape_body["inactive"] = {"KC": ["Patrick Mahomes"]}
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    tape.write_text(json.dumps(tape_body), encoding="utf-8")
+    nfl, _ = live_original(tmp_path)
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert m["evidence_sources"]["tape"] == "archived_refused"
+    assert _tape_source(nfl, m)["status"] == "REFUSED"
+    comp = json.loads((nfl / "versions" / "r1" / "comparison.json").read_text("utf-8"))
+    changed = [d for d in comp["differences"] if "evidence_changed:injury_weather" in d["causes"]]
+    assert changed, comp["cause_counts"]  # a real difference: the original had the tape
+    assert all("evidence_changed:injury" in d["causes"] for d in changed)
 
 
 def _ctx_replay() -> Any:

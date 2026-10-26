@@ -422,7 +422,9 @@ def context_labels(sources: dict[str, str]) -> dict[str, list[str]]:
     from what the original run fetched, so ``evidence_changed:nflverse`` goes on
     every opportunity, matchup or probability difference. Weather and the tape
     (injuries) feed the ``injury_weather`` pillar. They are labelled when the
-    rebuild had no archived copy.
+    rebuild had no archived copy, and the tape also when the replay refused the
+    archived copy (``archived_refused``) -- either way the replay priced those
+    picks without it.
     """
     out: dict[str, list[str]] = {
         "evidence_changed:opportunity": ["evidence_changed:nflverse"],
@@ -508,10 +510,24 @@ def rebuild_slate(
             f"publication={summary.get('publication')!r}), not a bundle-only replay; outputs "
             f"left in {out} for inspection")
 
+    # Staging an archived tape is not the same as the replay using it: phase 1's
+    # point-in-time gate still refuses one whose bytes carry no date, because the
+    # staged copy's mtime is the rebuild's own clock. Report what the replay
+    # admitted, so context_labels explains the injury pillar instead of claiming
+    # the tape was evidence the rebuild used.
+    rebuilt_tape = next((s for s in rebuilt_manifest.get("sources") or []
+                         if isinstance(s, dict) and s.get("name") == "tape"), None)
+    tape_admitted = rebuilt_tape is not None and rebuilt_tape.get("status") == "AVAILABLE"
+    if tape_entry is None:
+        tape_source = "unavailable"
+    elif tape_admitted:
+        tape_source = "archived"
+    else:
+        tape_source = "archived_refused"
     sources = {
         "nflverse": "pinned" if nflverse_used else "unavailable",
         "weather": "archived" if weather is not None else "unavailable",
-        "tape": "archived" if tape_entry is not None else "unavailable",
+        "tape": tape_source,
     }
     manifest: dict[str, Any] = {
         "rebuild_id": rid,
