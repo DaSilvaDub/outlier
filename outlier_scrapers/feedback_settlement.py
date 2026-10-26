@@ -329,6 +329,8 @@ def _computed_pnl(result: str, units: float, decimal_price: float | None, *, pla
 def import_settlements(
     db_path_or_conn: Path | str | sqlite3.Connection,
     settlement_data: list[dict[str, Any]],
+    *,
+    run_id: str | None = None,
 ) -> dict[str, int]:
     now = _utc_now()
     summary = {
@@ -469,8 +471,8 @@ def import_settlements(
                     settlement_id, decision_id, snapshot_id, outcome_id,
                     event_id, market_id, actual_result, win_loss_push,
                     closing_line, closing_price, clv_line, clv_price, pnl,
-                    would_have_result, settled_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    would_have_result, settled_at, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     settlement_id,
@@ -488,6 +490,7 @@ def import_settlements(
                     pnl,
                     would_have,
                     now,
+                    run_id,
                 ),
             )
             summary["updated_count"] += 1
@@ -498,10 +501,12 @@ def import_settlements(
 def import_settlement_file(
     input_path: Path,
     db_path: Path = DEFAULT_DB_PATH,
+    *,
+    run_id: str | None = None,
 ) -> dict[str, int]:
     """Read and import one settlement CSV using the public CLI contract."""
     rows = _read_csv(Path(input_path), required=("win_loss_push",))
-    return import_settlements(db_path, rows)
+    return import_settlements(db_path, rows, run_id=run_id)
 
 
 def import_settlement_inbox(
@@ -509,6 +514,7 @@ def import_settlement_inbox(
     db_path: Path = DEFAULT_DB_PATH,
     *,
     archive_dir: Path | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Import pending settlement CSVs, archiving only fully matched files.
 
@@ -530,7 +536,7 @@ def import_settlement_inbox(
         return summary
     for input_path in sorted(inbox.glob("*.csv")):
         summary["file_count"] += 1
-        stats = import_settlement_file(input_path, db_path)
+        stats = import_settlement_file(input_path, db_path, run_id=run_id)
         for key in ("unmatched_count", "ambiguous_count", "duplicate_count", "updated_count"):
             summary[key] += stats[key]
         if stats["unmatched_count"] or stats["ambiguous_count"]:

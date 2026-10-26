@@ -734,6 +734,7 @@ def run_t30_reprice(
     now: datetime | None = None,
     force: bool = False,
     refresh_runner: RefreshRunner = refresh.main,
+    run_id: str | None = None,
 ) -> T30RunResult:
     pack_dir = Path(pack_dir)
     if not pack_dir.is_dir():
@@ -798,6 +799,7 @@ def run_t30_reprice(
             feedback_db,
             recorded_pack_path=pack_dir,
             connection=conn,
+            run_id=run_id,
         )
         backup_dir = pack._swap_staged_pack(staging_dir, pack_dir)
         published = True

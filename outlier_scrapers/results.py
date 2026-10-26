@@ -829,6 +829,7 @@ def collect_and_import(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     now: datetime | None = None,
     fetch_json: Callable[[str], dict[str, Any]] = _fetch_json,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     feedback.initialize_database(db_path)
@@ -837,7 +838,7 @@ def collect_and_import(
             conn, leagues, lookback_days=lookback_days, now=current, fetch_json=fetch_json
         )
         imported = (
-            feedback.import_settlements(conn, rows)
+            feedback.import_settlements(conn, rows, run_id=run_id)
             if rows
             else {
                 "unmatched_count": 0,

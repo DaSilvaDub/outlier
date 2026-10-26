@@ -576,6 +576,11 @@ def main(argv: Sequence[str] | None = None) -> Path:
     parser.add_argument("--top-signal-n", type=int, default=10)
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Daily run id recorded on ledger writes; omit only for ad-hoc builds.",
+    )
+    parser.add_argument(
         "--blend-weights",
         type=Path,
         default=probability_blend.DEFAULT_WEIGHTS_PATH,
@@ -682,6 +687,7 @@ def main(argv: Sequence[str] | None = None) -> Path:
                 feedback_db,
                 recorded_pack_path=out_dir,
                 connection=conn,
+                run_id=args.run_id,
             )
             backup_dir = _swap_staged_pack(staging_dir, out_dir)
             published = True

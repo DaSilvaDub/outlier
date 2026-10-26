@@ -184,7 +184,7 @@ def test_ingest_pending_settlements_routes_to_feedback_inbox(monkeypatch, tmp_pa
     }
     seen = {}
 
-    def fake_import(inbox, db):
+    def fake_import(inbox, db, run_id=None):
         seen["args"] = (inbox, db)
         return expected
 
@@ -201,7 +201,7 @@ def test_collect_completed_results_routes_to_results_module(monkeypatch, tmp_pat
     expected = {"settlement_rows": 2, "updated_count": 2}
     seen = {}
 
-    def fake_collect(db, *, leagues, lookback_days, output_dir):
+    def fake_collect(db, *, leagues, lookback_days, output_dir, run_id=None):
         seen["args"] = (db, leagues, lookback_days, output_dir)
         return expected
 
@@ -786,7 +786,7 @@ def test_t30_only_runs_under_daily_writer_lock(tmp_path, monkeypatch):
         lambda _lock: calls.append("release"),
     )
 
-    def fake_t30(path, *, feedback_db, force):
+    def fake_t30(path, *, feedback_db, force, run_id=None):
         calls.append(("t30", path, feedback_db, force))
         return type("Result", (), {"completed": True, "reason": "due"})()
 
