@@ -302,3 +302,85 @@ def test_daily_refit_aborts_on_a_refused_write_or_bad_pointer(tmp_path, monkeypa
     monkeypatch.setattr(daily_job.feedback, "fit_blend_weights", fail)
     with pytest.raises(type(error)):
         daily_job.refit_blend_weights(db, tmp_path / "blend_weights.json")
+
+
+# --- a pointer is only accepted for a version publish_version recorded ------------
+
+def test_pointer_to_a_version_that_was_never_published_is_refused(tmp_path):
+    live = _live(tmp_path)
+    calibration_store.publish_version(BLEND, live)
+    other = dict(BLEND, status="hand_made")
+    data = calibration_store._canonical_bytes(other)
+    digest = calibration_store.sha256_bytes(data)
+    version = calibration_store.versions_dir(live) / f"blend_weights.{digest[:12]}.json"
+    version.write_bytes(data)  # a valid file, but never published
+    pointer = json.loads(calibration_store.pointer_path(live).read_text(encoding="utf-8"))
+    pointer.update(version_file=version.relative_to(live.parent).as_posix(), sha256=digest)
+    calibration_store.pointer_path(live).write_text(json.dumps(pointer), encoding="utf-8")
+    with pytest.raises(calibration_store.CalibrationVersionError, match="never recorded"):
+        probability_blend.load_weight_artifact(live)
+
+
+def test_pointer_with_no_history_file_is_refused(tmp_path):
+    live = _live(tmp_path)
+    calibration_store.publish_version(BLEND, live)
+    (live.parent / calibration_store.POINTER_HISTORY_NAME).unlink()
+    with pytest.raises(calibration_store.CalibrationVersionError, match="never recorded"):
+        probability_blend.load_weight_artifact(live)
+
+
+def test_corrupt_history_line_is_an_error(tmp_path):
+    live = _live(tmp_path)
+    calibration_store.publish_version(BLEND, live)
+    history = live.parent / calibration_store.POINTER_HISTORY_NAME
+    history.write_text("{not json\n" + history.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(calibration_store.CalibrationVersionError, match="not JSON"):
+        probability_blend.load_weight_artifact(live)
+
+
+# --- the run record for the manifest ----------------------------------------------
+
+def test_run_record_names_pointer_versions_legacy_files_and_failures(tmp_path):
+    calibration = tmp_path / "calibration"
+    calibration.mkdir()
+    blend, stake, missing = (calibration / n for n in ("blend_weights.json", "stake_calibration.json", "x.json"))
+    version = calibration_store.publish_version(BLEND, blend, run_id="r1", source="test")
+    stake.write_text('{"a": 1}\n', encoding="utf-8")
+    record = calibration_store.run_record({"blend": blend, "stake": stake, "none": missing})
+    assert record["directory"] == str(calibration_store.calibration_dir())
+    assert record["artifacts"]["blend"]["status"] == "pointer"
+    assert record["artifacts"]["blend"]["sha256"] == calibration_store.sha256_file(version)
+    assert record["artifacts"]["blend"]["published_by_run_id"] == "r1"
+    assert record["artifacts"]["stake"] == {
+        "status": "legacy_live_file",
+        "sha256": calibration_store.sha256_file(stake),
+    }
+    assert record["artifacts"]["none"] == {"status": "missing"}
+    version.write_text("tampered", encoding="utf-8")
+    broken = calibration_store.run_record({"blend": blend})["artifacts"]["blend"]
+    assert broken["status"] == "invalid" and "pointer hash" in broken["error"]
+
+
+def test_finalize_run_puts_the_calibration_record_in_the_manifest(tmp_path, monkeypatch):
+    import argparse
+
+    from outlier_scrapers import daily_job
+
+    live = _live(tmp_path)
+    live.parent.mkdir(parents=True)
+    calibration_store.publish_version(BLEND, live, run_id="r1", source="test")
+    monkeypatch.setattr(probability_blend, "DEFAULT_WEIGHTS_PATH", live)
+    monkeypatch.setattr(stake_calibration, "DEFAULT_ARTIFACT_PATH", live.with_name("stake_calibration.json"))
+    monkeypatch.setattr(daily_job, "persist_desk_feedback", lambda *a, **k: {})
+    monkeypatch.setattr(daily_job, "_log_identity_audit", lambda *a, **k: None)
+    written = {}
+    monkeypatch.setattr(daily_job, "_atomic_write_manifest", lambda pack_dir, data: written.update(data))
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    daily_job._finalize_run(
+        pack_dir, argparse.Namespace(feedback_db=tmp_path / "f.sqlite3"), ["nfl"], "full", 0, {}, {}, {}, {}
+    )
+    artifacts = written["calibration"]["artifacts"]
+    assert artifacts["blend_weights"]["status"] == "pointer"
+    assert artifacts["blend_weights"]["sha256"] == calibration_store.current_sha256(live)
+    assert artifacts["stake_calibration"] == {"status": "missing"}
