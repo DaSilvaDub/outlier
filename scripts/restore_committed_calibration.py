@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404 - runs only git with fixed arguments, never shell input
 import sys
 
 from outlier_scrapers import calibration_store, paths
@@ -34,7 +34,10 @@ class RestoreError(RuntimeError):
 
 
 def _git(repo: Path, *args: str) -> bytes:
-    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False)
+    # Fixed git subcommands; ``args`` are the literal rev-parse/show arguments built above.
+    done = subprocess.run(  # nosec B603 B607
+        ["git", "-C", str(repo), *args], capture_output=True, check=False
+    )
     if done.returncode != 0:
         raise RestoreError(f"git {' '.join(args)} failed: {done.stderr.decode(errors='replace').strip()}")
     return done.stdout
