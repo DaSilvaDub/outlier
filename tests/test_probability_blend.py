@@ -230,8 +230,9 @@ def test_write_weight_artifact_retries_access_denied(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", flaky)
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
     written = probability_blend.write_weight_artifact(artifact, output)
-    assert written == output
-    assert output.exists()
+    assert written.parent == tmp_path / "versions" / "blend_weights"
+    assert not output.exists()
+    assert probability_blend.load_weight_artifact(output) == artifact
     assert calls["n"] == 3
 
 

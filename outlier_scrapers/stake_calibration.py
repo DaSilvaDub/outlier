@@ -24,11 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import calibration_store, probability_blend
 from outlier_scrapers.sizing import compute_full_kelly
 
 SCHEMA_VERSION = 1
-DEFAULT_ARTIFACT_PATH = paths.PROJECT_ROOT / "calibration" / "stake_calibration.json"
+# Fixed at import from OUTLIER_CALIBRATION_DIR (see probability_blend.DEFAULT_WEIGHTS_PATH).
+DEFAULT_ARTIFACT_PATH = calibration_store.calibration_dir() / "stake_calibration.json"
 DEFAULT_SOURCE_PROBABILITY_COLUMN = "final_blended_prob"
 DEFAULT_MIN_SAMPLES = 30
 DEFAULT_PRIOR_STRENGTH = 30.0
@@ -463,20 +464,20 @@ def compute_artifact_fingerprint(artifact: Mapping[str, Any]) -> str:
 
 
 def write_stake_calibration_artifact(artifact: Mapping[str, Any], output_path: Path) -> Path:
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output_path.with_suffix(f"{output_path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(dict(artifact), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    """Save ``artifact`` as a new write-once version and point readers at it.
+
+    ``output_path`` names the live artifact (``stake_calibration.json``); it is
+    never overwritten. Returns the version file that now holds the artifact.
+    """
+    return calibration_store.publish_version(
+        artifact, Path(output_path), source="stake_calibration"
     )
-    temporary.replace(output_path)
-    return output_path
 
 
 def load_stake_calibration_artifact(
     path: Path = DEFAULT_ARTIFACT_PATH,
 ) -> dict[str, Any] | None:
-    path = Path(path)
+    path = calibration_store.resolve_artifact_path(Path(path))
     if not path.exists():
         return None
     try:

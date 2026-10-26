@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import calibration_store, paths, probability_blend
 
 DEFAULT_DB_PATH = paths.FEEDBACK_DB_PATH
 SCHEMA_VERSION = 5
@@ -549,6 +549,8 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     from outlier_scrapers.feedback_capture import _validate_decision_snapshot_identities
 
     db_path = Path(db_path)
+    # Refuse before anything is created or opened for writing (protected dirs in tests).
+    calibration_store.refuse_forbidden_write(db_path)
     # Every writer passes through here; never create an empty local ledger while
     # the pre-migration one still holds the history.
     paths.require_migrated_ledger(db_path)
