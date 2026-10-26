@@ -1,6 +1,7 @@
 # HANDOFF — 2026-10-26 (Antigravity, Week 8 Postgame Forensic Calibration & Roster Truth)
 
 - **Branch**: `feat/week8-calibration-and-roster-rules`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/311
 - **Files Touched**:
   - `outlier_nfl/roster.py`: Added Isaiah Likely (TE, NYG) and J.J. McCarthy (QB, NYG) to `OFFSEASON_MOVES_2026` and `NFL_2026_FULL_DEPTH_CHARTS["NYG"]`. Replaced stale Russell Wilson reference.
   - `outlier_nfl/best_bets.py`: Implemented `SAME_TEAM_RUSH_CANNIBALIZATION_GATE` (`RULE-NFL-041`) preventing dual rush overs on the same team from both being `VALIDATED`; the lower-ranked prop is quarantined to `PROVISIONAL` with zero stake and tagged `correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER`.
