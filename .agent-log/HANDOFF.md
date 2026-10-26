@@ -1,3 +1,22 @@
+# HANDOFF — 2026-10-26 (Antigravity, Week 8 Postgame Forensic Calibration & Roster Truth)
+
+- **Branch**: `feat/week8-calibration-and-roster-rules`
+- **Files Touched**:
+  - `outlier_nfl/roster.py`: Added Isaiah Likely (TE, NYG) and J.J. McCarthy (QB, NYG) to `OFFSEASON_MOVES_2026` and `NFL_2026_FULL_DEPTH_CHARTS["NYG"]`. Replaced stale Russell Wilson reference.
+  - `outlier_nfl/best_bets.py`: Implemented `SAME_TEAM_RUSH_CANNIBALIZATION_GATE` (`RULE-NFL-041`) preventing dual rush overs on the same team from both being `VALIDATED`; the lower-ranked prop is quarantined to `PROVISIONAL` with zero stake and tagged `correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER`.
+  - `outlier_nfl/calibration.py`: Added `TRENCH_DEFICIT_RUSH_HAIRCUT` and included `Likely` in tight-end coverage valve check.
+  - `tests/test_nfl_roster.py`: Added `test_isaiah_likely_and_jj_mccarthy_nyg_attribution` verifying NYG attribution and rejecting BAL/HOU/MIN.
+  - `tests/test_nfl_best_bets.py`: Added `test_same_team_rush_cannibalization_gate` verifying the same-team dual rush over constraint.
+  - `reports/NFL/2026-10-25_Week8_Postgame_Forensic_Calibration.md`: Complete 12-section forensic audit and rules report across 24 official predictions (+6.42 units, 66.7% win rate, 90% alt floor win rate).
+- **Verification**:
+  - `pytest tests/test_nfl_roster.py tests/test_nfl_best_bets.py tests/test_nfl_calibration.py`: 84 passed in 14.05s.
+  - Zero calls to paid reasoning models (fully offline).
+- **Next Steps**:
+  - Ready for PR creation or master review.
+  - Monitor Monday Night Football (DAL @ PHI) for post-game settlement and calibration.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.

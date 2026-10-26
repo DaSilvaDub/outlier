@@ -983,6 +983,23 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         else:
             seen_validated_players.add(pkey)
 
+    # RULE-NFL-041: Same-team rushing overs cannibalization gate.
+    # At most 1 VALIDATED rushing yardage/attempt over per team per game.
+    seen_validated_team_rush: set[tuple[str, str]] = set()
+    for pick in picks:
+        if pick["verdict"] != VALIDATED:
+            continue
+        market = str(pick.get("market") or "").upper()
+        pos = str(pick.get("position") or "").upper()
+        if market in ("RUSH_YDS", "RUSH_ATT") and pos == "OVER":
+            tkey = (str(pick.get("event_id") or ""), str(pick.get("team") or "").upper())
+            if tkey in seen_validated_team_rush:
+                pick["verdict"] = PROVISIONAL
+                pick["stake_fraction"] = 0.0
+                pick["gaps"].append("correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER")
+            else:
+                seen_validated_team_rush.add(tkey)
+
     picks.sort(key=_rank_key)
     for rank, pick in enumerate(picks, 1):
         pick["rank"] = rank

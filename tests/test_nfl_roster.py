@@ -384,3 +384,20 @@ def test_backup_with_more_quotes_is_not_promoted() -> None:
     assert taped["KC"]["starting_qb"] == "Patrick Mahomes"
     assert taped["KC"]["starting_qb_status"] == "probable"
     assert all(r["starting_qb_status"] != "confirmed" for r in taped.values())
+
+
+def test_isaiah_likely_and_jj_mccarthy_nyg_attribution() -> None:
+    from outlier_nfl.roster import verify_player_team_attribution, get_team_depth_chart
+    # Isaiah Likely is on the New York Giants (NYG), NOT on Houston (HOU) or Baltimore (BAL)
+    assert verify_player_team_attribution("Isaiah Likely", "NYG", {}, allow_static=True) is True
+    assert verify_player_team_attribution("Isaiah Likely", "HOU", {}, allow_static=True) is False
+    assert verify_player_team_attribution("Isaiah Likely", "BAL", {}, allow_static=True) is False
+
+    # J.J. McCarthy is on the New York Giants (NYG), NOT Minnesota (MIN)
+    assert verify_player_team_attribution("J.J. McCarthy", "NYG", {}, allow_static=True) is True
+    assert verify_player_team_attribution("J.J. McCarthy", "MIN", {}, allow_static=True) is False
+
+    # NYG Depth chart contains McCarthy as QB and Likely as TE
+    nyg_chart = get_team_depth_chart("NYG")
+    assert nyg_chart["starting_qb"] == "J.J. McCarthy"
+    assert nyg_chart["te"] == "Isaiah Likely"

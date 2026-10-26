@@ -692,6 +692,7 @@ def apply_game_script_calibration(
         if is_underdog_in_deficit_risk and is_full_game:
             if prop.market in ("RUSH_YDS", "RUSH_ATT") and prop.position == "OVER":
                 tags.append("DEFICIT_VOLUME_RISK")
+                tags.append("TRENCH_DEFICIT_RUSH_HAIRCUT")
                 vol_adj = -0.15  # 15% downward volume haircut
             elif prop.market in ("ANYTIME_TD", "REC_YDS", "REC", "RUSH_REC_YDS"):
                 tags.append("RESILIENT_GAME_SCRIPT_TARGET")
@@ -704,7 +705,7 @@ def apply_game_script_calibration(
                 if prop.market in ("REC_YDS", "REC"):
                     vol_adj = (vol_adj or 0.0) + 0.20
             # Check tight end safety valves
-            elif prop.market in ("REC_YDS", "REC") and any(te in prop.player_name for te in ("LaPorta", "Kincaid", "Kelce", "McBride", "Kittle", "Ferguson", "Hockenson", "Njoku", "Goedert")):
+            elif prop.market in ("REC_YDS", "REC") and any(te in prop.player_name for te in ("LaPorta", "Kincaid", "Kelce", "McBride", "Kittle", "Ferguson", "Hockenson", "Njoku", "Goedert", "Likely")):
                 tags.append("SHELL_COVERAGE_TARGET_UPGRADE")
                 vol_adj = (vol_adj or 0.0) + 0.15
             # Check vertical deep threats
