@@ -822,3 +822,77 @@ def test_admissibility_and_rebuild_never_touch_the_ledger(archived, monkeypatch)
     for mod in (rb, rc):
         src = inspect.getsource(mod)
         assert "feedback" not in src and "run_write_log" not in src
+
+
+# ---------------------------------------------------------------------------
+# Kickoff gate and path containment
+# ---------------------------------------------------------------------------
+
+def _edit_context(nfl: Path, run_id: str, **changes: Any) -> None:
+    """Change the original run's context and re-seal the pointer and archive entry."""
+    mp = nfl / "runs" / run_id / "manifest.json"
+    body = json.loads(mp.read_text(encoding="utf-8"))
+    for k, v in changes.items():
+        if v is rb:  # sentinel: drop the key
+            body["context"].pop(k, None)
+        else:
+            body["context"][k] = v
+    mp.write_text(json.dumps(body), encoding="utf-8")
+    new = hashlib.sha256(mp.read_bytes()).hexdigest()
+    _reseal_pointer(nfl, run_id, new)
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "run_manifest":
+            d["sha256"], d["size"] = new, mp.stat().st_size
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", [rb, None, "not a time", "2026-10-04T17:00:00"])
+def test_missing_naive_or_unparseable_first_kickoff_is_refused(archived, value):
+    nfl, run_id = archived
+    _edit_context(nfl, run_id, first_kickoff_utc=value)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("first_kickoff_utc" in r for r in v.reasons)
+    with pytest.raises(rb.RebuildRefused, match="first_kickoff_utc"):
+        rb.rebuild_slate(nfl, SLATE, clock=lambda: NOW)
+
+
+def test_as_of_at_or_after_first_kickoff_is_refused(archived):
+    nfl, run_id = archived
+    _edit_context(nfl, run_id, first_kickoff_utc="2026-10-04T14:00:00+00:00")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("not before first kickoff" in r for r in v.reasons)
+
+
+@pytest.mark.parametrize("bad", ["../outside/schedule.json", "/etc/hostname"])
+def test_archive_path_outside_the_nfl_directory_is_refused(archived, bad):
+    nfl, _ = archived
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "pregame_schedule":
+            d["path"] = bad
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible
+    assert any("not inside the NFL directory" in r or "outside the NFL directory" in r
+               or "not from runs/" in r for r in v.reasons)
+
+
+def test_symlink_out_of_the_nfl_directory_is_refused(archived, tmp_path):
+    nfl, run_id = archived
+    outside = tmp_path / "outside.json"
+    src = nfl / "runs" / run_id / "raw" / "schedule.json"
+    outside.write_bytes(src.read_bytes())
+    src.unlink()
+    try:
+        src.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("outside the NFL directory" in r for r in v.reasons)

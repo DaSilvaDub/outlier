@@ -116,8 +116,8 @@ def _run_tape_entry(root: Path, mine: list[ar.ArchiveEntry],
     if manifest_entry is None:
         return None
     try:
-        body = json.loads(ar.resolve_path(root, manifest_entry.path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        body = json.loads(_inside(root, manifest_entry.path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RebuildRefused):
         return None
     tape = next((s for s in body.get("sources") or []
                  if isinstance(s, dict) and s.get("name") == "tape"), None)
@@ -154,8 +154,8 @@ def _sealed_hash_problems(root: Path, run_id: str, mine: list[ar.ArchiveEntry],
         if not entry.path.startswith(prefix):
             problems.append(f"{role} was archived from {entry.path}, not from {prefix}")
         try:
-            on_disk = ar.sha256_file(ar.resolve_path(root, entry.path))
-        except OSError as exc:
+            on_disk = ar.sha256_file(_inside(root, entry.path))
+        except (OSError, RebuildRefused) as exc:
             problems.append(f"{role} unreadable: {exc}")
             continue
         if on_disk != entry.sha256:
@@ -175,9 +175,9 @@ def _original_problems(root: Path, run_id: str, mine: list[ar.ArchiveEntry]) -> 
     if manifest_entry is None:
         return ["the pointer's run is not archived"]
     try:
-        manifest_bytes = ar.resolve_path(root, manifest_entry.path).read_bytes()
+        manifest_bytes = _inside(root, manifest_entry.path).read_bytes()
         body = json.loads(manifest_bytes)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RebuildRefused) as exc:
         return [f"run manifest unreadable: {exc}"]
     ctx = body.get("context") or {}
     problems = _sealed_hash_problems(root, run_id, mine, manifest_bytes, body)
@@ -189,11 +189,31 @@ def _original_problems(root: Path, run_id: str, mine: list[ar.ArchiveEntry]) -> 
             "pregame run captured its own inputs")
     as_of, first = _parse(ctx.get("as_of_utc")), _parse(ctx.get("first_kickoff_utc"))
     if as_of is None:
-        problems.append("original run has no as_of_utc")
-    elif first is not None and as_of >= first:
+        problems.append("original run has no timezone-aware as_of_utc")
+    if first is None:
+        problems.append(
+            f"original run has no timezone-aware first_kickoff_utc ({ctx.get('first_kickoff_utc')!r}); "
+            "as_of cannot be shown to precede kickoff")
+    if as_of is not None and first is not None and as_of >= first:
         problems.append(f"original as_of {as_of.isoformat()} is not before first kickoff "
                         f"{first.isoformat()}")
     return problems
+
+
+def _inside(root: Path, entry_path: str) -> Path:
+    """``entry_path`` resolved under ``root``; anything that escapes ``root`` is refused.
+
+    ``archive.resolve_path`` also accepts absolute paths (legacy files archived in
+    place). A rebuild reads only archived bytes from inside the NFL directory, so
+    an absolute path, a ``..`` segment or a symlink out of ``root`` is refused.
+    """
+    p = Path(entry_path)
+    if p.is_absolute() or ".." in p.parts:
+        raise RebuildRefused(f"archive path {entry_path!r} is not inside the NFL directory")
+    full = (root / p).resolve()
+    if not full.is_relative_to(root.resolve()):
+        raise RebuildRefused(f"archive path {entry_path!r} resolves outside the NFL directory")
+    return full
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +221,7 @@ def _original_problems(root: Path, run_id: str, mine: list[ar.ArchiveEntry]) -> 
 # ---------------------------------------------------------------------------
 
 def _verified_bytes(root: Path, entry: ar.ArchiveEntry) -> bytes:
-    data = ar.resolve_path(root, entry.path).read_bytes()
+    data = _inside(root, entry.path).read_bytes()
     if hashlib.sha256(data).hexdigest() != entry.sha256:
         raise RebuildRefused(f"{entry.path} no longer matches its archived sha256")
     return data
