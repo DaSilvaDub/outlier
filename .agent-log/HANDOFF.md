@@ -1,3 +1,45 @@
+# HANDOFF — 2026-10-26 (Claude, daily debug review — rebuild tape evidence source)
+
+- **Branch**: `claude/inspiring-fermat-dskd2f`. **Files touched**:
+  `outlier_nfl/rebuild.py`, `tests/test_nfl_rebuild.py`.
+- **Fix**: `rebuild_slate()` derived `evidence_sources.tape` from whether an archived tape
+  was *staged* (`tape_entry is not None`), not from whether the replay *admitted* it. An
+  archived tape whose own bytes carry no `as_of_utc` / `fetched_at_utc` is dated by the
+  staged copy's mtime — the rebuild's own clock — so phase 1's point-in-time gate refuses
+  it (`tape REFUSED ... written <now> after as_of <slate>`), yet the rebuild manifest still
+  said `tape: "archived"`. Because `context_labels()` keys off that value, every injury
+  difference the refusal caused lost its `evidence_changed:injury` label, so
+  `comparison.md` attributed it to the model/code rather than to the rebuild having no
+  usable tape. The tape source is now `archived` only when the rebuilt run manifest's tape
+  source is `AVAILABLE`, `archived_refused` when staged but refused, `unavailable` when
+  nothing was archived. `context_labels()` already labels any non-`archived` value, so the
+  label follows.
+- **Verification**: `tests/test_nfl_rebuild.py` + `_compare` + `test_nfl_pipeline_inputs.py`
+  71 passed; `-k nfl` sweep 1171 passed / 3 skipped (5 failures, all
+  `ModuleNotFoundError: sqlalchemy`); offline suite 2227 passed / 52 skipped / 71 failed,
+  every failure tracing to absent `sqlalchemy` (135) or `google-genai` (6). mypy clean on
+  `outlier_scrapers outlier_nfl`; pyright clean on `rebuild.py`; ruff (project E4/E7/E9/F)
+  clean on both changed files. The two behavioural tests were confirmed RED before the fix
+  (`assert 'archived' == 'archived_refused'`, labels `[False, False, False]`). No reasoning
+  models or provider calls.
+- **Sandbox limitation**: PyPI is unreachable under this environment's network policy
+  (`pypi.org` is in `no_proxy` and DNS fails), so `sqlalchemy`, `numpy`, `openai`,
+  `anthropic`, `google-genai` and `python-dateutil` are absent; `structlog` was supplied as
+  a local import stub outside the repo on `PYTHONPATH` only to get past `tests/conftest.py`.
+  The 163 mypy errors seen under `mypy outlier_scrapers outlier_nfl` are all in
+  `outlier_nba` (pulled in transitively) and all numpy-typing artifacts of that gap. CI is
+  the authoritative run for the dependency-gated modules.
+- **Reported, not fixed** (needs a human call): `_stage_nflverse()` picks the *newest*
+  archived copy of each nflverse CSV and only marks it `post_as_of`, even when an
+  admissible earlier copy is in the archive (tested as intended at
+  `tests/test_nfl_rebuild.py:318`), so a point-in-time rebuild prefers data the original run
+  could not have seen; `rebuild_compare._match()` collapses duplicate same-line picks on the
+  rebuilt side into a dict, silently dropping one from the comparison;
+  `calibration_store.run_record()` says "Never raises" but `sha256_file` can raise `OSError`.
+- **Next steps**: review/merge this PR. Paid reasoning remains off.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
