@@ -302,14 +302,24 @@ class PinnedInputs:
         return out
 
 
-def _stage_nflverse(root: Path, out: Path, season: int,
-                    entries: list[ar.ArchiveEntry]) -> list[dict[str, Any]]:
+def _fetched_after(fetched_at: str | None, as_of: datetime | None) -> bool:
+    """True when the copy was fetched after ``as_of``, or cannot be shown to be earlier."""
+    got = _parse(fetched_at)
+    return got is None or as_of is None or got > as_of
+
+
+def _stage_nflverse(root: Path, out: Path, season: int, entries: list[ar.ArchiveEntry],
+                    as_of: datetime | None = None) -> list[dict[str, Any]]:
     """Copy the season's archived nflverse files into ``out/nflverse/`` under their names.
 
     For each CSV, the newest archived copy (by ``fetched_at``) is chosen, together
     with the sidecar from the same ``<sha256>`` folder. Each copy is checked against
     its manifest entry. #252's pinned loaders then verify that folder (sidecar hash
     and schema). ``archive/nflverse/`` itself and the default cache are never passed.
+
+    A copy fetched after the slate's ``as_of`` is still used (the archive may hold
+    nothing earlier) but is marked ``post_as_of``: its stats may include revisions
+    the original run could not have seen, so the effect must be visible, not silent.
     """
     from outlier_nfl.boxscore_nflverse import ensure_games_csv, ensure_week_stats_csv
 
@@ -333,7 +343,8 @@ def _stage_nflverse(root: Path, out: Path, season: int,
             if hashlib.sha256((dest_dir / Path(e.path).name).read_bytes()).hexdigest() != e.sha256:
                 raise RebuildRefused(f"staged copy of {e.path} does not match its entry")
             used.append({"name": Path(e.path).name, "archive_path": e.path,
-                         "sha256": e.sha256, "fetched_at": e.fetched_at})
+                         "sha256": e.sha256, "fetched_at": e.fetched_at,
+                         "post_as_of": _fetched_after(e.fetched_at, as_of)})
     names = {u["name"] for u in used}
     if f"stats_player_week_{season}.csv" in names:
         ensure_week_stats_csv(season, cache_dir=dest_dir, pinned=True)
@@ -442,7 +453,8 @@ def rebuild_slate(
     run_id = verdict.run_id or ""
 
     all_entries, _ = ar.read_manifest(ar.manifest_path(root))
-    nflverse_used = _stage_nflverse(root, out, season, all_entries)
+    nflverse_used = _stage_nflverse(root, out, season, all_entries,
+                                    _parse(ctx.get("as_of_utc")))
     csv_by_url: dict[str, bytes] = {}
     for u in nflverse_used:
         data = (out / "nflverse" / u["name"]).read_bytes()
@@ -491,6 +503,8 @@ def rebuild_slate(
         "as_of_utc": ctx["as_of_utc"],
         "inputs": [asdict(e) for e in verdict.entries],
         "nflverse_files": nflverse_used,
+        "nflverse_post_as_of": any(u["post_as_of"] for u in nflverse_used),
+        "nflverse_post_as_of_files": [u["name"] for u in nflverse_used if u["post_as_of"]],
         "evidence_sources": sources,
         "refused_sources": sorted(set(inputs.refused)),
         "rebuilt_run_id": summary["run_id"],

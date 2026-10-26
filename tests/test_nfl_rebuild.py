@@ -289,6 +289,38 @@ def test_newest_archived_nflverse_copy_is_used(archived, tmp_path):
     m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
     [f] = [f for f in m["nflverse_files"] if f["name"] == "stats_player_week_2026.csv"]
     assert f["sha256"] == hashlib.sha256(newer).hexdigest()
+    assert f["post_as_of"] is True  # fetched 10-05, slate as_of is 10-04 15:00Z
+
+
+def test_nflverse_copies_are_marked_before_or_after_as_of(archived, tmp_path):
+    """One copy before as_of (the archived 10-04 12:00Z) and one after (10-05)."""
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    nfl, _ = archived
+    before = rb.rebuild_slate(nfl, SLATE, rebuild_id="pre", clock=lambda: NOW)
+    assert all(f["post_as_of"] is False for f in before["nflverse_files"])
+    assert before["nflverse_post_as_of"] is False
+    assert "fetched after as_of" not in (nfl / "versions" / "pre" / "comparison.md").read_text("utf-8")
+
+    newer = STATS_CSV + b"P2,Rashee Rice,WR,2026,3,REG,2026_03_BAL_KC,KC,6,0.2,0,50,0\n"
+    cache = tmp_path / "late_cache"
+    cache.mkdir()
+    (cache / "stats_player_week_2026.csv").write_bytes(newer)
+    _write_meta(cache / "stats_player_week_2026.csv", CacheMeta(
+        url="https://x/s", fetched_at="2026-10-05T12:00:00+00:00",
+        sha256=hashlib.sha256(newer).hexdigest(), size=len(newer), rows=4))
+    ar.record_nflverse(nfl, cache, [2026])
+    after = rb.rebuild_slate(nfl, SLATE, rebuild_id="post", clock=lambda: NOW)
+    flags = {f["name"]: f["post_as_of"] for f in after["nflverse_files"]}
+    assert flags["stats_player_week_2026.csv"] is True
+    assert flags["games.csv"] is False  # the earlier copy is still the newest games.csv
+    assert after["nflverse_post_as_of"] is True
+    assert after["nflverse_post_as_of_files"] == [
+        "stats_player_week_2026.csv", "stats_player_week_2026.csv.meta.json"]
+    md = (nfl / "versions" / "post" / "comparison.md").read_text("utf-8")
+    assert "nflverse fetched after as_of" in md and "stats_player_week_2026.csv" in md
 
 
 def _rebuilt_sources(nfl: Path, m: dict[str, Any]) -> dict[str, str]:

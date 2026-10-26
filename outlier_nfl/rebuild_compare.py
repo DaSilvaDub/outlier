@@ -181,6 +181,10 @@ def render_markdown(report: dict[str, Any], header: dict[str, Any]) -> str:
              f"- Rebuilt run: `{header.get('rebuilt_run_id')}` (mode "
              f"{header.get('rebuilt_mode')}, bundle-only)",
              f"- Edge basis: {report['edge_basis']}",
+             *([f"- **nflverse fetched after as_of:** "
+                f"{', '.join(header.get('nflverse_post_as_of_files') or [])} "
+                "(stats may include later revisions)"]
+               if header.get("nflverse_post_as_of") else []),
              f"- Picks: original {report['original_picks']}, rebuilt {report['rebuilt_picks']}, "
              f"unchanged {report['unchanged']}, differences {len(report['differences'])}", "",
              "## Causes", ""]
