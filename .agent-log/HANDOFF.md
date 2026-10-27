@@ -1,3 +1,50 @@
+# HANDOFF — 2026-10-27 (Claude, daily debug review — WNBA postgame calibration misfires)
+
+- **Last Commit SHA**: `2348553` on `claude/inspiring-fermat-4phxrd`.
+  **PR**: https://github.com/DaSilvaDub/outlier/pull/314
+- **Files touched**: `outlier_scrapers/projections.py`, `outlier_scrapers/totals_model.py`,
+  `tests/test_projections.py`, `tests/test_totals_model.py`.
+- **Fixes** (both in the WNBA postgame calibrations from `a439629` / PR #313, merged this morning):
+  1. The 15% shooting-impairment discount tested `any(keyword in injury_flags)` and
+     `player_name in injury_flags` *independently*. `injury_flags` is the event-level report
+     for both teams (`pack_context.build_injuries` joins one `TEAM: Name (Status; Body)` chunk
+     per player with `|`), so a player listed with an ankle in a game where a teammate had a
+     wrist was cut 15%; the bare `"hand"` substring also matched `shorthanded` / `left-handed`
+     prose in the player's own entry. On a 30-min, 0.60 PTS/min player that is mean 19.80 ->
+     16.83 and `OVER 15.5` win_prob 0.667 -> 0.527. `_shooting_hand_injury()` now matches per
+     chunk, mirroring `slate_quality.pitcher_returning_from_il`, with word boundaries.
+  2. `backfill_totals_probabilities` only `break`ed on a September/October hit, so a
+     non-matching event date fell through to `as_of` (the run clock): an August game repriced
+     in an October run got the postseason 5.5pp Under tilt. The first date the row carries now
+     decides; the Sept/Oct window itself is unchanged.
+- **Verification**: both new tests confirmed RED pre-fix (source file stashed) and GREEN after.
+  `test_totals_model.py` 32 passed / 0 failed; all 9 `test_wnba*` in `test_projections.py` pass,
+  including the three pre-existing `a439629` calibration tests; `test_alt_player_props.py` 14/14;
+  `compileall` clean over `outlier_scrapers outlier_nfl outlier_nba scripts tests`. No new line
+  over 100 chars. No reasoning models or provider calls.
+- **Sandbox limitation (worse than 2026-10-24)**: PyPI is blocked by this environment's network
+  policy, so **nothing** was installed — no `pytest`, `ruff` or `mypy` at all. Tests were driven
+  by a minimal stdlib harness (a `pytest.approx` shim, plus a `structlog` stub supplied outside
+  the repo on `PYTHONPATH`); fixture-based and `pytest.raises` tests were skipped and
+  `sqlalchemy`/`numpy`-gated modules cannot be imported. CI is authoritative; it is green on
+  master at `7e81ba1`.
+- **Reported, not changed** (see PR #314 for detail):
+  - `backfill_totals_probabilities` writes the compressed value to `market_consensus_prob` too.
+    That column is documented as bookmaker-derived (`docs/feedback-loop.md:66`) and is the
+    default `source_probability_column` for the stake-calibration fit (`calibration.py:31`,
+    enforced at `pack_sizing.py:83`), so a model-side pace adjustment now rides in the market
+    column and into the ledger. Which column carries it is an architectural call.
+  - WNBA postseason is defined twice: all of Sept+Oct in `totals_model`, vs Sep 18+/Oct in
+    `projections._is_wnba_playoff_row`. The looser window matches the `a439629` comment, so it
+    was left alone, but early-September regular-season games get a postseason-only Under tilt.
+  - `market in {"PTS", "3PTS"}`: `"3PTS"` is unreachable (`_wnba_market_code` returns only
+    PTS/REB/AST/PR/PA/RA/PRA; no 3PT stat is modelled). Dead branch, left in place.
+  - The rule's comment says "for perimeter players" but there is no position gate.
+- **Next steps**: review/merge PR #314. Open-PR backlog is still large: #299 and #301 (the
+  2026-10-24 feed-health empty-slate fix) remain unmerged against current master.
+
+---
+
 # HANDOFF — 2026-10-27 (Antigravity, WNBA postgame audit calibrations)
 
 - **Last Commit SHA**: `a439629`
