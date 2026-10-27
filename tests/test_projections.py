@@ -888,3 +888,49 @@ def test_wnba_postgame_shooting_impairment_discount():
     assert rec_injured is not None
     assert rec_injured["distribution"]["mean"] == pytest.approx(rec_healthy["distribution"]["mean"] * 0.85, abs=0.1)
 
+
+def _wnba_pts_mean(injury_flags: str) -> float:
+    """Projected PTS mean for one player under an event-level injury report."""
+    record = wnba_projection_record(
+        {
+            "sport": "WNBA",
+            "market_type": "PTS",
+            "player": "Allisha Gray",
+            "line": 15.5,
+            "selection": "Allisha Gray - Points OVER 15.5",
+            "_event_starts_at": "2026-10-25T20:00:00Z",
+            "injury_flags": injury_flags,
+        },
+        features={"projected_minutes": 30.0, "points_per_minute": 0.60},
+    )
+    assert record is not None
+    return float(record["distribution"]["mean"])
+
+
+def test_wnba_shooting_impairment_ignores_another_players_injury():
+    """injury_flags covers both teams; only this player's own entry may discount."""
+    healthy = _wnba_pts_mean("")
+    own_hand = _wnba_pts_mean("ATL: Allisha Gray (Questionable; Right Finger Sprain)")
+    assert own_hand == pytest.approx(healthy * 0.85, abs=0.01)
+
+    # Her own note is an ankle; the wrist belongs to a teammate in the same report.
+    teammate_wrist = _wnba_pts_mean(
+        "ATL: Allisha Gray (Questionable; Left Ankle Sprain) | "
+        "ATL: Rhyne Howard (Out; Right Wrist Fracture)"
+    )
+    assert teammate_wrist == pytest.approx(healthy, abs=0.01)
+
+    opponent_wrist = _wnba_pts_mean("MIN: Napheesa Collier (Out; Right Wrist Fracture)")
+    assert opponent_wrist == pytest.approx(healthy, abs=0.01)
+
+
+def test_wnba_shooting_impairment_ignores_hand_inside_other_words():
+    """Prose such as "shorthanded" or "left-handed" is not a hand injury."""
+    healthy = _wnba_pts_mean("")
+    prose = _wnba_pts_mean(
+        "ATL: Allisha Gray (Questionable; Left Ankle Sprain): Atlanta is shorthanded"
+    )
+    assert prose == pytest.approx(healthy, abs=0.01)
+    assert _wnba_pts_mean(
+        "ATL: Allisha Gray (Out; Left-Handed Shooting Hand Contusion)"
+    ) == pytest.approx(healthy * 0.85, abs=0.01)

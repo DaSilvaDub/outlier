@@ -1342,6 +1342,39 @@ def _wnba_market_code(row: Mapping[str, object]) -> str | None:
     return None
 
 
+_INJURY_CHUNK_SPLIT = "|"
+_INJURY_TEAM_PREFIX_RE = re.compile(r"^[A-Z]{2,3}:\s*")
+_INJURY_STATUS_PAREN_RE = re.compile(r"\((?P<status>[^)]*)\)")
+# Word boundaries on purpose: analysis prose ("shorthanded", "left-handed") must not
+# read as a hand injury, while "Right Hand Contusion" and "fingers" still do.
+_SHOOTING_HAND_RE = re.compile(r"\b(?:hand|wrist|finger|thumb)s?\b", re.IGNORECASE)
+
+
+def _shooting_hand_injury(injury_flags: object, player: object) -> bool:
+    """True when *this* player's own injury entry cites a hand/wrist/finger issue.
+
+    ``injury_flags`` is the event-level report for both teams: one
+    ``TEAM: First Last (Status; Body): analysis`` chunk per player joined by ``|``
+    (see ``pack_context.build_injuries``). The keyword and the name must therefore
+    come from the same chunk, or a teammate's wrist would discount this player.
+    """
+    target = _normalize_person_name(player)
+    if not target:
+        return False
+    for chunk in str(injury_flags or "").split(_INJURY_CHUNK_SPLIT):
+        body = _INJURY_TEAM_PREFIX_RE.sub("", chunk.strip())
+        if not body:
+            continue
+        name = _normalize_person_name(body.split("(", 1)[0].split(":", 1)[0])
+        if not name or (name != target and target not in name and name not in target):
+            continue
+        status_match = _INJURY_STATUS_PAREN_RE.search(body)
+        status = status_match.group("status") if status_match else body
+        if _SHOOTING_HAND_RE.search(status):
+            return True
+    return False
+
+
 def _is_wnba_playoff_row(row: Mapping[str, object]) -> bool:
     for key in ("_event_starts_at", "event_starts_at", "as_of", "game_date", "date"):
         val = str(row.get(key) or "").strip()
@@ -1414,14 +1447,13 @@ def wnba_projection_record(
     # Postgame Calibration Upgrade: Shooting Impairment Discount
     # When injury reports cite hand/wrist/finger or shooting-arm issues for perimeter players,
     # discount scoring and 3-point rates by 15% (0.85x).
-    inj_text = str(row.get("injury_flags") or "").lower()
-    player_name = str(row.get("player") or "").lower()
-    if any(k in inj_text for k in ("finger", "wrist", "hand", "thumb")) and player_name and player_name in inj_text:
-        if market in {"PTS", "3PTS"}:
-            component_rates = [
-                round(float(r) * 0.85, 4) if r is not None else None
-                for r in component_rates
-            ]
+    if market in {"PTS", "3PTS"} and _shooting_hand_injury(
+        row.get("injury_flags"), row.get("player")
+    ):
+        component_rates = [
+            round(float(r) * 0.85, 4) if r is not None else None
+            for r in component_rates
+        ]
 
     mean_stat = minutes * sum(float(rate) for rate in component_rates if rate is not None)
     if mean_stat <= 0:

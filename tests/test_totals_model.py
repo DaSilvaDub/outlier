@@ -585,3 +585,25 @@ def test_backfill_wnba_playoff_pace_compression():
     assert float(out_over[0]["final_blended_prob"]) == pytest.approx(0.50 - 0.055, abs=0.05)
     assert float(out_under[0]["final_blended_prob"]) == pytest.approx(0.50 + 0.055, abs=0.05)
 
+
+def test_backfill_wnba_pace_compression_ignores_the_run_clock():
+    """An August game is not postseason just because the run happens in October."""
+    norm = {"WNBA": _game_norm(_two_sided(line=160.5))}
+
+    def over_prob(**dates) -> float:
+        row = _opportunity_row(
+            sport="WNBA",
+            line=160.5,
+            selection="AAA @ BBB Total OVER 160.5",
+            **dates,
+        )
+        return float(backfill_totals_probabilities([row], norm)[0]["final_blended_prob"])
+
+    august = over_prob(event_starts_at="2026-08-20T23:00:00Z", as_of="2026-10-27T13:00:00Z")
+    october = over_prob(event_starts_at="2026-10-25T20:00:00Z", as_of="2026-10-25T15:00:00Z")
+    assert august == pytest.approx(october + 0.055, abs=0.001)
+    # Only the event date decides, so an August slate priced in October is untouched.
+    assert august == pytest.approx(
+        over_prob(event_starts_at="2026-08-20T23:00:00Z", as_of="2026-08-20T18:00:00Z"),
+        abs=0.001,
+    )
