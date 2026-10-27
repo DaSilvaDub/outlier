@@ -714,6 +714,37 @@ def apply_game_script_calibration(
                 if prop.market in ("REC_YDS", "REC"):
                     vol_adj = (vol_adj or 0.0) - 0.25
 
+        # RULE-NFL-042: International / Neutral-Site Trench Decay (INSTD)
+        # International games suffer from neutral-site footing & sluggish trench play
+        # Apply a -15% volume haircut to rushing overs and flag INTERNATIONAL_TRENCH_DECAY.
+        venue = str(ctx.get("venue") or "").lower()
+        is_neutral = bool(
+            ctx.get("neutral")
+            or any(tok in venue for tok in ("london", "international", "mexico", "frankfurt", "munich", "sao paulo", "germany", "tottenham", "wembley"))
+            or any(tok in tag.lower() for tag in tags for tok in ("london", "international", "neutral"))
+        )
+        if is_neutral and is_full_game:
+            if prop.market in ("RUSH_YDS", "RUSH_ATT") and prop.position == "OVER":
+                tags.append("INTERNATIONAL_TRENCH_DECAY")
+                vol_adj = (vol_adj or 0.0) - 0.15
+
+        # RULE-NFL-044: Post-Injury Timeshare Decay Gate (PITDG)
+        # RBs returning from injury or with limited practice share volume when capable backfield partner exists.
+        # RBs carrying limited practice / post-injury signals receive a -20% carry projection haircut.
+        injury_flags = ("POST_INJURY_TIMESHARE", "LIMITED_PRACTICE", "QUESTIONABLE_VOLUME_RISK", "TIMESHARE_DECAY")
+        if is_full_game and prop.market in ("RUSH_YDS", "RUSH_ATT") and prop.position == "OVER":
+            if any(flag in tags for flag in injury_flags):
+                tags.append("POST_INJURY_TIMESHARE_DECAY")
+                vol_adj = (vol_adj or 0.0) - 0.20
+
+        # RULE-NFL-045: Two-High Shell Defensive Passing Ceiling (THSDPC)
+        # When facing top two-high shell coverage defenses, cap QB passing expectations (-15% volume).
+        shell_flags = ("MATCHUP_PASS_SUPPRESS", "TWO_HIGH_SHELL_MATCHUP", "SHELL_DEFENSE_PASS_CAP")
+        if is_full_game and prop.market in ("PASS_YDS", "PASS_RUSH_YDS") and prop.position == "OVER":
+            if any(flag in tags for flag in shell_flags):
+                tags.append("SHELL_DEFENSIVE_PASSING_CAP")
+                vol_adj = (vol_adj or 0.0) - 0.15
+
         # 3. Empirical Hit Rate Priority (Tier 1 / Tier 2)
         # Period props (quarters/halves) have micro-sample volatility and must NEVER qualify for TIER_1_ANCHOR or TIER_2_STRONG.
         l5 = prop.l5_hit_rate

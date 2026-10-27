@@ -662,3 +662,54 @@ def test_same_team_rush_cannibalization_gate():
     assert len(provisional) == 1
     assert "correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER" in provisional[0]["gaps"]
     assert provisional[0]["stake_fraction"] == 0.0
+
+
+def test_heavy_favorite_spread_exclusion_filter_rule_043():
+    """RULE-NFL-043: Heavy favorite spreads <= -8.5 must be quarantined to PROVISIONAL."""
+    from outlier_nfl.best_bets import build_best_bets, VALIDATED, PROVISIONAL, prop_key
+    
+    spread_pick = _prop(
+        player_name="Houston Texans",
+        market="SPREAD",
+        line=-10.5,
+        position="AWAY",
+        best_odds=-110,
+        team="HOU",
+        event_id="evt-hou-nyg",
+        l5=1.0,
+        l10=0.9,
+    )
+    opposite_pick = _prop(
+        player_name="Houston Texans",
+        market="SPREAD",
+        line=-10.5,
+        position="HOME",
+        best_odds=-110,
+        team="HOU",
+        event_id="evt-hou-nyg",
+        l5=0.0,
+        l10=0.1,
+    )
+    
+    movement = {
+        prop_key(spread_pick): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": -10.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": -10.5, "last_odds": -110, "last_implied": 52.4,
+        },
+        prop_key(opposite_pick): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": -10.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": -10.5, "last_odds": -110, "last_implied": 52.4,
+        },
+    }
+    
+    payload = build_best_bets(_inputs(props=[spread_pick, opposite_pick], movement=movement))
+    spreads = [p for p in payload["picks"] if str(p.get("market")).upper() == "SPREAD"]
+    assert len(spreads) >= 1
+    # Check that any -10.5 spread is never VALIDATED
+    for s in spreads:
+        if float(s.get("line") or 0) <= -8.5:
+            assert s["verdict"] == PROVISIONAL
+            assert s["stake_fraction"] == 0.0
+            assert "market:HEAVY_FAVORITE_SPREAD_EXCLUDED" in s["gaps"]
