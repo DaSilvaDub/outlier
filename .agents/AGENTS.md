@@ -98,6 +98,26 @@ In `outlier_scrapers/refresh_plan.py`, tasks running in the concurrent thread po
 On Windows in this workspace, default `pytest` execution frequently crashes with `PermissionError: [WinError 5] Access is denied: 'C:\Users\dasil\AppData\Local\Temp\pytest-of-dasil'`. Always execute pytest with the local temp directory argument:
 `pytest --basetemp=.pytest_temp [target_tests]`
 
+## Week 6 Postgame Calibration & Pipeline Refinement Rules
+1. **2nd-Half Monte Carlo Possession Modeling (R-TOT-01):**
+   - When |1H margin| >= 10.0 pts, apply dynamic 2nd-Half Clock-Bleed Haircut (-1.0 drive per team in 2H / -18% 2H scoring haircut), preventing +4.2 pt FG over-projection.
+2. **Underdog QB Pass Completion/Attempt Unders (R-PROP-01):**
+   - Ban `PASS_COMP` / `PASSING_COMPLETIONS` `UNDER` and `PASS_ATT` / `PASSING_ATTEMPTS` `UNDER` on `+6.0` or greater underdogs and in `SHOOTOUT` scripts (`>= 51.0` total).
+3. **Underdog RB Attempt Overs (R-PROP-02):**
+   - Require `>= 65%` carry share before recommending `RUSH_ATT OVER` on any road underdog of `+4.5` or greater (`UNDERDOG_RB_ATT_MIN_CARRY_SHARE = 0.65`).
+4. **Alpha WR1 Target-Share Threshold (R-PROP-05):**
+   - Raise `ALPHA_WR1_SCRIPT_PROOF` threshold to `>= 28%` target share (`ALPHA_WR1_MIN_TARGET_SHARE = 0.28`).
+5. **Hard Rock Alternate Floor Filter (R-ALT-01):**
+   - Enforce strict `L5 >= 80%` (`MIN_FLOOR_L5_HIT_RATE = 0.80`) and `L10 >= 70%` (`MIN_FLOOR_L10_HIT_RATE = 0.70`) minimum in `outlier_nfl/alt_floors.py` so 20%-60% L5 candidates are never ranked.
+6. **Retire Stacking Full-Game Unders with 1H Unders in Weather (REMOVE #1):**
+   - Express low-total/high-wind unders via 1st-Half Unders (or cap total game-under exposure at `1.0u` split `75%` 1H / `25%` FG). Never stack Full-Game Under + Team-Total Under on top of 1H Under.
+7. **Retire Contradicting Matchup/Weather Tags with Raw Historical Hit Rates (REMOVE #2 / R-PROP-04):**
+   - Never override an active `WEATHER_WIND` (`>= 12 mph`) or `SHOOTOUT` tag solely because L5/L10 hit rates are 80%. Hard-block explosive pass/receiving OVERs (`LONG_REC`, `LONG_PASS`, and `PASS_YDS / PASS_RUSH_YDS OVER >= 275.5`).
+8. **Retire Unfiltered Injury-Row Counts in Matchup Ranking Narratives (REMOVE #3 / R-DATA-01):**
+   - Cap game-day inactives at `<= 7` (`MAX_GAMEDAY_INACTIVES = 7`). Filter cumulative weekly injury feed rows (38-51) to verified defensive starters out or non-offensive game-day inactives. Ensure Scenario 1 front-runner team matches projected winner.
+9. **In-Game Injury Exit Attribution (R-INJ-01):**
+   - When a recommended prop fails due to an early in-game injury exit (e.g., Terry McLaurin exiting in Q1 on track to clear), audit and label the recommendation as an unavoidable injury event rather than a model calibration flaw.
+
 
 
 

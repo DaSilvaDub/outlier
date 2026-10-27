@@ -311,3 +311,15 @@ def test_vacated_backfield_boost_does_not_cross_teams():
         return {c.player: c for c in e.evaluate_rbs()}["Zach Charbonnet"].matchup_proj
 
     assert charbonnet(engine([sea_rb, ari_homonym])) == charbonnet(engine([sea_rb]))
+
+
+def test_r_data_01_raw_injury_feed_rows_never_print_as_designated_inactives():
+    """REMOVE #3 / R-DATA-01: 40+ cumulative injury-report rows must be capped at <= 7 game-day inactives."""
+    raw_ari_rows = [f"Reserve Player {a} {b}" for a in "abcdefg" for b in "abcdefg"][:49]
+    engine = _seattle_engine({"ARI": raw_ari_rows})
+    qbs = engine.evaluate_qbs()
+    assert len(qbs) == 1
+    inj_text = qbs[0].tactical_drivers["injuries"]
+    assert "49 designated inactives" not in inj_text
+    assert "missing 7 capped game-day inactive(s)" in inj_text
+    assert "filtered from 49 cumulative injury-report rows" in inj_text

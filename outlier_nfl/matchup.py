@@ -69,6 +69,40 @@ GROUND_DOMINANCE_CLOCK_BLEED = 3.0
 # the underdog controls the ground game, dampening cover probability.
 HEAVY_FAVORITE_SPREAD = 7.0
 
+# 2nd-Half Monte Carlo Possession Modeling (R-TOT-01):
+# When |1H margin| >= 10.0 pts, the leading offense bleeds play-clock (-1.0 drive per team
+# in the 2nd half / -18% 2nd-half scoring haircut), preventing +4.2 pt FG over-projection.
+SECOND_HALF_CLOCK_BLEED_MARGIN = 10.0
+SECOND_HALF_CLOCK_BLEED_DRIVES = -1.0
+SECOND_HALF_CLOCK_BLEED_HAIRCUT = 0.18
+
+# Weather / Low-Total Under Exposure Rule (REMOVE #1):
+# Express low-total/high-wind unders via 1st-Half Unders (or cap total game-under exposure
+# at 1.0u split 75% 1H / 25% FG) to avoid 4th-quarter hurry-up + Overtime variance.
+WEATHER_UNDER_EXPOSURE_CAP_UNITS = 1.0
+FIRST_HALF_WEATHER_UNDER_SHARE = 0.75
+
+
+def apply_second_half_clock_bleed(
+    first_half_home: float,
+    first_half_away: float,
+    second_half_home: float,
+    second_half_away: float,
+) -> tuple[float, float, bool]:
+    """Apply R-TOT-01 2nd-half clock-bleed haircut when |1H margin| >= 10 points.
+
+    Returns ``(adjusted_2h_home, adjusted_2h_away, triggered)``.
+    """
+    margin_1h = abs(float(first_half_home) - float(first_half_away))
+    if margin_1h >= SECOND_HALF_CLOCK_BLEED_MARGIN:
+        factor = 1.0 - SECOND_HALF_CLOCK_BLEED_HAIRCUT
+        return (
+            round(float(second_half_home) * factor, 2),
+            round(float(second_half_away) * factor, 2),
+            True,
+        )
+    return float(second_half_home), float(second_half_away), False
+
 
 @dataclass(frozen=True)
 class PropSignal:
@@ -1236,6 +1270,11 @@ def render_matchup_markdown(
             dog = away
             fav_score = script.home_score
             dog_score = script.away_score
+        # R-DATA-01: Ensure front-runner team in Scenario 1 always aligns with the projected winner
+        if script.away_score > script.home_score:
+            fav, dog, fav_score, dog_score = away, home, script.away_score, script.home_score
+        elif script.home_score > script.away_score:
+            fav, dog, fav_score, dog_score = home, away, script.home_score, script.away_score
         lines.extend(["", "## 5. Three canonical scripts", ""])
         lines.append(
             f"### Scenario 1: Front-runner grind ({'BASE' if script.script_type == 'FRONT_RUNNER_GRIND' else 'ALT'})"
@@ -1244,7 +1283,15 @@ def render_matchup_markdown(
             f"- {fav} controls with the run game. Projected {fav} {fav_score:.0f}, {dog} {dog_score:.0f}."
         )
         lines.append(
-            f"- Correlated: {fav} spread, UNDER {script.total:.1f}, favorite RB rush OVER / TD."
+            f"- Correlated: {fav} spread, UNDER {script.total:.1f}, favorite RB rush OVER / TD.\n"
+            + (
+                f"- Total execution rule: express low-total/weather unders via 1H UNDER "
+                f"(or cap total game-under exposure at {WEATHER_UNDER_EXPOSURE_CAP_UNITS:.1f}u "
+                f"split {FIRST_HALF_WEATHER_UNDER_SHARE:.0%} 1H / {1.0 - FIRST_HALF_WEATHER_UNDER_SHARE:.0%} FG; "
+                "never stack Full-Game Under + Team-Total Under on top of 1H Under)."
+                if script.total_lean == "UNDER"
+                else ""
+            )
         )
         lines.append("")
         lines.append(
