@@ -1,3 +1,46 @@
+# HANDOFF - 2026-10-25 (Claude, daily debug review - ledger archive ordering)
+
+- **Branch**: `claude/inspiring-fermat-xmbiyn`. **Files touched**:
+  `outlier_scrapers/paths.py`, `tests/test_feedback_ledger_migration.py`.
+- **Fix**: `paths.archived_ledgers()` sorted `feedback.migrated-*.sqlite3` by raw file
+  name, and both callers read `[-1]` as "the newest archive". For two archives from the
+  same day that is wrong: `-` (0x2D) sorts before `.` (0x2E), so the day's *second*
+  archive `feedback.migrated-<date>-2.sqlite3` came before the first
+  `feedback.migrated-<date>.sqlite3`. Consequences: (a)
+  `feedback_migration._finish_interrupted` re-verified the staged copy against the
+  *earlier* archive, so row counts differed and the resume refused with "Inspect both by
+  hand" - leaving the only live ledger in the `.migrating` file after the original was
+  already archived; (b) `paths.require_migrated_ledger`'s refusal message named the older
+  archive as the copy to restore from. Now ordered on the parsed date and counter (the
+  unsuffixed name counts as the day's first); an unparseable name sorts ahead of every
+  parsed archive so `[-1]` is always a real one.
+- **Reachable because** `_archive_path` adds the `-2`/`-3` counter whenever an archive for
+  today already exists, which the repo's own
+  `test_migrate_does_not_overwrite_an_earlier_archive` exercises; the stale copies in
+  canonical `calibration/` make a same-day second migration realistic.
+- **Verification**: reproduced RED then GREEN (the resume raised
+  `LedgerMigrationError: ... does not match .../feedback.migrated-2026-10-21.sqlite3
+  (staging={'market_snapshots': 4}, archive={'market_snapshots': 1})` before the fix;
+  after it the resume promotes the 4-row ledger). New regression test
+  `test_resume_verifies_against_the_newest_same_day_archive`. Suite 2128 passed /
+  52 skipped, byte-identical to the pre-change baseline; mypy 0 errors in
+  `outlier_scrapers`/`outlier_nfl`; pyright clean on `paths.py`; ruff findings on both
+  changed files identical before and after (3 pre-existing in `paths.py`: I001, UP037,
+  DTZ005 - not touched). No reasoning models or provider calls.
+- **Sandbox limitation (unchanged from 2026-10-24)**: PyPI is unreachable under this
+  environment's network policy, so `sqlalchemy`, `numpy`, `openai`, `anthropic`,
+  `google-genai` and `python-dateutil` are absent; all 67 test failures and 38 collection
+  errors trace to one of them, and `structlog` was supplied as a local stub outside the
+  repo on `PYTHONPATH` to get past `tests/conftest.py`. `tests/test_feedback_ledger_migration.py`
+  imports `pack_publish` -> `storage` -> `database` -> `sqlalchemy`, so the new test could not
+  be executed here; it was verified by a standalone harness making the identical call
+  sequence. **CI is authoritative for it.** CI was green on master at `097b374` (Offline
+  Pytest + Static Type Checking) before this change.
+- **Next steps**: review/merge the PR, then watch CI for the new test. The open-PR backlog
+  is still large (#299, #302, #303, #304, #305 and ~13 older ones). Paid reasoning remains off.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.

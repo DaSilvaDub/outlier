@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -108,9 +109,30 @@ def resolve_feedback_db_path() -> Path:
     return legacy_feedback_db_path()
 
 
+# feedback.migrated-<date>.sqlite3 is a day's first archive; -2, -3, ... are the
+# later ones (see feedback_migration._archive_path).
+_ARCHIVED_LEDGER_RE = re.compile(r"\Afeedback\.migrated-(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.sqlite3\Z")
+
+
 def archived_ledgers(directory: Path) -> list[Path]:
-    """Originals the migration renamed aside, oldest first (names sort by date)."""
-    return sorted(directory.glob("feedback.migrated-*.sqlite3"))
+    """Originals the migration renamed aside, oldest first.
+
+    Ordering on the file name alone is wrong for two archives from the same day:
+    ``-`` sorts before ``.``, so ``feedback.migrated-<date>-2.sqlite3`` -- the
+    *later* archive -- came before ``feedback.migrated-<date>.sqlite3``, and
+    callers that take the last element got the older file. Order on the parsed
+    date and counter instead, with the unsuffixed name counting as the first.
+    A name that does not parse sorts ahead of every parsed archive, so the last
+    element is always a real one.
+    """
+
+    def sort_key(path: Path) -> tuple[int, str, int, str]:
+        match = _ARCHIVED_LEDGER_RE.match(path.name)
+        if match is None:
+            return (0, "", 0, path.name)
+        return (1, match.group(1), int(match.group(2) or 1), path.name)
+
+    return sorted(directory.glob("feedback.migrated-*.sqlite3"), key=sort_key)
 
 
 def ledger_file_present(db_path: Path) -> bool:
