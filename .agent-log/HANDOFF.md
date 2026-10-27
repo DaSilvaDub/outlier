@@ -1,4 +1,43 @@
-# HANDOFF — 2026-10-27 (Antigravity, WNBA postgame audit calibrations)
+# HANDOFF — 2026-10-27 (Antigravity, Daily NFL Pack and Odds Refresh)
+
+- **Last Commit SHA**: `7e81ba1`
+- **Files Touched**:
+  - `data/NFL/tape/prior_week.json` (rebuilt from nflverse box scores weeks 1–7)
+  - `data/NFL/runs/` (recorded runs for 2026-10-29, 2026-11-01, 2026-11-02)
+  - `reports/NFL/2026-10-27_1727ET_Weekly_Best_Bets.md` (weekly traced best bets card)
+  - `data/NFL/exports/nfl_only.csv` (refreshed Thursday Night Football pack)
+  - `G:\My Drive\today\extra_packs_2026-10-29_latest\` & `extra_packs\` (published companion packs: `nfl_only.csv`, `2026-10-29_CAR_GB_Game_Script.md`, `nfl_alt_floors.csv`, `nfl_best_bets.md`, positional matchup reports, `Matchup_Boost_Rankings.csv`)
+  - `calibration/alerts/nfl_weekly_status.json` (status=ok)
+- **Summary of Actions**:
+  - Ran `scripts/pull_nflverse_tape.py --before 2026-10-29` to refresh unit grades and defensive metrics across all 32 teams for weeks 1–7.
+  - Automatically resolved expired Outlier API Cognito bearer token via `AWSCognitoIdentityProviderService.InitiateAuth` (`REFRESH_TOKEN_AUTH`) and updated `config/.outlier_session/storage_state.json`.
+  - Executed `outlier_nfl.weekly` odds refresh and weekly snapshot pipeline across all remaining slates (`2026-10-29`, `2026-11-01`, `2026-11-02`), capturing market movements, price snapshots, and generating the consolidated weekly best bets card (`reports/NFL/2026-10-27_1727ET_Weekly_Best_Bets.md`).
+  - Executed `scripts/refresh_nfl_pack.ps1 -Date 2026-10-29` for Thursday Night Football (Panthers at Packers), verifying active starting QBs (Bryce Young & Jordan Love), exporting `nfl_only.csv` (38 rows), filtering injuries against ESPN/tape statuses, and publishing all companion reports to Google Drive.
+  - Paid reasoning remained OFF throughout execution.
+- **Next Steps**:
+  - Regular game-day refreshes on Thursday afternoon for TNF lock.
+
+---
+
+# HANDOFF — 2026-10-27 (Antigravity, MLB + WNBA Daily Master Quantitative Pipeline)
+
+- **Last Commit SHA**: `7e81ba1`
+- **Branch**: `master` (Execution / Coordination run)
+- **Status**: Complete
+- **Actions Executed**:
+  - Ran multi-ent bootstrap verification (`report-sync.ps1` -> `REPORT STATUS: OK`, nonce `94588eefc6a940ff`).
+  - Executed dual-sport pipeline via `scripts\run_daily_pipeline.ps1` in `C:\Users\dasil\Dev\GitHub\outlier-scheduled` for slate `2026-10-27` (America/New_York) with paid reasoning OFF.
+  - Normalized CRLF line endings on `calibration/versions/stake_calibration/stake_calibration.e6ec36aa58c8.json` in scheduled worktree to resolve Windows git checkout hash mismatch.
+  - Generated full briefing pack `packs/2026-10-27` (7 MLB candidates across gameline, team totals, spread, and SO; WNBA off-day confirmed with 80 advance market cards date-filtered).
+  - Pitcher identity audit: `status=ok so=1 mismatch=0 unconfirmed=0`.
+  - Exported replace-export packages and Master Prompts to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+  - Outputted consolidated `playable_props.md` and `playable_props.csv` reflecting strict quantitative discipline (0 Board A actionable plays).
+  - Verification: 146 unit tests passed offline across `test_feed_health.py`, `test_game_totals.py`, `test_alt_player_props.py`, and `test_projections.py`.
+- **Next Steps**: Monitor pregame lineup confirmations for World Series Game (Brewers @ Rays) at 20:00 ET; await WNBA Game 5 on 2026-10-29.
+
+---
+
+
 
 - **Last Commit SHA**: `a439629`
 - **Branch**: `feat/wnba-postgame-calibration-game4`
