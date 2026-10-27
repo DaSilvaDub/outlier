@@ -201,6 +201,20 @@ OFFSEASON_MOVES_2026: dict[str, dict[str, Any]] = {
         "role": "Starting Tight End",
         "notes": "Signed by Carolina Panthers.",
     },
+    "Isaiah Likely": {
+        "current_team": "NYG",
+        "former_teams": ["BAL", "Ravens", "Baltimore", "HOU", "Texans", "Houston"],
+        "pos": "TE",
+        "role": "Starting Tight End",
+        "notes": "Acquired by New York Giants in 2026. Is on the Giants, NOT on the Baltimore Ravens or Houston Texans.",
+    },
+    "J.J. McCarthy": {
+        "current_team": "NYG",
+        "former_teams": ["MIN", "Vikings", "Minnesota"],
+        "pos": "QB",
+        "role": "Starting Quarterback",
+        "notes": "Starting QB for the New York Giants in 2026.",
+    },
     "Keenan Allen": {
         "current_team": "IND",
         "former_teams": ["CHI", "Bears", "Chicago", "LAC", "Chargers"],
@@ -480,10 +494,10 @@ NFL_2026_FULL_DEPTH_CHARTS: dict[str, dict[str, Any]] = {
     },
     "NYG": {
         "name": "New York Giants",
-        "starting_qb": "Russell Wilson",
-        "rbs": ["Tyrone Tracy Jr.", "Devin Singletary"],
-        "wrs": ["Malik Nabers", "Darius Slayton", "Jalin Hyatt"],
-        "te": "Theo Johnson",
+        "starting_qb": "J.J. McCarthy",
+        "rbs": ["Cam Skattebo", "Tyrone Tracy Jr.", "Devin Singletary"],
+        "wrs": ["Malik Nabers", "Malachi Fields", "Darius Slayton", "Jalin Hyatt"],
+        "te": "Isaiah Likely",
     },
     "NYJ": {
         "name": "New York Jets",

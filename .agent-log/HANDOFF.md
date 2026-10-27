@@ -1,3 +1,26 @@
+# HANDOFF — 2026-10-26 (Antigravity, Week 8 Postgame Calibration Rules 042-045 & HFSEF)
+
+- **Branch**: `feat/week8-calibration-and-roster-rules`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/311
+- **Last Commit SHA**: `f3db578`
+- **Files Touched**:
+  - `outlier_nfl/best_bets.py`:
+    - Implemented `RULE-NFL-043` (`HEAVY_FAVORITE_SPREAD_EXCLUDED`): Spreads $\le -8.5$ quarantined to `PROVISIONAL` with zero stake fraction.
+    - Expanded candidate sides `SIDES = ("OVER", "UNDER", "HOME", "AWAY")` and bidirectional `_opposite_implied` matching (`HOME` <-> `AWAY`, `OVER` <-> `UNDER`).
+  - `outlier_nfl/calibration.py`:
+    - Implemented `RULE-NFL-042` (`INTERNATIONAL_TRENCH_DECAY`): -15% volume haircut on rushing overs for neutral/international venues.
+    - Implemented `RULE-NFL-044` (`POST_INJURY_TIMESHARE_DECAY`): -20% carry volume haircut on RBs returning from injury or with limited practice.
+    - Implemented `RULE-NFL-045` (`SHELL_DEFENSIVE_PASSING_CAP`): -15% passing volume haircut on passing overs facing two-high shell defenses.
+  - `tests/test_nfl_best_bets.py`: Added `test_heavy_favorite_spread_exclusion_filter_rule_043`.
+  - `tests/test_nfl_calibration.py`: Added `test_international_trench_decay_rule_042`, `test_post_injury_timeshare_decay_rule_044`, and `test_two_high_shell_defensive_passing_ceiling_rule_045`.
+- **Verification**:
+  - `pytest tests/test_nfl_calibration.py tests/test_nfl_best_bets.py tests/test_nfl_roster.py`: 88 passed in 16.65s (100% offline, zero paid reasoning calls).
+- **Next Steps**:
+  - PR #311 is fully updated and green for review/merge.
+  - Live Monday Night Football (DAL @ PHI) analysis and SGP options refreshed for tonight's slate.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.

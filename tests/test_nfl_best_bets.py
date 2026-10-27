@@ -617,3 +617,99 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
 
+
+
+def test_same_team_rush_cannibalization_gate():
+    from outlier_nfl.snapshots import prop_key
+
+    rb1_over = _prop(player_name="RB One", player_id="p_rb1", team="PHI", market="RUSH_YDS", line=45.5, odds=-110, implied=52.381)
+    rb1_under = _prop("UNDER", player_name="RB One", player_id="p_rb1", team="PHI", market="RUSH_YDS", line=45.5, odds=-110, implied=52.381)
+    rb2_over = _prop(player_name="RB Two", player_id="p_rb2", team="PHI", market="RUSH_YDS", line=35.5, odds=-110, implied=52.381)
+    rb2_under = _prop("UNDER", player_name="RB Two", player_id="p_rb2", team="PHI", market="RUSH_YDS", line=35.5, odds=-110, implied=52.381)
+
+    ext = _external()
+    for e in ext:
+        if e.get("source") == "pbp":
+            e["rush_epa_per_play"] = 0.20 if e.get("team") == "DAL" else -0.10
+    for w in (1, 2, 3):
+        ext.append({"source": "ngs", "kind": "rushing", "week": w, "player": "RB One", "team": "PHI", "rush_attempts": 15})
+        ext.append({"source": "ngs", "kind": "rushing", "week": w, "player": "RB Two", "team": "PHI", "rush_attempts": 12})
+
+    usage = [
+        {"player": "RB One", "team": "PHI", "games": 3, "carry_share": 0.45, "carries_pg": 15.0, "target_share": 0.0, "targets_pg": 0.0},
+        {"player": "RB Two", "team": "PHI", "games": 3, "carry_share": 0.35, "carries_pg": 12.0, "target_share": 0.0, "targets_pg": 0.0},
+    ]
+
+    movement = {
+        prop_key(rb1_over): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 44.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 45.5, "last_odds": -110, "last_implied": 52.4,
+        },
+        prop_key(rb2_over): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 34.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 35.5, "last_odds": -110, "last_implied": 52.4,
+        },
+    }
+
+    payload = build_best_bets(_inputs(props=[rb1_over, rb1_under, rb2_over, rb2_under], movement=movement, external_metrics=ext, usage_players=usage))
+    overs = [p for p in payload["picks"] if p["position"] == "OVER"]
+    validated = [p for p in overs if p["verdict"] == VALIDATED]
+    provisional = [p for p in overs if p["verdict"] == PROVISIONAL]
+
+    assert len(validated) == 1
+    assert len(provisional) == 1
+    assert "correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER" in provisional[0]["gaps"]
+    assert provisional[0]["stake_fraction"] == 0.0
+
+
+def test_heavy_favorite_spread_exclusion_filter_rule_043():
+    """RULE-NFL-043: Heavy favorite spreads <= -8.5 must be quarantined to PROVISIONAL."""
+    from outlier_nfl.best_bets import build_best_bets, VALIDATED, PROVISIONAL, prop_key
+    
+    spread_pick = _prop(
+        player_name="Houston Texans",
+        market="SPREAD",
+        line=-10.5,
+        position="AWAY",
+        best_odds=-110,
+        team="HOU",
+        event_id="evt-hou-nyg",
+        l5=1.0,
+        l10=0.9,
+    )
+    opposite_pick = _prop(
+        player_name="Houston Texans",
+        market="SPREAD",
+        line=-10.5,
+        position="HOME",
+        best_odds=-110,
+        team="HOU",
+        event_id="evt-hou-nyg",
+        l5=0.0,
+        l10=0.1,
+    )
+    
+    movement = {
+        prop_key(spread_pick): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": -10.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": -10.5, "last_odds": -110, "last_implied": 52.4,
+        },
+        prop_key(opposite_pick): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": -10.5,
+            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": -10.5, "last_odds": -110, "last_implied": 52.4,
+        },
+    }
+    
+    payload = build_best_bets(_inputs(props=[spread_pick, opposite_pick], movement=movement))
+    spreads = [p for p in payload["picks"] if str(p.get("market")).upper() == "SPREAD"]
+    assert len(spreads) >= 1
+    # Check that any -10.5 spread is never VALIDATED
+    for s in spreads:
+        if float(s.get("line") or 0) <= -8.5:
+            assert s["verdict"] == PROVISIONAL
+            assert s["stake_fraction"] == 0.0
+            assert "market:HEAVY_FAVORITE_SPREAD_EXCLUDED" in s["gaps"]

@@ -987,3 +987,51 @@ def test_primary_spread_preserves_signed_favorite_regardless_of_line_order():
     assert primary_spread(lines_away_last, "PIT", "IND") == -3.0
 
 
+
+
+def test_international_trench_decay_rule_042():
+    """RULE-NFL-042: Neutral/international site rushing over receives volume haircut."""
+    g_lines = [
+        _make_game_line("SPREAD", -3.0, team="PIT", home_team="NO", away_team="PIT", event_id="evt-intl-01"),
+        _make_game_line("TOTAL", 41.5, event_id="evt-intl-01"),
+    ]
+    prop = _make_prop("Alvin Kamara", "RUSH_YDS", 19.5, pos="OVER", team="NO", opponent="PIT", event_id="evt-intl-01")
+    prop = prop.__class__(**{**prop.__dict__, "calibration_tags": ("LONDON_INTERNATIONAL_VENUE",)})
+    from outlier_nfl.calibration import apply_game_script_calibration
+    calibrated = apply_game_script_calibration(g_lines, [prop])
+    assert len(calibrated) == 1
+    p = calibrated[0]
+    assert "INTERNATIONAL_TRENCH_DECAY" in p.calibration_tags
+    assert p.calibrated_volume_adjustment == -0.15
+
+
+def test_post_injury_timeshare_decay_rule_044():
+    """RULE-NFL-044: RB rushing over with post-injury/limited practice receives decay."""
+    g_lines = [
+        _make_game_line("SPREAD", -7.0, team="MIN", home_team="MIN", away_team="IND", event_id="evt-min-01"),
+    ]
+    prop = _make_prop("Aaron Jones Sr.", "RUSH_ATT", 10.5, pos="OVER", team="MIN", opponent="IND", event_id="evt-min-01")
+    prop = prop.__class__(**{**prop.__dict__, "calibration_tags": ("POST_INJURY_TIMESHARE",)})
+    
+    from outlier_nfl.calibration import apply_game_script_calibration
+    calibrated = apply_game_script_calibration(g_lines, [prop])
+    assert len(calibrated) == 1
+    p = calibrated[0]
+    assert "POST_INJURY_TIMESHARE_DECAY" in p.calibration_tags
+    assert p.calibrated_volume_adjustment == -0.20
+
+
+def test_two_high_shell_defensive_passing_ceiling_rule_045():
+    """RULE-NFL-045: Passing over facing two-high shell receives passing cap."""
+    g_lines = [
+        _make_game_line("SPREAD", -2.5, team="KC", home_team="SEA", away_team="KC", event_id="evt-kc-sea-01"),
+    ]
+    prop = _make_prop("Patrick Mahomes", "PASS_YDS", 224.5, pos="OVER", team="KC", opponent="SEA", event_id="evt-kc-sea-01")
+    prop = prop.__class__(**{**prop.__dict__, "calibration_tags": ("MATCHUP_PASS_SUPPRESS",)})
+    
+    from outlier_nfl.calibration import apply_game_script_calibration
+    calibrated = apply_game_script_calibration(g_lines, [prop])
+    assert len(calibrated) == 1
+    p = calibrated[0]
+    assert "SHELL_DEFENSIVE_PASSING_CAP" in p.calibration_tags
+    assert p.calibrated_volume_adjustment == -0.15

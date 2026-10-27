@@ -84,7 +84,7 @@ ASSUMED_OVERROUND = 1.0476  # -110 / -110 two-way market, used only when one sid
 QUARTER_KELLY = 0.25
 MAX_STAKE = 0.02  # bankroll fraction
 
-SIDES = ("OVER", "UNDER")
+SIDES = ("OVER", "UNDER", "HOME", "AWAY")
 
 PASS_MARKETS = frozenset(
     {"PASS_YDS", "PASS_TD", "PASS_COMP", "PASS_ATT", "LONG_PASS", "INT", "PASS_RUSH_YDS",
@@ -346,7 +346,7 @@ class _Sources:
 
 
 def _side_sign(position: str) -> int:
-    return 1 if position == "OVER" else -1
+    return 1 if position in ("OVER", "HOME") else -1
 
 
 def _signal_matches_market(sig: PropSignal, prop_market: str) -> bool:
@@ -722,7 +722,16 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
 
 def _opposite_implied(prop: Mapping[str, Any], by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> float | None:
     position = str(prop.get("position") or "").upper()
-    other = "UNDER" if position == "OVER" else "OVER"
+    if position == "OVER":
+        other = "UNDER"
+    elif position == "UNDER":
+        other = "OVER"
+    elif position == "HOME":
+        other = "AWAY"
+    elif position == "AWAY":
+        other = "HOME"
+    else:
+        other = "UNDER"
     key = prop_key({**prop, "position": other}) + (_f(prop.get("line")),)
     row = by_line.get(key)
     return _pct(row.get("implied_probability")) if row else None
@@ -982,6 +991,39 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
             pick["gaps"].append("correlation:CORRELATED_SAME_PLAYER")
         else:
             seen_validated_players.add(pkey)
+
+    # RULE-NFL-041: Same-team rushing overs cannibalization gate.
+    # At most 1 VALIDATED rushing yardage/attempt over per team per game.
+    seen_validated_team_rush: set[tuple[str, str]] = set()
+    for pick in picks:
+        if pick["verdict"] != VALIDATED:
+            continue
+        market = str(pick.get("market") or "").upper()
+        pos = str(pick.get("position") or "").upper()
+        if market in ("RUSH_YDS", "RUSH_ATT") and pos == "OVER":
+            tkey = (str(pick.get("event_id") or ""), str(pick.get("team") or "").upper())
+            if tkey in seen_validated_team_rush:
+                pick["verdict"] = PROVISIONAL
+                pick["stake_fraction"] = 0.0
+                pick["gaps"].append("correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER")
+            else:
+                seen_validated_team_rush.add(tkey)
+
+    # RULE-NFL-043: Heavy favorite spread exclusion filter (HFSEF).
+    # NFL spreads <= -8.5 on favorites fail to cover at high historical rates (42.1%).
+    # Quarantined to PROVISIONAL with 0 stake.
+    for pick in picks:
+        market = str(pick.get("market") or "").upper()
+        if market in ("SPREAD", "POINT_SPREAD"):
+            try:
+                line_val = float(pick.get("line") or 0.0)
+                if line_val <= -8.5:
+                    pick["verdict"] = PROVISIONAL
+                    pick["stake_fraction"] = 0.0
+                    if "market:HEAVY_FAVORITE_SPREAD_EXCLUDED" not in pick.get("gaps", []):
+                        pick.setdefault("gaps", []).append("market:HEAVY_FAVORITE_SPREAD_EXCLUDED")
+            except (ValueError, TypeError):
+                pass
 
     picks.sort(key=_rank_key)
     for rank, pick in enumerate(picks, 1):
