@@ -1,20 +1,23 @@
-# HANDOFF — 2026-10-26 (Antigravity, Week 8 Postgame Forensic Calibration & Roster Truth)
+# HANDOFF — 2026-10-26 (Antigravity, Week 8 Postgame Calibration Rules 042-045 & HFSEF)
 
 - **Branch**: `feat/week8-calibration-and-roster-rules`
 - **PR**: https://github.com/DaSilvaDub/outlier/pull/311
+- **Last Commit SHA**: `f3db578`
 - **Files Touched**:
-  - `outlier_nfl/roster.py`: Added Isaiah Likely (TE, NYG) and J.J. McCarthy (QB, NYG) to `OFFSEASON_MOVES_2026` and `NFL_2026_FULL_DEPTH_CHARTS["NYG"]`. Replaced stale Russell Wilson reference.
-  - `outlier_nfl/best_bets.py`: Implemented `SAME_TEAM_RUSH_CANNIBALIZATION_GATE` (`RULE-NFL-041`) preventing dual rush overs on the same team from both being `VALIDATED`; the lower-ranked prop is quarantined to `PROVISIONAL` with zero stake and tagged `correlation:CANNIBALIZED_SAME_TEAM_RUSH_OVER`.
-  - `outlier_nfl/calibration.py`: Added `TRENCH_DEFICIT_RUSH_HAIRCUT` and included `Likely` in tight-end coverage valve check.
-  - `tests/test_nfl_roster.py`: Added `test_isaiah_likely_and_jj_mccarthy_nyg_attribution` verifying NYG attribution and rejecting BAL/HOU/MIN.
-  - `tests/test_nfl_best_bets.py`: Added `test_same_team_rush_cannibalization_gate` verifying the same-team dual rush over constraint.
-  - `reports/NFL/2026-10-25_Week8_Postgame_Forensic_Calibration.md`: Complete 12-section forensic audit and rules report across 24 official predictions (+6.42 units, 66.7% win rate, 90% alt floor win rate).
+  - `outlier_nfl/best_bets.py`:
+    - Implemented `RULE-NFL-043` (`HEAVY_FAVORITE_SPREAD_EXCLUDED`): Spreads $\le -8.5$ quarantined to `PROVISIONAL` with zero stake fraction.
+    - Expanded candidate sides `SIDES = ("OVER", "UNDER", "HOME", "AWAY")` and bidirectional `_opposite_implied` matching (`HOME` <-> `AWAY`, `OVER` <-> `UNDER`).
+  - `outlier_nfl/calibration.py`:
+    - Implemented `RULE-NFL-042` (`INTERNATIONAL_TRENCH_DECAY`): -15% volume haircut on rushing overs for neutral/international venues.
+    - Implemented `RULE-NFL-044` (`POST_INJURY_TIMESHARE_DECAY`): -20% carry volume haircut on RBs returning from injury or with limited practice.
+    - Implemented `RULE-NFL-045` (`SHELL_DEFENSIVE_PASSING_CAP`): -15% passing volume haircut on passing overs facing two-high shell defenses.
+  - `tests/test_nfl_best_bets.py`: Added `test_heavy_favorite_spread_exclusion_filter_rule_043`.
+  - `tests/test_nfl_calibration.py`: Added `test_international_trench_decay_rule_042`, `test_post_injury_timeshare_decay_rule_044`, and `test_two_high_shell_defensive_passing_ceiling_rule_045`.
 - **Verification**:
-  - `pytest tests/test_nfl_roster.py tests/test_nfl_best_bets.py tests/test_nfl_calibration.py`: 84 passed in 14.05s.
-  - Zero calls to paid reasoning models (fully offline).
+  - `pytest tests/test_nfl_calibration.py tests/test_nfl_best_bets.py tests/test_nfl_roster.py`: 88 passed in 16.65s (100% offline, zero paid reasoning calls).
 - **Next Steps**:
-  - Ready for PR creation or master review.
-  - Monitor Monday Night Football (DAL @ PHI) for post-game settlement and calibration.
+  - PR #311 is fully updated and green for review/merge.
+  - Live Monday Night Football (DAL @ PHI) analysis and SGP options refreshed for tonight's slate.
 
 ---
 
