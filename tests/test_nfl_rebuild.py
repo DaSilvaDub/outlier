@@ -1,0 +1,898 @@
+"""#232 part a: rebuild from admissible archived originals (replay only, versioned).
+
+Originals are real pipeline runs. A *live* original is produced the way the
+stage-gate tests do it: the harness's live-shaped ``FrozenOutlierClient`` with a
+pregame clock. It is archived with the 9c writer (``archive.record_pointed_runs``).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from outlier_nfl import archive as ar
+from outlier_nfl import rebuild as rb
+from outlier_nfl.pipeline import NflPipeline
+from outlier_nfl.run_context import parse_utc
+from scripts import nfl_snapshot_diff as snap
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "nfl"
+SLATE = "2026-10-04"
+PREGAME = "2026-10-04T15:00:00+00:00"
+NOW = datetime(2026, 10, 11, 3, 0, tzinfo=timezone.utc)
+
+
+NETWORK_CALLS: list[Any] = []
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Real loaders (conftest's offline stubs undone) with every socket blocked and logged.
+
+    Tests assert the rebuild makes no network call. The original live runs may try
+    (and fail), just as a real live run without network would.
+    """
+    import socket
+
+    from outlier_nfl import external, usage, weather
+
+    NETWORK_CALLS.clear()
+
+    def deny(_self: Any, address: Any, *_a: Any) -> None:
+        NETWORK_CALLS.append(address)
+        raise OSError("network disabled in tests")
+
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny)
+    monkeypatch.setattr(socket, "create_connection", lambda address, *a, **k: deny(None, address))
+    monkeypatch.setattr("outlier_nfl.pipeline.load_external_metrics",
+                        external.load_external_metrics)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", weather.load_slate_weather)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_usage", usage.load_usage)
+
+
+# Real column layouts: nflverse games.csv (``boxscore_nflverse.GAMES_REQUIRED_COLUMNS``
+# plus ``gametime``/``game_type``) and stats_player_week (``usage.py`` reads player_id,
+# player_display_name, position, season, week, season_type, game_id, team, targets,
+# target_share, carries, receiving_yards, rushing_yards).
+GAMES_CSV = (
+    "game_id,season,game_type,week,gameday,gametime,away_team,home_team,away_score,home_score\n"
+    + "".join(f"2026_{w:02d}_BAL_KC,2026,REG,{w},2026-09-{13 + 7 * (w - 1) - 7:02d},13:00,"
+              f"BAL,KC,20,24\n" for w in (1, 2, 3))
+    + "2026_04_BAL_KC,2026,REG,4,2026-10-04,13:00,BAL,KC,,\n"
+).encode()
+STATS_CSV = (
+    "player_id,player_display_name,position,season,week,season_type,game_id,team,targets,"
+    "target_share,carries,receiving_yards,rushing_yards\n"
+    + "".join(f"P1,Travis Kelce,TE,2026,{w},REG,2026_{w:02d}_BAL_KC,KC,8,0.25,0,70,0\n"
+              for w in (1, 2, 3))
+).encode()
+
+
+def _archive_nflverse(tmp_path: Path, nfl: Path, fetched_at: str = "2026-10-04T12:00:00+00:00"):
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    cache = tmp_path / "nflverse_cache"
+    cache.mkdir(exist_ok=True)
+    for name, data in (("stats_player_week_2026.csv", STATS_CSV), ("games.csv", GAMES_CSV)):
+        (cache / name).write_bytes(data)
+        _write_meta(cache / name, CacheMeta(url=f"https://x/{name}", fetched_at=fetched_at,
+                                            sha256=hashlib.sha256(data).hexdigest(),
+                                            size=len(data), rows=data.count(b"\n") - 1))
+    assert not ar.record_nflverse(nfl, cache, [2026]).conflicts
+
+
+TAPE_STAMP = "2026-10-04T12:00:00+00:00"
+
+
+def stamped_tape() -> dict[str, Any]:
+    """The frozen tape as a real refresh writes it: stamped ``fetched_at_utc``
+    (``tape_nflverse``), so its date is in its own hash-verified bytes."""
+    return {**snap.frozen_tape(FIXTURES_DIR), "fetched_at_utc": TAPE_STAMP}
+
+
+def _tape(nfl: Path) -> Path:
+    tape = nfl / "tape" / "prior_week.json"
+    if not tape.exists():  # a test may plant its own tape first
+        tape.parent.mkdir(parents=True, exist_ok=True)
+        tape.write_text(json.dumps(stamped_tape()), encoding="utf-8")
+    return tape
+
+
+def live_original(tmp_path: Path, client: Any = None, clock: str = PREGAME,
+                  window: str | None = None, keep_pipeline_archive: bool = False,
+                  ) -> tuple[Path, str]:
+    """A real live run. Since #280 the pipeline archives its own run; by default that
+    archive is dropped so a test can model a catch-up (or no) archive explicitly."""
+    nfl = tmp_path / "NFL"
+    _tape(nfl)
+    now = parse_utc(clock)
+    s = NflPipeline(client=client or snap.FrozenOutlierClient(FIXTURES_DIR), data_dir=tmp_path,
+                    clock=lambda: now).run(date=SLATE, as_of_utc=clock, window=window,
+                                           reports_dir=tmp_path / "reports")
+    if not keep_pipeline_archive:
+        ar.manifest_path(nfl).unlink(missing_ok=True)
+    return nfl, s["run_id"]
+
+
+def _originals(nfl: Path) -> dict[str, bytes]:
+    return {p.relative_to(nfl).as_posix(): p.read_bytes() for p in sorted(nfl.rglob("*"))
+            if p.is_file() and "versions" not in p.relative_to(nfl).parts}
+
+
+@pytest.fixture
+def archived(tmp_path):
+    nfl, run_id = live_original(tmp_path)
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    NETWORK_CALLS.clear()  # the original live run may try; the rebuild must not
+    return nfl, run_id
+
+
+def test_archived_live_original_is_admissible(archived):
+    nfl, run_id = archived
+    [v] = rb.admissibility(nfl)
+    assert (v.slate, v.admissible, v.run_id, v.reasons) == (SLATE, True, run_id, [])
+    # The four required roles plus the tape the run admitted (archived since #258).
+    assert {e.role for e in v.entries} == {*ar.REQUIRED_SLATE_ROLES, ar.TAPE_ROLE}
+
+
+def test_unarchived_slate_is_not_admissible(tmp_path):
+    nfl, _ = live_original(tmp_path)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("missing_role" in r for r in v.reasons)
+    with pytest.raises(rb.RebuildRefused, match="not admissible"):
+        rb.rebuild_slate(nfl, SLATE, clock=lambda: NOW)
+    assert not (nfl / "versions").exists()
+
+
+def test_fixture_original_is_not_admissible(tmp_path):
+    NflPipeline(data_dir=tmp_path).run(date="2026-09-13", offline_fixtures_dir=FIXTURES_DIR,
+                                       reports_dir=tmp_path / "reports")
+    nfl = tmp_path / "NFL"
+    ar.record_pointed_runs(nfl)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("mode 'fixture'" in r for r in v.reasons)
+
+
+def test_tampered_archive_input_is_not_admissible(archived):
+    nfl, run_id = archived
+    props = nfl / "runs" / run_id / "raw" / "player_props.json"
+    props.write_bytes(props.read_bytes() + b" ")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("size_mismatch" in r for r in v.reasons)
+
+
+def test_rebuild_is_replay_versioned_and_touches_no_original(archived):
+    nfl, run_id = archived
+    before = _originals(nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW, code_version="abc")
+    out = nfl / "versions" / "r1"
+    # NOW is past kickoff, so RunContext calls it retrospective, with replay=True.
+    assert (m["rebuilt_mode"], m["rebuilt_replay"], m["publication"]) == (
+        "retrospective", True, "bundle_only")
+    assert m["source_run_id"] == run_id and m["as_of_utc"] == PREGAME
+    assert {i["role"] for i in m["inputs"]} == {*ar.REQUIRED_SLATE_ROLES, ar.TAPE_ROLE}
+    assert all(len(i["sha256"]) == 64 for i in m["inputs"])
+    assert json.loads((out / "rebuild_manifest.json").read_text("utf-8")) == m
+    assert (out / m["rebuilt_run_dir"] / "nfl_best_bets.json").is_file()
+    assert _originals(nfl) == before  # predictions, pointers, snapshots, archive untouched
+
+
+def test_rebuild_id_is_write_once(archived):
+    nfl, _ = archived
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    marker = (nfl / "versions" / "r1" / "rebuild_manifest.json").read_bytes()
+    with pytest.raises(rb.RebuildRefused, match="never overwrites"):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert (nfl / "versions" / "r1" / "rebuild_manifest.json").read_bytes() == marker
+    with pytest.raises(rb.RebuildRefused, match="invalid rebuild id"):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="../x", clock=lambda: NOW)
+
+
+def test_rebuild_serves_exactly_the_archived_inputs(archived, monkeypatch):
+    nfl, run_id = archived
+    seen: dict[str, Any] = {}
+    real = rb.ArchivedOutlierClient.__init__
+
+    def spy(self, schedule, markets, props):
+        seen.update(schedule=schedule, markets=markets, props=props)
+        real(self, schedule, markets, props)
+
+    monkeypatch.setattr(rb.ArchivedOutlierClient, "__init__", spy)
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    raw = nfl / "runs" / run_id / "raw"
+    assert seen["props"] == json.loads((raw / "player_props.json").read_text("utf-8"))
+    assert seen["markets"] == json.loads((raw / "event_markets.json").read_text("utf-8"))
+
+
+def test_rebuild_writes_a_cause_labelled_comparison(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    out = nfl / "versions" / "r1"
+    comp = json.loads((out / "comparison.json").read_text("utf-8"))
+    assert comp["edge_basis"].startswith("sportsbook prices only")
+    assert comp["original_picks"] > 0 and comp["rebuilt_picks"] > 0
+    assert all(d["causes"] for d in comp["differences"])
+    assert m["comparison"]["differences"] == len(comp["differences"])
+    assert "# NFL rebuild comparison: 2026-10-04 (r1)" in (out / "comparison.md").read_text("utf-8")
+
+
+def test_edited_original_card_refuses_the_comparison(archived):
+    nfl, run_id = archived
+    card = nfl / "runs" / run_id / "nfl_best_bets.json"
+    card.write_bytes(card.read_bytes() + b" ")
+    with pytest.raises(rb.RebuildRefused, match="sealed in its run manifest"):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+
+
+def test_cli(archived, capsys):
+    from scripts import nfl_rebuild
+
+    nfl, _ = archived
+    assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl)]) == 0
+    assert f"ADMISSIBLE {SLATE}" in capsys.readouterr().out
+    assert nfl_rebuild.main(["rebuild", "--nfl-dir", str(nfl), "--slate", SLATE,
+                             "--rebuild-id", "cli1"]) == 0
+    assert "wrote" in capsys.readouterr().out
+    assert nfl_rebuild.main(["rebuild", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 2
+    assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl), "--slate", "2026-10-11"]) == 1
+
+
+# --- pinned nflverse, offline usage/weather ------------------------------------------
+
+def test_nflverse_is_pinned_from_the_archive_with_original_names(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    staged = nfl / "versions" / "r1" / "nflverse"
+    assert sorted(p.name for p in staged.iterdir()) == [
+        "games.csv", "games.csv.meta.json", "stats_player_week_2026.csv",
+        "stats_player_week_2026.csv.meta.json"]
+    entries = {e.path: e for e in ar.read_manifest(ar.manifest_path(nfl))[0]}
+    for f in m["nflverse_files"]:
+        e = entries[f["archive_path"]]
+        assert (f["sha256"], f["fetched_at"]) == (e.sha256, e.fetched_at)
+        assert ar.sha256_file(staged / f["name"]) == e.sha256
+    assert m["evidence_sources"]["nflverse"] == "pinned"
+    assert NETWORK_CALLS == []
+
+
+def test_damaged_archive_copy_is_refused_before_use(archived):
+    nfl, _ = archived
+    [stats] = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0]
+               if e.path.endswith("stats_player_week_2026.csv")]
+    (nfl / stats.path).write_bytes(STATS_CSV.replace(b"70", b"71"))
+    with pytest.raises(rb.RebuildRefused):
+        rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+
+
+def test_newest_archived_nflverse_copy_is_used(archived, tmp_path):
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    nfl, _ = archived
+    newer = STATS_CSV + b"P2,Rashee Rice,WR,2026,3,REG,2026_03_BAL_KC,KC,6,0.2,0,50,0\n"
+    cache = tmp_path / "nflverse_cache"
+    (cache / "stats_player_week_2026.csv").write_bytes(newer)
+    _write_meta(cache / "stats_player_week_2026.csv", CacheMeta(
+        url="https://x/s", fetched_at="2026-10-05T12:00:00+00:00",
+        sha256=hashlib.sha256(newer).hexdigest(), size=len(newer), rows=4))
+    ar.record_nflverse(nfl, cache, [2026])
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    [f] = [f for f in m["nflverse_files"] if f["name"] == "stats_player_week_2026.csv"]
+    assert f["sha256"] == hashlib.sha256(newer).hexdigest()
+    assert f["post_as_of"] is True  # fetched 10-05, slate as_of is 10-04 15:00Z
+
+
+def test_nflverse_copies_are_marked_before_or_after_as_of(archived, tmp_path):
+    """One copy before as_of (the archived 10-04 12:00Z) and one after (10-05)."""
+    import hashlib
+
+    from outlier_nfl.boxscore_nflverse import CacheMeta, _write_meta
+
+    nfl, _ = archived
+    before = rb.rebuild_slate(nfl, SLATE, rebuild_id="pre", clock=lambda: NOW)
+    assert all(f["post_as_of"] is False for f in before["nflverse_files"])
+    assert before["nflverse_post_as_of"] is False
+    assert "fetched after as_of" not in (nfl / "versions" / "pre" / "comparison.md").read_text("utf-8")
+
+    newer = STATS_CSV + b"P2,Rashee Rice,WR,2026,3,REG,2026_03_BAL_KC,KC,6,0.2,0,50,0\n"
+    cache = tmp_path / "late_cache"
+    cache.mkdir()
+    (cache / "stats_player_week_2026.csv").write_bytes(newer)
+    _write_meta(cache / "stats_player_week_2026.csv", CacheMeta(
+        url="https://x/s", fetched_at="2026-10-05T12:00:00+00:00",
+        sha256=hashlib.sha256(newer).hexdigest(), size=len(newer), rows=4))
+    ar.record_nflverse(nfl, cache, [2026])
+    after = rb.rebuild_slate(nfl, SLATE, rebuild_id="post", clock=lambda: NOW)
+    flags = {f["name"]: f["post_as_of"] for f in after["nflverse_files"]}
+    assert flags["stats_player_week_2026.csv"] is True
+    assert flags["games.csv"] is False  # the earlier copy is still the newest games.csv
+    assert after["nflverse_post_as_of"] is True
+    assert after["nflverse_post_as_of_files"] == [
+        "stats_player_week_2026.csv", "stats_player_week_2026.csv.meta.json"]
+    md = (nfl / "versions" / "post" / "comparison.md").read_text("utf-8")
+    assert "nflverse fetched after as_of" in md and "stats_player_week_2026.csv" in md
+
+
+def _rebuilt_sources(nfl: Path, m: dict[str, Any]) -> dict[str, str]:
+    run = json.loads((nfl / "versions" / m["rebuild_id"] / m["rebuilt_run_dir"] / "manifest.json")
+                     .read_text("utf-8"))
+    return {s["name"]: s["status"] for s in run["sources"]}
+
+
+def test_usage_comes_only_from_the_pinned_weekly_file(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    sources = _rebuilt_sources(nfl, m)
+    assert sources["external:schedule"] == "AVAILABLE" and sources["usage"] == "AVAILABLE"
+    assert all(v == "UNAVAILABLE" for k, v in sources.items()
+               if k.startswith("external:") and k != "external:schedule")
+    assert any("ffopportunity" in u for u in m["refused_sources"])
+    assert NETWORK_CALLS == []
+
+
+def test_without_archived_nflverse_usage_is_unavailable(tmp_path):
+    nfl, _ = live_original(tmp_path)
+    ar.record_pointed_runs(nfl)
+    NETWORK_CALLS.clear()
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    sources = _rebuilt_sources(nfl, m)
+    assert sources["external:schedule"] == "UNAVAILABLE"
+    assert sources["usage"] == "UNAVAILABLE"
+    assert m["evidence_sources"]["nflverse"] == "unavailable" and NETWORK_CALLS == []
+
+
+def test_weather_is_never_fetched_only_archived(archived, monkeypatch):
+    nfl, run_id = archived
+    from outlier_nfl import weather
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("weather fetched during a rebuild")
+
+    monkeypatch.setattr(weather, "_fetch_json", boom)
+    monkeypatch.setattr("outlier_nfl.pipeline.load_slate_weather", boom)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert m["evidence_sources"]["weather"] == "archived" and NETWORK_CALLS == []
+    out = nfl / "versions" / "r1" / m["rebuilt_run_dir"] / "nfl_weather.json"
+    original = nfl / "runs" / run_id / "nfl_weather.json"
+    assert (json.loads(out.read_text("utf-8"))["records"]
+            == json.loads(original.read_text("utf-8"))["records"])
+
+
+def test_missing_archived_weather_is_missing_and_labelled():
+    labels = rb.context_labels({"nflverse": "pinned", "weather": "unavailable", "tape": "archived"})
+    assert labels["evidence_changed:injury_weather"] == ["evidence_changed:weather"]
+    assert labels["probability_changed"] == ["evidence_changed:nflverse"]
+    inputs = rb.PinnedInputs({}, None)
+    with pytest.raises(rb.UnavailableInRebuild):
+        inputs.weather([])
+    assert inputs.refused == ["weather"]
+
+
+# --- archived tape role (#258) ----------------------------------------------------------
+
+def _tape_source(nfl: Path, m: dict[str, Any]) -> dict[str, Any]:
+    run = json.loads((nfl / "versions" / m["rebuild_id"] / m["rebuilt_run_dir"] / "manifest.json")
+                     .read_text("utf-8"))
+    return next(s for s in run["sources"] if s["name"] == "tape")
+
+
+def test_archived_tape_is_used_and_matches_the_original(archived):
+    nfl, run_id = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    original = json.loads((nfl / "runs" / run_id / "manifest.json").read_text("utf-8"))
+    orig_tape = next(s for s in original["sources"] if s["name"] == "tape")
+    tape = _tape_source(nfl, m)
+    assert m["evidence_sources"]["tape"] == "archived"
+    assert (tape["status"], tape["sha256"]) == ("AVAILABLE", orig_tape["sha256"])
+    comp = json.loads((nfl / "versions" / "r1" / "comparison.json").read_text("utf-8"))
+    assert not any("evidence_changed:injury" in d["causes"] for d in comp["differences"])
+
+
+def test_rebuild_without_archived_tape_labels_injury(tmp_path):
+    # The original's tape lists Mahomes Out, so his picks' injury pillar CONTRADICTS.
+    # The tape is then rewritten, so it can't be archived; the rebuild has no tape
+    # and the pillar becomes MISSING. That is a real difference, labelled injury.
+    tape_body = stamped_tape()
+    tape_body["inactive"] = {"KC": ["Patrick Mahomes"]}
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    tape.write_text(json.dumps(tape_body), encoding="utf-8")
+    nfl, _ = live_original(tmp_path)
+    tape.write_text(tape.read_text("utf-8") + " ", encoding="utf-8")  # rewritten after the run
+    result = ar.record_pointed_runs(nfl)
+    assert result.notes and ar.TAPE_ROLE not in {e.role for e in result.recorded}
+    _archive_nflverse(tmp_path, nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert m["evidence_sources"]["tape"] == "unavailable"
+    assert _tape_source(nfl, m)["status"] != "AVAILABLE"
+    comp = json.loads((nfl / "versions" / "r1" / "comparison.json").read_text("utf-8"))
+    changed = [d for d in comp["differences"] if "evidence_changed:injury_weather" in d["causes"]]
+    assert changed, comp["cause_counts"]  # a real difference: the original had the tape
+    assert all("evidence_changed:injury" in d["causes"] for d in changed)
+
+
+def test_two_windows_sharing_one_tape_both_rebuild_with_it(tmp_path):
+    """The full-day run and the early-window run read the same shared prior_week.json.
+    The archive stores one copy (keyed by sha256, so its entry names the first run
+    recorded), and both slates' rebuilds must use it. The frozen client can't serve a
+    complete late-window props feed (that run is PARTIAL), so the second window is
+    the full day."""
+    nfl, full = live_original(tmp_path, clock=PREGAME)
+    _, early = live_original(tmp_path, window="early", clock="2026-10-04T15:05:00+00:00")
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    tapes = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE]
+    assert len({e.path for e in tapes}) == 1
+    verdicts = {v.slate: v for v in rb.admissibility(nfl)}
+    assert set(verdicts) == {SLATE, f"{SLATE}_early"}
+    for slate, run_id in ((SLATE, full), (f"{SLATE}_early", early)):
+        v = verdicts[slate]
+        assert v.admissible and v.run_id == run_id, v.reasons
+        assert ar.TAPE_ROLE in {e.role for e in v.entries}, slate
+        m = rb.rebuild_slate(nfl, slate, rebuild_id=f"r-{slate}", clock=lambda: NOW)
+        assert m["evidence_sources"]["tape"] == "archived"
+        assert _tape_source(nfl, m)["status"] == "AVAILABLE"
+
+
+# --- determinism, guard, no network --------------------------------------------------
+
+def _normalized_tree(out: Path) -> dict[str, bytes]:
+    m = json.loads((out / "rebuild_manifest.json").read_text("utf-8"))
+    rid, run = m["rebuild_id"], m["rebuilt_run_id"]
+    tree: dict[str, bytes] = {}
+    for p in sorted(out.rglob("*")):
+        if not p.is_file():
+            continue
+        name = p.relative_to(out).as_posix().replace(run, "<run>")
+        if name.startswith("work/NFL/archive/"):
+            continue  # the replay run's private archive (since #280), inside the version
+        data = p.read_bytes().replace(run.encode(), b"<run>").replace(rid.encode(), b"<rid>")
+        if name.endswith("<run>/manifest.json"):
+            body = json.loads(data)
+            for art in body["artifacts"]:
+                art.pop("sha256")  # hashes of files that embed the run id
+            data = json.dumps(body, sort_keys=True).encode()
+        tree[name] = data
+    return tree
+
+
+def test_two_rebuilds_of_the_same_slate_are_byte_identical(archived):
+    """Same archive and clock: every file is identical except for rebuild_id, the
+    rebuilt run id (its random uuid suffix, so also its folder name), and the run
+    manifest's artifact sha256s of the files that embed that id. With a real clock,
+    created_utc, updated_at, timestamp_utc and run_started_utc differ too."""
+    nfl, _ = archived
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r2", clock=lambda: NOW)
+    a = _normalized_tree(nfl / "versions" / "r1")
+    b = _normalized_tree(nfl / "versions" / "r2")
+    assert a.keys() == b.keys()
+    assert [k for k in a if a[k] != b[k]] == []
+
+
+def test_guard_originals_untouched_and_nothing_written_outside_the_version(archived, tmp_path):
+    nfl, _ = archived
+    (nfl / "calibration").mkdir()
+    (nfl / "calibration" / "nfl_calibration.json").write_text('{"k": 1}', encoding="utf-8")
+
+    def tree() -> dict[str, tuple[bytes, int]]:
+        return {p.relative_to(tmp_path).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in sorted(tmp_path.rglob("*")) if p.is_file()
+                and "versions" not in p.relative_to(tmp_path).parts}
+
+    before = tree()
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert tree() == before  # nothing outside versions/r1 created, changed or removed
+    for key in ("NFL/normalized/nfl_run_pointer_latest.json", "NFL/tape/prior_week.json",
+                "NFL/calibration/nfl_calibration.json", "NFL/archive/manifest.jsonl"):
+        assert key in before
+    assert sorted(p.name for p in (nfl / "versions").iterdir()) == ["r1"]
+
+
+def test_rebuild_opens_no_socket(archived):
+    nfl, _ = archived
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert NETWORK_CALLS == []
+
+
+# --- the tape's date in the point-in-time check -------------------------------------
+
+def _set_mtime_now(path: Path) -> None:
+    import os
+    import time
+
+    os.utime(path, (time.time(), time.time()))  # as a copy or git checkout would
+
+
+def _archived_tape(nfl: Path) -> Path:
+    [e] = [e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE]
+    return nfl / e.path
+
+
+def test_archived_tape_with_mtime_reset_is_accepted_and_byte_identical(archived):
+    nfl, _ = archived
+    _set_mtime_now(_archived_tape(nfl))
+    m1 = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    _set_mtime_now(_archived_tape(nfl))
+    m2 = rb.rebuild_slate(nfl, SLATE, rebuild_id="r2", clock=lambda: NOW)
+    assert _tape_source(nfl, m1)["status"] == _tape_source(nfl, m2)["status"] == "AVAILABLE"
+    a = _normalized_tree(nfl / "versions" / "r1")
+    b = _normalized_tree(nfl / "versions" / "r2")
+    assert [k for k in a if a[k] != b[k]] == []
+
+
+def test_record_days_after_the_run_keeps_the_tapes_own_date(tmp_path):
+    import os
+
+    nfl, run_id = live_original(tmp_path)
+    # record runs three days later; the shared tape's mtime moves on with a re-copy
+    later = parse_utc("2026-10-07T09:00:00+00:00").timestamp()
+    os.utime(nfl / "tape" / "prior_week.json", (later, later))
+    assert not ar.record_pointed_runs(nfl).conflicts
+    _archive_nflverse(tmp_path, nfl)
+    tape = next(e for e in ar.read_manifest(ar.manifest_path(nfl))[0] if e.role == ar.TAPE_ROLE)
+    run = json.loads((nfl / "runs" / run_id / "manifest.json").read_text("utf-8"))
+    assert tape.captured_at == run["context"]["run_started_utc"]  # not record time
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    assert _tape_source(nfl, m)["status"] == "AVAILABLE"  # dated by its fetched_at_utc
+    # captured_at is never used as the tape's date: the run read the tape after it
+    assert rb._tape_known_at(run, tape) == {}
+
+
+def test_tape_date_comes_only_from_the_run_manifest():
+    entry = ar.ArchiveEntry(role=ar.TAPE_ROLE, path="archive/tape/abc/prior_week.json",
+                            sha256="abc", captured_at="2026-10-04T15:00:00+00:00",
+                            slate=SLATE, size=1, source="tape", season=2026)
+    ctx = {"as_of_utc": "2026-10-04T15:00:00+00:00"}
+
+    def manifest(**src: Any) -> dict[str, Any]:
+        return {"context": ctx, "sources": [{"name": "tape", "status": "AVAILABLE",
+                                             "sha256": "abc", **src}]}
+
+    assert rb._tape_known_at(manifest(), entry) == {}  # no read time recorded: none
+    stamp = "2026-10-04T11:00:00+00:00"
+    assert rb._tape_known_at(manifest(written_at_utc=stamp), entry) == {"abc": parse_utc(stamp)}
+    # recorded after the run's as_of: not proof of a point-in-time read, refused
+    assert rb._tape_known_at(manifest(written_at_utc="2026-10-04T15:00:01+00:00"), entry) == {}
+    # recorded for another tape: refused
+    other = {"context": ctx, "sources": [{"name": "tape", "status": "AVAILABLE",
+                                          "sha256": "zzz", "written_at_utc": stamp}]}
+    assert rb._tape_known_at(other, entry) == {}
+
+
+def test_unstamped_archived_tape_with_a_fresh_copy_is_refused_and_labelled(tmp_path):
+    tape = tmp_path / "NFL" / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
+    nfl, _ = live_original(tmp_path)
+    ar.record_pointed_runs(nfl)
+    _archive_nflverse(tmp_path, nfl)
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="r1", clock=lambda: NOW)
+    src = _tape_source(nfl, m)
+    assert src["status"] == "REFUSED" and "after as_of" in src["reason"]
+
+
+def _ctx_replay() -> Any:
+    from outlier_nfl.run_context import make_run_context
+
+    return make_run_context(slate_date=SLATE, window=None, as_of_utc=parse_utc(PREGAME),
+                            fixture=False, run_started_utc=NOW)
+
+
+def test_known_at_applies_only_to_a_tape_matching_the_manifest_hash(tmp_path):
+    """A vouched-for sha256 dates only those bytes; any other tape keeps the mtime check."""
+    import hashlib
+
+    from outlier_nfl.matchup import load_tape_envelope
+
+    nfl = tmp_path / "NFL"
+    tape = nfl / "tape" / "prior_week.json"
+    tape.parent.mkdir(parents=True)
+    body = json.dumps(snap.frozen_tape(FIXTURES_DIR)).encode()
+    tape.write_bytes(body)  # unstamped, mtime now (after as_of)
+    ctx = _ctx_replay()
+    assert ctx.historical
+    early = {hashlib.sha256(body).hexdigest(): parse_utc("2026-10-04T11:00:00+00:00")}
+    assert load_tape_envelope(nfl, ctx, early).source.status == "AVAILABLE"
+    assert load_tape_envelope(nfl, ctx).source.status == "REFUSED"
+    tape.write_bytes(body + b" ")  # different bytes, same vouched-for map
+    refused = load_tape_envelope(nfl, ctx, early).source
+    assert refused.status == "REFUSED" and "after as_of" in (refused.reason or "")
+
+
+# ---------------------------------------------------------------------------
+# Late-archived runs (10a): admitted only against the hashes sealed at run time
+# ---------------------------------------------------------------------------
+
+def _recorded_via(nfl: Path, via: str | None) -> None:
+    """Rewrite the archive manifest lines as if recorded by ``via`` (None = old entries)."""
+    mp = ar.manifest_path(nfl)
+    out = []
+    for line in mp.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        d.pop("recorded_via", None)
+        if via:
+            d["recorded_via"] = via
+        out.append(json.dumps(d, sort_keys=True))
+    mp.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def test_catch_up_archived_run_is_admissible_and_flagged_late(archived):
+    nfl, _ = archived
+    [v] = rb.admissibility(nfl)
+    assert v.admissible and v.archived_late
+    assert v.to_dict()["archived_late"] is True
+
+
+def test_pipeline_archived_run_is_not_flagged_late(archived):
+    nfl, _ = archived
+    _recorded_via(nfl, "pipeline")
+    [v] = rb.admissibility(nfl)
+    assert v.admissible and not v.archived_late
+
+
+def test_entries_from_before_the_marker_count_as_late(archived):
+    nfl, _ = archived
+    _recorded_via(nfl, None)
+    [v] = rb.admissibility(nfl)
+    assert v.admissible and v.archived_late
+
+
+def test_unknown_recorded_via_is_an_invalid_manifest_line(archived):
+    nfl, _ = archived
+    mp = ar.manifest_path(nfl)
+    d = json.loads(mp.read_text(encoding="utf-8").splitlines()[0])
+    d["recorded_via"] = "someone"
+    with pytest.raises(ar.ArchiveError, match="recorded_via"):
+        ar.parse_entry(d)
+
+
+def test_rebuild_manifest_records_archived_late(archived):
+    nfl, _ = archived
+    m = rb.rebuild_slate(nfl, SLATE, rebuild_id="late1", clock=lambda: NOW, code_version="abc")
+    assert m["archived_late"] is True
+    assert json.loads((nfl / "versions" / "late1" / "rebuild_manifest.json")
+                      .read_text(encoding="utf-8"))["archived_late"] is True
+
+
+def _reseal_pointer(nfl: Path, run_id: str, sha: Any) -> None:
+    for p in (nfl / "normalized").glob("nfl_run_pointer_*.json"):
+        body = json.loads(p.read_text(encoding="utf-8"))
+        if body.get("run_id") == run_id:
+            body["manifest_sha256"] = sha
+            p.write_text(json.dumps(body), encoding="utf-8")
+
+
+@pytest.mark.parametrize("sha", ["0" * 64, None])
+def test_pointer_hash_that_differs_from_the_archived_manifest_is_refused(archived, sha):
+    nfl, run_id = archived
+    _reseal_pointer(nfl, run_id, sha)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("manifest_sha256" in r for r in v.reasons)
+
+
+def _edit_manifest_artifact(nfl: Path, run_id: str, name: str, sha: Any) -> None:
+    """Change what the run manifest sealed for ``name`` and re-archive the manifest."""
+    mp = nfl / "runs" / run_id / "manifest.json"
+    body = json.loads(mp.read_text(encoding="utf-8"))
+    for a in body["artifacts"]:
+        if a["name"] == name:
+            if sha is None:
+                a.pop("sha256", None)
+            else:
+                a["sha256"] = sha
+    mp.write_text(json.dumps(body), encoding="utf-8")
+    new = hashlib.sha256(mp.read_bytes()).hexdigest()
+    _reseal_pointer(nfl, run_id, new)
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "run_manifest":
+            d["sha256"], d["size"] = new, mp.stat().st_size
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_manifest_without_a_per_file_hash_is_refused(archived):
+    nfl, run_id = archived
+    _edit_manifest_artifact(nfl, run_id, "raw/player_props.json", None)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible
+    assert any("lists no sha256 for raw/player_props.json" in r for r in v.reasons)
+
+
+def test_manifest_hash_that_differs_from_the_archived_bytes_is_refused(archived):
+    nfl, run_id = archived
+    _edit_manifest_artifact(nfl, run_id, "raw/schedule.json", "1" * 64)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible
+    assert any("raw/schedule.json archived sha256 differs" in r for r in v.reasons)
+
+
+def test_a_copy_not_from_the_original_run_directory_is_refused(archived, tmp_path):
+    nfl, run_id = archived
+    src = nfl / "runs" / run_id / "raw" / "schedule.json"
+    copy = nfl / "elsewhere" / "schedule.json"
+    copy.parent.mkdir()
+    copy.write_bytes(src.read_bytes())
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "pregame_schedule":
+            d["path"] = "elsewhere/schedule.json"
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("not from runs/" in r for r in v.reasons)
+
+
+def test_cli_lists_late_slates_separately(archived, capsys):
+    from scripts import nfl_rebuild
+    nfl, _ = archived
+    assert nfl_rebuild.main(["admissible", "--nfl-dir", str(nfl)]) == 0
+    out = capsys.readouterr().out
+    assert "ADMISSIBLE" in out and "archived_late" in out and "(archived_late 1)" in out
+
+
+def test_a_run_the_pipeline_archived_itself_is_admissible_and_not_late(tmp_path):
+    nfl, _ = live_original(tmp_path, keep_pipeline_archive=True)
+    _archive_nflverse(tmp_path, nfl)
+    [v] = rb.admissibility(nfl)
+    assert v.admissible and not v.archived_late
+
+
+# ---------------------------------------------------------------------------
+# Refusals with reasons, and the ledger boundary (10a reads archive + pointers only)
+# ---------------------------------------------------------------------------
+
+def test_pointer_to_a_run_that_was_never_archived_is_refused_with_a_reason(tmp_path):
+    """The Oct 11 shape: a dated pointer names a run no archive entry covers."""
+    nfl, run_id = live_original(tmp_path)  # pointer exists, archive manifest dropped
+    ar.manifest_path(nfl).parent.mkdir(parents=True, exist_ok=True)
+    ar.manifest_path(nfl).write_text("", encoding="utf-8")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and v.run_id == run_id
+    assert any("not archived" in r or "missing_role" in r for r in v.reasons)
+    with pytest.raises(rb.RebuildRefused, match="not admissible"):
+        rb.rebuild_slate(nfl, SLATE, clock=lambda: NOW)
+
+
+def test_slate_with_no_dated_pointer_is_refused_with_a_reason(archived):
+    nfl, _ = archived
+    v = next(x for x in rb.admissibility(nfl, ["2026-10-18"]) if x.slate == "2026-10-18")
+    assert v.slate == "2026-10-18" and not v.admissible and v.run_id is None
+    assert any("no dated run pointer" in r for r in v.reasons)
+
+
+def test_old_manifest_format_without_context_is_refused(archived):
+    """The Oct 8 shape: a run manifest that predates the context block."""
+    nfl, run_id = archived
+    mp = nfl / "runs" / run_id / "manifest.json"
+    body = json.loads(mp.read_text(encoding="utf-8"))
+    body.pop("context")
+    mp.write_text(json.dumps(body), encoding="utf-8")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and v.reasons
+
+
+def test_legacy_archived_slate_is_never_admissible_for_rebuild(tmp_path):
+    """Legacy (pre-bundle) slates are for the 10b re-grade only, never a rebuild."""
+    nfl, _run_id = live_original(tmp_path)
+    ar.manifest_path(nfl).write_text("", encoding="utf-8")
+    legacy = nfl / "legacy" / "card.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("{}", encoding="utf-8")
+    role = ar.LEGACY_ROLES[0]
+    ar.record_file(nfl, legacy, role=role, slate=SLATE, source="legacy_disk", season=2026,
+                   captured_at="2026-10-04T14:00:00+00:00", original_path="legacy/card.json",
+                   mtime="2026-10-04T14:00:00+00:00")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible
+
+
+def test_admissibility_and_rebuild_never_touch_the_ledger(archived, monkeypatch):
+    import inspect
+    import sqlite3
+
+    nfl, _ = archived
+    ledger = nfl.parent / "feedback.sqlite3"
+    ledger.write_bytes(b"not a database")
+    before = hashlib.sha256(ledger.read_bytes()).hexdigest()
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("rebuild opened a SQLite database")
+
+    monkeypatch.setattr(sqlite3, "connect", boom)
+    rb.admissibility(nfl)
+    rb.rebuild_slate(nfl, SLATE, rebuild_id="noledger", clock=lambda: NOW, code_version="abc")
+    assert hashlib.sha256(ledger.read_bytes()).hexdigest() == before
+    from outlier_nfl import rebuild_compare as rc
+    for mod in (rb, rc):
+        src = inspect.getsource(mod)
+        assert "feedback" not in src and "run_write_log" not in src
+
+
+# ---------------------------------------------------------------------------
+# Kickoff gate and path containment
+# ---------------------------------------------------------------------------
+
+def _edit_context(nfl: Path, run_id: str, **changes: Any) -> None:
+    """Change the original run's context and re-seal the pointer and archive entry."""
+    mp = nfl / "runs" / run_id / "manifest.json"
+    body = json.loads(mp.read_text(encoding="utf-8"))
+    for k, v in changes.items():
+        if v is rb:  # sentinel: drop the key
+            body["context"].pop(k, None)
+        else:
+            body["context"][k] = v
+    mp.write_text(json.dumps(body), encoding="utf-8")
+    new = hashlib.sha256(mp.read_bytes()).hexdigest()
+    _reseal_pointer(nfl, run_id, new)
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "run_manifest":
+            d["sha256"], d["size"] = new, mp.stat().st_size
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", [rb, None, "not a time", "2026-10-04T17:00:00"])
+def test_missing_naive_or_unparseable_first_kickoff_is_refused(archived, value):
+    nfl, run_id = archived
+    _edit_context(nfl, run_id, first_kickoff_utc=value)
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("first_kickoff_utc" in r for r in v.reasons)
+    with pytest.raises(rb.RebuildRefused, match="first_kickoff_utc"):
+        rb.rebuild_slate(nfl, SLATE, clock=lambda: NOW)
+
+
+def test_as_of_at_or_after_first_kickoff_is_refused(archived):
+    nfl, run_id = archived
+    _edit_context(nfl, run_id, first_kickoff_utc="2026-10-04T14:00:00+00:00")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("not before first kickoff" in r for r in v.reasons)
+
+
+@pytest.mark.parametrize("bad", ["../outside/schedule.json", "/etc/hostname"])
+def test_archive_path_outside_the_nfl_directory_is_refused(archived, bad):
+    nfl, _ = archived
+    arch = ar.manifest_path(nfl)
+    lines = []
+    for line in arch.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d["role"] == "pregame_schedule":
+            d["path"] = bad
+        lines.append(json.dumps(d, sort_keys=True))
+    arch.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible
+    assert any("not inside the NFL directory" in r or "outside the NFL directory" in r
+               or "not from runs/" in r for r in v.reasons)
+
+
+def test_symlink_out_of_the_nfl_directory_is_refused(archived, tmp_path):
+    nfl, run_id = archived
+    outside = tmp_path / "outside.json"
+    src = nfl / "runs" / run_id / "raw" / "schedule.json"
+    outside.write_bytes(src.read_bytes())
+    src.unlink()
+    try:
+        src.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    [v] = rb.admissibility(nfl)
+    assert not v.admissible and any("outside the NFL directory" in r for r in v.reasons)

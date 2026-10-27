@@ -86,6 +86,24 @@
 
 ---
 
+# HANDOFF — 2026-10-27 (Antigravity, WNBA postgame audit calibrations)
+
+- **Last Commit SHA**: `a439629`
+- **Branch**: `feat/wnba-postgame-calibration-game4`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/313
+- **Files Touched**:
+  - `outlier_scrapers/projections.py`: Added Rebound Vacuum Multiplier (1.22x for starting centers with >=32 min in playoffs) and Shooting Impairment Discount (0.85x on PTS/3PTS for hand/finger/wrist injuries).
+  - `outlier_scrapers/totals_model.py`: Added WNBA Postseason Half-Court Pace Compression (5.5% shift on Over/Under consensus) for September/October games.
+  - `tests/test_projections.py`: Added `test_wnba_postgame_rebound_vacuum_multiplier` and `test_wnba_postgame_shooting_impairment_discount`.
+  - `tests/test_totals_model.py`: Added `test_backfill_wnba_playoff_pace_compression`.
+- **Verification**:
+  - 160 unit tests passed across all related model suites (`test_totals_model.py`, `test_game_totals.py`, `test_alt_player_props.py`, `test_alt_team_totals.py`, `test_projections.py`).
+  - No reasoning models invoked.
+- **Next Steps**:
+  - Review and merge PR #313.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
@@ -163,6 +181,26 @@
 - Next steps: none unless requested. Any later value check must refresh prices and injury status; do not promote provisional/actionable flags to approved bets.
 
 ---
+
+# HANDOFF — 2026-10-21 (Claude, feedback ledger moved to local data)
+
+**Branch**: `fix/feedback-ledger-local-data` · **Commit**: `78f3f25` · **PR**: https://github.com/DaSilvaDub/outlier/pull/287
+
+## Accomplished
+- The ledger default is now `%LOCALAPPDATA%\outlier\calibration\feedback.sqlite3`. It is still shared by every worktree and is off the cloud-synced checkout, which corrupted it on 08-22, 08-25, 09-01 and 10-21. Resolution: `OUTLIER_FEEDBACK_DB` > local data > canonical `calibration/` > `PROJECT_ROOT` (CI / cloud unchanged). Reports stay in the repo.
+- `paths.require_migrated_ledger` makes writers, the enforce gate and the SO diagnose script raise `LedgerMigrationRequired` instead of starting an empty local ledger.
+- New `python -m outlier_scrapers.feedback migrate-ledger`: backup-API copy, integrity_check, row counts on 4 tables, then the original is archived as `feedback.migrated-<date>.sqlite3`. Idempotent and resumable.
+- `initialize_database` no longer leaks its connection.
+- 37 new or updated tests; 770 passed across the related modules.
+
+## Next steps
+1. **Owner action:** with no pipeline running, run `python -m outlier_scrapers.feedback migrate-ledger` once. Until then, Windows pipeline writers refuse with that instruction. The real ledger was NOT migrated by the agent.
+2. Watch CI on PR #287 (the full core suite runs there; locally the reasoning guard blocks the CI pytest command line).
+3. Later, optional: the old copies in canonical `calibration/` (`feedback.corrupt-*`, `.recovered*`, `.fuse_hidden*`) are ~1.3 GB of strays. Prune them only by hand, once the local ledger has proven out.
+4. Interaction with PR #290 (NBA shadow auto-run): its scheduled tasks pass an explicit `--db` trial ledger, so the migration guard never blocks them. Switching them to `-SharedLedger` (default ledger) before `migrate-ledger` has run makes them raise `LedgerMigrationRequired`: migrate first.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA shadow auto-run)
 
 - Branch `claude/auto-run-setup-f2bb7f`, PR https://github.com/DaSilvaDub/outlier/pull/290.
@@ -295,7 +333,13 @@
 
 # HANDOFF — 2026-10-15 (Claude, Daily Debug Review: matchup-ranking inactive name join)
 
-**Branch**: `claude/inspiring-fermat-sq82jn` · **Last commit**: `e215da9` · **PR**: https://github.com/DaSilvaDub/outlier/pull/268 (open)
+**Branch**: `claude/inspiring-fermat-sq82jn` · **PR #268 merged** as `785ef42` · **follow-up PR**: https://github.com/DaSilvaDub/outlier/pull/271 (open, commit `6a64e56`)
+
+> **Read this first if you touch `matchup_rankings.py`:** PR #268 was merged from
+> `0e69635`, one commit *before* the review-nit fix was pushed, so `f12cea1` did not land.
+> Master has the `_name_key` inactive join but **not** the team-scoped usage index. PR #271
+> replays that one commit on top of the merge. Until #271 lands, the vacated-backfield
+> lookup on master can still credit one team's out RB with another team's carries.
 
 ## Accomplished
 1. **Bug found and fixed (PR #268)** — `MatchupRankingsEngine.is_player_inactive`
@@ -345,8 +389,18 @@
    `backfield_vacated_boost` accumulates up to +0.60 per out RB, so two out RBs can more
    than double a projection.
 
+## Review outcome (2026-10-16)
+The author reviewed #268: **APPROVE at 0e69635, no blockers**, 4 nits. Nit 1 was a real
+correctness gap (slate-wide usage index → cross-team volume leak) and is fixed in PR #271,
+keyed on `(team, name key)` rather than a team check on the resolved profile, which would
+have turned the false match into a lost boost when both teams carry the key. The other
+three needed no code and are answered on #268: the 2026-09-13 fixture slate renders
+byte-identically (its tape has no `inactive` block, so `injury_report()` returns `None`);
+a public `_name_key` alias is a repo-wide rename across 3 existing call sites, offered as a
+follow-up; the #265 overlap in the same two files is for whoever drives that PR.
+
 ## Next steps
-1. Drive PR #268 to green and merge.
+1. Review and merge PR #271 — it carries the fix #268's merge raced past.
 2. Decide items 1-3 above; 1 is the one with betting-integrity impact.
 3. Carried over from 2026-10-14: update the canonical checkout to master before re-running
    `scripts/nfl_signal_scorecard.py`, or it reverts the week 5 snap-fill re-grade.

@@ -21,32 +21,106 @@ from scripts import diagnose_so_gamelog_calibration as diagnose
 
 @pytest.fixture
 def canonical(tmp_path, monkeypatch):
-    canonical_dir = tmp_path / "canonical" / "calibration"
-    monkeypatch.setattr(paths, "CANONICAL_CALIBRATION_DIR", canonical_dir)
-    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "checkout")
-    return canonical_dir
+    """No LOCALAPPDATA (CI / cloud sandbox) and a fake checkout; returns its calibration dir.
+
+    There is no hardcoded canonical checkout any more: the calibration dir is this
+    checkout's own (or OUTLIER_CALIBRATION_DIR).
+    """
+    checkout = tmp_path / "checkout"
+    monkeypatch.setattr(paths, "PROJECT_ROOT", checkout)
+    monkeypatch.delenv("OUTLIER_CALIBRATION_DIR", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    return checkout / "calibration"
 
 
-def test_env_var_wins_over_everything(canonical, monkeypatch, tmp_path):
+@pytest.fixture
+def local_appdata(canonical, monkeypatch, tmp_path):
+    """A Windows-like host: LOCALAPPDATA points at tmp_path."""
+    appdata = tmp_path / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(appdata))
+    return appdata / "outlier" / "calibration"
+
+
+def test_env_var_wins_over_everything(local_appdata, canonical, monkeypatch, tmp_path):
     canonical.mkdir(parents=True)
+    local_appdata.mkdir(parents=True)
     override = tmp_path / "elsewhere" / "ledger.sqlite3"
     monkeypatch.setenv("OUTLIER_FEEDBACK_DB", str(override))
 
     assert paths.resolve_feedback_db_path() == override
 
 
-def test_canonical_ledger_used_when_its_directory_exists(canonical, monkeypatch):
+def test_local_data_dir_wins_over_canonical(local_appdata, canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    canonical.mkdir(parents=True)
+
+    # Chosen even before it exists: the ledger moved, the directory is created on init.
+    assert paths.resolve_feedback_db_path() == local_appdata / "feedback.sqlite3"
+
+
+def test_blank_local_appdata_is_ignored(canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", "   ")
+    canonical.mkdir(parents=True)
+
+    assert paths.local_calibration_dir() is None
+    assert paths.resolve_feedback_db_path() == canonical / "feedback.sqlite3"
+
+
+def test_report_dir_stays_in_repo_with_local_data(local_appdata, canonical, monkeypatch):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_REPORT_DIR", raising=False)
+    canonical.mkdir(parents=True)
+
+    assert paths.resolve_feedback_report_dir() == canonical / "reports" / "latest"
+
+
+def test_checkout_ledger_used_when_its_directory_exists(canonical, monkeypatch):
     monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
     canonical.mkdir(parents=True)
 
     assert paths.resolve_feedback_db_path() == canonical / "feedback.sqlite3"
 
 
-def test_falls_back_to_checkout_without_canonical_directory(canonical, monkeypatch, tmp_path):
+def test_checkout_ledger_path_does_not_need_the_directory_to_exist(canonical, monkeypatch):
     monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
 
-    expected = tmp_path / "checkout" / "calibration" / "feedback.sqlite3"
-    assert paths.resolve_feedback_db_path() == expected
+    assert not canonical.exists()
+    assert paths.resolve_feedback_db_path() == canonical / "feedback.sqlite3"
+
+
+def test_calibration_dir_env_override_moves_every_calibration_path(canonical, monkeypatch, tmp_path):
+    monkeypatch.delenv("OUTLIER_FEEDBACK_DB", raising=False)
+    monkeypatch.delenv("OUTLIER_FEEDBACK_REPORT_DIR", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    monkeypatch.setenv("OUTLIER_CALIBRATION_DIR", str(elsewhere))
+
+    assert paths.resolve_feedback_db_path() == elsewhere / "feedback.sqlite3"
+    assert paths.legacy_feedback_db_path() == elsewhere / "feedback.sqlite3"
+    assert paths.resolve_feedback_report_dir() == elsewhere / "reports" / "latest"
+
+
+def test_worktree_finds_the_main_checkouts_legacy_ledger_through_git(tmp_path, monkeypatch):
+    """Found from the worktree's .git file, with no hardcoded path to any checkout."""
+    main = tmp_path / "main"
+    gitdir = main / ".git" / "worktrees" / "feature"
+    gitdir.mkdir(parents=True)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "PROJECT_ROOT", worktree)
+    monkeypatch.delenv("OUTLIER_CALIBRATION_DIR", raising=False)
+
+    assert paths.main_checkout_root() == main
+    assert paths.legacy_feedback_db_path() == main / "calibration" / "feedback.sqlite3"
+    # Anything this run writes still lands in the worktree's own calibration dir.
+    assert paths._repo_calibration_dir() == worktree / "calibration"
+
+
+def test_plain_checkout_is_its_own_main_checkout(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path)
+
+    assert paths.main_checkout_root() == tmp_path
 
 
 def test_blank_env_var_is_ignored(canonical, monkeypatch):
@@ -58,11 +132,11 @@ def test_blank_env_var_is_ignored(canonical, monkeypatch):
 
 def test_report_dir_follows_the_same_resolution(canonical, monkeypatch, tmp_path):
     monkeypatch.delenv("OUTLIER_FEEDBACK_REPORT_DIR", raising=False)
-    expected_fallback = tmp_path / "checkout" / "calibration" / "reports" / "latest"
-    assert paths.resolve_feedback_report_dir() == expected_fallback
+    expected = tmp_path / "checkout" / "calibration" / "reports" / "latest"
+    assert paths.resolve_feedback_report_dir() == expected
 
     canonical.mkdir(parents=True)
-    assert paths.resolve_feedback_report_dir() == canonical / "reports" / "latest"
+    assert paths.resolve_feedback_report_dir() == expected
 
     override = tmp_path / "reports-override"
     monkeypatch.setenv("OUTLIER_FEEDBACK_REPORT_DIR", str(override))

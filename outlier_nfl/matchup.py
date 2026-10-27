@@ -180,8 +180,13 @@ def _tape_written_at(raw: Mapping[str, Any], path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
 
 
-def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext) -> str | None:
-    """Why a local tape cannot be used at ``ctx`` (None when it is admissible)."""
+def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext,
+                             written_at: datetime | None = None) -> str | None:
+    """Why a local tape cannot be used at ``ctx`` (None when it is admissible).
+
+    ``written_at`` replaces the stamp/mtime lookup; only ``load_tape_envelope``
+    passes it, and only for bytes whose sha256 a caller vouched for.
+    """
     season = raw.get("season")
     if season is None:
         return "envelope has no season"
@@ -201,13 +206,14 @@ def tape_inadmissible_reason(raw: Mapping[str, Any], path: Path, ctx: RunContext
         return (f"stale: built from games before {before_day}, {age} days before slate "
                 f"{ctx.slate_date} (max {TAPE_MAX_AGE_DAYS}; run with --refresh-tape)")
     if ctx.historical:  # retrospective or replay: the tape must predate as_of
-        written = _tape_written_at(raw, path)
+        written = written_at or _tape_written_at(raw, path)
         if written > ctx.as_of_utc:
             return f"tape written {written.isoformat()} after as_of {ctx.as_of_iso}"
     return None
 
 
-def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext) -> TapeEnvelope:
+def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext,
+                       known_at: Mapping[str, datetime] | None = None) -> TapeEnvelope:
     """Read and admit the run's tape (F02: point-in-time tape only).
 
     Local ``tape/prior_week.json`` then ``tape/latest.json`` must match the slate
@@ -237,7 +243,9 @@ def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext) -> TapeEnvelope:
         if not teams:
             refusals.append(f"{path.name}: no teams")
             continue
-        reason = None if packaged else tape_inadmissible_reason(raw, path, ctx)
+        sha = hashlib.sha256(data).hexdigest()
+        reason = None if packaged else tape_inadmissible_reason(
+            raw, path, ctx, (known_at or {}).get(sha))
         if reason:
             refusals.append(f"{path.name}: {reason}")
             continue
@@ -246,7 +254,7 @@ def load_tape_envelope(nfl_dir: Path | str, ctx: RunContext) -> TapeEnvelope:
             payload=raw if isinstance(raw, dict) else {},
             source=SourceRecord(
                 "tape", "AVAILABLE", "packaged fixture tape" if packaged else None,
-                rows_admitted=len(teams), sha256=hashlib.sha256(data).hexdigest(),
+                rows_admitted=len(teams), sha256=sha,
             ),
         )
     if refusals:

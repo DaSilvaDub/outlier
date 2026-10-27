@@ -27,6 +27,7 @@ from outlier_scrapers.feedback_db import (
     _timestamp_extreme,
     _truthy,
     _utc_now,
+    log_run_writes,
 )
 from outlier_scrapers.utils import _american_to_decimal, _write_csv
 
@@ -411,11 +412,18 @@ def capture_pack(
     source_filename: str | None = None,
     snapshot_namespace: str = "",
     decision_filename: str = "decisions.csv",
+    run_id: str | None = None,
 ) -> CaptureStats:
     """Persist a dated pack's opportunity snapshots and seed pipeline decisions.
 
     Re-capturing an identical source timestamp is idempotent.  A new line, price,
     source timestamp, side, or alternate outcome creates a new snapshot.
+
+    ``run_id`` names the daily run doing the write.  It is stored on rows this call
+    inserts and never changed by a later upsert, so on ``market_snapshots`` and
+    ``decisions`` it means "first writer" and is informational only.  What each run
+    left in the ledger is recorded in the insert-only ``run_write_log``, written in
+    the same transaction as the upserts.
     """
 
     pack_dir = Path(pack_dir)
@@ -479,11 +487,11 @@ def capture_pack(
                     insight_component, movement_component, orf_component,
                     projection_feature_hash, projection_quality_flags, pack_path,
                     policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
-                    recency_hit_prob, created_at
+                    recency_hit_prob, created_at, run_id
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(snapshot_id) DO UPDATE SET
                     market_consensus_prob = COALESCE(
@@ -539,7 +547,7 @@ def capture_pack(
                     WHERE settlements.snapshot_id = market_snapshots.snapshot_id
                 )
                 """,
-                [*values, now],
+                [*values, now, run_id],
             )
 
         for decision in decisions:
@@ -550,8 +558,8 @@ def capture_pack(
                     A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
                     units, kill_reason, news_override,
                     policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(decision_id) DO UPDATE SET
                     pipeline_verdict = excluded.pipeline_verdict,
                     units = CASE
@@ -574,7 +582,7 @@ def capture_pack(
                     WHERE settlements.snapshot_id = decisions.snapshot_id
                 )
                 """,
-                [decision[field] for field in DECISION_FIELDS] + [now, now],
+                [decision[field] for field in DECISION_FIELDS] + [now, now, run_id],
             )
 
         for source, row, snapshot, decision in captured_rows:
@@ -582,8 +590,9 @@ def capture_pack(
                 """
                 INSERT INTO pack_snapshot_memberships (
                     pack_capture_id, snapshot_id, pack_path, pack_timestamp,
-                    source, pipeline_verdict, units, selected, actionable, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source, pipeline_verdict, units, selected, actionable, created_at,
+                    run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(pack_capture_id, snapshot_id) DO NOTHING
                 """,
                 (
@@ -597,8 +606,17 @@ def capture_pack(
                     snapshot["selected"],
                     1 if _truthy(row.get("actionable")) else 0,
                     now,
+                    run_id,
                 ),
             )
+
+        log_run_writes(
+            conn,
+            run_id=run_id,
+            source="capture_pack",
+            pack_capture_id=pack_capture_id,
+            snapshot_ids=[snapshot["snapshot_id"] for snapshot in snapshots],
+        )
 
         decision_ids = [decision["decision_id"] for decision in decisions]
         current: list[dict[str, Any]] = []
@@ -617,6 +635,7 @@ def capture_t30_pack(
     *,
     recorded_pack_path: Path | None = None,
     connection: sqlite3.Connection | None = None,
+    run_id: str | None = None,
 ) -> CaptureStats:
     """Persist only the dedicated T-30 output under a separate snapshot namespace."""
 
@@ -628,10 +647,13 @@ def capture_t30_pack(
         source_filename="t30_reprice.csv",
         snapshot_namespace="t30",
         decision_filename="t30_decisions.csv",
+        run_id=run_id,
     )
 
 
-def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> ImportStats:
+def import_decisions(
+    input_path: Path, db_path: Path = DEFAULT_DB_PATH, *, run_id: str | None = None
+) -> ImportStats:
     rows = _read_csv(Path(input_path), DECISION_FIELDS)
     now = _utc_now()
     with _connect(Path(db_path)) as conn:
@@ -692,8 +714,8 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                     A_verdict, B_verdict, C_verdict, D_verdict, final_verdict,
                     units, kill_reason, news_override,
                     policy_fingerprint, portfolio_mode, pre_cap_units, portfolio_units, cap_reasons,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(decision_id) DO UPDATE SET
                     snapshot_id = excluded.snapshot_id,
                     pipeline_verdict = excluded.pipeline_verdict,
@@ -717,6 +739,13 @@ def import_decisions(input_path: Path, db_path: Path = DEFAULT_DB_PATH) -> Impor
                     WHERE settlements.snapshot_id = decisions.snapshot_id
                 )
                 """,
-                [values[field] for field in DECISION_FIELDS] + [now, now],
+                [values[field] for field in DECISION_FIELDS] + [now, now, run_id],
+            )
+            log_run_writes(
+                conn,
+                run_id=run_id,
+                source="import_decisions",
+                pack_capture_id="",
+                snapshot_ids=[snapshot_id],
             )
     return ImportStats(imported=len(rows))

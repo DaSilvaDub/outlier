@@ -826,3 +826,65 @@ def test_wnba_playoff_minutes_expansion_in_projections():
     assert playoff_rec["distribution"]["mean"] > reg_rec["distribution"]["mean"]
     assert playoff_rec["distribution"]["mean"] == pytest.approx(35.2 * 0.65, abs=0.1)
 
+def test_wnba_postgame_rebound_vacuum_multiplier():
+    """Starting centers logging >=32 projected minutes in playoffs get a 1.22x rebound rate boost."""
+    playoff_row_c = {
+        "sport": "WNBA",
+        "market_type": "REB",
+        "line": 9.5,
+        "selection": "Angel Reese - Rebounds OVER 9.5",
+        "_event_starts_at": "2026-10-25T20:00:00Z",
+        "player_position": "C",
+    }
+    playoff_row_g = {
+        "sport": "WNBA",
+        "market_type": "REB",
+        "line": 4.5,
+        "selection": "Jordin Canada - Rebounds OVER 4.5",
+        "_event_starts_at": "2026-10-25T20:00:00Z",
+        "player_position": "G",
+    }
+    features = {
+        "projected_minutes": 32.0,
+        "rebounds_per_minute": 0.35,
+    }
+    rec_c = wnba_projection_record(playoff_row_c, features=features)
+    rec_g = wnba_projection_record(playoff_row_g, features=features)
+
+    assert rec_c is not None
+    assert rec_g is not None
+    assert rec_c["distribution"]["mean"] == pytest.approx(35.2 * (0.35 * 1.22), abs=0.1)
+    assert rec_g["distribution"]["mean"] == pytest.approx(35.2 * 0.35, abs=0.1)
+
+
+def test_wnba_postgame_shooting_impairment_discount():
+    """Perimeter players with hand/wrist/finger injury flags receive a 15% discount on PTS/3PTS."""
+    healthy_row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "player": "Allisha Gray",
+        "line": 15.5,
+        "selection": "Allisha Gray - Points OVER 15.5",
+        "_event_starts_at": "2026-10-25T20:00:00Z",
+        "injury_flags": "",
+    }
+    injured_row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "player": "Allisha Gray",
+        "line": 15.5,
+        "selection": "Allisha Gray - Points OVER 15.5",
+        "_event_starts_at": "2026-10-25T20:00:00Z",
+        "injury_flags": "Allisha Gray (finger injury, questionable)",
+    }
+    features = {
+        "projected_minutes": 30.0,
+        "points_per_minute": 0.60,
+    }
+    rec_healthy = wnba_projection_record(healthy_row, features=features)
+    rec_injured = wnba_projection_record(injured_row, features=features)
+
+    assert rec_healthy is not None
+    assert rec_injured is not None
+    assert rec_injured["distribution"]["mean"] == pytest.approx(rec_healthy["distribution"]["mean"] * 0.85, abs=0.1)
+

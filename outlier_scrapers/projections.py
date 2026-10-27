@@ -1399,6 +1399,30 @@ def wnba_projection_record(
         line_value = float(str(line).replace("+", ""))
     except (TypeError, ValueError):
         return None
+
+    # Postgame Calibration Upgrade: Rebound Vacuum Multiplier
+    # In postseason play, when a starting center logs >= 32.0 projected minutes,
+    # boost rebounding rate by 1.22x.
+    pos = str(row.get("player_position") or row.get("player_role") or (features.get("player_position") if isinstance(features, dict) else "") or "").strip().upper()
+    is_frontcourt_center = pos in {"C", "CENTER", "C-F", "F-C"}
+    if is_playoffs and market == "REB" and is_frontcourt_center and minutes >= 32.0:
+        component_rates = [
+            round(float(r) * 1.22, 4) if r is not None else None
+            for r in component_rates
+        ]
+
+    # Postgame Calibration Upgrade: Shooting Impairment Discount
+    # When injury reports cite hand/wrist/finger or shooting-arm issues for perimeter players,
+    # discount scoring and 3-point rates by 15% (0.85x).
+    inj_text = str(row.get("injury_flags") or "").lower()
+    player_name = str(row.get("player") or "").lower()
+    if any(k in inj_text for k in ("finger", "wrist", "hand", "thumb")) and player_name and player_name in inj_text:
+        if market in {"PTS", "3PTS"}:
+            component_rates = [
+                round(float(r) * 0.85, 4) if r is not None else None
+                for r in component_rates
+            ]
+
     mean_stat = minutes * sum(float(rate) for rate in component_rates if rate is not None)
     if mean_stat <= 0:
         return None

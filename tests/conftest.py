@@ -1,16 +1,56 @@
 import hashlib
 import os
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-import pytest
-from outlier_scrapers import paths
-from outlier_scrapers.portfolio import PortfolioPolicy
-
-# Resolved at import, before any test monkeypatches paths.PROJECT_ROOT or chdirs.
+# Calibration lock. This must run before any outlier_scrapers module is imported:
+# the DEFAULT_*_PATH constants are computed from OUTLIER_CALIBRATION_DIR at import.
+# Tests get a temporary calibration dir, and every write under the real
+# ``calibration/`` of this checkout or of the main checkout is refused *before* it
+# happens (outlier_scrapers.calibration_store), instead of detected afterwards.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+# conftest can be imported twice (as ``conftest`` and ``tests.conftest``); the second
+# import must reuse the first one's directory instead of replacing it.
+_TEST_CALIBRATION_DIR = Path(
+    os.environ.get("_OUTLIER_TEST_CALIBRATION_DIR")
+    or tempfile.mkdtemp(prefix="outlier-test-calibration-")
+)
+os.environ["_OUTLIER_TEST_CALIBRATION_DIR"] = str(_TEST_CALIBRATION_DIR)
+
+
+def _main_checkout_root(repo_root: Path) -> Path:
+    dot_git = repo_root / ".git"
+    if dot_git.is_file():
+        text = dot_git.read_text(encoding="utf-8").strip()
+        if text.startswith("gitdir:"):
+            gitdir = Path(text.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (repo_root / gitdir).resolve()
+            if gitdir.parent.name == "worktrees":
+                return gitdir.parent.parent.parent
+    return repo_root
+
+
+REAL_CALIBRATION_DIRS = tuple(
+    dict.fromkeys(
+        [
+            (_REPO_ROOT / "calibration").resolve(),
+            (_main_checkout_root(_REPO_ROOT) / "calibration").resolve(),
+        ]
+    )
+)
+os.environ["OUTLIER_CALIBRATION_DIR"] = str(_TEST_CALIBRATION_DIR)
+os.environ["OUTLIER_PROTECTED_CALIBRATION_DIRS"] = os.pathsep.join(
+    str(p) for p in REAL_CALIBRATION_DIRS
+)
+
+import pytest  # noqa: E402
+from outlier_scrapers import paths  # noqa: E402
+from outlier_scrapers.portfolio import PortfolioPolicy  # noqa: E402
 # Committed artifacts that production writers target by default.
 _GUARDED_DIRS = ("calibration", "reports")
 
@@ -59,6 +99,17 @@ def _guarded_digests() -> dict[Path, str | None]:
 
 
 @pytest.fixture(autouse=True)
+def _clean_test_calibration_dir():
+    """The shared temporary calibration dir starts empty for every test."""
+    yield
+    for child in _TEST_CALIBRATION_DIR.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
 def _no_writes_to_real_tracked_artifacts():
     """Fail any test that modifies or deletes a tracked file under real ``calibration/`` or ``reports/``.
 
@@ -88,13 +139,18 @@ def _no_writes_to_real_tracked_artifacts():
 
 
 # The resolved production ledger (paths.FEEDBACK_DB_PATH, which honours
-# OUTLIER_FEEDBACK_DB), the canonical checkout's ledger, and this checkout's own
-# copy. No test may open any of them.
+# OUTLIER_FEEDBACK_DB), the local-data ledger, the canonical checkout's
+# pre-migration ledger, and this checkout's own copy. No test may open any of them.
 REAL_LEDGER_PATHS = tuple(
     dict.fromkeys(
         [
             paths.FEEDBACK_DB_PATH,
-            paths.CANONICAL_CALIBRATION_DIR / "feedback.sqlite3",
+            *(
+                [paths.local_calibration_dir() / paths.FEEDBACK_DB_NAME]
+                if paths.local_calibration_dir() is not None
+                else []
+            ),
+            paths.main_checkout_root() / "calibration" / "feedback.sqlite3",
             paths.PROJECT_ROOT / "calibration" / "feedback.sqlite3",
         ]
     )

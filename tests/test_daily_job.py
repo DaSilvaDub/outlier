@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,7 +184,7 @@ def test_ingest_pending_settlements_routes_to_feedback_inbox(monkeypatch, tmp_pa
     }
     seen = {}
 
-    def fake_import(inbox, db):
+    def fake_import(inbox, db, run_id=None):
         seen["args"] = (inbox, db)
         return expected
 
@@ -200,7 +201,7 @@ def test_collect_completed_results_routes_to_results_module(monkeypatch, tmp_pat
     expected = {"settlement_rows": 2, "updated_count": 2}
     seen = {}
 
-    def fake_collect(db, *, leagues, lookback_days, output_dir):
+    def fake_collect(db, *, leagues, lookback_days, output_dir, run_id=None):
         seen["args"] = (db, leagues, lookback_days, output_dir)
         return expected
 
@@ -336,12 +337,35 @@ class _FakeLoginProc:
         return self.returncode
 
 
+class _StalledLoginProc:
+    """A login child that never exits: every wait() times out.
+
+    terminate() and kill() are recorded but deliberately do not reap it, which
+    is the worst case orchestrate_login's termination ladder has to survive.
+    """
+
+    def __init__(self):
+        self.returncode = None
+        self.signals: list[str] = []
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired(cmd="login", timeout=timeout)
+
+    def terminate(self):
+        self.signals.append("terminate")
+
+    def kill(self):
+        self.signals.append("kill")
+
+
 def _setup_orchestrate_login(
-    monkeypatch, tmp_path, *, otp_result: bool, returncode: int, auth_check: bool
+    monkeypatch, tmp_path, *, otp_result: bool, returncode: int, auth_check: bool, proc=None
 ) -> dict:
     calls: dict = {"auth_checks": []}
+    login_proc = proc if proc is not None else _FakeLoginProc(returncode)
+    calls["proc"] = login_proc
     monkeypatch.setattr(daily_job, "otp_status_file", lambda: tmp_path / "otp_status.json")
-    monkeypatch.setattr(daily_job.subprocess, "Popen", lambda *_a, **_k: _FakeLoginProc(returncode))
+    monkeypatch.setattr(daily_job.subprocess, "Popen", lambda *_a, **_k: login_proc)
     monkeypatch.setattr(daily_job, "tail_otp_status_and_fetch", lambda _ts: otp_result)
 
     def fake_auth_check(leagues):
@@ -381,6 +405,22 @@ def test_orchestrate_login_recovers_from_nonzero_exit_if_auth_ok(tmp_path, monke
     )
 
     assert daily_job.orchestrate_login(["MLB"])
+    assert calls["auth_checks"] == [["MLB"]]
+
+
+def test_orchestrate_login_survives_a_login_child_that_never_dies(tmp_path, monkeypatch):
+    # The termination ladder added for the stalled-login fix ended in a bare
+    # wait(); when even a kill does not reap the child, that wait raises
+    # TimeoutExpired, which escaped orchestrate_login and crashed the whole
+    # daily pipeline instead of reporting an authentication failure.
+    _require_daily_job()
+    stalled = _StalledLoginProc()
+    calls = _setup_orchestrate_login(
+        monkeypatch, tmp_path, otp_result=False, returncode=0, auth_check=False, proc=stalled
+    )
+
+    assert not daily_job.orchestrate_login(["MLB"])
+    assert stalled.signals == ["terminate", "kill"]
     assert calls["auth_checks"] == [["MLB"]]
 
 
@@ -746,7 +786,7 @@ def test_t30_only_runs_under_daily_writer_lock(tmp_path, monkeypatch):
         lambda _lock: calls.append("release"),
     )
 
-    def fake_t30(path, *, feedback_db, force):
+    def fake_t30(path, *, feedback_db, force, run_id=None):
         calls.append(("t30", path, feedback_db, force))
         return type("Result", (), {"completed": True, "reason": "due"})()
 

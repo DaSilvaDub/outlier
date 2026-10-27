@@ -19,7 +19,9 @@ from .otp_fetcher import fetch_and_write_otp
 from . import pack
 from . import feedback
 from . import probability_blend
+from . import stake_calibration
 from . import feed_health
+from . import calibration_store
 from . import pack_manifest
 from . import refresh_plan
 from . import results
@@ -152,7 +154,16 @@ def orchestrate_login(leagues: list[str] | None = None) -> bool:
                 login_proc.kill()
             except OSError as exc:
                 logger.warning("Could not kill stalled login process: %s", exc)
-            login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
+            try:
+                login_proc.wait(timeout=LOGIN_PROCESS_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                # Nothing left to escalate to. Letting this propagate would
+                # abort the pipeline with a traceback instead of the
+                # authentication-failure path _ensure_authenticated expects.
+                logger.error(
+                    "Login process survived the kill; abandoning it as an orphan "
+                    "and treating the login as failed."
+                )
     if login_proc.returncode != 0:
         logger.error(f"Login process exited with code {login_proc.returncode}")
         success = False
@@ -230,10 +241,15 @@ def check_freshness(leagues: list[str], *, now: datetime | None = None) -> bool:
 
 
 def run_pack(
-    leagues: list[str], target_date: str | None = None, feedback_db: Path | None = None
+    leagues: list[str],
+    target_date: str | None = None,
+    feedback_db: Path | None = None,
+    run_id: str | None = None,
 ) -> Path | None:
     logger.info("Building pack...")
     args = ["--leagues", ",".join(leagues)]
+    if run_id:
+        args.extend(["--run-id", run_id])
     if target_date:
         args.extend(["--date", target_date])
     if feedback_db:
@@ -248,12 +264,13 @@ def run_pack(
 def ingest_pending_settlements(
     inbox_dir: Path | None = None,
     db_path: Path | None = None,
+    run_id: str | None = None,
 ) -> dict | None:
     """Import result-feed CSVs before building the next slate."""
     inbox = inbox_dir or PROJECT_ROOT / "calibration" / "settlements" / "inbox"
     db = db_path or feedback.DEFAULT_DB_PATH
     try:
-        stats = feedback.import_settlement_inbox(inbox, db)
+        stats = feedback.import_settlement_inbox(inbox, db, run_id=run_id)
     except (OSError, csv.Error, feedback.FeedbackError, ValueError) as exc:
         logger.error("Settlement ingestion failed: %s", exc)
         return None
@@ -272,6 +289,7 @@ def collect_completed_results(
     output_dir: Path | None = None,
     *,
     lookback_days: int = 3,
+    run_id: str | None = None,
 ) -> dict:
     """Grade completed ledger rows without blocking a new-slate refresh on feed downtime."""
     db = db_path or feedback.DEFAULT_DB_PATH
@@ -282,6 +300,7 @@ def collect_completed_results(
             leagues=leagues,
             lookback_days=lookback_days,
             output_dir=output,
+            run_id=run_id,
         )
     except (
         OSError,
@@ -304,8 +323,12 @@ def refit_blend_weights(
 
     The fitted artifact only improves as settlements accumulate, so it is
     refitted every run instead of whenever someone remembers to call
-    ``feedback fit-blend`` by hand. Failure is non-fatal: the pack falls back to
-    the previous artifact (or to market-only) rather than skipping a slate.
+    ``feedback fit-blend`` by hand. An ordinary fit failure (I/O, SQLite, bad
+    data) is non-fatal: the pack falls back to the previous artifact (or to
+    market-only) rather than skipping a slate. A refused write or a bad
+    calibration pointer (``CalibrationWriteRefused``, ``CalibrationVersionError``)
+    is deliberately *not* caught: the run aborts instead of continuing on weights
+    nobody can vouch for.
     """
 
     db = db_path or feedback.DEFAULT_DB_PATH
@@ -447,6 +470,7 @@ def _run_pre_pack_maintenance(
             args.feedback_db,
             args.results_output,
             lookback_days=args.results_lookback_days,
+            run_id=getattr(args, "run_id", None),
         )
 
     settlement_stats = {
@@ -459,7 +483,9 @@ def _run_pre_pack_maintenance(
         "updated_count": 0,
     }
     if not args.skip_settlement_ingest:
-        imported = ingest_pending_settlements(args.settlement_inbox, args.feedback_db)
+        imported = ingest_pending_settlements(
+            args.settlement_inbox, args.feedback_db, run_id=getattr(args, "run_id", None)
+        )
         if imported is None:
             return 1, result_collection, settlement_stats, {}, {}
         settlement_stats = imported
@@ -510,7 +536,12 @@ def _desk_steps_for_profile(profile: str) -> list[str]:
 def _run_pack_and_desk(
     args: argparse.Namespace, leagues: list[str]
 ) -> tuple[Path | None, str, int | None]:
-    pack_dir = run_pack(leagues, target_date=args.date, feedback_db=args.feedback_db)
+    pack_dir = run_pack(
+        leagues,
+        target_date=args.date,
+        feedback_db=args.feedback_db,
+        run_id=getattr(args, "run_id", None),
+    )
     if pack_dir is None:
         logger.error("Pack generation failed. Aborting.")
         return None, args.analysis_profile, None
@@ -583,7 +614,7 @@ def _finalize_run(
 
     manifest = pack_manifest.build_manifest_v2(
         pack_dir,
-        run_id=f"{pack_dir.name}-{int(time.time())}",
+        run_id=getattr(args, "run_id", None) or f"{pack_dir.name}-{int(time.time())}",
         timestamp=datetime.now(timezone.utc).isoformat(),
         leagues=leagues,
         profile=profile,
@@ -593,6 +624,12 @@ def _finalize_run(
             "settlement_ingest": settlement_stats,
             "result_collection": result_collection,
             "blend_refit": blend_refit,
+            "calibration": calibration_store.run_record(
+                {
+                    "blend_weights": probability_blend.DEFAULT_WEIGHTS_PATH,
+                    "stake_calibration": stake_calibration.DEFAULT_ARTIFACT_PATH,
+                }
+            ),
             "feedback_maintenance": feedback_maintenance,
             "desk_feedback": desk_feedback,
         },
@@ -606,7 +643,13 @@ def _finalize_run(
     return final_code
 
 
+def _new_run_id(target_date: str | None) -> str:
+    day = target_date or datetime.now().astimezone().date().isoformat()
+    return f"{day}-{int(time.time())}"
+
+
 def _run_locked_pipeline(args: argparse.Namespace, leagues: list[str]) -> int:
+    args.run_id = _new_run_id(args.date)
     early, result_collection, settlement_stats, feedback_maintenance, blend_refit = (
         _run_pre_pack_maintenance(args, leagues)
     )
@@ -730,6 +773,7 @@ def main(argv: list[str] | None = None) -> int:
                     t30_pack_dir,
                     feedback_db=args.feedback_db or feedback.DEFAULT_DB_PATH,
                     force=args.force_t30,
+                    run_id=f"t30-{_new_run_id(None)}",
                 )
             except Exception as exc:
                 logger.error("T-30 repricing failed: %s", exc)

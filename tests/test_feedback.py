@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from outlier_scrapers import feedback, pack
+from outlier_scrapers import feedback, pack, probability_blend
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER
 from outlier_scrapers.pack import CANDIDATES_HEADER
 from outlier_scrapers.ultimate_alt import ULTIMATE_ALT_HEADER
@@ -304,7 +304,9 @@ def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
     assert captured == [(4.0, "-100_TO_+100", "1_TO_6H", "HIGH", 0.7)] * 2
     output = tmp_path / "blend_weights.json"
     artifact = feedback.fit_blend_weights(db_path, output, min_samples=2, prior_strength=0)
-    assert output.exists()
+    # The live path is never overwritten: the fit is a new version behind a pointer.
+    assert not output.exists()
+    assert probability_blend.load_weight_artifact(output) == artifact
     assert artifact["status"] == "active"
     # Both rows share one captured_at, so there's no chronological holdout to
     # prove OOS improvement; the market-weight floor applies (Phase 1).

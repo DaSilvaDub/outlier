@@ -7,11 +7,12 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from outlier_scrapers import paths, probability_blend
+from outlier_scrapers import calibration_store, paths, probability_blend
 
 DEFAULT_DB_PATH = paths.FEEDBACK_DB_PATH
 SCHEMA_VERSION = 5
@@ -186,6 +187,7 @@ MARKET_SNAPSHOT_COLUMN_DEFINITIONS = {
     "cap_reasons": "TEXT",
     "recency_hit_prob": "REAL",
     "created_at": "TEXT NOT NULL DEFAULT ''",
+    "run_id": "TEXT",
 }
 
 DECISION_COLUMN_DEFINITIONS = {
@@ -207,6 +209,7 @@ DECISION_COLUMN_DEFINITIONS = {
     "cap_reasons": "TEXT",
     "created_at": "TEXT NOT NULL DEFAULT ''",
     "updated_at": "TEXT NOT NULL DEFAULT ''",
+    "run_id": "TEXT",
 }
 
 SETTLEMENT_COLUMN_DEFINITIONS = {
@@ -225,12 +228,16 @@ SETTLEMENT_COLUMN_DEFINITIONS = {
     "pnl": "REAL",
     "would_have_result": "TEXT",
     "settled_at": "TEXT NOT NULL DEFAULT ''",
+    "run_id": "TEXT",
 }
+
+MEMBERSHIP_COLUMN_DEFINITIONS = {"run_id": "TEXT"}
 
 REQUIRED_TABLE_IDENTITY_COLUMNS = {
     "market_snapshots": {"snapshot_id"},
     "decisions": {"decision_id", "snapshot_id"},
     "settlements": {"settlement_id"},
+    "pack_snapshot_memberships": {"pack_capture_id", "snapshot_id"},
 }
 
 # SQLite does not support bind parameters for identifiers. Keep every schema
@@ -286,6 +293,7 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "cap_reasons": "ALTER TABLE market_snapshots ADD COLUMN cap_reasons TEXT",
         "recency_hit_prob": "ALTER TABLE market_snapshots ADD COLUMN recency_hit_prob REAL",
         "created_at": "ALTER TABLE market_snapshots ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+        "run_id": "ALTER TABLE market_snapshots ADD COLUMN run_id TEXT",
     },
     "decisions": {
         "decision_id": "ALTER TABLE decisions ADD COLUMN decision_id TEXT",
@@ -306,6 +314,7 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "cap_reasons": "ALTER TABLE decisions ADD COLUMN cap_reasons TEXT",
         "created_at": "ALTER TABLE decisions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         "updated_at": "ALTER TABLE decisions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        "run_id": "ALTER TABLE decisions ADD COLUMN run_id TEXT",
     },
     "settlements": {
         "settlement_id": "ALTER TABLE settlements ADD COLUMN settlement_id TEXT",
@@ -323,6 +332,10 @@ TABLE_COLUMN_ADD_STATEMENTS = {
         "pnl": "ALTER TABLE settlements ADD COLUMN pnl REAL",
         "would_have_result": "ALTER TABLE settlements ADD COLUMN would_have_result TEXT",
         "settled_at": "ALTER TABLE settlements ADD COLUMN settled_at TEXT NOT NULL DEFAULT ''",
+        "run_id": "ALTER TABLE settlements ADD COLUMN run_id TEXT",
+    },
+    "pack_snapshot_memberships": {
+        "run_id": "ALTER TABLE pack_snapshot_memberships ADD COLUMN run_id TEXT",
     },
 }
 
@@ -548,8 +561,15 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
     from outlier_scrapers.feedback_capture import _validate_decision_snapshot_identities
 
     db_path = Path(db_path)
+    # Refuse before anything is created or opened for writing (protected dirs in tests).
+    calibration_store.refuse_forbidden_write(db_path)
+    # Every writer passes through here; never create an empty local ledger while
+    # the pre-migration one still holds the history.
+    paths.require_migrated_ledger(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    # closing(): sqlite3's context manager only commits; without an explicit close
+    # the connection lingered until GC with its WAL frames uncheckpointed.
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.row_factory = sqlite3.Row
         prior_schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.execute("PRAGMA foreign_keys = ON")
@@ -605,7 +625,8 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 portfolio_units REAL,
                 cap_reasons TEXT,
                 recency_hit_prob REAL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                run_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS decisions (
@@ -626,7 +647,8 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 portfolio_units REAL,
                 cap_reasons TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                run_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS settlements (
@@ -644,7 +666,8 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 clv_price REAL,
                 pnl REAL,
                 would_have_result TEXT,
-                settled_at TEXT NOT NULL
+                settled_at TEXT NOT NULL,
+                run_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS pack_snapshot_memberships (
@@ -658,8 +681,41 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
                 selected INTEGER NOT NULL DEFAULT 0,
                 actionable INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT '',
+                run_id TEXT,
                 PRIMARY KEY (pack_capture_id, snapshot_id)
             );
+
+            CREATE TABLE IF NOT EXISTS run_write_log (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                written_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                pack_capture_id TEXT NOT NULL DEFAULT '',
+                snapshot_id TEXT NOT NULL,
+                decision_id TEXT,
+                market_consensus_prob REAL,
+                independent_model_prob REAL,
+                final_blended_prob REAL,
+                edge REAL,
+                board TEXT,
+                selected INTEGER,
+                pipeline_verdict TEXT,
+                final_verdict TEXT,
+                units REAL,
+                content_hash TEXT NOT NULL
+            );
+
+            CREATE TRIGGER IF NOT EXISTS run_write_log_no_update
+            BEFORE UPDATE ON run_write_log
+            BEGIN
+                SELECT RAISE(ABORT, 'run_write_log is insert-only');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS run_write_log_no_delete
+            BEFORE DELETE ON run_write_log
+            BEGIN
+                SELECT RAISE(ABORT, 'run_write_log is insert-only');
+            END;
 
             """
         )
@@ -667,6 +723,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
         _ensure_table_columns(conn, "market_snapshots", MARKET_SNAPSHOT_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "decisions", DECISION_COLUMN_DEFINITIONS)
         _ensure_table_columns(conn, "settlements", SETTLEMENT_COLUMN_DEFINITIONS)
+        _ensure_table_columns(conn, "pack_snapshot_memberships", MEMBERSHIP_COLUMN_DEFINITIONS)
         _migrate_blend_segments(conn, prior_schema_version)
         _validate_decision_snapshot_identities(conn)
         _migrate_probability_semantics(conn, prior_schema_version)
@@ -717,6 +774,7 @@ def initialize_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
             "CREATE INDEX IF NOT EXISTS idx_settlements_decision ON settlements(decision_id)",
             "CREATE INDEX IF NOT EXISTS idx_pack_membership_pack_path "
             "ON pack_snapshot_memberships(pack_path, pack_timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_run_write_log_run ON run_write_log(run_id, snapshot_id)",
         ):
             conn.execute(statement)
         conn.execute("PRAGMA user_version = 5")
@@ -866,6 +924,97 @@ def _migrate_decision_ids(conn: sqlite3.Connection) -> None:
                 (new_id, old_id),
             )
             conn.execute("DELETE FROM decisions WHERE decision_id = ?", (old_id,))
+
+
+RUN_LOG_HASH_FIELDS = (
+    "snapshot_id",
+    "decision_id",
+    "market_consensus_prob",
+    "independent_model_prob",
+    "final_blended_prob",
+    "edge",
+    "board",
+    "selected",
+    "pipeline_verdict",
+    "final_verdict",
+    "units",
+)
+
+RUN_LOG_LIVE_ROW_SQL = """
+    SELECT s.snapshot_id, d.decision_id, s.market_consensus_prob,
+           s.independent_model_prob, s.final_blended_prob, s.edge, s.board,
+           s.selected, d.pipeline_verdict, d.final_verdict, d.units
+    FROM market_snapshots s
+    LEFT JOIN decisions d ON d.snapshot_id = s.snapshot_id
+    WHERE s.snapshot_id = ?
+"""
+
+
+def run_log_content_hash(values: dict[str, Any]) -> str:
+    """Hash the fields ``run_write_log`` records, in a fixed order."""
+
+    payload = json.dumps(
+        [values[field] for field in RUN_LOG_HASH_FIELDS],
+        separators=(",", ":"),
+        default=str,
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def log_run_writes(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str | None,
+    source: str,
+    pack_capture_id: str,
+    snapshot_ids: Iterable[str],
+) -> int:
+    """Append one ``run_write_log`` row per snapshot, from the live row just written.
+
+    ``market_snapshots`` and ``decisions`` are upserted, so a later run overwrites
+    the values an earlier run wrote.  This log is the append-only record of what
+    each run left in the ledger.  It uses the caller's connection, so it commits or
+    rolls back together with the upsert; a failure here must fail the capture.
+    ``run_id`` is ``None`` only for callers that did not supply one.
+    """
+
+    now = _utc_now()
+    written = 0
+    for snapshot_id in dict.fromkeys(snapshot_ids):
+        row = conn.execute(RUN_LOG_LIVE_ROW_SQL, (snapshot_id,)).fetchone()
+        if row is None:
+            raise FeedbackError(f"Cannot log run write for unknown snapshot_id {snapshot_id!r}")
+        values = {field: row[field] for field in RUN_LOG_HASH_FIELDS}
+        conn.execute(
+            """
+            INSERT INTO run_write_log (
+                run_id, written_at, source, pack_capture_id, snapshot_id, decision_id,
+                market_consensus_prob, independent_model_prob, final_blended_prob, edge,
+                board, selected, pipeline_verdict, final_verdict, units, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                now,
+                source,
+                pack_capture_id,
+                values["snapshot_id"],
+                values["decision_id"],
+                values["market_consensus_prob"],
+                values["independent_model_prob"],
+                values["final_blended_prob"],
+                values["edge"],
+                values["board"],
+                values["selected"],
+                values["pipeline_verdict"],
+                values["final_verdict"],
+                values["units"],
+                run_log_content_hash(values),
+            ),
+        )
+        written += 1
+    return written
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
