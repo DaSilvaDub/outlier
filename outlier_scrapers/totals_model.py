@@ -250,6 +250,22 @@ def backfill_totals_probabilities(
         consensus = p_side_market * no_push_factor
         model_prob = consensus
 
+        # Postgame Audit Rule: Finals Half-Court Pace Ceiling
+        # In postseason play (September/October), apply a 5.5% compression to projected game totals.
+        is_playoffs = False
+        for date_key in ("_event_starts_at", "event_starts_at", "as_of"):
+            d_val = str(row.get(date_key) or "").strip()
+            if len(d_val) >= 7 and d_val[5:7] in ("09", "10"):
+                is_playoffs = True
+                break
+        if str(row.get("sport") or "").upper() == "WNBA" and is_playoffs:
+            if side == "OVER":
+                consensus = max(0.01, consensus - 0.055)
+                model_prob = consensus
+            elif side == "UNDER":
+                consensus = min(0.99, consensus + 0.055)
+                model_prob = consensus
+
         row["model_prob"] = model_prob
         row["market_consensus_prob"] = consensus
         row["final_blended_prob"] = model_prob

@@ -563,3 +563,25 @@ def test_backfill_flags_totals_model_divergence():
     row = _opportunity_row(selection="OVER 8.5")
     out = backfill_totals_probabilities([row], norm)
     assert "totals_model_divergence" in out[0]["sizing_flags"]
+
+def test_backfill_wnba_playoff_pace_compression():
+    """WNBA playoff totals apply a 5.5% compression to over consensus."""
+    norm = {"WNBA": _game_norm(_two_sided(line=160.5))}
+    over_row = _opportunity_row(
+        sport="WNBA",
+        line=160.5,
+        selection="AAA @ BBB Total OVER 160.5",
+        event_starts_at="2026-10-25T20:00:00Z",
+    )
+    under_row = _opportunity_row(
+        sport="WNBA",
+        line=160.5,
+        selection="AAA @ BBB Total UNDER 160.5",
+        event_starts_at="2026-10-25T20:00:00Z",
+    )
+    out_over = backfill_totals_probabilities([over_row], norm)
+    out_under = backfill_totals_probabilities([under_row], norm)
+
+    assert float(out_over[0]["final_blended_prob"]) == pytest.approx(0.50 - 0.055, abs=0.05)
+    assert float(out_under[0]["final_blended_prob"]) == pytest.approx(0.50 + 0.055, abs=0.05)
+
