@@ -1,3 +1,21 @@
+# HANDOFF — 2026-10-27 (Antigravity, WNBA postgame audit calibrations)
+
+- **Last Commit SHA**: `a439629`
+- **Branch**: `feat/wnba-postgame-calibration-game4`
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/313
+- **Files Touched**:
+  - `outlier_scrapers/projections.py`: Added Rebound Vacuum Multiplier (1.22x for starting centers with >=32 min in playoffs) and Shooting Impairment Discount (0.85x on PTS/3PTS for hand/finger/wrist injuries).
+  - `outlier_scrapers/totals_model.py`: Added WNBA Postseason Half-Court Pace Compression (5.5% shift on Over/Under consensus) for September/October games.
+  - `tests/test_projections.py`: Added `test_wnba_postgame_rebound_vacuum_multiplier` and `test_wnba_postgame_shooting_impairment_discount`.
+  - `tests/test_totals_model.py`: Added `test_backfill_wnba_playoff_pace_compression`.
+- **Verification**:
+  - 160 unit tests passed across all related model suites (`test_totals_model.py`, `test_game_totals.py`, `test_alt_player_props.py`, `test_alt_team_totals.py`, `test_projections.py`).
+  - No reasoning models invoked.
+- **Next Steps**:
+  - Review and merge PR #313.
+
+---
+
 # HANDOFF - 2026-10-21 (Claude, NBA Phase 2: team model)
 
 **Branch**: `claude/nba-phase2-team-model` (PR to master). Report with numbers: `docs/nba/phase2-team-model.md`.
