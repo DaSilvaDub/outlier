@@ -87,6 +87,29 @@
 ---
 
 # HANDOFF — 2026-10-27 (Antigravity, WNBA postgame audit calibrations)
+# HANDOFF — 2026-10-28 (Antigravity, NFL Master Betting Pipeline V2.0 Full Quantitative Engine)
+
+- **Last Commit SHA**: `534d3fc`
+- **Branch**: `master` (Quantitative Execution & Baseline Calibration)
+- **Status**: Complete (Deterministic Quantitative Pipeline & Monte Carlo Engine Only; Paid Reasoning: OFF)
+- **Files Touched**:
+  - `data/NFL/tape/prior_week.json` (admitted 32 teams with point-in-time cutoff `before: 2026-10-27`)
+  - `config/.outlier_session/storage_state.json` (auto-renewed AWS Cognito token via `REFRESH_TOKEN_AUTH`)
+  - `reports/NFL/2026-10-27_1728ET_Weekly_Best_Bets.md` (consolidated weekly traced best bets card)
+  - `data/NFL/normalized/nfl_best_bets_week_2026-10-27.json` (3,225 evaluated candidates, 437 provisional edges)
+  - `data/NFL/normalized/nfl_game_projections_week9.json` (50,000 Monte Carlo drive simulations per game across 14 matchups)
+  - `reports/NFL/` (updated positional matchup advantage rankings and alt floors)
+- **Summary of Actions**:
+  - Executed mandatory STEP 0 multi-agent synchronization protocol via `report-sync.ps1` (`REPORT STATUS: OK`, nonce `220169329d244bc4`).
+  - Executed the full NFL Master Betting Pipeline V2.0 for Week 9 covering the Tuesday opening baseline through Thursday TNF (CAR @ GB), Sunday slate (12 games), and Monday MNF (CHI @ SEA).
+  - Executed 50,000 drive-based Monte Carlo simulations per game (700,000 total) to produce fair spreads, fair totals, win probabilities, and progression-derived first-half distributions.
+  - Evaluated 3,225 market quotes across moneylines, spreads, totals, team totals, and player props (passing, rushing, receiving, touchdown props).
+  - Applied the strict Tuesday Baseline Invariant: 437 qualifying +EV opportunities traced with 6-pillar breakdown and classified as **PROVISIONAL** (`injury_weather: STALE`). Active stake locked at **0.00 units (0.0% bankroll)** until game-day injury and weather lock.
+  - House rule strictly obeyed: paid reasoning remained default OFF throughout execution.
+- **Next Steps**:
+  - Await Thursday 15:00 ET game-day refresh for Thursday Night Football (Panthers at Packers) to validate active positions.
+  - Sunday 10:30 ET game-day refresh for the 12-game Sunday slate.
+  - Monday 15:00 ET game-day refresh for Monday Night Football (Bears at Seahawks).
 
 ---
 
