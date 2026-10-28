@@ -1,3 +1,33 @@
+# HANDOFF — 2026-10-28 (Antigravity, MLB + WNBA Master Betting Pipeline V3.0 Dual-Sport Quantitative Execution Engine)
+
+- **Last Commit SHA**: `6dc9357`
+- **Branch**: `master` (Quantitative Execution & Baseline Calibration)
+- **Status**: Complete (Deterministic Quantitative Pipeline; Paid Reasoning: OFF)
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/316 (merged)
+- **Files Touched**:
+  - `config/.outlier_session/storage_state.json` (auto-renewed AWS Cognito token via `REFRESH_TOKEN_AUTH`)
+  - `packs/2026-10-28/` (generated full daily briefing pack, candidates, game/team totals, identity audit, projections)
+  - `scripts/organize_today_run2.py` (added resilience for unmounted Windows drive paths)
+  - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py` (filtered destination paths for mounted drives)
+  - `C:\Users\dasil\OneDrive\Desktop\today` (exported replace packages, Master Prompts, and consolidated `playable_props.md` / `playable_props.csv`)
+  - `calibration/alerts/daily_pipeline_status.json` (`status=ok`, timestamp 2026-10-28T16:44:33Z)
+- **Summary of Actions**:
+  - Executed mandatory STEP 0 multi-agent synchronization protocol via `report-sync.ps1` (`REPORT STATUS: OK`, nonce `7bdf30c283a7404d`).
+  - Auto-renewed AWS Cognito bearer token via `InitiateAuth` (`REFRESH_TOKEN_AUTH`), successfully validating 200 OK responses across MLB, WNBA, NBA, and NFL endpoints.
+  - Executed the complete dual-sport quantitative pipeline via `scripts\run_daily_pipeline.ps1` in `C:\Users\dasil\Dev\GitHub\outlier-scheduled` for slate `2026-10-28` (America/New_York) with paid reasoning OFF.
+  - Normalized stray un-prefixed test fixture directory `packs/2099-07-07` to `packs/_test_fixture_2099-07-07-fixture` to prevent lexicographical pack mis-targeting.
+  - Fixed Windows unmounted drive error (`[WinError 3] The system cannot find the path specified: 'G:\'`) in `organize_today_run2.py` and `generate_prompts.py` via feature branch `fix/drive-mount-export-resilience`, cleanly merged to master in PR #316 (`6dc9357`).
+  - Generated full briefing pack `packs/2026-10-28` (8 MLB candidates across gameline, team totals, spread, and SO; WNBA off-day confirmed with next scheduled game Finals Game 5 on 2026-10-29; advance market cards date-filtered).
+  - Pitcher identity audit: `status=ok so=1 mismatch=0 unconfirmed=0 fail_closed_count=0`.
+  - Exported replace-export packages and Master Prompts to `C:\Users\dasil\OneDrive\Desktop\today` (generic prompts, totals prompts, extra packs, extracted data).
+  - Exported consolidated `playable_props.md` and `playable_props.csv` reflecting strict quantitative discipline (0 Board A actionable plays; Jacob Misiorowski is Board A_FLAGGED with missing predictive signal and recommended units cleared to blank; all other plays are Board B with negative or sub-threshold edge).
+  - Verified offline test suites: 109 unit tests passed across `test_game_totals.py`, `test_feed_health.py`, and `test_alt_player_props.py`.
+  - House rule strictly obeyed: paid reasoning remained default OFF throughout execution.
+- **Next Steps**:
+  - Monitor pregame lineup confirmations for World Series Game (Brewers @ Rays) at 20:00 ET; await WNBA Finals Game 5 on 2026-10-29.
+
+---
+
 # HANDOFF — 2026-10-28 (Antigravity, Daily NFL Pack and Odds Refresh)
 
 - **Last Commit SHA**: `5fad491`
