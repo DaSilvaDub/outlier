@@ -626,7 +626,8 @@ def organize_today_additive(
     today_str = latest_pack.name
     suffix = "_latest"
 
-    out_dirs = out_dirs or DEFAULT_OUT_DIRS
+    raw_out_dirs = out_dirs or DEFAULT_OUT_DIRS
+    out_dirs = [d for d in raw_out_dirs if not d.drive or os.path.exists(d.drive + "\\")]
     data_dirs = data_dirs or DEFAULT_DATA_SEARCH
 
     current_date = date.fromisoformat(today_str)

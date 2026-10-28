@@ -629,7 +629,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    out_dirs = [Path(p) for p in dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))]
+    raw_dirs = dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))
+    out_dirs = [Path(p) for p in raw_dirs if not Path(p).drive or os.path.exists(Path(p).drive + "\\")]
     subdirs = find_all_pack_dirs()
     if not subdirs:
         print("Error: No pack directories found in packs/.")
