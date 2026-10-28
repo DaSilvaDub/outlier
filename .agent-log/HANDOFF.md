@@ -1,3 +1,53 @@
+# HANDOFF — 2026-10-28 (Claude, daily debug review — WNBA postseason detection reads the run clock)
+
+- **Last Commit SHA**: `22feb52` on `claude/inspiring-fermat-s0jic6`.
+  **PR**: https://github.com/DaSilvaDub/outlier/pull/315
+- **Files touched**: `outlier_scrapers/projections.py`, `tests/test_projections.py`.
+- **Fix** (one bug, same class as PR #314 fix 2, in the copy that PR did not reach):
+  `projections._is_wnba_playoff_row` tested *every* date field for a postseason date and only
+  `return True`d on a hit, so a non-matching event date fell through to `as_of`. `as_of` is the
+  odds-snapshot timestamp, which `pack_selection` writes onto the row (`pack_selection.py:639`
+  and `:673`) immediately before calling `wnba_projection_record` (`:752`) — so every WNBA row
+  reaching the projection carries it. A July game repriced during an October run therefore read
+  as postseason and took the playoff minutes expansion: on a 32.0-minute, 0.65 PTS/min player,
+  minutes `32.0 -> 35.2` and mean `20.80 -> 22.88`. The same row also became eligible for the
+  playoff-gated 1.22x rebound-vacuum multiplier. The first date the row carries now decides, and
+  `as_of` is read *last* rather than ahead of `game_date`/`date`, the way
+  `slate_quality._row_slate_date` already resolves a slate date. The Sep 18+/Oct window is
+  unchanged, and rows carrying only `as_of` still resolve from it (covered by a test, so the
+  fallback is not lost).
+- **Verification**: the false-positive test confirmed RED pre-fix (mean 22.88 where 20.80 is
+  correct) and GREEN after. `tests/test_projections.py` 39 passed (37 pre-existing + 2 new),
+  including the three `a439629` WNBA calibration tests. `mypy outlier_scrapers` — no errors in
+  `projections.py`, total unchanged from base. `pyright outlier_scrapers/projections.py` — 0
+  errors. `ruff check` on both changed files — 8 findings, identical to the pre-change baseline.
+  CI on PR #315: Static Type Checking green; Codacy 0 new issues, -7 complexity. No reasoning
+  models, desk runners, or provider calls.
+- **Sandbox state (better than 2026-10-27, still constrained)**: `pytest`, `ruff`, `mypy` and
+  `pyright` are now pre-installed, so real test/type runs were possible. PyPI egress is still
+  blocked by the network policy (`pypi.org:443 connect_rejected`), so `structlog`, `sqlalchemy`,
+  `numpy` and the provider SDKs could not be installed. `structlog` was stubbed **outside the
+  repo** on `PYTHONPATH`; with that, 39 of 78 test modules collect and run (2232 passed, 52
+  skipped, 71 failed — the same 71 before and after this change, all missing-dependency import
+  failures, and the local pytest runs on 3.13 where CI uses 3.11). The 39 `sqlalchemy`-gated
+  modules (`test_pack.py`, `test_schema.py`, `test_verdict_*.py`, `test_pass_*_publish.py`, the
+  NBA suites, the feedback-ledger suites) cannot be imported here. CI is authoritative.
+- **Reported, not changed** (all carried forward from the 2026-10-27 review and still open):
+  - WNBA postseason is defined twice with different windows — all of Sept+Oct in `totals_model`,
+    Sep 18+/Oct in `projections`. Unifying them is a modelling call, not a bug fix.
+  - `market in {"PTS", "3PTS"}`: `"3PTS"` is unreachable; `_wnba_market_code` only returns
+    PTS/REB/AST/PR/PA/RA/PRA.
+  - The rebound-vacuum comment says "starting center" but there is no starter gate.
+  - `backfill_totals_probabilities` still writes the pace-compressed value into
+    `market_consensus_prob`, the column documented as bookmaker-derived.
+  - Neither the shooting-impairment discount nor the rebound-vacuum multiplier reaches the
+    composite markets (PR/PA/RA/PRA) that carry the same `points`/`rebounds` components.
+- **Next steps**: review/merge PR #315, then the daily-review backlog, which keeps growing —
+  #314 (yesterday's WNBA fixes, which #315 builds on conceptually but does not depend on), #312,
+  #306, #295, #291 are all still unmerged against current master.
+
+---
+
 # HANDOFF — 2026-10-27 (Antigravity, Daily NFL Pack and Odds Refresh)
 
 - **Last Commit SHA**: `7e81ba1`

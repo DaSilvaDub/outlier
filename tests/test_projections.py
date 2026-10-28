@@ -826,6 +826,47 @@ def test_wnba_playoff_minutes_expansion_in_projections():
     assert playoff_rec["distribution"]["mean"] > reg_rec["distribution"]["mean"]
     assert playoff_rec["distribution"]["mean"] == pytest.approx(35.2 * 0.65, abs=0.1)
 
+
+def test_wnba_regular_season_row_repriced_in_the_postseason_window_is_not_playoffs():
+    """as_of is the run clock: a July game repriced in October is still regular season."""
+    row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "line": 19.5,
+        "selection": "Paige Bueckers - Points OVER 19.5",
+        "_event_starts_at": "2026-07-15T19:00:00Z",
+        "as_of": "2026-10-28T13:00:00Z",
+    }
+    features = {
+        "projected_minutes": 32.0,
+        "points_per_minute": 0.65,
+    }
+    record = wnba_projection_record(row, features=features)
+
+    assert record is not None
+    # 32.0 min * 0.65 ppm, with no +10% postseason expansion from the run clock.
+    assert record["distribution"]["mean"] == pytest.approx(32.0 * 0.65, abs=0.1)
+
+
+def test_wnba_row_without_an_event_date_still_reads_the_postseason_from_as_of():
+    """The as_of fallback stays: it is the only date some audit rows carry."""
+    row = {
+        "sport": "WNBA",
+        "market_type": "PTS",
+        "line": 19.5,
+        "selection": "Paige Bueckers - Points OVER 19.5",
+        "as_of": "2026-10-28T13:00:00Z",
+    }
+    features = {
+        "projected_minutes": 32.0,
+        "points_per_minute": 0.65,
+    }
+    record = wnba_projection_record(row, features=features)
+
+    assert record is not None
+    assert record["distribution"]["mean"] == pytest.approx(35.2 * 0.65, abs=0.1)
+
+
 def test_wnba_postgame_rebound_vacuum_multiplier():
     """Starting centers logging >=32 projected minutes in playoffs get a 1.22x rebound rate boost."""
     playoff_row_c = {

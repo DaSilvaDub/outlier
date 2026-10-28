@@ -1343,15 +1343,23 @@ def _wnba_market_code(row: Mapping[str, object]) -> str | None:
 
 
 def _is_wnba_playoff_row(row: Mapping[str, object]) -> bool:
-    for key in ("_event_starts_at", "event_starts_at", "as_of", "game_date", "date"):
+    """Whether the row's own game date falls inside the postseason window.
+
+    The first date the row actually carries decides, with ``as_of`` -- the run
+    clock -- read last, the way ``slate_quality._row_slate_date`` already
+    resolves a slate date. Testing every field for a postseason date instead
+    falls through to ``as_of``, so a July game repriced during an October run
+    read as postseason and took the playoff minutes expansion.
+    """
+    for key in ("_event_starts_at", "event_starts_at", "game_date", "date", "as_of"):
         val = str(row.get(key) or "").strip()
-        if len(val) >= 10 and val[:4].isdigit():
-            try:
-                d = date.fromisoformat(val[:10])
-                if (d.month == 9 and d.day >= 18) or (d.month == 10):
-                    return True
-            except ValueError:
-                pass
+        if len(val) < 10 or not val[:4].isdigit():
+            continue
+        try:
+            d = date.fromisoformat(val[:10])
+        except ValueError:
+            continue
+        return (d.month == 9 and d.day >= 18) or (d.month == 10)
     return False
 
 
