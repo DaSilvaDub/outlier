@@ -1,3 +1,31 @@
+# HANDOFF — 2026-10-28 (Antigravity, Daily NFL Pack and Odds Refresh)
+
+- **Last Commit SHA**: `5fad491`
+- **Branch**: `master` (Quantitative Execution & Baseline Calibration)
+- **Status**: Complete (Deterministic Quantitative Pipeline & Odds Refresh; Paid Reasoning: OFF)
+- **Files Touched**:
+  - `config/.outlier_session/storage_state.json` (auto-renewed AWS Cognito token via `REFRESH_TOKEN_AUTH`)
+  - `data/NFL/tape/prior_week.json` (refreshed tape across 32 teams through week 7)
+  - `data/NFL/normalized/nfl_best_bets_week_2026-10-27.json` (521 provisional edges across 3,849 quotes)
+  - `reports/NFL/2026-10-28_1242ET_Weekly_Best_Bets.md` (consolidated weekly best bets card)
+  - `data/NFL/exports/nfl_only.csv` (49 rows for Thursday Night Football CAR @ GB)
+  - `G:\My Drive\today\extra_packs_2026-10-29_latest\` & `extra_packs\` (`nfl_only.csv`, `2026-10-29_CAR_GB_Game_Script.md`, `nfl_alt_floors.csv`, `nfl_best_bets.md`, positional matchup reports, `Matchup_Boost_Rankings.csv`)
+  - `reports/NFL/` (updated positional matchup advantage rankings and alt floors)
+- **Summary of Actions**:
+  - Executed mandatory STEP 0 multi-agent synchronization protocol via `report-sync.ps1` (`REPORT STATUS: OK`, nonce `3936f03cfa6d4ccb`).
+  - Resolved expired Outlier API Cognito bearer token via `AWSCognitoIdentityProviderService.InitiateAuth` (`REFRESH_TOKEN_AUTH`), renewing `AccessToken` and `IdToken`.
+  - Rebuilt nflverse tape via `scripts/pull_nflverse_tape.py --before 2026-10-29` to refresh unit grades and defensive metrics across all 32 teams for weeks 1–7.
+  - Executed `outlier_nfl.weekly` odds refresh and weekly snapshot pipeline across all remaining slates (`2026-10-29`, `2026-11-01`, `2026-11-02`), capturing market movements, price snapshots, and generating the consolidated weekly best bets card (`reports/NFL/2026-10-28_1242ET_Weekly_Best_Bets.md`).
+  - Executed `scripts/refresh_nfl_pack.ps1 -Date 2026-10-29` for Thursday Night Football (Panthers at Packers), verifying active starting QBs (Bryce Young & Jordan Love), exporting `nfl_only.csv` (49 rows), filtering injuries against ESPN/tape statuses, and publishing all companion reports to Google Drive.
+  - Ran unit tests: 64 passed across `test_nfl_matchup_rankings.py`, `test_nfl_scorecard.py`, `test_nfl_alt_floors.py`.
+  - Paid reasoning remained OFF throughout execution.
+- **Next Steps**:
+  - Thursday 15:00 ET game-day refresh for Thursday Night Football (Panthers at Packers) to validate active positions against pregame inactive announcements.
+  - Sunday 10:30 ET game-day refresh for the 12-game Sunday slate.
+  - Monday 15:00 ET game-day refresh for Monday Night Football (Bears at Seahawks).
+
+---
+
 # HANDOFF — 2026-10-28 (Antigravity, NFL Master Betting Pipeline V2.0 Full Quantitative Engine)
 
 - **Last Commit SHA**: `534d3fc`
