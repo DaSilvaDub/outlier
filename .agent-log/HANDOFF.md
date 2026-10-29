@@ -1,3 +1,33 @@
+# HANDOFF — 2026-10-29 (Antigravity, MLB + WNBA Master Betting Pipeline V3.0 Dual-Sport Quantitative Execution Engine)
+
+- **Last Commit SHA**: `c99682c`
+- **Branch**: `master` (Quantitative Execution & Baseline Calibration)
+- **Status**: Complete (Deterministic Quantitative Pipeline; Paid Reasoning: OFF)
+- **Files Touched**:
+  - `config/.outlier_session/storage_state.json` & `api_bearer_token.txt` (auto-renewed AWS Cognito token via `REFRESH_TOKEN_AUTH`)
+  - `C:\Users\dasil\Dev\GitHub\outlier-scheduled\config\.outlier_session\` (mirrored refreshed auth session tokens)
+  - `packs/2026-10-29/` (generated full daily briefing pack, candidates, game/team totals, identity audit, projections)
+  - `C:\Users\dasil\OneDrive\Desktop\today` (exported replace packages: `extracted_data_2026-10-29_latest`, `extra_packs_2026-10-29_latest`, `generic_prompts_2026-10-29_latest`, `hitrate_prompts_2026-10-29_latest`, `totals_prompts_2026-10-29_latest`, `perfect_hit_props_2026-10-29_latest`, and consolidated `playable_props.md` / `playable_props.csv`)
+  - `calibration/alerts/daily_pipeline_status.json` (`status=ok`, timestamp 2026-10-29T17:39:28Z)
+- **Summary of Actions**:
+  - Executed mandatory STEP 0 multi-agent synchronization protocol via `report-sync.ps1` (`REPORT STATUS: OK`, nonce `5e3bb82833274491`).
+  - Auto-renewed AWS Cognito bearer token via `InitiateAuth` (`REFRESH_TOKEN_AUTH`), successfully validating 200 OK responses across MLB and WNBA endpoints.
+  - Executed the complete dual-sport quantitative pipeline via `scripts\run_daily_pipeline.ps1` in `C:\Users\dasil\Dev\GitHub\outlier-scheduled` for slate `2026-10-29` (America/New_York) with paid reasoning strictly OFF.
+  - Normalized stray untracked future test fixture directory `packs/2099-07-07` to `packs/_test_fixture_2099-07-07-fixture2` to protect lexicographical pack ordering in `find_all_pack_dirs`.
+  - Ingestion audit:
+    - MLB: Travel/off-day confirmed (0 scheduled games today; post-World Series Game 2026-10-28 between Brewers & Rays).
+    - WNBA: Finals Game 5 (afternoon tip-off at 16:30 UTC / 12:30 EDT); pregame candidate ingestion properly dropped 83 in-play / post-lock candidates via deterministic pregame guardrails (`started_dropped=83`), leaving 0 active pregame candidates.
+  - Pitcher identity audit: `status=ok so=0 mismatch=0 unconfirmed=0 fail_closed_count=0`.
+  - Exported replace packages and 3 Master Prompts to `C:\Users\dasil\OneDrive\Desktop\today` and `G:\My Drive\today`.
+  - Exported consolidated `playable_props.md` and `playable_props.csv` reflecting strict quantitative discipline (0 Board A actionable plays for current post-lock/travel slate).
+  - Verified offline test suites: 109 unit tests passed across `test_game_totals.py`, `test_feed_health.py`, and `test_alt_player_props.py`.
+  - House rule strictly obeyed: paid reasoning remained default OFF throughout execution.
+- **Next Steps**:
+  - Await upcoming MLB World Series Game scheduling.
+  - Monitor pregame inactive announcements for Thursday Night Football (Panthers at Packers) at 20:15 ET.
+
+---
+
 # HANDOFF — 2026-10-29 (Antigravity, Daily NFL Pack and Odds Refresh)
 
 - **Last Commit SHA**: `c99682c`
