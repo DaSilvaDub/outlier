@@ -627,7 +627,18 @@ def organize_today_additive(
     suffix = "_latest"
 
     raw_out_dirs = out_dirs or DEFAULT_OUT_DIRS
-    out_dirs = [d for d in raw_out_dirs if not d.drive or os.path.exists(d.drive + "\\")]
+    out_dirs = []
+    for candidate_out in raw_out_dirs:
+        if not candidate_out.drive or os.path.exists(candidate_out.drive + "\\"):
+            out_dirs.append(candidate_out)
+        else:
+            print(f"Warning: export destination skipped, drive not mounted: {candidate_out}")
+    if not out_dirs:
+        print(
+            "Error: no export destination is mounted "
+            f"(checked {len(raw_out_dirs)}); nothing was exported."
+        )
+        return None
     data_dirs = data_dirs or DEFAULT_DATA_SEARCH
 
     current_date = date.fromisoformat(today_str)
