@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -483,3 +483,55 @@ def test_generate_playable_props_empty_disclaimer_when_no_fallbacks(tmp_path: Pa
     content = md_file.read_text(encoding="utf-8")
     assert "*No qualifying alternate team total fallbacks identified for current slate.*" in content
 
+
+def test_an_unmounted_destination_is_named_and_the_mounted_one_still_gets_the_export(
+    tmp_path: Path, capsys
+):
+    """An unmounted Windows drive is skipped out loud, not in silence.
+
+    ``PureWindowsPath`` stands in for the Drive letter: on Linux a real ``Path``
+    reports no ``.drive`` for ``G:\\...``, so only the pure-Windows flavour
+    exercises the mount check.
+    """
+    packs = tmp_path / "packs"
+    pack = packs / "2026-07-26"
+    pack.mkdir(parents=True)
+    _write_candidates(pack / "candidates.csv", [])
+    (pack / "briefing.md").write_text("ZERO CANDIDATES\n", encoding="utf-8")
+
+    mounted = tmp_path / "today"
+    unmounted = PureWindowsPath(r"G:\My Drive\today")
+
+    result = org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[mounted, unmounted],
+        run_generate_prompts=False,
+    )
+
+    assert result == pack
+    out = capsys.readouterr().out
+    assert "drive not mounted" in out
+    assert "G:\\My Drive\\today" in out
+    # The mounted destination was still written.
+    assert (mounted / "extracted_data_2026-07-26_latest" / "briefing.md").exists()
+
+
+def test_no_mounted_destination_fails_loudly_instead_of_exporting_nothing(tmp_path: Path, capsys):
+    packs = tmp_path / "packs"
+    pack = packs / "2026-07-26"
+    pack.mkdir(parents=True)
+    _write_candidates(pack / "candidates.csv", [])
+    (pack / "briefing.md").write_text("ZERO CANDIDATES\n", encoding="utf-8")
+
+    result = org.organize_today_additive(
+        pack_search=[packs],
+        data_dirs=[tmp_path / "data"],
+        out_dirs=[PureWindowsPath(r"G:\My Drive\today"), PureWindowsPath(r"H:\today")],
+        run_generate_prompts=False,
+    )
+
+    assert result is None
+    out = capsys.readouterr().out
+    assert "no export destination is mounted" in out
+    assert "nothing was exported" in out

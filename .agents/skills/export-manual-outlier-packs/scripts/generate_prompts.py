@@ -630,7 +630,19 @@ def main() -> None:
     args = parser.parse_args()
 
     raw_dirs = dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))
-    out_dirs = [Path(p) for p in raw_dirs if not Path(p).drive or os.path.exists(Path(p).drive + "\\")]
+    out_dirs = []
+    for raw_dir in raw_dirs:
+        candidate_out = Path(raw_dir)
+        if not candidate_out.drive or os.path.exists(candidate_out.drive + "\\"):
+            out_dirs.append(candidate_out)
+        else:
+            print(f"Warning: output directory skipped, drive not mounted: {candidate_out}")
+    if not out_dirs:
+        print(
+            "Error: no output directory is mounted "
+            f"(checked {len(raw_dirs)}); no prompts were written."
+        )
+        return
     subdirs = find_all_pack_dirs()
     if not subdirs:
         print("Error: No pack directories found in packs/.")

@@ -6,16 +6,29 @@ environment.
 
 ## PyPI egress blocked
 
-Codex sandboxes block outbound network access to PyPI. Packages installed via
-`pip install` or `uv pip install` will fail with connection errors.
+Cloud sandboxes block outbound network access to PyPI. `pip install` and
+`uv pip install` fail with DNS or proxy errors (`pypi.org` answers 403 through
+the agent proxy), so no project dependency can be installed in-session.
 
-**Affected dependencies:** sqlalchemy, openai, anthropic, google-generativeai,
-playwright, and any other package not pre-installed in the sandbox image.
+**Affected dependencies:** structlog, numpy, SQLAlchemy, psycopg2-binary,
+tzdata, openai, anthropic, google-genai, playwright, and any other package not
+pre-installed in the sandbox image.
 
-**Impact:** Tests and modules that import these packages at the top level will
-fail at collection time. Use `--continue-on-collection-errors` when running
-pytest in sandboxes to exercise the tests that can actually import their
-dependencies.
+**Impact: no test runs at all, not merely a reduced subset.** An autouse
+fixture in `tests/conftest.py` (the ledger tripwire) imports
+`outlier_scrapers.feedback`, which imports `structlog`, so *every* test errors
+during setup — a bare `pytest --continue-on-collection-errors` reports
+~2060 errors and 0 passed. `--continue-on-collection-errors` alone therefore
+buys nothing; do not read its exit code as evidence of coverage.
+
+`structlog` is the single blocker for the great majority of the suite. Putting
+a throwaway `structlog` stand-in on `PYTHONPATH` **outside the checkout**
+(never committed) is enough to collect and run most tests, which is the only
+way a cloud session can exercise them today. Tests that additionally need
+numpy, SQLAlchemy or a provider SDK still error.
+
+Treat hosted CI (GitHub Actions) as the authority for test results reported
+from a cloud session, and say in the handoff how the suite was run.
 
 **Not affected:**
 - CI (GitHub Actions) — has full PyPI access and installs from `requirements.txt`.

@@ -1,3 +1,49 @@
+# HANDOFF — 2026-10-29 (claude, daily automated debug + code-health review)
+
+- **Last Commit SHA**: `4d2abdd`
+- **Branch**: `claude/inspiring-fermat-ga2ns7`
+- **Status**: Complete (one fix pushed; one dependency issue needs the Windows checkout)
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/317
+- **Files Touched**:
+  - `scripts/organize_today_run2.py` (name skipped unmounted destinations; stop when none remain)
+  - `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py` (same)
+  - `tests/test_organize_today_run2.py` (2 regression tests, both fail against `master`)
+  - `docs/CLOUD-SANDBOX-LIMITATIONS.md` (corrected the PyPI / pytest guidance)
+- **Summary of Actions**:
+  - Cloud STEP 0 equivalent per AGENTS.md "Cloud / Sandbox Agents": fetched `origin/master`,
+    HEAD == `origin/master` (`c99682c`), all 5 upgrade markers present. No PowerShell in this
+    sandbox, so `report-sync.ps1` was not run.
+  - Reviewed the only code change since the last run, PR #316 (`6dc9357`), and found that the
+    unmounted-drive filter it added drops destinations silently. With every destination
+    unmounted, `organize_today_additive` exports nothing and still returns the pack as success;
+    `generate_prompts.py` writes no prompts and exits 0. Fixed and covered by tests.
+  - Full suite (with a throwaway `structlog` stand-in on `PYTHONPATH`, nothing committed):
+    2232 passed, 52 skipped. The 71 failures and 39 errors are all `ModuleNotFoundError` for
+    PyPI-blocked dependencies (`sqlalchemy`, `google`, `numpy`) — no repository defect.
+  - `mypy outlier_scrapers outlier_nfl`: no findings in the gated packages. The 163 reported
+    errors are all in `outlier_nba` (not in CI's gate) and all stem from numpy being absent,
+    which leaves `FArr`/`IArr` unresolved.
+  - `ruff` on the changed files: no new findings, and one pre-existing `E501` removed.
+  - Paid reasoning / AI Research Desk: never invoked (house rule).
+- **Next Steps / Open Items**:
+  1. **Stale lock files (needs PyPI, so needs the Windows checkout).** `requirements.lock` and
+     `uv.lock` pin only 4 of the 9 runtime dependencies `pyproject.toml` declares. Missing:
+     `structlog`, `numpy`, `SQLAlchemy`, `psycopg2-binary`, `tzdata` — plus `mypy`, `pyright`,
+     `pytest-cov`, `types-python-dateutil` from `requirements.txt`. Both locks date from
+     `b7638f7` (2026-10-06). CI's "Install frozen dependencies" step therefore does not freeze
+     them; the later `pip install -e .` resolves them live, and `numpy>=1.26` /
+     `SQLAlchemy>=2.0.0` are unbounded, so a major release enters CI with no repo change. Fix:
+     `uv lock && uv export --frozen --no-hashes --all-extras -o requirements.lock`.
+  2. **#316 committed CRLF.** Both files it touched were 100% LF before and are now CRLF, so a
+     2-line change produced 1528 lines of diff and `git blame` on them is poisoned. There is no
+     `.gitattributes`. Worth a deliberate normalization commit with `* text=auto`.
+  3. **Daily-debug PRs are piling up unreviewed**: #295, #302, #303, #306, #312, #314, #315 are
+     all still open, plus #317 from this run. #303 already records the `structlog` sandbox
+     blocker in HANDOFF.md; this run put the correction in
+     `docs/CLOUD-SANDBOX-LIMITATIONS.md` instead, so the two do not conflict.
+
+---
+
 # HANDOFF — 2026-10-28 (Antigravity, MLB + WNBA Master Betting Pipeline V3.0 Dual-Sport Quantitative Execution Engine)
 
 - **Last Commit SHA**: `6dc9357`
