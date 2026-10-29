@@ -1,3 +1,34 @@
+# HANDOFF — 2026-10-29 (Antigravity, Daily NFL Pack and Odds Refresh)
+
+- **Last Commit SHA**: `c99682c`
+- **Branch**: `master` (Quantitative Execution & Baseline Calibration)
+- **Status**: Complete (Deterministic Quantitative Pipeline & Odds Refresh; Paid Reasoning: OFF)
+- **Files Touched**:
+  - `config/.outlier_session/storage_state.json` & `api_bearer_token.txt` (auto-renewed AWS Cognito token via `REFRESH_TOKEN_AUTH`)
+  - `data/NFL/tape/prior_week.json` (refreshed tape across 32 teams through week 7)
+  - `data/NFL/runs/` (recorded new run bundles for `2026-10-29`, `2026-11-01`, `2026-11-02`)
+  - `reports/NFL/2026-10-29_1332ET_Weekly_Best_Bets.md` (consolidated weekly best bets card with 11 validated game-day plays and 726 provisional edges)
+  - `reports/NFL/2026-10-29_CAR_GB_Game_Script.md` (refreshed pregame tactical game script for Panthers @ Packers)
+  - `data/NFL/exports/nfl_only.csv` (80 qualified props for Thursday Night Football CAR @ GB after injury filter)
+  - `G:\My Drive\today\extra_packs_2026-10-29_latest\` & `extra_packs\` (published `nfl_only.csv`, `2026-10-29_CAR_GB_Game_Script.md`, `nfl_matchup_scripts.json`, `nfl_alt_floors.csv`, `nfl_best_bets.md`, positional matchup reports, `Matchup_Boost_Rankings.csv`)
+  - `C:\Users\dasil\OneDrive\Desktop\today\extra_packs_2026-10-29_latest\` & `extra_packs\` (mirrored all pack artifacts)
+  - `calibration/alerts/nfl_weekly_status.json` (`status=ok`)
+- **Summary of Actions**:
+  - Executed mandatory STEP 0 multi-agent synchronization protocol via `report-sync.ps1` (`REPORT STATUS: OK`, nonce `0926d53555184620`).
+  - Resolved expired Outlier API Cognito bearer token via `AWSCognitoIdentityProviderService.InitiateAuth` (`REFRESH_TOKEN_AUTH`), renewing `AccessToken` and `IdToken` and updating `storage_state.json` and `api_bearer_token.txt`.
+  - Rebuilt `nflverse` matchup tape via `scripts/pull_nflverse_tape.py --before 2026-10-29` to refresh unit grades and defensive metrics across all 32 teams for weeks 1–7.
+  - Executed `scripts/run_nfl_weekly_snapshots.ps1` (`outlier_nfl.weekly`) odds refresh and weekly price snapshot pipeline across all remaining slates (`2026-10-29`, `2026-11-01`, `2026-11-02`), capturing market movements, price snapshots, and generating the consolidated weekly best bets card (`reports/NFL/2026-10-29_1332ET_Weekly_Best_Bets.md`).
+  - Executed `outlier_nfl.pipeline --date 2026-10-29 --generate-game-script` to refresh pregame tactical game script, alternate floor props, and positional matchup advantage rankings for Thursday Night Football (Panthers at Packers).
+  - Executed `scripts/refresh_nfl_pack.ps1 -Date 2026-10-29` for Thursday Night Football (Panthers at Packers), verifying active starting QBs (Bryce Young & Jordan Love), exporting `nfl_only.csv` (80 rows), filtering injuries against ESPN/tape statuses (0 ruled out removed; 106 ruled-out universe), and publishing all companion reports to Google Drive and Desktop `today`.
+  - Verified offline test suites: 64 passed across `test_nfl_matchup_rankings.py`, `test_nfl_scorecard.py`, `test_nfl_alt_floors.py`.
+  - House rule strictly obeyed: paid reasoning remained default OFF throughout execution.
+- **Next Steps**:
+  - Monitor pregame inactive confirmations for Thursday Night Football (Panthers at Packers) ahead of kickoff (20:15 ET).
+  - Sunday 10:30 ET game-day refresh for the 12-game Sunday slate.
+  - Monday 15:00 ET game-day refresh for Monday Night Football (Bears at Seahawks).
+
+---
+
 # HANDOFF — 2026-10-28 (Antigravity, MLB + WNBA Master Betting Pipeline V3.0 Dual-Sport Quantitative Execution Engine)
 
 - **Last Commit SHA**: `6dc9357`
