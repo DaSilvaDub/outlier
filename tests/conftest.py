@@ -53,37 +53,53 @@ from outlier_scrapers import paths  # noqa: E402
 from outlier_scrapers.portfolio import PortfolioPolicy  # noqa: E402
 # Committed artifacts that production writers target by default.
 _GUARDED_DIRS = ("calibration", "reports")
+# Capture both roots before tests redirect PROJECT_ROOT. Worktree tests can still
+# reach canonical through shared production defaults.
+_ARTIFACT_ROOTS = tuple(
+    dict.fromkeys(
+        root.resolve()
+        for root in (_REPO_ROOT, paths.CANONICAL_CALIBRATION_DIR.parent)
+        if root.is_dir()
+    )
+)
 
 
-def _tracked_guarded_files() -> tuple[Path, ...]:
+def _tracked_guarded_files(root: Path = _REPO_ROOT) -> tuple[Path, ...]:
     try:
         out = subprocess.run(
             ["git", "ls-files", "-z", "--", *_GUARDED_DIRS],
-            cwd=_REPO_ROOT,
+            cwd=root,
             capture_output=True,
             check=True,
         ).stdout
         names = [n for n in out.decode("utf-8").split("\0") if n]
-        return tuple(_REPO_ROOT / n for n in names)
+        return tuple(root / n for n in names)
     except (OSError, subprocess.CalledProcessError):
         # No git (e.g. sdist): fall back to every file currently under the guarded dirs.
         return tuple(
             p
             for d in _GUARDED_DIRS
-            if (_REPO_ROOT / d).is_dir()
-            for p in (_REPO_ROOT / d).rglob("*")
+            if (root / d).is_dir()
+            for p in (root / d).rglob("*")
             if p.is_file()
         )
 
 
-_TRACKED_GUARDED_FILES = _tracked_guarded_files()
+_TRACKED_GUARDED_FILES = tuple(
+    dict.fromkeys(p for root in _ARTIFACT_ROOTS for p in _tracked_guarded_files(root))
+)
 # path -> ((mtime_ns, size), sha1); a file is re-hashed only when its stat changes.
 _DIGEST_CACHE: dict[Path, tuple[tuple[int, int], str]] = {}
 
 
 def _guarded_digests() -> dict[Path, str | None]:
     digests: dict[Path, str | None] = {}
-    for path in _TRACKED_GUARDED_FILES:
+    # JSON artifacts include ignored/untracked alerts and outputs created during
+    # the test. Never scan/hash the shared SQLite ledger or recovery archives.
+    json_files = {
+        p for root in _ARTIFACT_ROOTS for p in (root / "calibration").rglob("*.json") if p.is_file()
+    }
+    for path in set(_TRACKED_GUARDED_FILES) | json_files:
         try:
             st = path.stat()
         except FileNotFoundError:
@@ -91,11 +107,19 @@ def _guarded_digests() -> dict[Path, str | None]:
             continue
         key = (st.st_mtime_ns, st.st_size)
         cached = _DIGEST_CACHE.get(path)
-        if cached is None or cached[0] != key:
+        # Always hash small calibration JSONs: a same-size rewrite followed by
+        # utime() must not evade detection through the stat cache.
+        if path in json_files or cached is None or cached[0] != key:
             cached = (key, hashlib.sha1(path.read_bytes()).hexdigest())
             _DIGEST_CACHE[path] = cached
         digests[path] = cached[1]
     return digests
+
+
+def _changed_artifacts(before, after) -> list[Path]:
+    return sorted(
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +135,7 @@ def _clean_test_calibration_dir():
 
 @pytest.fixture(autouse=True)
 def _no_writes_to_real_tracked_artifacts():
-    """Fail any test that modifies or deletes a tracked file under real ``calibration/`` or ``reports/``.
+    """Fail changes to tracked reports/calibration and any calibration JSON.
 
     Production defaults point at committed artifacts: ``daily_job.main()`` refits
     ``probability_blend.DEFAULT_WEIGHTS_PATH`` (``calibration/blend_weights.json``)
@@ -119,21 +143,21 @@ def _no_writes_to_real_tracked_artifacts():
     cwd-relative ``reports/NFL`` when ``reports_dir`` is omitted. A test that
     reaches either without a ``tmp_path`` override silently rewrites tracked files
     on every run. Content hashes are compared, so a no-op touch passes.
+    Both this checkout and canonical are protected, including new/untracked JSON.
     This only fails -- it never restores, because a live daily or NFL run may
     legitimately update these files while pytest is running.
     """
     before = _guarded_digests()
     yield
     after = _guarded_digests()
-    changed = sorted(
-        path.relative_to(_REPO_ROOT).as_posix() for path in before if before[path] != after[path]
-    )
+    changed = [str(path) for path in _changed_artifacts(before, after)]
     if changed:
         pytest.fail(
-            f"test modified tracked files under real {'/ or '.join(_GUARDED_DIRS)}/: "
+            f"test changed protected artifacts under real {'/ or '.join(_GUARDED_DIRS)}/: "
             f"{changed}. Point the writer at tmp_path (monkeypatch the module's "
             "DEFAULT_*_PATH / paths.PROJECT_ROOT, or pass an explicit path such as "
-            "reports_dir=); then `git checkout -- <file>` to undo the damage.",
+            "reports_dir=). Inspect the diff before restoring: concurrent production "
+            "runs may also update these files.",
             pytrace=False,
         )
 
