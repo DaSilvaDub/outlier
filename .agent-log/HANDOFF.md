@@ -1,3 +1,51 @@
+# HANDOFF — 2026-10-30 (Claude, daily debug review — the OVER side token vanished inside "Turnovers")
+
+- **Branch**: `claude/inspiring-fermat-0npyxb`. **PR**: see below.
+- **Files touched**: `outlier_scrapers/pack_market.py`, `tests/test_pack_market_selection.py` (new).
+- **Fix**: `build_selection` appended the side only when `side_s.lower() not in core.lower()`.
+  That substring test is true for every market label or player name that merely *contains*
+  "over" / "under", so the OVER row of a **Turnovers** prop (and of a surname like Grover)
+  was written as `"Jackie Young - Turnovers 3.5"` — no side at all. `results._grade_row`
+  needs a literal `OVER|UNDER`, so that row returns `None` and stays pending in the ledger
+  forever, while the UNDER twin (`"... Turnovers UNDER 3.5"`) settles normally. The loss is
+  therefore one-sided: every OVER outcome on such a market is missing from the settled set the
+  stake calibration is fit on. The guard now matches on whole words (`\bOVER\b`), the same
+  idiom `verdict_gate._selection_side` already uses, so a label that really ends in "Over"
+  still is not doubled.
+- **Verification**: the three new assertions were confirmed RED on stashed source and GREEN
+  after; the dedup-intent assertion passes both ways. Full runnable suite: see PR body.
+  `ruff check` on the two files reports exactly the same six pre-existing items as on master
+  (nothing new); `mypy` clean on `pack_market.py`. No reasoning models, no provider calls.
+- **Reported, not changed**:
+  - `projections.py:934` and `projections.py:1392` derive the side from the selection with a
+    bare substring and test OVER **first**, so a selection whose player name contains "over"
+    reads an UNDER row as OVER and projects the wrong side's win probability. No current
+    WNBA/MLB player name triggers it and the only modelled WNBA labels are Points/Rebounds/
+    Assists/PR/PA/RA/PRA, so it is latent, not live — but the remedy is the same word-boundary
+    regex applied here.
+  - `scripts/organize_today_run2.py` and
+    `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py` were committed in
+    6dc9357 with mixed CRLF/LF line endings, which is why a one-line change showed as a
+    1,469-line diff. They are the only two mixed-ending Python files tracked; the repo has no
+    `.gitattributes`.
+  - `team_totals.TEAM_TOTAL_PROPOSITIONS` lists MLB's normalized alias (`"R"`) next to the raw
+    `"RUNS"`, but basketball carries only `"POINTS"` — not the normalized `"PTS"`. Any record
+    that reaches `is_team_total_record` / `is_alt_team_total_record` through the documented
+    `rec.get("market")` fallback (i.e. with `proposition` missing) is therefore not recognised
+    as a WNBA/NBA team total. Normalized feed records always carry `proposition`, so this is
+    an asymmetry in a defensive path rather than an observed failure.
+- **Sandbox limitation**: PyPI is unreachable from this environment, so nothing could be
+  installed. Tests ran on the pre-installed uv-tool `pytest` (Python 3.13) with a `structlog`
+  stub supplied outside the repo on `PYTHONPATH`; the 39 modules that need `sqlalchemy`,
+  `numpy`, `openai`, `anthropic`, `google-genai` or `dateutil` cannot be imported here and were
+  excluded. CI is authoritative for those.
+- **Next steps**: review/merge this PR. The open-PR backlog is now 24, twelve of them earlier
+  daily-review fixes (#317, #315, #314, #312, #306, #295, #291, #278, #277, #274, #273 and
+  #318) that have never landed on `master` — the same defect classes keep being re-found
+  because the fixes are not merged.
+
+---
+
 # HANDOFF — 2026-10-30 (Gemini, MLB/WNBA Postgame Slate Audit & Settlement Pattern Fixes)
 
 - **Last Commit SHA**: `ef94cbf`
