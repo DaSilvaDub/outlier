@@ -1,3 +1,26 @@
+# HANDOFF — 2026-10-30 (Gemini, MLB/WNBA Postgame Slate Audit & Settlement Pattern Fixes)
+
+- **Last Commit SHA**: `ef94cbf`
+- **Branch**: `fix/results-gameline-patterns`
+- **Status**: Complete (Feature Branch Pushed & PR Opened; Paid Reasoning: OFF)
+- **PR**: https://github.com/DaSilvaDub/outlier/pull/318
+- **Files Touched**:
+  - `outlier_scrapers/results.py` (expanded gameline regexes in `_grade_row` to match `ML`, `ML_3WAY`, `Moneyline`, `Moneyline Three/3-Way`, `Total Three/3-Way`, `Point Spread`, `Puck Line`)
+  - `tests/test_results.py` (added test coverage verifying grading of all expanded gameline patterns in `test_spread_and_push_grading`)
+- **Summary of Actions**:
+  - Executed full postgame audit for the 2026-10-29 Eastern Time slate:
+    - WNBA: Atlanta Dream 80, Golden State Valkyries 69 (covered Dream -5.5, Under 154.5, Kiah Stokes Under 9.5 REB, Rhyne Howard Over 2.5 3PT, Allisha Gray Over 1.5 3PT).
+    - MLB: Travel/off-day verified; World Series Game 5 (Milwaukee Brewers 4 @ Tampa Bay Rays 1) reconciled.
+  - Investigated feedback database settlement gaps and identified that 25,155+ historical gameline decisions (ML, 3-way moneyline, 3-way totals) were failing to settle automatically in `results._grade_row` due to rigid literal matching on `"Money Line"`.
+  - Expanded `_grade_row` regexes in `outlier_scrapers/results.py` to recognize all production selection formats.
+  - Validated with unit tests in `tests/test_results.py` (100 passed across `test_results.py`, `test_game_totals.py`, `test_alt_team_totals.py`).
+  - Opened PR #318 following feature branch and non-master commit protocol.
+- **Next Steps**:
+  - Review and merge PR #318 into `master`.
+  - Run `python -m outlier_scrapers.results --leagues MLB,WNBA --lookback-days 3` to back-grade pending gameline records.
+
+---
+
 # HANDOFF — 2026-10-29 (Antigravity, MLB + WNBA Master Betting Pipeline V3.0 Dual-Sport Quantitative Execution Engine)
 
 - **Last Commit SHA**: `c99682c`
