@@ -1774,6 +1774,22 @@ def export_projections(
     if not isinstance(props_rows, list):
         props_rows = []
     if _feed_is_current_with_no_slate(props_payload, props_rows, target_date):
+        resolved_date = (
+            target_date.isoformat()
+            if isinstance(target_date, date)
+            else (str(target_date) if target_date else datetime.now().astimezone().date().isoformat())
+        )
+        result: dict[str, object] = {
+            "sport": sport,
+            "date": resolved_date,
+            "generated_at": datetime.now().astimezone().isoformat(),
+            "projections": [],
+        }
+        if sport == "WNBA":
+            result["coverage"] = {"status": "no_slate", "eligible_count": 0}
+        out_path = paths_for_league.projections_latest()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return {
             "status": "skipped",
             "reason": f"props feed is current but has no {sport} slate on {target_date}",

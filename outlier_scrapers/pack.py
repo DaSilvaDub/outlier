@@ -345,6 +345,8 @@ def select_date(
         return rows, (requested or today)
     if requested and requested in dated:
         target = requested
+    elif requested and requested == today:
+        target = requested
     else:
         target = today if today in dated else max(dated)
     kept = [r for r in rows if _local_date(r.get("_event_starts_at")) in (target, None)]
