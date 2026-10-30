@@ -598,11 +598,19 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
 
     if not _event_match(event, selection):
         return None
-    total = re.search(r"\b(?:Total O/U|TOTAL)\s+(OVER|UNDER)\b", selection, re.IGNORECASE)
+    total = re.search(
+        r"\b(?:Total\s+O/U|TOTAL|Total\s+(?:Three|3)[-\s]Way)\s+(OVER|UNDER)\b",
+        selection,
+        re.IGNORECASE,
+    )
     if total:
         actual = event.away_score + event.home_score
         return actual, _side_result(actual, line, total.group(1).upper())
-    spread = re.search(r"\b(?:Spread|Run Line)\s+(HOME|AWAY)\b", selection, re.IGNORECASE)
+    spread = re.search(
+        r"\b(?:Spread|Point\s+Spread|Run\s+Line|Puck\s+Line)\s+(HOME|AWAY)\b",
+        selection,
+        re.IGNORECASE,
+    )
     if spread:
         selected_score, other_score = (
             (event.home_score, event.away_score)
@@ -613,7 +621,11 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         adjusted = margin + line
         result = "PUSH" if adjusted == 0 else "W" if adjusted > 0 else "L"
         return margin, result
-    moneyline = re.search(r"\bMoney Line\s+(HOME|AWAY)\b", selection, re.IGNORECASE)
+    moneyline = re.search(
+        r"\b(?:Money\s*Line(?:\s+(?:Three|3)[-\s]Way)?|ML(?:_3WAY)?)\s+(HOME|AWAY)\b",
+        selection,
+        re.IGNORECASE,
+    )
     if moneyline:
         selected_score, other_score = (
             (event.home_score, event.away_score)
