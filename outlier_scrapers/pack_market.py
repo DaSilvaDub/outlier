@@ -416,9 +416,13 @@ def build_selection(name: Any, label: Any, side: Any, line: Any, proposition: An
         core = " ".join(p for p in (name_s, label_s) if p)
     # Append side only if not already present in core (prevents "Foo OVER OVER 1.5").
     # This keeps display dedup while preserving verbatim spirit for research quotes.
+    # The match is on whole words: a bare substring test read "Turnovers" (and
+    # surnames such as Grover) as an OVER already present, so the OVER side of
+    # every such market lost its side token and results._grade_row -- which needs
+    # a literal OVER/UNDER -- could never settle it, while the UNDER twin settled.
     parts = [core] if core else []
     if side_s:
-        if side_s.lower() not in (core or "").lower():
+        if not re.search(rf"\b{re.escape(side_s)}\b", core or "", re.IGNORECASE):
             parts.append(side_s)
     fl = _fmt_signed_line(line, proposition)
     if fl:
