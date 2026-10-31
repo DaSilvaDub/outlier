@@ -1,5 +1,5 @@
 {
-  "config_hash": "3c062f4405f35185b472b6f4305fb17d0421a47ad63ebc977e43a88ff37d9e31",
+  "config_hash": "8895b4ad51d3daa0dc3a33317661e857a4aaf1f9b9363aba512597dccee4d1ed",
   "families": {
     "team.ALT_SPREAD": {
       "last_evidence": null,
@@ -41,7 +41,11 @@
   "schema": 1,
   "thresholds": {
     "max_abs_calibration_gap": 0.03,
+    "min_clv_coverage": 0.5,
+    "min_clv_dates": 20,
+    "min_clv_observations": 100,
     "min_distinct_dates": 45,
+    "min_independent_games": 300,
     "min_settled_outcomes": 1500,
     "require_median_clv_non_negative": true,
     "require_oos_logloss_beat_market": true

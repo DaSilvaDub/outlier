@@ -8,6 +8,7 @@ dropped values sitting just under an interior edge (e.g. 0.8499 vs a 0.85 edge).
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -120,6 +121,42 @@ def summarize(p: Any, y: Any, buckets: int = 10) -> dict[str, Any]:
         "home_win_rate": float(y.mean()) if n else float("nan"),
         "home_win_rate_wilson": wilson(float(y.sum()), n),
         "reliability": reliability(p, y, buckets),
+    }
+
+
+def clustered_log_loss_diff(
+    baseline: Any,
+    candidate: Any,
+    y: Any,
+    groups: Sequence[Any],
+    *,
+    reps: int = 1000,
+    seed: int = 13,
+) -> dict[str, Any]:
+    """Like :func:`paired_log_loss_diff`, but resampling whole groups (games, dates).
+
+    Observations that share a group are correlated (several lines of one game), so the
+    interval resamples groups with replacement and keeps each group's rows together.
+    """
+    y = _f(y)
+    diff = _loss_terms(_f(baseline), y) - _loss_terms(_f(candidate), y)
+    labels = {g: i for i, g in enumerate(dict.fromkeys(groups))}
+    idx = np.array([labels[g] for g in groups])
+    k = len(labels)
+    if k < 2:  # a single cluster has no spread to resample
+        return {"n": len(diff), "groups": k, "mean": float(diff.mean()), "ci": (float("nan"),) * 2}
+    sums = np.bincount(idx, weights=diff, minlength=k)
+    counts = np.bincount(idx, minlength=k).astype(np.float64)
+    rng = np.random.default_rng(seed)
+    means = np.empty(reps)
+    for r in range(reps):
+        pick = rng.integers(0, k, k)
+        means[r] = sums[pick].sum() / counts[pick].sum()
+    return {
+        "n": len(diff),
+        "groups": k,
+        "mean": float(diff.mean()),
+        "ci": (float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))),
     }
 
 

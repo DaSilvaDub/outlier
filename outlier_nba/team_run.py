@@ -31,7 +31,7 @@ from outlier_nba.pipeline import NbaPipeline, PipelineResult, Stage
 from outlier_nba.pricing import blend, team_markets
 from outlier_nba.ratings.model import AsOf, TeamModel, TeamParams, predict
 from outlier_nba.ratings.possessions import TEAM_INDEX, TEAMS, Dataset, build_dataset
-from outlier_nba.receipts import StageReceipt, receipt
+from outlier_nba.receipts import StageReceipt, failing, receipt
 from outlier_nba.run_context import (
     AsOfReader,
     RunContext,
@@ -43,6 +43,7 @@ from outlier_nba.run_writer import RunWriter
 from outlier_nba.sim.engine import SimDraws, SimInputError, SimParams, simulate
 from outlier_nba.track import capture as capture_mod
 from outlier_nba.track import promotion
+from outlier_nba.track.model_ledger import record_model_probs
 from outlier_nba.track.backtest import Predictions, walk_forward
 from outlier_scrapers import paths
 
@@ -52,6 +53,10 @@ MODEL_CONFIG_PATH = paths.PROJECT_ROOT / "config" / "nba_team_model.json"
 MAX_RESULT_AGE_DAYS = 7  # newest finished game in the store vs the slate date
 OPENING_WINDOW_DAYS = 45  # days after Oct 1 in which a prior-season-only model is acceptable
 DEFAULT_DRAWS = 20_000
+# Only games starting within this many hours are priced. The schedule runs for months, but the
+# ratings are as of now and far-out quotes are thin; a forecast made weeks ahead would also
+# become the "first pre-tip forecast" the promotion evidence is built on.
+DEFAULT_HORIZON_HOURS = 36.0
 FAMILY = {
     "ML": "team.ML",
     "SPREAD": "team.SPREAD",
@@ -68,7 +73,7 @@ ROW_FIELDS = [
     "away", "home", "team", "selection", "book", "price", "model_prob", "model_win",
     "model_push", "model_loss", "model_se", "model_fair_decimal", "market_prob",
     "model_weight", "final_prob", "edge_final", "edge_model_only", "flags", "board",
-    "units", "actionable", "event_starts_at", "as_of",
+    "units", "actionable", "event_starts_at", "as_of", "venue",
 ]  # fmt: skip
 
 
@@ -166,7 +171,12 @@ def compute_team_state(
     past = build_dataset([g for g, u in zip(ds.games, usable) if u])
     preds = walk_forward(past, params)
     if not preds.noise.ready:
-        raise TeamStateError(f"only {preds.noise.n_obs} out-of-sample games to estimate noise")
+        from outlier_nba.ingest.espn import BOOTSTRAP_HINT
+
+        raise TeamStateError(
+            f"only {preds.noise.n_obs} out-of-sample games to estimate noise: the store holds "
+            f"{len(games)} games and the model needs about two seasons of history; {BOOTSTRAP_HINT}"
+        )
     model = TeamModel(past, params, extra_season=season)
     asof = model.fit_asof(season, slate_day)
     return TeamState(
@@ -212,6 +222,8 @@ def state_summary(state: TeamState) -> dict[str, Any]:
             "sigma_margin": t.sigma_margin,
             "sigma_total": t.sigma_total,
             "ot_ratio": t.ot_ratio,
+            "level_bias_per100": state.params.bias_weight * t.level_bias,
+            "pace_efficiency_beta": t.beta_pe,
         },
     }
 
@@ -254,6 +266,10 @@ def parse_flag(value: Any) -> bool | None:
         if text in _FALSE:
             return False
     return None
+
+
+def _venue(neutral: bool | None) -> str:
+    return "unknown" if neutral is None else "neutral" if neutral else "home"
 
 
 def event_neutral(event: Mapping[str, Any]) -> bool | None:
@@ -315,10 +331,12 @@ def event_draws(
         sigma_p=state.tracker.sigma_p,
     )
     t = state.tracker
+    bias = state.params.bias_weight * t.level_bias  # same correction the backtest applied
     return simulate(
         SimParams.single(
-            log_poss=pr.log_poss, sigma_p=t.sigma_p, e_home=pr.e_home, e_away=pr.e_away,
-            sigma_e=t.sigma_e, rho=t.rho, ot_ratio=t.ot_ratio,
+            log_poss=pr.log_poss, sigma_p=t.sigma_p, e_home=pr.e_home + bias,
+            e_away=pr.e_away + bias, sigma_e=t.sigma_e, rho=t.rho, ot_ratio=t.ot_ratio,
+            beta_pe=t.beta_pe,
         ),
         n,
         rng,
@@ -438,6 +456,7 @@ def price_slate(
             "flags": ";".join(dict.fromkeys(flags)),
             "board": "SHADOW", "units": 0, "actionable": "false",
             "event_starts_at": rec.tip.isoformat(), "as_of": captured_at.isoformat(),
+            "venue": _venue(neutral_by_event.get(rec.event_id)),
         }  # fmt: skip
         stats["rows"] += 1
         stats["model_priced"] += priced is not None
@@ -543,6 +562,8 @@ def run_team_shadow(
     params: TeamParams | None = None,
     params_source: str = "given",
     feed_receipt_loader: Callable[[], Mapping[str, Any] | None] = load_feed_receipt,
+    ledger_db: Path | None = None,
+    horizon_hours: float | None = DEFAULT_HORIZON_HOURS,
     n_draws: int = DEFAULT_DRAWS,
     promotion_path: Path = promotion.DEFAULT_PATH,
     slate_date: str | None = None,
@@ -585,20 +606,37 @@ def run_team_shadow(
             for r in slate.records
             if r.kind in ("GAME", "TEAM")
         ]
-        state["records"] = [
+        admitted = [
             row["rec"] for row in reader.admit(stamped, stamp_key="captured_at", tip_key="tip")
         ]
+        cutoff = None if horizon_hours is None else ctx.as_of_utc + timedelta(hours=horizon_hours)
+        state["records"] = [r for r in admitted if cutoff is None or r.tip <= cutoff]
+        near = {r.event_id for r in state["records"]}
+        state["events"] = [
+            e
+            for e in slate.events
+            if str(e.get("eventId") or e.get("id") or "") in near or cutoff is None
+        ]
+        state["beyond_horizon"] = len(admitted) - len(state["records"])
         return receipt(
-            "normalize", "OK" if state["records"] else "EMPTY", received=len(state["records"])
+            "normalize",
+            "OK" if state["records"] else "EMPTY",
+            received=len(state["records"]),
+            reason=(
+                f"{state['beyond_horizon']} outcomes start beyond the {horizon_hours}h horizon"
+                if state["beyond_horizon"]
+                else None
+            ),
         )
 
     def price(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
         records = state["records"]
+        state["shadow_rows"] = []  # the ledger stage reads this even when nothing was priced
         if not records:
             return receipt("price_team_markets", "EMPTY", reason="no team-market outcomes")
         cap = capture_mod.build_shadow_capture(records, captured_at=bundle.fetch_started)
         draws_by_event, neutral_by_event = simulate_events(
-            state["team_state"], slate.events, ctx.slate_date, n_draws, 20260101, records
+            state["team_state"], state["events"], ctx.slate_date, n_draws, 20260101, records
         )
         rows, stats = price_slate(
             state["team_state"],
@@ -609,14 +647,16 @@ def run_team_shadow(
             neutral_by_event=neutral_by_event,
             promotion_path=promotion_path,
         )
+        state["shadow_rows"] = rows
         writer.stage_text("team_shadow.csv", rows_to_csv(rows))
-        ladders = fair_ladders(event_teams(slate.events, records), draws_by_event)
+        ladders = fair_ladders(event_teams(state["events"], records), draws_by_event)
         writer.stage_text(
             "team_fair_ladders.csv",
             rows_to_csv(ladders, list(ladders[0]) if ladders else ["event_id"]),
         )
         writer.stage_json("team_run_summary.json", {**stats, "run_id": ctx.run_id,
-                          "n_draws": n_draws, "note": "SHADOW: units 0, model weight from evaluator"})  # fmt: skip
+                          "n_draws": n_draws,
+                          "horizon_hours": horizon_hours, "beyond_horizon": state["beyond_horizon"], "note": "SHADOW: units 0, model weight from evaluator"})  # fmt: skip
         quoted = {r.event_id for r in records}
         unmodelled = sorted(e for e in quoted if draws_by_event.get(e) is None)
         if not stats.get("model_priced"):
@@ -639,12 +679,28 @@ def run_team_shadow(
             )
         return receipt("price_team_markets", "OK", received=len(rows))
 
+    def model_ledger(ctx: RunContext, writer: RunWriter, state: dict[str, Any]) -> StageReceipt:
+        # Side effect, so it runs last and only when everything before it passed.
+        prior = failing(state["receipts"])
+        if prior:
+            return receipt("model_ledger", "EMPTY", reason=f"skipped: {len(prior)} stage(s) not OK")
+        if not ctx.publishes:
+            return receipt(
+                "model_ledger", "EMPTY", reason=f"skipped: {ctx.mode} run is bundle-only"
+            )
+        if not state.get("shadow_rows"):
+            return receipt("model_ledger", "EMPTY", reason="no priced rows to record")
+        stats = record_model_probs(ledger_db, state["shadow_rows"], ctx.run_id)  # type: ignore[arg-type]
+        return receipt("model_ledger", "OK", received=stats["model_rows"])
+
     stages = [
         Stage("feeds", True, feeds),
         Stage("team_state", True, team_state),
         Stage("normalize", True, normalize),
         Stage("price_team_markets", True, price),
     ]
+    if ledger_db is not None:
+        stages.append(Stage("model_ledger", True, model_ledger))
     result = pipe.run(ctx, stages)
     logger.info("nba_team_shadow", run_id=result.run_id, status=result.status,
                 published=result.published, withheld=result.withheld_reason)  # fmt: skip

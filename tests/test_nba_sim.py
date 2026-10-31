@@ -98,3 +98,25 @@ def test_invalid_inputs_fail_closed(bad) -> None:
 def test_tiny_draw_counts_are_refused() -> None:
     with pytest.raises(SimInputError):
         simulate(_params(), 10, np.random.default_rng(0))
+
+
+def test_pace_efficiency_beta_narrows_the_total_without_moving_the_mean() -> None:
+    base = SimParams.single(
+        log_poss=np.log(99.0), sigma_p=0.05, e_home=114.0, e_away=112.0, sigma_e=11.0, rho=0.0,
+        ot_ratio=1.0, beta_pe=0.0,
+    )  # fmt: skip
+    neg = SimParams.single(
+        log_poss=np.log(99.0), sigma_p=0.05, e_home=114.0, e_away=112.0, sigma_e=11.0, rho=0.0,
+        ot_ratio=1.0, beta_pe=-40.0,
+    )  # fmt: skip
+    rng = np.random.default_rng(12)
+    a, b = simulate(base, 80000, rng), simulate(neg, 80000, rng)
+    assert b.total.std() < a.total.std() - 0.5  # faster games are less efficient: less spread
+    assert b.total.mean() == pytest.approx(a.total.mean(), abs=0.6)
+    assert b.margin.std() == pytest.approx(a.margin.std(), rel=0.05)
+
+
+def test_beta_defaults_to_none_and_must_be_finite() -> None:
+    assert _params().beta_pe is None  # existing callers are unchanged
+    with pytest.raises(SimInputError):
+        simulate(_params(beta_pe=float("nan")), 100, np.random.default_rng(0))
