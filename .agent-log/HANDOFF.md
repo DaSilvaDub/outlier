@@ -1,3 +1,64 @@
+# HANDOFF — 2026-10-31 (Claude, daily debug review — totals side selection read a zero edge as no price)
+
+- **Last Commit SHA**: `90528de` on `claude/inspiring-fermat-tewcm5`.
+  **PR**: https://github.com/DaSilvaDub/outlier/pull/321
+- **Files touched**: `outlier_scrapers/game_totals.py`, `tests/test_game_totals.py`.
+- **Fix** (one bug): `pick_best_side` ranked the two sides with
+  `edge or float("-inf")`. `compute_side_edge` returns `round(p_side - implied, 4)`,
+  so a side can land on exactly `0.0` / `-0.0`, and both are falsy — the zero-edge
+  side scored as "not priced" and lost to the other side's *negative* edge. Verified:
+  `pick_best_side(0.52381, -110, -110)` has over_edge `0.0` / under_edge `-0.0476`
+  and returned `("UNDER", -110, -0.0476)`, the strictly worse side. With one side
+  unpriced and the other at `0.0`, both compared equal at `-inf` and the fallthrough
+  returned OVER with no price and no edge at all. Reachable because the devig is a
+  book median while `over_price`/`under_price` are best-single-book offers, so the two
+  are decoupled. `actionable` does not flip (MIN_EDGE_TOTALS is 0.03), but
+  `headline_side`, `best_price`, `best_book`, `p_side_market`, `model_win_prob`, the
+  fair-total direction flags and `SIDE_RESOLUTION_CONFLICT` / `SOURCE_INTEGRITY_FLAG`
+  were all computed for the wrong side. Only `None` now means "not priced"; ties still
+  resolve to OVER and both-unpriced still returns OVER.
+- **Verification**: both new tests confirmed RED pre-fix (source stashed) and GREEN
+  after; the pre-existing `test_pick_best_side_prefers_higher_edge` still passes.
+  Whole `tests/test_game_totals.py`: per-test results identical before and after the
+  change (24 passed / 27 failed, every failure `ModuleNotFoundError: sqlalchemy`).
+  `pyright outlier_scrapers/game_totals.py` — 0 errors, 0 warnings. `compileall` clean.
+  No added line over 100 chars (the two >100 lines in these files are pre-existing).
+  CI is green on master at `055f4e0`. No reasoning models, desk runners or provider calls.
+- **Checked and found clean** (no finding — recorded so the next review can skip them):
+  - MLB player/team prop whitelists (`ALLOWED_MLB_PLAYER_PROPS` / `ALLOWED_MLB_TEAM_PROPS`)
+    are correctly gated at both generation sites and in `verdict_gate`.
+  - `calibration_store.py` write-once/pointer/history logic, `probability_blend.py`
+    fit → floor → resolve → blend path, `derive_push_prob` / `_is_integer_line`.
+  - `slate_quality.is_wnba_playoffs` is the correct postseason resolver (reads `as_of`
+    last, Sep 18+/Oct window); position token sets agree across modules.
+  - The same `or float("-inf")` idiom at `ultimate_alt_report.py:292,293,318,319` is
+    **not** reachable: `_audit_leg` rejects `edge <= 0` and `ev <= 0`, and `_audit_parlay`
+    gates on `ev_pct >= MIN_PARLAY_EV_PCT` (3.0). Left alone deliberately.
+- **Reported, not changed**:
+  - `projections.wnba_projection_record`: the rebound-vacuum gate `minutes >= 32.0` is
+    tested *after* the playoff minutes expansion has already multiplied `minutes` by 1.10,
+    so the effective raw threshold is ~29.1, not the documented 32.0. Whether the gate
+    should read raw or expanded minutes is a modelling call.
+  - `6dc9357` rewrote `scripts/organize_today_run2.py` and the skill's
+    `generate_prompts.py` end-to-end (1469/1589 lines changed for a 3-line fix) by
+    flipping line endings; both files now carry mixed CRLF+LF. Harmless at runtime but it
+    hides every future diff in those files. Worth a `.gitattributes`/normalization pass.
+- **Sandbox limitation (unchanged from 2026-10-27)**: PyPI is blocked by this
+  environment's network policy and DNS does not resolve, so **nothing** could be
+  installed — no `pytest`, `ruff` or `mypy`, and `site-packages` is empty. `pyright` is
+  pre-installed and usable. Tests were driven by a stdlib harness with `pytest` and
+  `structlog` shims supplied **outside** the repo on `PYTHONPATH`; fixture-based tests and
+  every `sqlalchemy`/`numpy`-gated module are unrunnable here. All 84 `pyright` errors
+  repo-wide are missing-dependency artifacts (`np.ndarray` unresolved), not real type
+  errors. CI is authoritative.
+- **Next steps**: the daily-review backlog is now 10+ PRs deep and growing — #319, #317,
+  #315, #314, #312, #306, #303, #302, #299, #295 are all still unmerged against current
+  master, plus #320/#318/#311/#304/#294. Several carry confirmed bug fixes
+  (#315's WNBA postseason false positive, #314's shooting-impairment misfire) that are
+  still live in `master`. Triaging that queue is worth more than another day of new findings.
+
+---
+
 # HANDOFF — 2026-10-31 (Antigravity, Daily NFL Pack and Odds Refresh)
 
 - **Last Commit SHA**: `809ac35`
