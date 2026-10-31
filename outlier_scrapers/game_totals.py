@@ -486,7 +486,17 @@ def pick_best_side(
     under_edge, _ = compute_side_edge("UNDER", p_over, under_price)
     if over_edge is None and under_edge is None:
         return "OVER", over_price, None
-    if (under_edge or float("-inf")) > (over_edge or float("-inf")):
+    # Only None means "this side is not priced". ``x or float("-inf")`` also
+    # swallowed an edge of exactly 0.0 (and -0.0), because both are falsy, so a
+    # zero-edge side lost to the negative-edge other side and the worse side
+    # became the headline. compute_side_edge rounds to 4dp, and the devig is a
+    # book median while the price is the best single book, so an edge landing
+    # inside +/-0.00005 is reachable.
+    if over_edge is None:
+        return "UNDER", under_price, under_edge
+    if under_edge is None:
+        return "OVER", over_price, over_edge
+    if under_edge > over_edge:
         return "UNDER", under_price, under_edge
     return "OVER", over_price, over_edge
 

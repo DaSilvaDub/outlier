@@ -129,6 +129,54 @@ def test_pick_best_side_prefers_higher_edge():
     assert edge is not None and edge > 0
 
 
+def test_pick_best_side_keeps_a_zero_edge_side_over_a_negative_one():
+    """An edge of exactly 0.0 is an edge, not a missing price.
+
+    compute_side_edge rounds to 4dp, so a side can land on 0.0 / -0.0. Both are
+    falsy, and the old ``edge or float("-inf")`` ranking therefore read them as
+    "not priced" and handed the headline to the negative-edge side.
+    """
+    p_over = 0.52381  # exactly the implied probability of -110
+    assert compute_side_edge("OVER", p_over, -110)[0] == 0.0
+    assert compute_side_edge("UNDER", p_over, -110)[0] < 0.0
+
+    side, price, edge = pick_best_side(p_over, -110, -110)
+    assert side == "OVER"
+    assert price == -110
+    assert edge == 0.0
+
+    # Mirrored: the zero-edge side is UNDER this time.
+    p_over_mirror = 1.0 - 0.52381
+    assert compute_side_edge("UNDER", p_over_mirror, -110)[0] == 0.0
+    side, price, edge = pick_best_side(p_over_mirror, -110, -110)
+    assert side == "UNDER"
+    assert price == -110
+    assert edge == 0.0
+
+
+def test_pick_best_side_uses_the_only_priced_side_at_zero_edge():
+    """With one side unpriced, a 0.0 edge on the other must still win it.
+
+    Previously both sides compared equal at -inf -- the unpriced one because it
+    is None, the priced one because its edge is 0.0 -- and the fallthrough
+    handed back OVER with no price and no edge at all.
+    """
+    p_over = 1.0 - 0.52381  # UNDER sits exactly on the implied probability of -110
+    assert compute_side_edge("OVER", p_over, None)[0] is None
+    assert compute_side_edge("UNDER", p_over, -110)[0] == 0.0
+
+    side, price, edge = pick_best_side(p_over, None, -110)
+    assert side == "UNDER"
+    assert price == -110
+    assert edge == 0.0
+
+    # Mirrored: OVER is the only priced side and its edge is exactly 0.0.
+    side, price, edge = pick_best_side(0.52381, -110, None)
+    assert side == "OVER"
+    assert price == -110
+    assert edge == 0.0
+
+
 def test_build_game_totals_actionable_at_three_pct_edge():
     games_norm = {
         "generated_at": "2026-07-07T12:00:00Z",
