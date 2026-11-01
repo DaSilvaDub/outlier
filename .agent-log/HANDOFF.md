@@ -1918,3 +1918,166 @@ this sandbox cannot import.
 - Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
 - Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
 
+
+---
+
+# HANDOFF — 2026-11-01 (Claude, daily debug review — the review backlog is the bug)
+
+> **Appended at the bottom on purpose.** Every other agent prepends at the top of this
+> file, which is the single reason six of the seven open code PRs cannot merge (see
+> finding 2). A bottom append touches a different hunk and merges cleanly.
+
+- **Branch**: `claude/inspiring-fermat-0xm95p`. Base: `origin/master` @ `055f4e0`.
+- **Files touched**: `.agent-log/HANDOFF.md` only. **No product code was changed.**
+
+## Finding 1 (High) — the 2026-10-27 WNBA calibration bugs are still live in master
+
+Re-derived independently today from `a439629` before reading any open PR, then found
+PRs #314 / #315 already fix both. Confirmed still present at `055f4e0`:
+
+- `projections.wnba_projection_record:1417-1424` — the 15% shooting-impairment discount
+  tests `any(keyword in injury_flags)` and `player_name in injury_flags` *independently*.
+  `injury_flags` is the **event-level** report for both teams, one
+  `TEAM: Name (Status; Body)` chunk per player joined by `|`
+  (`pack_index.py:184-186` then `pack_selection.py:581`), so a player listed with an ankle
+  in a game where anyone else has a wrist is cut 15%.
+- Second, independent defect in the same three lines: the discount reads
+  `row.get("player")`, and **`player` is not in `CANDIDATES_HEADER`**
+  (`pack_selection.py:55-150`; the name lives in `selection`). The production call site
+  four lines above it resolves the name as
+  `card.get("player") or ref.get("player") or row.get("player")`
+  (`pack_selection.py:742-744`) precisely because the row has no such key — so on master
+  `player_name` is `""`, the `and player_name` short-circuits, and the rule is **inert in
+  production**. It passes its test only because the test hand-builds a `player` key.
+  PR #314's `_shooting_hand_injury(row.get("injury_flags"), row.get("player"))` keeps that
+  same argument, so **PR #314 does not fix this half**: correct per-chunk matching, still
+  fed an empty name. Worth a follow-up on #314 before merge, and the one-line fix already
+  exists in the same module: `projections._player_name_from_row(row)` (`:632-642`) falls
+  back from `player` to parsing `selection`, and the sibling caller at `:1583` already uses
+  it for exactly this. Verified `row["player"]` is never assigned anywhere in
+  `pack_selection.py` — only `player_id` (`:520`) and `player_position` (`:574`).
+- `projections._is_wnba_playoff_row:1345-1355` — tests every date field and only
+  `return True`s on a hit, so a non-postseason event date falls through to `as_of`, the run
+  clock. Fixed by #315, not by #314.
+
+## Finding 2 (High) — six of seven open code PRs conflict *only* on this file
+
+Fetched every open PR head and test-merged. Conflicting paths, per `git merge-tree`
+against `origin/master` @ `055f4e0`:
+
+| PR | code conflicts | conflicting paths |
+|----|----------------|-------------------|
+| #306, #312, #314, #315, #317, #319 | none | `.agent-log/HANDOFF.md` only |
+| #321 | none | merges clean |
+
+All product code and all test files auto-merge. Verified end to end in a scratch worktree:
+with the log conflict removed, **#314, #315, #306, #312, #317, #319, #321 all merge clean
+in sequence**, no code conflict at any step. The backlog is not blocked on code review
+disagreement or on stale branches; it is blocked on a shared append-at-top log.
+
+`PR #303` carries no code at all (handoff text only) and can simply be closed or merged.
+
+**Do not "fix" this with `merge=union`.** I tried it: `.agent-log/HANDOFF.md merge=union`
+does make all seven merge clean, but union concatenates line-wise, so the five competing
+`# HANDOFF` headings stack up together and the bodies land under the wrong heading. For a
+provenance log that is worse than a conflict. The two options that actually work are a
+protocol change, so they are the owner's call, not mine:
+
+1. one file per entry — `.agent-log/handoffs/YYYY-MM-DD-<agent>.md` — which can never
+   conflict; or
+2. make bottom-append the documented convention in `AGENTS.md` / `CLAUDE.md` (parts of
+   this file already read that way).
+
+## Finding 3 (Low, hygiene) — `6dc9357` converted two scripts to mixed CRLF/LF
+
+`6dc9357` ("fix(export): handle unmounted external drive gracefully", 2026-10-28) is a
+**4-line** logical change that landed as 1530 insertions / 1528 deletions, because both
+files were rewritten from LF to mixed CRLF+LF endings:
+
+```
+$ git show 6dc9357 --stat                      # 1530 insertions(+), 1528 deletions(-)
+$ git show 6dc9357 --stat --ignore-cr-at-eol   #    4 insertions(+),    2 deletions(-)
+$ git show HEAD:scripts/organize_today_run2.py | file -
+  Python script ... with CRLF, LF line terminators      # mixed
+$ git show 6dc9357^:scripts/organize_today_run2.py | file -
+  Python script ... (LF only)
+```
+
+Affects `scripts/organize_today_run2.py` and
+`.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`. Harmless to
+Python, but it hides real changes from review and is the d05eb21 class of confusion. There
+is **no `.gitattributes` in the repo**. Not fixed here: adding `* text=auto` renormalizes
+the whole tree, which is too broad for an unattended run. Recommend a one-off
+`dos2unix`-style renormalization of those two files plus a scoped `*.py text eol=lf`.
+
+## Two long-standing "open" items are stale and can be closed
+
+Both were carried as open in earlier handoffs; both are resolved in master at `055f4e0`:
+
+- *"a `--window` run clobbers `*_latest.json`"* — fixed. `pipeline.py:174-175` sets
+  `write_latest = window is None`, threaded as `publish_latest` through every
+  `*_latest.json` write (`:449-454`, `:737`, `:775`, `:811`, `:952-953`, `:1043-1053`),
+  with the F11 comment at `:426-428`.
+- *"`matches_kickoff_window()` falls through to `return True` for an unrecognised token"* —
+  fixed. `utils.py:478-507` raises `ValueError` on unknown tokens and `:519-522` fails
+  closed to `False`.
+
+## Verification
+
+- `git fetch origin` clean; all 5 upgrade markers present in `pack.py` / `daily_job.py`
+  (cloud STEP 0 per `AGENTS.md` "Cloud / Sandbox Agents"). HEAD == `origin/master`.
+- `python -m compileall` over the tree (excluding `.worktrees`, `.pytest_pr1_tmp`) — clean.
+- `mypy outlier_scrapers outlier_nfl` (2.3.1) — **163 errors, all in `outlier_nba`, all
+  caused by the missing `numpy`** (`FArr = NDArray[np.float64]` at `track/backtest.py:32`
+  and `pace.py:26` degrade to "not valid as a type"). **Zero** errors in `outlier_scrapers`
+  or `outlier_nfl`, the two `make typecheck` targets.
+- `ruff check` (0.16.9) under the project's own ruleset (pyproject selects the default
+  E4/E7/E9/F): 45 findings — 24 `E402`, 20 `F401`, 1 `F841` (`cards.py:126`, unused `exc`
+  in a retry loop). All pre-existing; the F401 count matches the figure already tracked in
+  this log. Audited the high-signal rules by hand: all 24 `PLR0124` are deliberate NaN
+  (`x != x`) checks, and all 18 `B023` closures are called inside the same loop iteration —
+  **no real defects among them**.
+- CI is authoritative and green on master @ `055f4e0`: Offline Pytest passed
+  (run 41200424219), Static Type Checking passed (run 41200424318).
+- No reasoning models, desk runners, or provider calls. Nothing written to `calibration/`
+  or `data/`.
+
+## Sandbox limitation — the test suite could not be run at all (same as 2026-10-27)
+
+PyPI egress is blocked by this environment's network policy
+(`pypi.org:443` gives `tunnel error: unsuccessful`; `pypi.org` is in the proxy's `noProxy`
+list, so direct DNS fails too). `pytest` 9.1.1, `ruff`, `mypy` and `pyright` are
+pre-installed, but **every** third-party runtime dep is absent — `numpy`, `structlog`,
+`sqlalchemy`, `dateutil`, `psycopg2`, `tzdata` and all three provider SDKs.
+`uv pip install --offline` fails too: the uv cache has none of them.
+
+Consequence: 65 of 78 test modules fail to import, and the remaining 1998 collected tests
+**all** error at setup, because a session-scoped `conftest` fixture imports
+`outlier_scrapers.feedback` then `totals_model`, `game_totals`, `line_movement`, `api`,
+which need the missing deps. Net: **0 tests executed.** No stub harness was built this
+run — stubbing seven libraries risks manufacturing false findings, which is worse than
+reporting the gap.
+
+**Recommended environment fix (owner action):** allow `pypi.org` and
+`files.pythonhosted.org` for this environment, or pre-install `requirements.lock` into the
+container image. Until then every daily review is limited to static analysis and reading.
+
+## Next steps
+
+1. **Triage the merge queue — this is the highest-value action available.** The code all
+   merges; only this log conflicts. Suggested order: #321 (already clean), then
+   #315, #314, #319, #317, #312, #306.
+2. Before merging #314, decide the `row.get("player")` follow-up in Finding 1 — as it
+   stands the rule stays inert in production even with #314 applied.
+3. Pick option 1 or 2 from Finding 2 and write it into `AGENTS.md`, so the backlog stops
+   re-forming.
+4. Still open, unchanged, and still needing a human call (carried forward):
+   `backfill_totals_probabilities` writes the pace-compressed value into
+   `market_consensus_prob`, which is documented as bookmaker-derived and is the default
+   `source_probability_column` for the stake-calibration fit (`calibration.py:31`,
+   enforced at `pack_sizing.py:83`) — a model-side adjustment rides into the ledger;
+   WNBA postseason is defined twice with different windows (all of Sep+Oct in
+   `totals_model` vs Sep 18+/Oct in `projections`); `"3PTS"` in
+   `market in {"PTS", "3PTS"}` is unreachable; the rebound-vacuum comment says "starting
+   center" with no starter gate; and neither calibration reaches the composite
+   `PR`/`PA`/`RA`/`PRA` markets that carry the same `points`/`rebounds` components.
