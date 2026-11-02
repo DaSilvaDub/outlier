@@ -17,6 +17,37 @@ DEFAULT_OUT_DIRS = [
 ]
 
 
+def reachable_out_dirs(dirs: list[Path]) -> list[Path]:
+    """Keep only export destinations whose drive is currently mounted.
+
+    An unmounted external / network drive must not abort the whole export, but
+    the skip has to be visible: a silently dropped destination leaves the
+    ``today`` folder missing outright with nothing in the run output to say
+    which one, and an empty result turns the export into a no-op that still
+    reports success.
+    """
+    kept: list[Path] = []
+    for raw in dirs:
+        candidate = Path(raw)
+        drive = candidate.drive
+        if not drive or os.path.exists(drive + os.sep):
+            kept.append(candidate)
+        else:
+            print(
+                f"WARNING: export destination {candidate} skipped: "
+                f"drive {drive} is not mounted",
+                file=sys.stderr,
+            )
+    if dirs and not kept:
+        listed = ", ".join(str(Path(d)) for d in dirs)
+        print(
+            "WARNING: no export destination is reachable, so nothing was "
+            f"exported (checked: {listed})",
+            file=sys.stderr,
+        )
+    return kept
+
+
 def filter_candidates_text_for_ai(candidates: str) -> str:
     """Apply the canonical AI-facing candidate projection in standalone runs."""
     repo_root = Path(__file__).resolve().parents[4]
@@ -630,7 +661,7 @@ def main() -> None:
     args = parser.parse_args()
 
     raw_dirs = dict.fromkeys(DEFAULT_OUT_DIRS + (args.out_dir or []))
-    out_dirs = [Path(p) for p in raw_dirs if not Path(p).drive or os.path.exists(Path(p).drive + "\\")]
+    out_dirs = reachable_out_dirs([Path(p) for p in raw_dirs])
     subdirs = find_all_pack_dirs()
     if not subdirs:
         print("Error: No pack directories found in packs/.")
