@@ -36,6 +36,13 @@ def calc_prob_exceeds(mu: float, baseline: float, sigma: float) -> float:
     return norm_cdf(z)
 
 
+def _signed(val: float | int | None, suffix: str = "") -> str:
+    """Format signed values cleanly without +- artifacts for negative numbers."""
+    if val is None:
+        return "N/A"
+    return f"+{val}{suffix}" if val > 0 else f"{val}{suffix}"
+
+
 def calc_advantage_score(
     boost_pct: float, prob_exceeds: float, volume_score: float, def_vuln_score: float
 ) -> float:
@@ -154,6 +161,16 @@ class MatchupRankingsEngine:
         date_str: str = "latest",
     ) -> None:
         self.date_str = date_str
+        if isinstance(usage_players, dict) and "players" in usage_players:
+            usage_players = usage_players["players"]
+        if isinstance(matchup_scripts, dict) and "records" in matchup_scripts:
+            matchup_scripts = matchup_scripts["records"]
+        if isinstance(props, dict) and "records" in props:
+            props = props["records"]
+        if isinstance(tapes, dict) and "teams" in tapes:
+            tapes = tapes["teams"]
+        if isinstance(weather_records, dict) and "records" in weather_records:
+            weather_records = weather_records["records"]
         self.usage_by_player: dict[str, dict[str, Any]] = {
             p.get("player") or p.get("player_name", ""): p for p in usage_players if isinstance(p, dict)
         }
@@ -771,9 +788,9 @@ def render_positional_markdown(
         md.append(f"| **Season Average entering Slate** | **{p.season_avg}** | Prior completed games per-game baseline |")
         md.append(f"| **Neutral-Opponent Projection** | **{p.neutral_proj}** | Baseline vs league-median defense |")
         md.append(f"| **Matchup-Adjusted Projection** | **{p.matchup_proj}** | Adjusted for opponent & situational catalysts |")
-        md.append(f"| **Expected Increase** | **+{p.expected_increase}** | Absolute edge over season average |")
-        md.append(f"| **Matchup Boost Percentage** | **+{p.boost_pct}%** | Relative statistical expansion |")
-        md.append(f"| **Matchup-Specific Boost** | **+{p.matchup_specific_boost}** | Isolated opponent defensive impact |")
+        md.append(f"| **Expected Increase** | **{_signed(p.expected_increase)}** | Absolute edge over season average |")
+        md.append(f"| **Matchup Boost Percentage** | **{_signed(p.boost_pct, '%')}** | Relative statistical expansion |")
+        md.append(f"| **Matchup-Specific Boost** | **{_signed(p.matchup_specific_boost)}** | Isolated opponent defensive impact |")
         md.append(f"| **Probability Exceeding Avg** | **{p.prob_pct}%** | Calibrated tail probability P(X > Season Avg) |")
         md.append(f"| **Confidence Tier** | **{p.confidence_tier}** | Model conviction tier |")
         md.append(f"| **Consensus Betting Line** | **{line_str}** | Market line & best odds |")
@@ -782,7 +799,7 @@ def render_positional_markdown(
         md.append("### Secondary Advantages")
         for sec in p.secondary_advantages:
             md.append(
-                f"- **{sec.stat}:** Season Avg `{sec.season_avg}` → Proj `{sec.matchup_proj}` (**+{sec.boost_pct}%**)"
+                f"- **{sec.stat}:** Season Avg `{sec.season_avg}` → Proj `{sec.matchup_proj}` (**{_signed(sec.boost_pct, '%')}**)"
             )
         md.append("")
 
@@ -823,7 +840,7 @@ def render_top_10_overall_markdown(
         )
         md.append(
             f"| **{rank}** | **{p.player}** | {p.team} | {p.position} | {p.opponent} | "
-            f"{p.primary_stat} | {p.season_avg} | {p.matchup_proj} | **+{p.boost_pct}%** | "
+            f"{p.primary_stat} | {p.season_avg} | {p.matchup_proj} | **{_signed(p.boost_pct, '%')}** | "
             f"**{p.prob_pct}%** | **{p.advantage_score}** | {line_str} |"
         )
 
@@ -842,7 +859,7 @@ def render_top_10_overall_markdown(
         md.append(f"- **Matchup:** {p.matchup_str} | **Venue:** {'Home' if p.is_home else 'Away'}")
         md.append(
             f"- **Primary Advantage Stat:** **{p.primary_stat}** (Season Avg: `{p.season_avg}` → "
-            f"Proj: `{p.matchup_proj}`, **+{p.boost_pct}%**, P(Above): **{p.prob_pct}%**)"
+            f"Proj: `{p.matchup_proj}`, **{_signed(p.boost_pct, '%')}**, P(Above): **{p.prob_pct}%**)"
         )
         md.append(f"- **Consensus Line:** `{line_str}` | **Market Implied:** `{implied_str}`")
         md.append(f"- **Defensive Vulnerability:** {t.get('def_vuln', 'N/A')}")

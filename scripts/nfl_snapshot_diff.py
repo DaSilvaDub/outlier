@@ -1930,7 +1930,17 @@ def _git_head(repo: Path) -> str | None:
 
 
 def _normalize_text(text: str, work: Path, run_ids: dict[str, str]) -> str:
-    text = text.replace(str(work.resolve()), "<WORK>").replace(str(work), "<WORK>")
+    patterns = {
+        str(work.resolve()),
+        str(work),
+        work.resolve().as_posix(),
+        work.as_posix(),
+        str(work.resolve()).replace("\\", "\\\\"),
+        str(work).replace("\\", "\\\\"),
+    }
+    for p in sorted(patterns, key=len, reverse=True):
+        if p:
+            text = text.replace(p, "<WORK>")
     for rid, token in sorted(run_ids.items(), key=lambda kv: -len(kv[0])):
         text = text.replace(rid, token)
     return text

@@ -512,7 +512,9 @@ def _rows_ab(slate: str = "2026-10-05") -> tuple[dict, dict]:
 def _check_text(base: Path, nfl: Path, capsys, *extra: str) -> tuple[int, str]:
     capsys.readouterr()
     code = nfl_archive.main(["check", "--nfl-dir", str(nfl), "--slate", "2026-10-05", *extra])
-    return code, capsys.readouterr().out.replace(str(base), "<ROOT>")
+    out = capsys.readouterr().out
+    out = out.replace(str(base), "<ROOT>").replace(base.as_posix(), "<ROOT>")
+    return code, out
 
 
 def _union(nfl: Path) -> tuple[list[dict], str | None]:
