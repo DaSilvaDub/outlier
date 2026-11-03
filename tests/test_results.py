@@ -215,7 +215,7 @@ def test_spread_and_push_grading():
     assert results._grade_row(
         {"selection": "ATL @ WAS Total Three Way UNDER 178", "line": "178", "market_type": "GAMELINE"},
         event,
-    ) == (178, "PUSH")
+    ) == (178, "L")
     assert results._grade_row(
         {"selection": "ATL @ WAS Total Three Way OVER 177.5", "line": "177.5", "market_type": "GAMELINE"},
         event,
@@ -224,6 +224,70 @@ def test_spread_and_push_grading():
         {"selection": "ATL @ WAS Total O/U UNDER 180.5", "line": "180.5", "market_type": "GAMELINE"},
         event,
     ) == (178, "W")
+
+
+def test_three_way_gamelines_lose_on_a_draw_instead_of_pushing():
+    """Three-way markets carry a third outcome, so a tie is a loss, not a push.
+
+    ``normalizer.game_sides("MONEYLINE_THREE_WAY")`` is ``(HOME, AWAY, DRAW)``
+    and ``pack_market.NO_PUSH_MARKETS`` lists ``ML_3WAY``: a draw settles the
+    DRAW side, so HOME and AWAY both lose and the stake is not returned.
+    Grading one as PUSH drops a real loss out of the hit-rate and calibration
+    fit in ``calibration.py``, which only keeps W/L rows.
+    """
+    tied = results.FinalEvent(
+        provider_event_id="1",
+        sport="NFL",
+        event_date=NOW.date(),
+        away="ATL",
+        home="WSH",
+        away_score=20,
+        home_score=20,
+        players={},
+    )
+    for selection in (
+        "ATL @ WAS ML_3WAY HOME 0",
+        "ATL @ WAS ML_3WAY AWAY 0",
+        "ATL @ WAS Moneyline Three Way HOME 0",
+        "ATL @ WAS Moneyline 3-Way AWAY 0",
+    ):
+        assert results._grade_row(
+            {"selection": selection, "line": "0", "market_type": "GAMELINE"}, tied
+        ) == (0, "L"), selection
+
+    # A two-way moneyline has no third outcome, so a tie still pushes.
+    for selection in ("ATL @ WAS Money Line HOME 0", "ATL @ WAS ML AWAY 0"):
+        assert results._grade_row(
+            {"selection": selection, "line": "0", "market_type": "GAMELINE"}, tied
+        ) == (0, "PUSH"), selection
+
+
+def test_three_way_total_landing_on_the_number_loses_both_sides():
+    event = results.FinalEvent(
+        provider_event_id="2",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="ATL",
+        home="WSH",
+        away_score=91,
+        home_score=87,
+        players={},
+    )
+    for selection in (
+        "ATL @ WAS Total Three Way OVER 178",
+        "ATL @ WAS Total Three Way UNDER 178",
+        "ATL @ WAS Total 3-Way OVER 178",
+        "ATL @ WAS Total 3 Way UNDER 178",
+    ):
+        assert results._grade_row(
+            {"selection": selection, "line": "178", "market_type": "GAMELINE"}, event
+        ) == (178, "L"), selection
+
+    # A two-way total landing on the number still pushes.
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total O/U UNDER 178", "line": "178", "market_type": "GAMELINE"},
+        event,
+    ) == (178, "PUSH")
 
 
 def test_team_total_matches_by_exact_team_alias_and_grades():
