@@ -2,7 +2,8 @@ param(
     # Required on purpose: the scheduled run must name the checkout it runs in, so it
     # can never silently run in (and write calibration\ and data\ of) a checkout
     # that agents or an editor are also using.
-    [Parameter(Mandatory = $true)][string]$RepoRoot
+    [Parameter(Mandatory = $true)][string]$RepoRoot,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +51,17 @@ $identityReceipt = @{}
 
 try {
     Set-Location -LiteralPath $repoRoot
+
+    # Check off-season: MLB and WNBA seasons are concluded (November through March).
+    # To avoid scraping, pack builds, and export errors during off-season, skip daily execution
+    # unless -Force is explicitly passed.
+    $currentMonth = (Get-Date).Month
+    $isOffSeason = ($currentMonth -ge 11 -or $currentMonth -le 3)
+    if ($isOffSeason -and -not $Force) {
+        Write-Output "MLB and WNBA are currently in off-season (November - March). Daily pipeline execution skipped."
+        Write-PipelineStatus -Status "ok" -Message "Daily pipeline skipped: MLB/WNBA off-season active (re-enable in spring or pass -Force)."
+        return
+    }
 
     Write-Output "Running local daily job (reasoning off)..."
     Invoke-CheckedPython @(
