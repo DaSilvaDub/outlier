@@ -545,6 +545,14 @@ def _matchup_team_score(event: FinalEvent, raw_team: str) -> float | None:
     return None
 
 
+# Three-way gameline labels (``ML_3WAY``, ``Moneyline Three Way``,
+# ``Total 3-Way``). These markets carry a third outcome -- DRAW for a
+# moneyline (see ``normalizer.game_sides``) and EXACTLY for a total -- so a
+# tie or an exact landing loses the HOME/AWAY/OVER/UNDER side instead of
+# pushing it. ``pack_market.NO_PUSH_MARKETS`` states the same rule.
+_THREE_WAY_LABEL = re.compile(r"(?:THREE|3)[-\s_]?WAY", re.IGNORECASE)
+
+
 def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     selection = str(row["selection"] or "")
     line = _number(row["line"])
@@ -605,7 +613,10 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     )
     if total:
         actual = event.away_score + event.home_score
-        return actual, _side_result(actual, line, total.group(1).upper())
+        result = _side_result(actual, line, total.group(1).upper())
+        if result == "PUSH" and _THREE_WAY_LABEL.search(total.group(0)):
+            result = "L"
+        return actual, result
     spread = re.search(
         r"\b(?:Spread|Point\s+Spread|Run\s+Line|Puck\s+Line)\s+(HOME|AWAY)\b",
         selection,
@@ -632,13 +643,10 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             if moneyline.group(1).upper() == "HOME"
             else (event.away_score, event.home_score)
         )
-        result = (
-            "PUSH"
-            if selected_score == other_score
-            else "W"
-            if selected_score > other_score
-            else "L"
-        )
+        if selected_score == other_score:
+            result = "L" if _THREE_WAY_LABEL.search(moneyline.group(0)) else "PUSH"
+        else:
+            result = "W" if selected_score > other_score else "L"
         return selected_score - other_score, result
     return None
 
