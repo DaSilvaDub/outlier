@@ -47,6 +47,15 @@ USER_AGENT = "outlier-results-collector/1.0"
 # ESPN season.type: 2 regular season, 3 postseason, 5 play-in. Preseason (1) and
 # all-star/other types are skipped and counted.
 KEPT_SEASON_TYPES = frozenset({2, 3, 5})
+# A store with less history than this cannot fit the model (about two seasons are needed to
+# warm the ratings and the out-of-sample noise estimate), so it is never installed as the first
+# store: a refresh of a few recent days alone must not pose as one.
+MIN_BOOTSTRAP_GAMES = 2500
+BOOTSTRAP_HINT = (
+    "build the history once with `python -m outlier_nba.cli backfill --stage all` "
+    "(about 16k polite requests, several hours, resumable), or copy an existing "
+    "data/NBA/store/nba_games.sqlite3 and the matching ESPN cache"
+)
 CUP_PATTERN = re.compile(r"emirates nba cup|in-season tournament|nba cup", re.I)
 
 # Games per regular season, for the gap report (2019-20 and 2020-21 were shortened).

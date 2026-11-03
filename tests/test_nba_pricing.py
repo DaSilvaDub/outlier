@@ -165,7 +165,8 @@ def test_missing_config_fails_closed(tmp_path: Path) -> None:
 
 def _passing(**kw) -> promotion.Evidence:
     base = {"n_settled": 2000, "distinct_dates": 80, "calibration_gap": 0.01,
-            "oos_logloss_beats_market": True, "median_clv": 0.002, "fitted_weight": 0.4}  # fmt: skip
+            "oos_logloss_beats_market": True, "median_clv": 0.002, "fitted_weight": 0.4,
+            "n_games": 900, "clv_n": 400, "clv_dates": 60, "clv_coverage": 0.9}  # fmt: skip
     return promotion.Evidence(**{**base, **kw})
 
 

@@ -378,3 +378,158 @@ def test_http_fetch_refuses_urls_outside_the_espn_endpoint() -> None:
         espn.http_fetch("https://stats.nba.com/stats/x")
     with pytest.raises(espn.EspnError, match="refusing"):
         espn.http_fetch("file:///etc/passwd")
+
+
+def _bt_args(tmp_path, *extra):
+    return ["backtest", "--out", str(tmp_path / "r.json"), "--no-tune", *extra]
+
+
+def test_sbro_backtest_fails_when_no_closing_line_game_matched(tmp_path, monkeypatch, capsys):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    called = []
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(
+        sbro, "load_market",
+        lambda seasons, games: ({}, {"seasons": {s: {"cached": False} for s in seasons}}),
+    )  # fmt: skip
+    monkeypatch.setattr(backtest, "run_backtest", lambda *a, **k: called.append(1) or {})
+    assert cli.main(_bt_args(tmp_path, "--sbro", "--allow-partial")) == 6
+    assert "closing_lines_unavailable" in capsys.readouterr().out
+    assert not called and not (tmp_path / "r.json").exists()  # no report claiming a comparison
+
+
+def test_sbro_backtest_needs_enough_games_per_season_unless_partial_is_allowed(
+    tmp_path, monkeypatch, capsys
+):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    report = {"seasons": {"2018-19": {"cached": True, "matched": 30}}}
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(sbro, "load_market", lambda seasons, games: ({"g": object()}, report))
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    monkeypatch.setattr(
+        backtest,
+        "run_backtest",
+        lambda *a, **k: {
+            "params": {},
+            "scored_seasons": [],
+            "market_lines": {"available": True, "n": 10},
+        },
+    )
+    base = _bt_args(tmp_path, "--sbro", "--seasons", "2018-19:2018-19")
+    assert cli.main(base) == 6
+    assert "only 30 matched games" in capsys.readouterr().out
+    assert cli.main([*base, "--allow-partial"]) == 0
+    saved = json.loads((tmp_path / "r.json").read_text())
+    assert saved["sbro_join"]["coverage_problems"]  # the shortfall travels with the report
+    assert (tmp_path / "sbro_manifest.json").exists()
+
+
+def test_closing_csv_backtest_fails_on_an_empty_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    empty = tmp_path / "c.csv"
+    empty.write_text("game_id,season,date,home,away,ml_home,ml_away\n", encoding="utf-8")
+    assert cli.main(_bt_args(tmp_path, "--closing-csv", str(empty))) == 6
+    assert "no usable rows" in capsys.readouterr().out
+
+
+def test_ratings_refuses_to_bootstrap_a_store_from_a_few_recent_days(tmp_path, monkeypatch, capsys):
+    """A fresh checkout has no history; a 5-day refresh must not be installed as the store."""
+    _seed_cache(tmp_path / "cache")  # three games: nothing like a history
+    monkeypatch.setattr(espn, "refresh_recent", lambda cache, today: {})
+    store = tmp_path / "store" / "nba_games.sqlite3"
+    args = ["ratings", "--date", "2026-10-22", "--cache-dir", str(tmp_path / "cache")]
+    args += ["--store", str(store), "--out-dir", str(tmp_path / "o")]
+    assert cli.main(args) == 3
+    out = capsys.readouterr().out
+    assert "history_missing" in out and "backfill --stage all" in out
+    assert not store.exists()  # nothing was installed to masquerade as history
+
+
+def test_too_little_history_error_says_how_to_build_it() -> None:
+    few = [g for g in synth_history() if g.season == "2026-27"]
+    with pytest.raises(team_run.TeamStateError) as err:
+        team_run.compute_team_state(few, "2026-10-22", team_run.TeamParams(lam=20.0), "t")
+    msg = str(err.value)
+    assert f"holds {len(few)} games" in msg and "backfill --stage all" in msg
+
+
+def test_backfill_all_runs_every_stage_in_order_and_stops_when_blocked(
+    tmp_path, monkeypatch, capsys
+):
+    calls: list[str] = []
+
+    def fake_fetch(stage, seasons, cache):
+        calls.append(stage)
+        return {"requested": 1, "todo": 1}
+
+    monkeypatch.setattr(espn, "run_fetch", fake_fetch)
+    _seed_cache(tmp_path / "cache")
+    store = tmp_path / "s.sqlite3"
+    args = ["backfill", "--stage", "all", "--cache-dir", str(tmp_path / "cache")]
+    args += ["--store", str(store), "--seasons", "2016-17:2016-17"]
+    assert cli.main(args) == 0
+    assert calls == ["scoreboard", "summary"] and store.exists()  # then it built and installed
+    out = capsys.readouterr().out
+    assert '"scoreboard"' in out and '"summary"' in out and '"installed"' in out
+
+    def blocked(stage, seasons, cache):
+        raise espn.BlockedError("HTTP 429")
+
+    monkeypatch.setattr(espn, "run_fetch", blocked)
+    other = tmp_path / "other.sqlite3"
+    args = [
+        "backfill",
+        "--stage",
+        "all",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+        "--store",
+        str(other),
+    ]
+    assert cli.main(args) == 4 and not other.exists()
+
+
+def test_backtest_creates_the_output_directory_before_writing_either_file(tmp_path, monkeypatch):
+    from outlier_nba.ingest import sbro
+    from outlier_nba.track import backtest
+
+    report = {"seasons": {"2018-19": {"cached": True, "matched": 900}}}
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(sbro, "load_market", lambda seasons, games: ({"g": object()}, report))
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    monkeypatch.setattr(
+        backtest,
+        "run_backtest",
+        lambda *a, **k: {
+            "params": {},
+            "scored_seasons": [],
+            "market_lines": {"available": True, "n": 5},
+        },
+    )
+    out = tmp_path / "does" / "not" / "exist" / "r.json"
+    args = ["backtest", "--no-tune", "--sbro", "--seasons", "2018-19:2018-19", "--out", str(out)]
+    assert cli.main(args) == 0
+    assert out.exists() and (out.parent / "sbro_manifest.json").exists()
+
+
+def test_closing_lines_that_match_no_scored_game_fail_the_run(tmp_path, monkeypatch, capsys):
+    """Rows parsed from a CSV but for games nobody scored: nothing was compared, so not success."""
+    monkeypatch.setattr(team_run, "load_store_games", lambda store: synth_history())
+    monkeypatch.setattr(espn, "coverage_report", lambda store: {})
+    path = tmp_path / "close.csv"
+    path.write_text(
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+        "no-such-game,2025-26,2025-12-01,BOS,NYK,-150,130,-3.5,220.5,219,-3,\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "r.json"
+    args = ["backtest", "--no-tune", "--closing-csv", str(path), "--draws", "200"]
+    args += ["--seasons", "2025-26:2025-26", "--tune-season", "2024-25", "--out", str(out)]
+    assert cli.main(args) == 6
+    assert "closing_lines_unavailable" in capsys.readouterr().out
+    assert not out.exists()  # no report that looks like a market comparison happened

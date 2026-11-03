@@ -40,13 +40,17 @@ class SimParams:
     sigma_e: FArr
     rho: FArr
     ot_ratio: FArr
+    # per-100 efficiency change per unit of log-possession surprise (shared by both teams)
+    beta_pe: FArr | None = None
 
     @classmethod
     def single(cls, **kw: float) -> SimParams:
         return cls(**{k: np.array([v], dtype=np.float64) for k, v in kw.items()})
 
     def validate(self) -> int:
-        arrays = {k: np.asarray(v, dtype=np.float64) for k, v in self.__dict__.items()}
+        arrays = {
+            k: np.asarray(v, dtype=np.float64) for k, v in self.__dict__.items() if v is not None
+        }
         sizes = {a.shape for a in arrays.values()}
         if len(sizes) != 1 or len(next(iter(sizes))) != 1:
             raise SimInputError(f"parameters must be 1-d arrays of one length, got {sizes}")
@@ -123,10 +127,17 @@ def simulate(params: SimParams, n: int, rng: np.random.Generator) -> SimDraws:
     eh = np.asarray(params.e_home, dtype=np.float64)[:, None]
     ea = np.asarray(params.e_away, dtype=np.float64)[:, None]
 
-    poss = np.exp(lp + sp * rng.standard_normal(shape))  # log-normal: positive, no floor
+    z_poss = rng.standard_normal(shape)
+    poss = np.exp(lp + sp * z_poss)  # log-normal: positive, no floor
+    beta = (
+        np.zeros((games, 1))
+        if params.beta_pe is None
+        else np.asarray(params.beta_pe, dtype=np.float64)[:, None]
+    )
+    pace_effect = beta * sp * z_poss  # a faster game than expected is less efficient per possession
     zh, za = _correlated(rho, shape, rng)
-    home = np.rint(np.maximum(poss * (eh + se * zh) / 100.0, 0.0)).astype(np.int64)
-    away = np.rint(np.maximum(poss * (ea + se * za) / 100.0, 0.0)).astype(np.int64)
+    home = np.rint(np.maximum(poss * (eh + pace_effect + se * zh) / 100.0, 0.0)).astype(np.int64)
+    away = np.rint(np.maximum(poss * (ea + pace_effect + se * za) / 100.0, 0.0)).astype(np.int64)
     home, away = _pull_ties(home, away, np.asarray(params.ot_ratio, dtype=np.float64), rng)
 
     ot = np.zeros(shape, dtype=np.int64)

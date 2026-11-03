@@ -50,6 +50,10 @@ THRESHOLDS = {
     "max_abs_calibration_gap": 0.03,
     "require_oos_logloss_beat_market": True,
     "require_median_clv_non_negative": True,
+    "min_independent_games": 300,
+    "min_clv_observations": 100,
+    "min_clv_dates": 20,
+    "min_clv_coverage": 0.5,
 }
 
 
@@ -65,6 +69,10 @@ class Evidence:
     oos_logloss_beats_market: bool | None = None
     median_clv: float | None = None
     fitted_weight: float | None = None
+    n_games: int | None = None  # distinct games behind n_settled (lines of one game correlate)
+    clv_n: int | None = None  # verified-close observations on the side the model backs
+    clv_dates: int | None = None
+    clv_coverage: float | None = None  # verified share of the backed lines
 
 
 def _hash(cfg: Mapping[str, Any]) -> str:
@@ -138,14 +146,25 @@ def _failures(ev: Evidence, th: Mapping[str, Any]) -> list[str]:
         bad.append("oos_logloss_vs_market")
     if th["require_median_clv_non_negative"] and (ev.median_clv is None or ev.median_clv < 0):
         bad.append("median_clv")
+
+    def need(key: str) -> Any:  # a config written before a key existed gets the default
+        return th.get(key, THRESHOLDS[key])
+
+    if ev.n_games is None or ev.n_games < need("min_independent_games"):
+        bad.append("independent_games")
+    if (
+        ev.clv_n is None
+        or ev.clv_n < need("min_clv_observations")
+        or ev.clv_dates is None
+        or ev.clv_dates < need("min_clv_dates")
+        or ev.clv_coverage is None
+        or ev.clv_coverage < need("min_clv_coverage")
+    ):
+        bad.append("clv_sample")
     return bad
 
 
-def evaluate(
-    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
-) -> dict[str, dict[str, Any]]:
-    """Re-decide each family named in ``evidence``; returns the new decision per family."""
-    cfg = _load(Path(path))
+def _decide(cfg: dict[str, Any], evidence: Mapping[str, Evidence]) -> dict[str, dict[str, Any]]:
     cap = float(cfg["max_model_weight"])
     decisions: dict[str, dict[str, Any]] = {}
     for family, ev in evidence.items():
@@ -153,14 +172,36 @@ def evaluate(
         failed = _failures(ev, cfg["thresholds"])
         promoted = not failed
         weight = min(max(ev.fitted_weight or 0.0, 0.0), cap) if promoted else 0.0
-        cfg["families"][family] = {
+        new = {
             "status": "promoted" if promoted else "shadow",
             "model_weight": weight,
             "last_evidence": {k: v for k, v in ev.__dict__.items()},
             "failed_keys": failed,
         }
-        decisions[family] = {"from": fam["status"], **cfg["families"][family]}
-        logger.info("promotion_decision", family=family, status=cfg["families"][family]["status"],
-                    failed=failed)  # fmt: skip
+        decisions[family] = {"from": fam["status"], **new}
+    return decisions
+
+
+def preview(
+    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
+) -> dict[str, dict[str, Any]]:
+    """What :func:`evaluate` would decide, without writing anything."""
+    return _decide(_load(Path(path)), evidence)
+
+
+def evaluate(
+    evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
+) -> dict[str, dict[str, Any]]:
+    """Re-decide each family named in ``evidence``; returns the new decision per family."""
+    cfg = _load(Path(path))
+    decisions = _decide(cfg, evidence)
+    for family, decision in decisions.items():
+        cfg["families"][family] = {k: v for k, v in decision.items() if k != "from"}
+        logger.info(
+            "promotion_decision",
+            family=family,
+            status=decision["status"],
+            failed=decision["failed_keys"],
+        )
     _write(cfg, Path(path))
     return decisions

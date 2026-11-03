@@ -37,6 +37,20 @@ Everything here is **SHADOW**: units 0, never actionable, model blend weight 0.
 * Fetch was 5 requests per burst with a pause, repo User-Agent, stop on 403/429. Total about 16k requests. The store
   was built in local temp, copied in, and re-counted from a fresh interpreter (integrity ok, counts match).
 
+## First-time setup on a new checkout or machine
+
+The history is **not** in git: the games store (`data/NBA/store/nba_games.sqlite3`, 2 MB) and the ESPN cache (about
+16k small files, 31 MB, default `%LOCALAPPDATA%/outlier_nba/espn_cache`) are local. A checkout without them cannot fit
+the model: `ratings` then finds no out-of-sample games, and (before this was fixed) it installed a 5-day store that hid
+the gap. Now:
+
+* `python -m outlier_nba.cli backfill --stage all` builds everything (scoreboard, then box scores, then the store);
+  about 16k polite requests, several hours, resumable, stops on 403/429.
+* or copy the store and the cache from a machine that has them and point at the cache with `OUTLIER_NBA_CACHE`
+  (the *parent* of `espn_cache`), and at the store with `--store`.
+* `ratings` refuses (exit 3, `history_missing`) to install a first store holding fewer than 2,500 games, and the
+  `team_state` stage message names the game count and the command above.
+
 ## Backtest
 
 Daily refit; a game is predicted only from games on earlier Eastern dates. Hyperparameters tuned on
@@ -89,10 +103,26 @@ Wilson intervals.
 
 * Margin MAE: sim 10.89, ridge 10.89, constant (expanding mean) 12.03.
 * Total MAE: sim 14.78, ridge 14.86, trailing 1,000-game mean 16.06.
-* **Total bias: the simulation under-predicts totals by 1.0 points** (-0.98 excluding stress seasons).
-  The analytic regulation total is lower still (about -2 to -3 by season) because it omits overtime. Likely cause
-  of the remainder: a decayed average lags the rising league scoring level (about 212 to 230 across the window).
-  That is a hypothesis, not tested; no level-trend term was added.
+* **Total bias (before the 2026-10-22 fix): the simulation under-predicts totals by 1.0 points** (-0.98
+  excluding stress seasons). Diagnosis on the walk-forward predictions: pace is unbiased (mean surprise -0.09
+  possessions), but points per 100 possessions are under-predicted by about 0.7 in nearly every season (+1.4
+  points a game at actual possessions); the rest is overtime, which the analytic regulation total omits. The sign
+  persisted within seasons, and an expanding mean of past residuals overshot later seasons (+2.7 in 2023-24), so the
+  bias is not stationary.
+  **Fix:** a level correction equal to the exponentially weighted mean of the model's own earlier out-of-sample
+  per-100 residuals, added to both teams (half-life 200 games, tuned on 2016-17 to 2017-18 only, applied once 200
+  games of history exist, identical in the backtest and in live pricing). It cannot change who is favoured. Result on
+  2018-19 to 2025-26 (n = 10,229): total bias -1.02 to +0.28, total MAE 14.79 to 14.77, win-probability log loss and
+  margin MAE unchanged. The accuracy gain is tiny (a 1-point bias is small against a 14.8-point error); what changes is
+  that the model's total is centred, so its over/under probabilities are no longer shifted. Seasons still differ
+  (2018-19 -1.5, 2023-24 +1.6).
+* **Total spread.** The simulation treated pace and efficiency as independent; empirically a game that runs faster than
+  expected is less efficient per possession (correlation -0.16, about -31 points per 100 per unit of log-possession
+  surprise). Adding that term (estimated out of sample) narrows the simulated total's standard deviation from 20.2 to
+  19.0 against a realised 18.7; the mean and the margin are unchanged. The efficiency spread (`sigma_e`) and the
+  correlation between the two teams' noise are measured on residuals *after* the pace component is removed;
+  measuring them before and then adding the pace term again would count that component twice (a regression test
+  with an exaggerated link catches it).
 * Margin spread: the tracker's sigma 13.74 against a realised residual sd of 13.90 (about 1% narrow).
 * Overtime: actual 5.3% of games; predicted 5.2% (by season 4.5-6.6% actual vs 4.7-5.8% predicted).
 

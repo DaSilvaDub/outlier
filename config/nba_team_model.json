@@ -1,5 +1,7 @@
 {
   "params": {
+    "bias_halflife": 200.0,
+    "bias_weight": 1.0,
     "carry": 0.7,
     "elo_carry": 0.75,
     "elo_hfa": 70.0,

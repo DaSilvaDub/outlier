@@ -23,6 +23,7 @@ from outlier_nba.pace import PaceFit, PacePrior, fit_pace, tie_density
 from outlier_nba.ratings.possessions import Dataset
 from outlier_nba.ratings.ridge import RatingFit, RatingPrior, fit_ratings
 
+MIN_BIAS_N = 200  # games of residual history before the level correction is applied
 MIN_NOISE_N = 300  # games of out-of-sample history before the simulator may be used
 
 
@@ -46,6 +47,8 @@ class TeamParams:
     elo_carry: float = 0.75
     elo_mov_exp: float = 0.8
     noise_halflife: float = 2000.0
+    bias_weight: float = 1.0  # 0 turns the out-of-sample level correction off
+    bias_halflife: float = 200.0  # games; tuned on 2016-17 to 2017-18 (the level drifts)
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)
@@ -71,6 +74,11 @@ class NoiseTracker:
     s_t2: float = 0.0
     n_ot: float = 0.0
     s_density: float = 0.0
+    bias_halflife: float = 1e12
+    s_bias: float = 0.0
+    bias_n: float = 0.0
+    bias_obs: int = 0  # raw count; readiness cannot depend on the decayed sample size
+    s_pe: float = 0.0
 
     @property
     def ready(self) -> bool:
@@ -98,6 +106,22 @@ class NoiseTracker:
         return math.sqrt(self.s_t2 / self.n)
 
     @property
+    def level_bias(self) -> float:
+        """Mean out-of-sample per-100 residual of the *uncorrected* model (pts/100, both teams).
+
+        The ratings are fitted on decayed history, so on a league whose scoring level keeps
+        moving they run behind it; this is the average amount by which they have been behind.
+        Zero until MIN_BIAS_N games of history exist.
+        """
+        return self.s_bias / self.bias_n if self.bias_obs >= MIN_BIAS_N else 0.0
+
+    @property
+    def beta_pe(self) -> float:
+        """Per-100 efficiency change per unit of log-possession surprise (negative in the NBA:
+        games that run faster than expected are less efficient per possession)."""
+        return self.s_pe / self.s_p2 if self.ready and self.s_p2 > 0 else 0.0
+
+    @property
     def ot_ratio(self) -> float:
         return self.n_ot / self.s_density if self.s_density > 0 else float("nan")
 
@@ -110,14 +134,37 @@ class NoiseTracker:
         m_res: float,
         t_res: float,
         ot: bool,
+        raw_eff_resid: float | None = None,
     ) -> None:
-        """Fold in one finished game. Residuals are actual minus the pre-game prediction."""
+        """Fold in one finished game. Residuals are actual minus the pre-game prediction.
+
+        ``e_h``/``e_a`` are residuals of the level-corrected forecast; the pace component is
+        removed here before they feed the spread and correlation estimates. ``raw_eff_resid`` is
+        the mean residual of the uncorrected forecast (it feeds the level correction).
+        """
         d = 0.5 ** (1.0 / self.halflife)
         density = None
         if self.n_obs >= 30:  # the tie density needs a spread; use the one measured so far
             density = float(tie_density(np.array([exp_margin]), self.sigma_margin)[0])
-        for name in ("n", "s_eh2", "s_ea2", "s_eha", "s_p2", "s_m2", "s_t2", "n_ot", "s_density"):
+        for name in (
+            "n", "s_eh2", "s_ea2", "s_eha", "s_p2", "s_m2", "s_t2", "n_ot", "s_density", "s_pe",
+        ):  # fmt: skip
             setattr(self, name, getattr(self, name) * d)
+        db = 0.5 ** (1.0 / self.bias_halflife)
+        self.s_bias *= db
+        self.bias_n *= db
+        if raw_eff_resid is not None:
+            self.s_bias += raw_eff_resid
+            self.bias_n += 1.0
+            self.bias_obs += 1
+        # beta from earlier games only (this game is not folded in yet). The pace component of
+        # the efficiency residual is modelled explicitly in the simulation, so the spread and
+        # correlation it is given must describe what is left once that component is removed;
+        # otherwise the component would be counted twice.
+        beta = self.beta_pe
+        self.s_pe += pace_resid * 0.5 * (e_h + e_a)
+        e_h -= beta * pace_resid
+        e_a -= beta * pace_resid
         if density is not None:
             self.s_density += density
             self.n_ot += float(ot)  # counted only where a density was accumulated
