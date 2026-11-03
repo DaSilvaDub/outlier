@@ -189,9 +189,41 @@ def test_spread_and_push_grading():
         event,
     ) == (4, "PUSH")
     assert results._grade_row(
+        {"selection": "ATL @ WAS Point Spread AWAY -4", "line": "-4", "market_type": "GAMELINE"},
+        event,
+    ) == (4, "PUSH")
+    assert results._grade_row(
         {"selection": "ATL @ WAS Money Line HOME 0", "line": "0", "market_type": "GAMELINE"},
         event,
     ) == (-4, "L")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS ML AWAY 0", "line": "0", "market_type": "GAMELINE"},
+        event,
+    ) == (4, "W")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Moneyline HOME 0", "line": "0", "market_type": "GAMELINE"},
+        event,
+    ) == (-4, "L")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS ML_3WAY AWAY 0", "line": "0", "market_type": "GAMELINE"},
+        event,
+    ) == (4, "W")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Moneyline Three Way HOME 0", "line": "0", "market_type": "GAMELINE"},
+        event,
+    ) == (-4, "L")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total Three Way UNDER 178", "line": "178", "market_type": "GAMELINE"},
+        event,
+    ) == (178, "PUSH")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total Three Way OVER 177.5", "line": "177.5", "market_type": "GAMELINE"},
+        event,
+    ) == (178, "W")
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total O/U UNDER 180.5", "line": "180.5", "market_type": "GAMELINE"},
+        event,
+    ) == (178, "W")
 
 
 def test_team_total_matches_by_exact_team_alias_and_grades():

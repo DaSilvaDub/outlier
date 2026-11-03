@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import io
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 SCRIPT = (
@@ -398,3 +398,36 @@ def test_find_all_pack_dirs_is_scoped_to_canonical_root(tmp_path):
     (mirror / "2100-01-01").mkdir(parents=True)
 
     assert module.find_all_pack_dirs(canonical) == [canonical / "2099-12-31"]
+
+
+def test_reachable_out_dirs_keeps_destinations_without_a_drive(tmp_path, capsys):
+    module = _load_module()
+    dirs = [tmp_path / "desktop_today", tmp_path / "drive_today"]
+
+    assert module.reachable_out_dirs(dirs) == dirs
+    assert capsys.readouterr().err == ""
+
+
+def test_reachable_out_dirs_names_each_unmounted_destination(monkeypatch, capsys):
+    # The drive check only means anything on Windows, where the scheduled export
+    # runs; parse paths with Windows semantics so the skip branch is exercised.
+    module = _load_module()
+    monkeypatch.setattr(module, "Path", PureWindowsPath)
+
+    kept = module.reachable_out_dirs(["exports\\today", "G:\\My Drive\\today"])
+
+    assert [str(k) for k in kept] == ["exports\\today"]
+    err = capsys.readouterr().err
+    assert "G:\\My Drive\\today" in err
+    assert "not mounted" in err
+
+
+def test_reachable_out_dirs_warns_when_nothing_is_reachable(monkeypatch, capsys):
+    module = _load_module()
+    monkeypatch.setattr(module, "Path", PureWindowsPath)
+
+    assert module.reachable_out_dirs(["G:\\My Drive\\today", "H:\\today"]) == []
+
+    err = capsys.readouterr().err
+    assert "no export destination is reachable" in err
+    assert "H:\\today" in err

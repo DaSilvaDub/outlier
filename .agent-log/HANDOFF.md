@@ -7664,6 +7664,31 @@ this sandbox cannot import.
 - Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
 - Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
 
+# Session Handoff: Daily Debug Review (2026-11-02, agent `claude`)
+
+1. **Work**: Automated daily debug review. Fixed the silent-skip hole in the
+   #316 unmounted-drive export filter (`scripts/organize_today_run2.py`,
+   `.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py`):
+   dropped export destinations are now named on stderr, and an export with no
+   reachable destination left says so instead of succeeding as a no-op. Added
+   six regression tests.
+2. **Branch**: `claude/inspiring-fermat-1c1vbd` (PR opened to `master`).
+3. **Next Steps / open items** (not changed by this session):
+   - PR #323 (off-season guards) is still **open and unmerged**; all checks are
+     green. The guards and `scripts/manage_mlb_wnba_tasks.ps1` are therefore not
+     on `master` yet, so the 08:00 scheduled pipeline has no off-season fast-exit.
+     Merge #323 to make the previous handoff's claims true.
+   - The off-season window in #323 is November-March inclusive; MLB Opening Day
+     falls in late March, so re-enable (or pass `-Force`) before then.
+   - `.worktrees/test-pr97/` is 364 tracked files duplicating the whole repo
+     (added accidentally in merge 5c63d66, 2026-10-06) and its copy of
+     `outlier_scrapers/pack.py` already diverges from the real one. Recommend
+     `git rm -r --cached .worktrees` plus a `.worktrees/` entry in `.gitignore`.
+   - No `.gitattributes`: 2 of 377 tracked Python files are CRLF (the two #316
+     touched), which rewrote both whole files in that commit's diff.
+
+---
+
 # Session Handoff: MLB & WNBA Pipeline Off-Season Shutdown
 
 1. **Last Commit SHA**: `aa07b06` (PR #323)
