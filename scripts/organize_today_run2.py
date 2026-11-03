@@ -51,6 +51,37 @@ DEFAULT_OUT_DIRS = [
 HIT_FIELDNAMES = ["player", "market_label", "side", "line", "team", "matchup"]
 
 
+def reachable_out_dirs(dirs: list[Path]) -> list[Path]:
+    """Keep only export destinations whose drive is currently mounted.
+
+    An unmounted external / network drive must not abort the whole export, but
+    the skip has to be visible: a silently dropped destination leaves the
+    ``today`` folder missing outright with nothing in the run output to say
+    which one, and an empty result turns the export into a no-op that still
+    reports success.
+    """
+    kept: list[Path] = []
+    for raw in dirs:
+        candidate = Path(raw)
+        drive = candidate.drive
+        if not drive or os.path.exists(drive + os.sep):
+            kept.append(candidate)
+        else:
+            print(
+                f"WARNING: export destination {candidate} skipped: "
+                f"drive {drive} is not mounted",
+                file=sys.stderr,
+            )
+    if dirs and not kept:
+        listed = ", ".join(str(Path(d)) for d in dirs)
+        print(
+            "WARNING: no export destination is reachable, so nothing was "
+            f"exported (checked: {listed})",
+            file=sys.stderr,
+        )
+    return kept
+
+
 def safe_copy(src: Path, dst: Path, retries: int = 5, delay: float = 0.5) -> bool:
     """Copy file with retries to handle transient cloud sync locks ([WinError 32]).
 
@@ -626,8 +657,7 @@ def organize_today_additive(
     today_str = latest_pack.name
     suffix = "_latest"
 
-    raw_out_dirs = out_dirs or DEFAULT_OUT_DIRS
-    out_dirs = [d for d in raw_out_dirs if not d.drive or os.path.exists(d.drive + "\\")]
+    out_dirs = reachable_out_dirs(out_dirs or DEFAULT_OUT_DIRS)
     data_dirs = data_dirs or DEFAULT_DATA_SEARCH
 
     current_date = date.fromisoformat(today_str)

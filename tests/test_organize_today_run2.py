@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -483,3 +483,34 @@ def test_generate_playable_props_empty_disclaimer_when_no_fallbacks(tmp_path: Pa
     content = md_file.read_text(encoding="utf-8")
     assert "*No qualifying alternate team total fallbacks identified for current slate.*" in content
 
+
+
+def test_reachable_out_dirs_keeps_destinations_without_a_drive(tmp_path: Path, capsys):
+    dirs = [tmp_path / "desktop_today", tmp_path / "drive_today"]
+
+    assert org.reachable_out_dirs(dirs) == dirs
+    assert capsys.readouterr().err == ""
+
+
+def test_reachable_out_dirs_names_each_unmounted_destination(monkeypatch, capsys):
+    # The drive check only means anything on Windows, where the scheduled export
+    # runs; parse paths with Windows semantics so the skip branch is exercised.
+    monkeypatch.setattr(org, "Path", PureWindowsPath)
+
+    kept = org.reachable_out_dirs(["exports\\today", "G:\\My Drive\\today"])
+
+    assert [str(k) for k in kept] == ["exports\\today"]
+    err = capsys.readouterr().err
+    assert "G:\\My Drive\\today" in err
+    assert "not mounted" in err
+
+
+def test_reachable_out_dirs_warns_when_nothing_is_reachable(monkeypatch, capsys):
+    monkeypatch.setattr(org, "Path", PureWindowsPath)
+
+    assert org.reachable_out_dirs(["G:\\My Drive\\today", "H:\\today"]) == []
+
+    err = capsys.readouterr().err
+    assert "no export destination is reachable" in err
+    assert "G:\\My Drive\\today" in err
+    assert "H:\\today" in err
