@@ -59,6 +59,7 @@ calibration/projections/*.jsonl
 *.egg-info/
 
 copilot-worktrees/
+.worktrees/
 
 # Local tooling and throwaway debug/scratch work (screenshots, debug scripts).
 .codex/

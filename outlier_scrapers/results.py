@@ -578,7 +578,11 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             else (actual, _side_result(actual, line, player_match.group(3).upper()))
         )
 
-    team_total = re.search(r"^([A-Za-z0-9]+)\s+Team Total\s+(OVER|UNDER)", selection, re.IGNORECASE)
+    team_total = re.fullmatch(
+        r"([A-Za-z0-9]+)\s+Team Total\s+(OVER|UNDER)(?:\s+-?\d+(?:\.\d+)?)?",
+        selection,
+        re.IGNORECASE,
+    )
     if team_total:
         team = _team_token(team_total.group(1))
         actual = (
@@ -594,8 +598,8 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             else (actual, _side_result(actual, line, team_total.group(2).upper()))
         )
 
-    matchup_team_total = re.search(
-        r"\b(?:[A-Za-z0-9]+)\s+@\s+(?:[A-Za-z0-9]+)\s+(.+?)\s+-\s+(?:Points|Runs|PTS|R)\s+(OVER|UNDER)\b",
+    matchup_team_total = re.fullmatch(
+        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(.+?)\s+-\s+(?:Points|Runs|PTS|R)\s+(OVER|UNDER)(?:\s+-?\d+(?:\.\d+)?)?",
         selection,
         re.IGNORECASE,
     )
@@ -604,10 +608,13 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         if actual is not None:
             return (actual, _side_result(actual, line, matchup_team_total.group(2).upper()))
 
-    if not _event_match(event, selection):
+    if market_type != "GAMELINE" or not _event_match(event, selection):
         return None
-    total = re.search(
-        r"\b(?:Total\s+O/U|TOTAL|Total\s+(?:Three|3)[-\s]Way)\s+(OVER|UNDER)\b",
+    # Parse only a full-game market label immediately after the matchup.  A
+    # substring search lets "TOTAL" inside "Team Total" (or a period market)
+    # inherit the game's final score and settle against the wrong scope.
+    total = re.fullmatch(
+        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Total\s+O/U|Total\s+(?:Three|3)[-\s]Way|TOTAL)\s+(OVER|UNDER)(?:\s+-?\d+(?:\.\d+)?)?",
         selection,
         re.IGNORECASE,
     )
@@ -617,8 +624,8 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         if result == "PUSH" and _THREE_WAY_LABEL.search(total.group(0)):
             result = "L"
         return actual, result
-    spread = re.search(
-        r"\b(?:Spread|Point\s+Spread|Run\s+Line|Puck\s+Line)\s+(HOME|AWAY)\b",
+    spread = re.fullmatch(
+        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Spread|Point\s+Spread|Run\s+Line|Puck\s+Line)\s+(HOME|AWAY)(?:\s+[+-]?\d+(?:\.\d+)?)?",
         selection,
         re.IGNORECASE,
     )
@@ -632,8 +639,8 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         adjusted = margin + line
         result = "PUSH" if adjusted == 0 else "W" if adjusted > 0 else "L"
         return margin, result
-    moneyline = re.search(
-        r"\b(?:Money\s*Line(?:\s+(?:Three|3)[-\s]Way)?|ML(?:_3WAY)?)\s+(HOME|AWAY)\b",
+    moneyline = re.fullmatch(
+        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Money\s*Line(?:\s+(?:Three|3)[-\s]Way)?|ML(?:_3WAY)?)\s+(HOME|AWAY)(?:\s+-?\d+(?:\.\d+)?)?",
         selection,
         re.IGNORECASE,
     )
