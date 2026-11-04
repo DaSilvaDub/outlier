@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import shutil
-import subprocess
+import subprocess  # nosec B404 - only runs fixed local pipeline scripts, never shell or user input
 import sys
 import time
 from pathlib import Path
@@ -103,7 +103,8 @@ def trigger_live_prop_pipeline() -> bool:
     try:
         if edges_script.exists():
             print(f"Executing {edges_script.name}...")
-            res = subprocess.run(
+            # Fixed argv (this interpreter + a script under NBA_PIPELINE_REPO), no shell.
+            res = subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
                 [python_exe, str(edges_script), "--allow-stale-hardrock"],
                 cwd=str(NBA_PIPELINE_REPO),
                 capture_output=True,
@@ -117,7 +118,8 @@ def trigger_live_prop_pipeline() -> bool:
 
         if grades_script.exists():
             print(f"Executing {grades_script.name}...")
-            res = subprocess.run(
+            # Fixed argv (this interpreter + a script under NBA_PIPELINE_REPO), no shell.
+            res = subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
                 [python_exe, str(grades_script)],
                 cwd=str(NBA_PIPELINE_REPO),
                 capture_output=True,
