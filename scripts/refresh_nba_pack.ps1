@@ -206,7 +206,14 @@ if ($ScratchOut) {
 }
 
 $filterScript = Join-Path $repoRoot "scripts\filter_nba_ruled_out.py"
-if (-not $SkipInjuryFilter -and (Test-Path -LiteralPath $filterScript)) {
+if ($SkipInjuryFilter) {
+    Write-Warning "Skipping injury filter (-SkipInjuryFilter set): pack is NOT filtered for ruled-out players."
+}
+elseif (-not (Test-Path -LiteralPath $filterScript)) {
+    # Fail closed: never publish an unfiltered pack unless the caller asked for it.
+    throw "Injury filter not found at $filterScript. Pass -SkipInjuryFilter to publish an unfiltered pack."
+}
+else {
     Write-Output "Filtering ruled-out players..."
     Invoke-CheckedPython @(
         $filterScript,
@@ -214,9 +221,6 @@ if (-not $SkipInjuryFilter -and (Test-Path -LiteralPath $filterScript)) {
         "--out", $filteredCsv,
         "--summary-json", $summaryJson
     )
-}
-else {
-    Write-Output "Skipping injury filter (filter script absent or flag set)."
 }
 
 $afterRows = Get-CsvDataRowCount -Path $filteredCsv

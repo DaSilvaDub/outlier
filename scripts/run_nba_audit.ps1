@@ -48,11 +48,15 @@ try {
     # Native commands (python.exe) do not trip $ErrorActionPreference = "Stop" in
     # Windows PowerShell 5.1, so every call below checks $LASTEXITCODE explicitly.
 
-    # 2. Settle shadow ledger against boxscores
+    # 2. Settle shadow ledger against boxscores. Delegate to run_nba_shadow.ps1 so
+    # settle grades the same ledger capture writes to (the local trial ledger by
+    # default; the shared ledger only with its explicit -SharedLedger switch) and
+    # records nba_settle_status.json. A bare `outlier_nba.cli settle` defaults to
+    # paths.FEEDBACK_DB_PATH and would skip the captured trial rows.
     Set-Location -LiteralPath $outlierRepo
     Write-Output "[$(Get-Date -Format 'o')] Settling outlier_nba shadow ledger..."
-    & $python -m outlier_nba.cli settle
-    if ($LASTEXITCODE -ne 0) { throw "outlier_nba.cli settle failed with exit code $LASTEXITCODE" }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $outlierRepo "scripts\run_nba_shadow.ps1") -Mode settle
+    if ($LASTEXITCODE -ne 0) { throw "run_nba_shadow.ps1 -Mode settle failed with exit code $LASTEXITCODE" }
 
     # 3. Ingest historical box scores in nba-props-pipeline if script exists
     $fetchBoxPy = Join-Path $nbaPipelineRepo "scripts\fetch_historical_boxscores.py"
