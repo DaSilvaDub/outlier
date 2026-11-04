@@ -13,6 +13,7 @@ total_open, spread_open_home, neutral`` (blank cell = unknown; ``date`` is ``YYY
 from __future__ import annotations
 
 import csv
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -49,26 +50,59 @@ def market_probability(ml_home: int, ml_away: int, method: str = "shin") -> floa
 
 
 def _opt(value: str | None) -> float | None:
+    """An unknown number: a blank cell, an absent column, or a cell that is not a number.
+
+    Archives write a missing line as text (SBRO uses ``NL``) and exporters write it as
+    ``nan``, so a cell that will not parse -- or parses to something that is not a finite
+    number -- says what a blank one says: the number is not known. None of them may take the
+    whole file down with them.
+    """
     if value is None or not value.strip():
         return None
-    return float(value)
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _price(value: str | None) -> int | None:
+    """An American price, or None where the cell is blank, absent or not a number."""
+    number = _opt(value)
+    return None if number is None else int(number)
+
+
+def _day(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(str(value or "").strip())
+    except ValueError:
+        return None
 
 
 def lines_from_csv(path: Path) -> dict[str, MarketLine]:
-    """Closing lines from a CSV in the documented layout; rows with unusable prices are dropped."""
+    """Closing lines from a CSV in the documented layout; rows with unusable prices are dropped.
+
+    A row is dropped -- never guessed at, and never raised over -- when it has no game id, no
+    readable date, or a moneyline that is blank, absent or unusable. The caller decides what an
+    empty result means (``backtest --closing-csv`` reports ``closing_lines_unavailable``).
+    """
     out: dict[str, MarketLine] = {}
     with Path(path).open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            ml_home, ml_away = int(float(row["ml_home"])), int(float(row["ml_away"]))
+            game_id = str(row.get("game_id") or "").strip()
+            day = _day(row.get("date"))
+            ml_home, ml_away = _price(row.get("ml_home")), _price(row.get("ml_away"))
+            if not game_id or day is None or ml_home is None or ml_away is None:
+                continue
             prob = market_probability(ml_home, ml_away)
             if prob is None:
                 continue
-            out[row["game_id"]] = MarketLine(
-                game_id=row["game_id"],
-                season=row["season"],
-                day=date.fromisoformat(row["date"]),
-                home=row["home"],
-                away=row["away"],
+            out[game_id] = MarketLine(
+                game_id=game_id,
+                season=str(row.get("season") or ""),
+                day=day,
+                home=str(row.get("home") or ""),
+                away=str(row.get("away") or ""),
                 p_home_ml=prob,
                 ml_home=ml_home,
                 ml_away=ml_away,
