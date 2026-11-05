@@ -492,7 +492,7 @@ def simulate_events(
                 state, home, away, slate_date, n, rng, neutral=bool(neutral[event_id])
             )
         except (SimInputError, KeyError, ValueError) as exc:
-            logger.warning("event_sim_failed", event=event_id, error=str(exc))
+            logger.warning("event_sim_failed", event_id=event_id, error=str(exc))
             draws[event_id] = None
     return draws, neutral
 

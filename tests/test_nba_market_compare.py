@@ -443,6 +443,25 @@ def test_closing_lines_can_come_from_a_csv(tmp_path: Path) -> None:
     assert lines["g2"].spread_home is None and lines["g2"].neutral
 
 
+def test_a_row_with_no_moneyline_is_dropped_not_a_crash(tmp_path: Path) -> None:
+    """A blank cell is documented as "unknown"; a missing price makes the row unusable, and an
+    unusable row is dropped. Parsing it as a number instead aborted the whole backtest."""
+    from outlier_nba.market import closing
+
+    path = tmp_path / "close.csv"
+    path.write_text(
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+        "g1,2018-19,2018-10-16,BOS,PHI,-200,170,-4.5,211.5,208.5,-5,\n"
+        "g2,2018-19,2018-10-17,MIA,UTA,,120,,,,,\n"  # no home moneyline
+        "g3,2018-19,2018-10-18,MIA,UTA,-140,,,,,,\n"  # no away moneyline
+        "g4,2018-19,2018-10-19,MIA,UTA,n/a,120,,,,,\n"  # not a number
+        "g5,2018-19,2018-10-20,MIA,UTA,-140,120,,,,,\n",
+        encoding="utf-8",
+    )
+    assert set(closing.lines_from_csv(path)) == {"g1", "g5"}
+
+
 def test_the_report_runs_on_any_provider_and_splits_neutral_from_ordinary() -> None:
     ds, lines, market, model = _synthetic(edge=0.0)
     flagged = {

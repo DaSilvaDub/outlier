@@ -54,12 +54,25 @@ def _opt(value: str | None) -> float | None:
     return float(value)
 
 
+def _opt_moneyline(value: str | None) -> int | None:
+    """An American price, or None when the cell is blank, missing or not a number."""
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
 def lines_from_csv(path: Path) -> dict[str, MarketLine]:
     """Closing lines from a CSV in the documented layout; rows with unusable prices are dropped."""
     out: dict[str, MarketLine] = {}
     with Path(path).open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            ml_home, ml_away = int(float(row["ml_home"])), int(float(row["ml_away"]))
+            ml_home = _opt_moneyline(row.get("ml_home"))
+            ml_away = _opt_moneyline(row.get("ml_away"))
+            if ml_home is None or ml_away is None:
+                continue  # a row with no usable price is dropped, as a documented blank cell
             prob = market_probability(ml_home, ml_away)
             if prob is None:
                 continue
