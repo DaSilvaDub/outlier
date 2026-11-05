@@ -1,0 +1,12 @@
+{
+  "active": true,
+  "sports": ["NFL", "NBA", "NCAA"],
+  "effective_date_et": "2026-11-05",
+  "reason": "Deliverables 7 and 8: NOT READY. Existing audited outputs are quarantined and prohibited for staking. Release requires independent source, quote, slate, provenance and calibration revalidation.",
+  "release_criteria": [
+    "C: has more than 20 GB free and an organizer run adds less than 50 MB to Older_Data",
+    "Quarantine inventory reconciled against Deliverable 8 and excluded from staking",
+    "All required orchestration failures return nonzero before publication",
+    "Retired NBA Gemini generators cannot produce betting outputs"
+  ]
+}
