@@ -1,0 +1,8 @@
+{
+  "classification": "DIAGNOSTIC ONLY - NO BET",
+  "slate_date": "2026-11-05",
+  "exit_code": 2,
+  "output_created": false,
+  "reason": "Error exporting NBA pack: No fresh nonempty exact-date NBA source. G:\\My Drive\\Sports_Analytics\\01_Active\\NBA_Active\\PROP EDGES\\prop_edges_latest.csv: Missing, stale or future-dated source: G:\\My Drive\\Sports_Analytics\\01_Active\\NBA_Active\\PROP EDGES\\prop_edges_latest.csv; C:\\Users\\dasil\\Dev\\GitHub\\Sports_Analytics\\Sports_Analytics\\01_Active\\NBA_Active\\PROP EDGES\\prop_edges_latest.csv: Missing, stale or future-dated source: C:\\Users\\dasil\\Dev\\GitHub\\Sports_Analytics\\Sports_Analytics\\01_Active\\NBA_Active\\PROP EDGES\\prop_edges_latest.csv; C:\\Users\\dasil\\Dev\\GitHub\\nba-props-pipeline\\output\\PROP EDGES\\prop_edges_latest.csv: Missing, stale or future-dated source: C:\\Users\\dasil\\Dev\\GitHub\\nba-props-pipeline\\output\\PROP EDGES\\prop_edges_latest.csv; C:\\Users\\dasil\\Dev\\GitHub\\nba-props-pipeline\\output\\MATCHUP\\PROP EDGES\\prop_edges_latest.csv: Missing, stale or future-dated source: C:\\Users\\dasil\\Dev\\GitHub\\nba-props-pipeline\\output\\MATCHUP\\PROP EDGES\\prop_edges_latest.csv",
+  "live_producers_invoked": false
+}

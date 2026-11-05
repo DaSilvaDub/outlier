@@ -1,3 +1,13 @@
+# HANDOFF - 2026-11-05 (Codex remediation)
+
+- Last Commit SHA (implementation and evidence): 538739397a981d1e1cf9094d34545ebe3e47318f
+- PR: https://github.com/DaSilvaDub/outlier/pull/330 (draft); CFB: https://github.com/DaSilvaDub/cfb-analytics/pull/25.
+- Files Touched: organizer, shared publication guards, daily/NBA/NFL/universal wrappers, NBA audit hold, retirement/quarantine utilities and tests; docs/remediation contains deployment, source hashes, 668-file quarantine receipt and storage acceptance.
+- Actual outcome: 13 unsafe Gemini entrypoints retired; 668 exports quarantined, 2 research DBs retained, 18 hold markers, zero move/hash errors. Eleven identical archive ledgers removed. User-approved Pictures online-only reclaimed storage; acceptance measured56.15GiB free and zero Older_Data growth on the empty post-quarantine fresh tree.
+- Verification: organizer38, orchestration12 (9initial+3new), retirement5, quarantine6, CFB14 offline cases passed; Ruff/PS parsing passed. Pytest emitted existing Temp/pytest-current atexit permission warning.
+- Next Steps: Keep holds active. Admin must pause saved scheduled-task inventory (Access denied from agent). Reconcile unlocated D8 historical/source artifacts and independently validate quotes, slate, provenance and calibration before any staking. Universal/multi-destination copies remain sequential. Do not resume betting just because tests pass. No live reasoning or pipeline rebuild was performed.
+
+---
 # HANDOFF - 2026-10-24 (Claude, second shadow pass + first settlement)
 
 - Re-ran `scripts/nba_shadow_daily.ps1` (live): ratings > capture > run > settle > promote all OK; the first 14 games settled (28,367 outcomes). Samples are tiny (ML log loss model 0.687 vs market 0.629 on 14 games); promotion fails every key on sample size, as expected.

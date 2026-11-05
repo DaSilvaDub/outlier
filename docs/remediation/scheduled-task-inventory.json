@@ -1,0 +1,98 @@
+[
+  {
+    "TaskName": "Outlier Daily Pipeline",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\dasil\\Dev\\GitHub\\outlier-scheduled\\scripts\\run_daily_pipeline.ps1 -RepoRoot C:\\Users\\dasil\\Dev\\GitHub\\outlier-scheduled"
+  },
+  {
+    "TaskName": "Sports_NBA_Audit_0230",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nba_audit.ps1\""
+  },
+  {
+    "TaskName": "Sports_NBA_Early_Pipeline_1815",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nba_early_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NBA_Full_Pipeline_0600",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nba_full_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NBA_Pack_Refresh_1230",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nba_pack_refresh.ps1\""
+  },
+  {
+    "TaskName": "Sports_NBA_Pack_Refresh_1730",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nba_pack_refresh.ps1\""
+  },
+  {
+    "TaskName": "Sports_NCAA_Audit_0200",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_ncaa_audit.ps1\""
+  },
+  {
+    "TaskName": "Sports_NCAA_Early_Pipeline_1900",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_ncaa_early_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NCAA_Full_Pipeline_0700",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_ncaa_full_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NCAA_Pack_Refresh_1200",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_ncaa_pack_refresh.ps1\""
+  },
+  {
+    "TaskName": "Sports_NCAA_Pack_Refresh_1700",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_ncaa_pack_refresh.ps1\""
+  },
+  {
+    "TaskName": "Sports_NFL_Audit_0300",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nfl_audit.ps1\""
+  },
+  {
+    "TaskName": "Sports_NFL_Early_Pipeline_1945",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nfl_early_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NFL_Full_Pipeline_0800",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nfl_full_pipeline.ps1\""
+  },
+  {
+    "TaskName": "Sports_NFL_Pack_Refresh_1130",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nfl_pack_refresh.ps1\""
+  },
+  {
+    "TaskName": "Sports_NFL_Pack_Refresh_1630",
+    "TaskPath": "\\",
+    "State": 3,
+    "Actions": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\run_nfl_pack_refresh.ps1\""
+  }
+]

@@ -41,6 +41,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "publication_guards.ps1")
+Assert-PublicationHold (Split-Path -Parent $PSScriptRoot)
 
 $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
 $driveToday = "G:\My Drive\today"

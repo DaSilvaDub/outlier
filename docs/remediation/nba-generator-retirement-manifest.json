@@ -1,0 +1,112 @@
+{
+  "status": "RETIRED / NO BET",
+  "source": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts",
+  "entrypoints": [
+    "run_slate_simulation_engine.py",
+    "run_next_day_slate_simulations.py",
+    "run_next_day_slate_20261031.py",
+    "run_next_day_slate_20261101.py",
+    "run_next_day_slate_20261102.py",
+    "run_next_day_slate_20261104.py",
+    "run_next_day_slate_20261105.py",
+    "generate_next_day_slate_master_report.py",
+    "generate_next_day_slate_master_report_20261101.py",
+    "generate_next_day_slate_master_report_20261102.py",
+    "generate_next_day_slate_master_report_20261104.py",
+    "generate_next_day_slate_master_report_20261105.py",
+    "export_next_day_deliverables_20261105.py"
+  ],
+  "files": [
+    {
+      "name": "run_slate_simulation_engine.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_slate_simulation_engine.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_slate_simulation_engine.py",
+      "original_sha256": "071d64936d0f304ccae05561ecf8b61963e29ae45eafb134d5b30154ee6c888c",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_simulations.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_simulations.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_simulations.py",
+      "original_sha256": "b4077a621f33d0466d230bca78fc89b06bc2e995b91ae9678bf16c7dd10fd744",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_20261031.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_20261031.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_20261031.py",
+      "original_sha256": "5fb2854dee6948b1d68997f3bef9f7831842ebf01e4237e9a8455080e71dce71",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_20261101.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_20261101.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_20261101.py",
+      "original_sha256": "26c984831c1b92d177236c3263d04de0f75e97d6471f614fc982173cac836749",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_20261102.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_20261102.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_20261102.py",
+      "original_sha256": "51962f9f5ef9814530150f356e8806ca50401aa22f1f108c6357955bb3506c3b",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_20261104.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_20261104.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_20261104.py",
+      "original_sha256": "0994e8bb930e125b41c07640fd258b4e88fb881e58246191f470628d87ada966",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "run_next_day_slate_20261105.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\run_next_day_slate_20261105.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\run_next_day_slate_20261105.py",
+      "original_sha256": "d034c784f3fe314d549e0e97adc0b45c89213b9cbfd53c17bab1aaa44d8f939d",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "generate_next_day_slate_master_report.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\generate_next_day_slate_master_report.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\generate_next_day_slate_master_report.py",
+      "original_sha256": "a795c364a2961f5d1ca0c64f1de0e1015da462ce0bcde134372deec8f76b1eb4",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "generate_next_day_slate_master_report_20261101.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\generate_next_day_slate_master_report_20261101.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\generate_next_day_slate_master_report_20261101.py",
+      "original_sha256": "9b5b3087f7d1a4dc1f4a6718f25ba5b3e1bde0f18051fddb805218360db463f9",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "generate_next_day_slate_master_report_20261102.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\generate_next_day_slate_master_report_20261102.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\generate_next_day_slate_master_report_20261102.py",
+      "original_sha256": "e51efe77d3bf225ff30221515d5d5b5d80ace2b36155628851dffe6e8e7f5040",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "generate_next_day_slate_master_report_20261104.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\generate_next_day_slate_master_report_20261104.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\generate_next_day_slate_master_report_20261104.py",
+      "original_sha256": "440175e7b7961e38f8d115293d49a4effd34fa5ee15ad3f03fb202f0a7a47c75",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "generate_next_day_slate_master_report_20261105.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\generate_next_day_slate_master_report_20261105.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\generate_next_day_slate_master_report_20261105.py",
+      "original_sha256": "4c327531876314492d0aa14cbdee40dc6b576477740ed16c01259e850d36481e",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    },
+    {
+      "name": "export_next_day_deliverables_20261105.py",
+      "original_path": "C:\\Users\\dasil\\.gemini\\config\\skills\\nba-master-betting-pipeline\\scripts\\export_next_day_deliverables_20261105.py",
+      "backup_path": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-generators\\export_next_day_deliverables_20261105.py",
+      "original_sha256": "e8eb49d6f86721dc5cb6360928566d016afba7e2bfa90e5ba183c3e657da85d4",
+      "tombstone_sha256": "71f278637b9b304c49dd0bf36588f1c5461e7db035ed958ab4daa88b79274fd5"
+    }
+  ]
+}
