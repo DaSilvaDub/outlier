@@ -27,6 +27,9 @@ def test_inventory_read_only_then_move_hash_verified(tmp_path):
     assert q.sha256(Path(row["destination"])) == row["sha256"]
     q.apply(payload, tmp_path / "manifest.json")
     assert row["status"] == "quarantined"
+    after = q.inventory([(root, "today")])
+    assert not any(item["status"] == "planned" for item in after["files"])
+    assert sum(item["status"] == "retained_publication_hold" for item in after["files"]) == 3
 
 
 def test_database_and_historical_archive_untouched(tmp_path):

@@ -1,0 +1,13 @@
+{
+  "verified_utc": "2026-11-05T06:38:40.4077874Z",
+  "free_bytes": 60296306688,
+  "free_gib": 56.155311584472656,
+  "older_data_before_bytes": 911181276.0,
+  "older_data_after_bytes": 911181276.0,
+  "growth_bytes": 0.0,
+  "growth_below_50mb": true,
+  "free_above_20gib": true,
+  "context": "Post-quarantine current Fresh_Data contains no deliverables; nonempty/copy-failure archive behavior is covered by offline regression tests",
+  "pictures_action": "User-approved OneDrive Pictures Free up space applied; cloud copies retained",
+  "post_cloud_free_bytes": 80001691648
+}

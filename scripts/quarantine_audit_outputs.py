@@ -124,7 +124,9 @@ def inventory(roots: list[tuple[Path, str]]) -> dict:
                    "destination": str(quarantine / path.relative_to(root)), "status": "planned"}
             try:
                 contained(path, root)
-                if protected(path):
+                if path.name == "QUARANTINE_HOLD.json":
+                    row["status"] = "retained_publication_hold"
+                elif protected(path):
                     row["status"] = "retained_research_database"
                 else:
                     row.update(size=path.stat().st_size, sha256=sha256(path))
@@ -148,7 +150,7 @@ def apply(manifest: dict, receipt: Path) -> dict:
             continue
         source, root, dest = Path(row["source"]), Path(row["root"]), Path(row["destination"])
         try:
-            if str(root) not in allowed_roots or protected(source):
+            if str(root) not in allowed_roots or protected(source) or source.name == "QUARANTINE_HOLD.json":
                 raise ValueError("Source root not allowlisted or protected database")
             contained(source, root)
             expected = root / "quarantine" / DATE / source.relative_to(root)
