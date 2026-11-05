@@ -7664,6 +7664,87 @@ this sandbox cannot import.
 - Verification: `git diff --check` passed and the JSON ledger parses. The reviewer's seven identity tests passed on the prior snapshot; no tests rerun in this documentation-only follow-up.
 - Next steps: update PR #300 body to reflect review verification, then review/merge PR #300.
 
+# Session Handoff: Daily Debug Review (2026-11-05, agent `claude`)
+
+1. **Work**: Automated daily debug review. The only code new to `master` since
+   the last review is the NBA Phase 2 stack merged by PR #294 (`fd5f5f6`,
+   ~10.7k lines: `track/evidence.py`, `track/market_compare.py`,
+   `track/model_ledger.py`, `ingest/sbro.py`, `market/closing.py`, the level
+   correction + pace-efficiency term in `ratings/model.py` / `sim/engine.py`,
+   and the `promote` / `sbro-fetch` / `--closing-csv` CLI paths). Reviewed that
+   delta and fixed two defects in it:
+   - **`outlier_nba/team_run.py:495` — the error handler raised instead of
+     logging.** `logger.warning("event_sim_failed", event=event_id, ...)` passes
+     the message positionally *and* `event=` as a keyword. `event` is
+     structlog's own parameter for the message (both `FilteringBoundLogger`, the
+     default wrapper class, and `structlog.stdlib.BoundLogger` declare
+     `def warning(self, event, *args, **kw)`), so the call binds `event` twice
+     and raises `TypeError` from inside the `except (SimInputError, KeyError,
+     ValueError)` clause that exists to degrade one game to
+     `MODEL_UNAVAILABLE`. `pipeline.py` treats a crashing stage as `FAILED`, so
+     a single unsimulable game failed the whole `nba run`: no
+     `team_shadow.csv`, no ledger rows, non-zero exit — instead of one flagged
+     row. Fixed by renaming the keyword to `event_id` (the only call in the repo
+     that reused `event`).
+   - **`outlier_nba/market/closing.py` — `lines_from_csv` crashed on a blank
+     moneyline.** `int(float(row["ml_home"]))` raised
+     `ValueError: could not convert string to float: ''`, contradicting the
+     module's own contract ("blank cell = unknown", "rows with unusable prices
+     are dropped") and the existing `g3` precedent (price `0` is dropped). So
+     `backtest --closing-csv` aborted on a traceback instead of skipping the
+     row. Fixed with an `_opt_moneyline` helper; a blank, missing or
+     non-numeric price now drops the row.
+2. **Last Commit SHA**: see the branch tip (plus this handoff commit).
+3. **Files Touched**: `outlier_nba/team_run.py`,
+   `outlier_nba/market/closing.py`, `tests/test_nba_team_run.py`,
+   `tests/test_nba_market_compare.py`, `.agent-log/HANDOFF.md`.
+4. **Branch**: `claude/inspiring-fermat-hh7g2v` (PR opened to `master`).
+5. **Verification**: full runnable suite before vs. after:
+   2238 passed / 71 failed / 52 skipped / 41 collection errors, unchanged set —
+   every failure and error is the sandbox missing `numpy`, `sqlalchemy`,
+   `structlog`, `google-genai` or `dateutil` (spot-checked:
+   `ModuleNotFoundError: No module named 'sqlalchemy'`). `ruff check` on the
+   four touched files: pre-existing findings only (the `I001` on
+   `team_run.py` imports came in with #294 and reproduces on `HEAD`).
+   `config/nba_promotion.json` still matches its own `_hash` (no
+   `PromotionTamperedError`). Both fixes were reproduced before the change and
+   re-run after: the closing-CSV crash with a one-file script and the new test
+   (fails pre-fix with the `ValueError`, passes post-fix); the duplicate-`event`
+   binding with a stand-in carrying structlog's signature.
+   **Caveat:** `numpy` is unavailable here, so every `tests/test_nba_*` module
+   is a collection error and the two new NBA tests could **not** be executed in
+   this sandbox — they need CI (or a local run) to confirm. The
+   closing-CSV one was verified by extracting its body into a standalone module
+   that imports only `outlier_nba.market.closing` (stdlib-only): 1 passed.
+6. **Next Steps / open items**:
+   - **Confirm the two new NBA tests in CI** (`tests/test_nba_team_run.py::test_an_event_that_cannot_be_simulated_is_logged_and_degraded_not_raised`,
+     `tests/test_nba_market_compare.py::test_a_row_with_no_moneyline_is_dropped_not_a_crash`).
+     They could not run without `numpy`.
+   - **Reported, not fixed (low severity, latent):** in `ingest/sbro.py`
+     `_lines()` decides which of a game's two rows holds the total from the
+     *closing* cells and then reads the *opening* spread from the same row. If a
+     game's favourite changed between open and close, `spread_open_home` gets
+     the opening total (~210) instead of a spread. `total_open` is guarded by a
+     `>= TOTAL_FLOOR` check; `spread_open` is not. Nothing in
+     `track/market_compare.py` reads `spread_open_home`, so it is inert today —
+     worth guarding before anything starts using it.
+   - **Still open from previous runs (unchanged, not re-litigated):**
+     `results._grade_row` fails open on period and prefixed-team-total
+     selections (full write-up in the 2026-11-03 entry; it wants a ruling, not a
+     patch); the three-way `PUSH` rows already settled in `feedback.sqlite3`
+     still need a human decision on re-grading; `.worktrees/test-pr97/` is 364
+     tracked files that ruff lints as live code; no `.gitattributes`, so 2 of
+     377 tracked Python files are CRLF.
+   - **Sandbox note (unchanged):** PyPI egress is blocked and `pip`/`uv` cannot
+     resolve it, so the suite runs from the uv wheel cache (pytest, ruff,
+     pyright) plus a local `structlog` shim kept **outside** the repo
+     (`PYTHONPATH` only, never committed). `numpy`, `sqlalchemy`,
+     `google-genai` and `dateutil` have no cached wheel, so the whole
+     `outlier_nba` test surface is unrunnable here. Still worth recording in
+     `docs/CLOUD-SANDBOX-LIMITATIONS.md`.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-03, agent `claude`)
 
 1. **Work**: Automated daily debug review. Found and fixed a settlement
