@@ -1,0 +1,36 @@
+{
+  "deployed_utc": "2026-11-05T08:14:01.046340+00:00",
+  "backup_root": "C:\\Users\\dasil\\outlier-quarantine\\2026-11-05\\nba-roster-fix\\081355",
+  "scripts": [
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\nba_roster_registry.py",
+      "original_sha256": null,
+      "installed_sha256": "246c75c6b36faec2959e74620815825cdc5c1ce5a32c1387091ce0601acf8ecf"
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\refresh_nba_roster_registry.py",
+      "original_sha256": null,
+      "installed_sha256": "4c1b5f57281ac35207ac4d49a429726f394a240d7913cb416d02e315c03ee774"
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\filter_nba_ruled_out.py",
+      "original_sha256": "f6eb48d7794baa3164bf338905eeb7179528604d00c561b836c1f029ba149a18",
+      "installed_sha256": "07986f45164b14b76af1e61be0bd678cf6fc7b4863a65aa0570a8ca6dce12c24"
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\export_nba_extra_pack.py",
+      "original_sha256": "9cb1eaeaa7e396e8e75c1f1c21c6f8170543c7117a2bd3e7ce251b008fd095db",
+      "installed_sha256": "9254880adf3b61608a1717e37bbe147a1bb6563a64604ea00937b0b2e8aea158"
+    },
+    {
+      "path": "C:\\Users\\dasil\\Dev\\GitHub\\outlier\\scripts\\refresh_nba_pack.ps1",
+      "original_sha256": "0e7db0fdf77e3e6f04bc1deabb61d4ab81712189a1602b0fd5d455f6505408e5",
+      "installed_sha256": "5d0cc1d56f619f3195dd5d21f3f5c612acab1ddf42d46b6eb72c5a5ca77cfe1a"
+    }
+  ],
+  "legacy_registry_sha256": "47c0cd3c4b4a1fc3c402648ed445d0b9c81127e3b7c5db76b83e8448386e6d46",
+  "registry_sha256": "92f252421fbdc60855a67dd47715f3bf45672018c10d2f9fae716066b4081783",
+  "as_of_utc": "2026-11-05T08:12:25.413686+00:00",
+  "source_count": 32,
+  "publication_hold": "UNCHANGED / ACTIVE"
+}

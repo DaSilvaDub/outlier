@@ -11,7 +11,8 @@ param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$NbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline",
     [string]$PythonExe = "python",
-    [string]$DriveRoot = ""
+    [string]$DriveRoot = "",
+    [string]$RegistryPath = ""
 )
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "publication_guards.ps1")
@@ -47,7 +48,17 @@ try {
         if (-not $SkipInjuryFilter) {
             $filter = Join-Path $RepoRoot "scripts\filter_nba_ruled_out.py"
             Assert-RequiredFile $filter
-            Invoke-CheckedStage $PythonExe @($filter, "--csv", $stagedCsv, "--out", $stagedCsv, "--summary-json", (Join-Path $stageDir "filter_summary.json"))
+            if (-not $RegistryPath) {
+                $refreshRoster = Join-Path $RepoRoot "scripts\refresh_nba_roster_registry.py"
+                Assert-RequiredFile $refreshRoster
+                $RegistryPath = Join-Path $RepoRoot "resources\nba_roster_registry.json"
+                Invoke-CheckedStage $PythonExe @($refreshRoster, "--date", $Date, "--out", $RegistryPath)
+            }
+            Assert-RequiredFile $RegistryPath
+            $receiptDir = Join-Path $RepoRoot "resources\nba_filter_receipts"
+            New-Item -ItemType Directory -Force -Path $receiptDir | Out-Null
+            $filterReceipt = Join-Path $receiptDir ("$Date-" + [Guid]::NewGuid().ToString("N") + ".json")
+            Invoke-CheckedStage $PythonExe @($filter, "--csv", $stagedCsv, "--out", $stagedCsv, "--date", $Date, "--registry", $RegistryPath, "--summary-json", $filterReceipt)
             Assert-DatedCsv $stagedCsv $Date $started
         }
         $shouldPublish = -not $SkipDrive -and (-not $ScratchOut -or $ForceDrive)

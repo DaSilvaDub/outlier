@@ -72,6 +72,38 @@ def test_valid_scratch_export_succeeds_without_drive_publication(tmp_path):
     assert not list(drive.rglob("*"))
 
 
+@pytest.mark.parametrize("refresh_exit", [0, 7])
+def test_default_filter_refreshes_registry_without_manual_resources_copy(tmp_path, refresh_exit):
+    producer = "import sys\nfrom pathlib import Path\nPath(sys.argv[sys.argv.index('--out')+1]).write_text('slate_date,player\\n2026-11-05,Fixture\\n')\n"
+    scripts, drive, scratch = _fixture(tmp_path, producer)
+    marker = tmp_path / "refreshed.txt"
+    filtered = tmp_path / "filtered.txt"
+    (scripts / "refresh_nba_roster_registry.py").write_text(
+        f"import sys\nfrom pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+        f"raise SystemExit({refresh_exit})\n" if refresh_exit else
+        f"import sys\nfrom pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n"
+        "p=Path(sys.argv[sys.argv.index('--out')+1]); p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fresh fixture registry')\n"
+    )
+    (scripts / "filter_nba_ruled_out.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "assert Path(sys.argv[sys.argv.index('--registry')+1]).read_text() == 'fresh fixture registry'\n"
+        "assert sys.argv[sys.argv.index('--date')+1] == '2026-11-05'\n"
+        f"Path({str(filtered)!r}).write_text('ran')\n"
+    )
+    result = subprocess.run([
+        SHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        str(scripts / "refresh_nba_pack.ps1"), "-RepoRoot", str(scripts.parent),
+        "-Date", "2026-11-05", "-SkipPipeline", "-SkipDrive",
+        "-PythonExe", sys.executable, "-MinDiskSpaceGB", "0", "-ScratchOut", str(scratch),
+    ], capture_output=True, text=True, timeout=40)
+    assert marker.exists()
+    assert (result.returncode == 0) == (refresh_exit == 0), result.stdout + result.stderr
+    assert filtered.exists() == (refresh_exit == 0)
+    assert scratch.exists() == (refresh_exit == 0)
+    assert (scripts.parent / "resources" / "nba_roster_registry.json").exists() == (refresh_exit == 0)
+    assert not list(drive.rglob("*"))
+
+
 def test_publication_hold_stops_before_producer(tmp_path):
     scripts, drive, scratch = _fixture(tmp_path, "raise AssertionError('producer must not run')")
     hold = scripts.parent / "docs" / "remediation" / "publication_hold.json"

@@ -1,0 +1,208 @@
+{
+  "before_rows": 5,
+  "after_rows": 3,
+  "removed_count": 2,
+  "removed_players": [
+    "Mouhamed Gueye",
+    "Jalen Johnson"
+  ],
+  "registry_as_of_utc": "2026-11-05T08:12:25.413686+00:00",
+  "registry_season_year": 2027,
+  "registry_source_count": 32,
+  "registry_sources": [
+    {
+      "fetched_utc": "2026-11-05T08:12:00.588130+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/00.json",
+      "sha256": "9133e21f5de866c269df1d9e6e49bf20cf84b9e856313cabfbdb4e1845895e99",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams?limit=40"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:03.279284+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/01.json",
+      "sha256": "45bf247e9992590feb0cf64352530fef49a65c5237f8a9625f276e265cebf6a3",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:03.265976+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/02.json",
+      "sha256": "7e366352f6b8aa78661d77d7bbf2d32abcf73f114ea7c56400eca452b46a41e1",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/1/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:03.675243+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/03.json",
+      "sha256": "b0d53ad6c7ceb37457af60fda131de5f8b41a44a74dae7482322e548dafa380f",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:03.674410+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/04.json",
+      "sha256": "9f1fa76ba1496b480944b920759eb758e90e4406517578d693607c5e32723f66",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/17/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:05.740803+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/05.json",
+      "sha256": "5f6b47135ce94cdb133e53c4c6f3df4ed80a551dce1777fcc11896d81318461f",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/30/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:05.847087+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/06.json",
+      "sha256": "c653aab46648318ecefacfc7bebd5cf8f4c6142b9662b21d0a5aee1175202339",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/4/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:08.367656+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/07.json",
+      "sha256": "5b6d1e6b9f60c38b9dad9403bcf24591aedb58bf69a2ca05aa71d101fa2bd1a7",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/5/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:08.286169+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/08.json",
+      "sha256": "e2b7adb9830cb1ca0493006798d03aef9ac2e62837510dbeb435ec4e9b3e700a",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/6/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:08.035744+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/09.json",
+      "sha256": "4f4d17196a7a80e677e663258d4c13bc9a4a25473b8f083d79a6e2a4cf97d0dc",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/7/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:08.193948+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/10.json",
+      "sha256": "951af9c906712180adbbf91d0d0794bd14453bffdc81be04cccf537c09862441",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/8/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:10.242700+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/11.json",
+      "sha256": "332865ba21329bca1440fe590d928e22b5047602179f0823dcbd6ad5496a9eca",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/9/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:10.496680+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/12.json",
+      "sha256": "e74723f3cd7d1b08d10cff0714a429c75edfe217d194a8bfbea678e7946d6a17",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/10/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:11.792173+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/13.json",
+      "sha256": "bc838817e0b2b7b77ec5562c5a328b496758eab45c9542bce08942e63fe02216",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/11/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:11.816697+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/14.json",
+      "sha256": "ca8a9245320c397d2a780dec130f076e14fceb446786e1a78275c72c014f4627",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/12/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:12.916083+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/15.json",
+      "sha256": "f6751c424903f2ce96ee927fdfb8eed40ae9876a238f7afd73a4e3ca5974242f",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/13/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:13.176910+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/16.json",
+      "sha256": "c73380ef64975bd3692cd16ab7e6c1a2c835116f4ffdefe854be1300ef9495db",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/29/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:16.335760+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/17.json",
+      "sha256": "628cac46c83f5d69e6f4d2d3506c61a229f4ad123e8e4ddcbd45541f59daff2e",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/14/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:15.908153+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/18.json",
+      "sha256": "635a46b5209a7e74b1940f02c0445808eb0a098cc6136def5229f0791c0489ef",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/15/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:15.176654+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/19.json",
+      "sha256": "d181a24098d539e3e134dec8efe721f3b99466601c3865c2240b79e7d44b7235",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/16/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:15.567405+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/20.json",
+      "sha256": "18f338e80dce26b55070e5af9eb0651a0ebb41f2c1368730c69d66c98c3785c8",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/3/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:17.972059+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/21.json",
+      "sha256": "b2fe3ce7c5285bb00f1b7967c84e82706de487f0a2eb42c720f893a6fd6d328b",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/18/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:18.565813+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/22.json",
+      "sha256": "943961c259c7e2e2010790b687111463b294761812d8dac89206124baba70795",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/25/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:20.434397+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/23.json",
+      "sha256": "beef856f57752dedfced0597f60e9795687dc20aa4e301bccb3344a456a5cc87",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/19/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:20.506233+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/24.json",
+      "sha256": "b5e3eecbea22a863fb5f61635ebb5f8d6c1332e2d4ba52300b27871835db1644",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/20/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:20.559731+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/25.json",
+      "sha256": "00d3e073d8242a7881e56c249db23c8559da818f35bdddad799e3acee3341fa9",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/21/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:20.975187+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/26.json",
+      "sha256": "d34cb1e83cc7351ebcbb75e2471acddd1aa78203bb4f2f129989622db92f8758",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/22/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:24.451749+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/27.json",
+      "sha256": "a592ff7ec5bdbdf76617bc1a17e46965e95076f525b598a6d24577a32f2df8c5",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/23/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:24.418108+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/28.json",
+      "sha256": "2473608903e0a1e0a6cf887e229e3f3531ddba82eebe58e052b3fb71cacd3bc4",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/24/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:22.957889+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/29.json",
+      "sha256": "c43f06115b4dd00fdb54d4818bf64251715b84ba4d9922cae6e14792dfbfba09",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/28/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:23.449240+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/30.json",
+      "sha256": "9442595d70ccfb1b53a8440b026412866db3b20958a2342ca83360c30b3fee55",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/26/roster"
+    },
+    {
+      "fetched_utc": "2026-11-05T08:12:25.405367+00:00",
+      "raw_path": "nba_roster_snapshots/20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643/31.json",
+      "sha256": "f031da6f0ff2e719b51ba779965d7c2cfaec6618d76906394137c551a0011ab0",
+      "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/27/roster"
+    }
+  ],
+  "registry_snapshot": "C:\\Users\\dasil\\.codex\\worktrees\\remediation-plan\\outlier\\resources\\nba_roster_snapshots\\20261105T081225Z-18964b4b8a2b4e27b2c8080474a82643\\registry.json",
+  "filtered_sha256": "72161648528e37885a9a64e3ad2f8d018df8fdebd20689b262e4ddf1bb9fbac0"
+}
