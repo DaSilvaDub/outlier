@@ -696,3 +696,72 @@ def test_double_and_triple_double_are_unsupported_when_a_category_is_missing():
     stats = {"PTS": 12, "REB": 9, "AST": 4}  # no STL/BLK in the box score
     assert results._player_actual("Double Double", stats, "NBA") is None
     assert results._player_actual("Triple Double", stats, "NBA") is None
+
+
+def _scored_event():
+    """ATL 86 at WSH 92: game total 178, home margin 6, home team total 92."""
+    return results.FinalEvent(
+        provider_event_id="1",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="ATL",
+        home="WSH",
+        away_score=86.0,
+        home_score=92.0,
+        players={},
+    )
+
+
+def test_period_scoped_lines_are_skipped_not_graded_off_the_full_game():
+    """A half/quarter line cannot be settled from a final box score, so skip it.
+
+    ``normalize_games`` keeps period markets and records their ``scope``
+    (see ``test_games.test_scope_metadata_preserved``), so such a selection can
+    exist. Grading one off the full-game result books a wrong W/L into the
+    ledger, which ``calibration.py`` and ``feedback_reporting.py`` then treat as
+    a real outcome. Returning None leaves the row unsettled, which is this
+    module's documented behaviour for anything it cannot grade.
+    """
+    event = _scored_event()
+    for selection, line in (
+        ("ATL @ WAS 1st Half Total OVER 90.5", "90.5"),
+        ("ATL @ WAS 2nd Half Total UNDER 88.5", "88.5"),
+        ("ATL @ WAS 1st Quarter Total UNDER 45.5", "45.5"),
+        ("ATL @ WAS 1H Spread HOME -2", "-2"),
+        ("ATL @ WAS 2H Money Line AWAY 0", "0"),
+        ("ATL @ WAS 1st 5 Innings Total O/U OVER 4.5", "4.5"),
+    ):
+        row = {"selection": selection, "line": line, "market_type": "GAMELINE"}
+        assert results._grade_row(row, event) is None, selection
+    # the full-game equivalents still grade
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total O/U OVER 170.5", "line": "170.5",
+         "market_type": "GAMELINE"},
+        event,
+    ) == (178.0, "W")  # fmt: skip
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Spread HOME -2", "line": "-2", "market_type": "GAMELINE"},
+        event,
+    ) == (6.0, "W")  # fmt: skip
+
+
+def test_a_team_total_is_never_graded_off_the_game_total():
+    """"<matchup> <team> Team Total" must not fall through to the game-total branch.
+
+    The bare ``TOTAL`` alternative in the game-total pattern used to match the
+    "Total" inside "Team Total", grading an 87.5 team total off the game's 178.
+    A team total is graded from one team's score or not at all.
+    """
+    event = _scored_event()
+    for side, _ in (("OVER", None), ("UNDER", None)):
+        row = {
+            "selection": f"ATL @ WAS WSH Team Total {side} 87.5",
+            "line": "87.5",
+            "market_type": "TEAM_PROP",
+        }
+        assert results._grade_row(row, event) is None, side
+    # the unprefixed form is still graded off the team's own score
+    assert results._grade_row(
+        {"selection": "WSH Team Total OVER 87.5", "line": "87.5", "market_type": "TEAM_PROP"},
+        event,
+    ) == (92.0, "W")  # fmt: skip
