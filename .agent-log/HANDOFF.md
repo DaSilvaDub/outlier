@@ -79,6 +79,125 @@
      collection errors stay unreachable here, so the phase-2 code merged in
      #294 was reviewed by reading, not by running its tests.
 
+# Session Handoff: Daily Debug Review (2026-11-04, agent `claude`)
+
+1. **Work**: Automated daily debug review of `master` at `fd5f5f6` (CI green:
+   Offline Pytest + Static Type Checking both succeeded on that commit). The code
+   new since the last review is PR #294, the NBA phase-2 stack (30 files, ~10.7k
+   lines: `track/evidence.py`, `track/market_compare.py`, `track/model_ledger.py`,
+   `ingest/sbro.py`, `market/closing.py`, the out-of-sample level correction in
+   `ratings/model.py` + `sim/engine.py` + `track/backtest.py`, and the new `promote`
+   / `sbro-fetch` / `--stage all` CLI paths). Read all of it; one reproducible bug
+   found and fixed.
+2. **Fixed**: `outlier_nba/market/closing.py::lines_from_csv` raised instead of
+   dropping a row it cannot use, contradicting its own contract on both counts
+   ("blank cell = unknown" in the layout docstring, "rows with unusable prices are
+   dropped" in the function docstring). Reproduced on `master`: a blank moneyline
+   cell -> `ValueError: could not convert string to float: ''`; an absent `ml_home`
+   column -> `KeyError: 'ml_home'`; a non-numeric cell -> `ValueError` on `NL`,
+   which is exactly the token the SBRO archive uses for "no line" and which
+   `sbro._num` already treats as unknown; `nan`/`inf` (what an exporter writes for a
+   missing value) -> `ValueError`/`OverflowError` out of `int()`. One bad row
+   therefore aborted the whole load with a traceback. This matters because
+   `lines_from_csv` is the *documented drop-in replacement* for SBRO - the thing
+   that keeps the closing-line comparison usable if the owner has to drop that
+   source over its Terms - and `backtest --closing-csv` has a defined answer for an
+   unusable file already (`closing_lines_unavailable`, exit 6), which it never got
+   to give. Fix: `_opt` returns None for blank, absent, unparseable and non-finite
+   cells; new `_price`/`_day` helpers; a row with no game id, no readable date or an
+   unusable moneyline is skipped. No signature change, no caller change.
+3. **Last Commit SHA**: `9f88d49` (plus this handoff commit).
+4. **Files Touched**: `outlier_nba/market/closing.py`,
+   `tests/test_nba_market_compare.py`, `.agent-log/HANDOFF.md`.
+5. **Branch**: `claude/inspiring-fermat-d0tvnt`, branched from `master` at `fd5f5f6`.
+6. **Verification**: `ruff check outlier_nba/market/closing.py` clean; `mypy` and
+   `pyright` on that file clean; the test file's ruff findings are byte-identical to
+   `master`'s (one line number shifted), no new long lines. The new test
+   `test_an_unreadable_csv_row_is_dropped_not_raised_over` fails on `master`'s
+   `closing.py` and passes on the fixed one, with the pre-existing
+   `test_closing_lines_can_come_from_a_csv` passing both ways - **but** see the
+   sandbox note: `tests/test_nba_market_compare.py` cannot be collected here (numpy
+   is unavailable), so both tests were run as verbatim copies in a file outside the
+   repo. CI will run them in place. Full runnable suite before vs. after the change:
+   2238 passed / 71 failed / 52 skipped / 41 collection errors both times, every
+   failure and error traced to a missing sandbox dependency
+   (sqlalchemy/numpy/google-genai/anthropic/openai/dateutil). No reasoning or desk
+   model was invoked.
+7. **Reviewed and found sound** (recording so the next review need not redo it):
+   the promotion evaluator's new sample gates and its `need()` default for configs
+   written before a key existed; `evidence.py`'s one-observation-per-line,
+   cluster-resampled and train/validate-split conventions;
+   `clustered_log_loss_diff`; the level-correction bookkeeping (the correction is
+   added to both `e_home`/`e_away` and to `exp_total` via
+   `2*bias*poss/100`, removed again before the residual feeds the tracker, and
+   `beta_pe` is read from earlier games only, so the pace term is not double
+   counted); `backfill --stage all`'s stage loop; the `--fixture` guard that refuses
+   the default ledger; the new `--horizon-hours` event filter (its event-id
+   extraction matches `simulate_events`, `event_teams` and `ingest/outlier.py`
+   exactly); and the SBRO year-rollover rule against the 2019-20 bubble.
+8. **Found and verified, deliberately NOT fixed (needs a ruling)**:
+   `results._pending_rows` selects the settlement window with a **string**
+   comparison, not an instant comparison:
+   `s.event_starts_at >= ? AND s.event_starts_at <= ?`, bound to
+   `datetime.isoformat()` (which always renders `+00:00`), against a column that
+   `feedback_capture` stores **verbatim** from the feed - `normalizer`'s
+   `starts_at` is `event.get("scheduledTime") or startTime or startDate or date or
+   scheduled` with no normalisation at all. Reproduced against the real function on
+   an in-memory ledger: with `now = 2026-11-05T14:00Z` and the default
+   `lookback_days=3`, one instant written three ways gives two different answers -
+   `2026-11-02T17:10:00Z` selected, `2026-11-02T17:10:00+00:00` selected,
+   `2026-11-02T13:10:00-04:00` **not selected**, although all three are the same
+   moment inside the window. A decision stored with a non-UTC offset is therefore
+   never settled - and never will be, since later passes only move the window
+   further away - so it drops silently out of the hit rate, the ROI and the
+   calibration fit. That is the same harm as the 2026-11-03 three-way PUSH bug.
+   Latent *today* only to the extent that the provider keeps sending UTC; nothing in
+   the pipeline enforces that, and the repo's own fixtures already carry
+   `-04:00` and naive forms (a naive value is at least counted visibly, as
+   `invalid_time_count`). Not fixed here because the clean repair is a choice the
+   owner should make, not an agent: either normalise `event_starts_at` to UTC at
+   capture time (an ingest/schema change, and the existing rows need a decision) or
+   widen the SQL bounds by a day on each side and do the exact window test in
+   Python in `collect_settlement_rows`, where each row's start is already parsed
+   (cheap and contained, but it changes which decisions get settled and what
+   `pending_count` means, on a module two open PRs already touch, and it cannot be
+   tested against the real ledger from here). Recommended next step: confirm the
+   formats actually present in `market_snapshots.event_starts_at` with
+   `SELECT DISTINCT substr(event_starts_at, 20) FROM market_snapshots`, then pick
+   one of the two repairs.
+9. **Needs human attention**:
+   - **PR #327 (`fix/results-scope-guard`) is open and unreviewed.** It is the fix
+     for the latent `_grade_row` scope problem this review flagged on 2026-11-03,
+     and it also carries the `.worktrees` untracking and the new `.gitattributes`.
+     Both of those are still true on `master` today: 364 tracked files under
+     `.worktrees/test-pr97/` duplicating the repo (ruff lints its divergent
+     `outlier_scrapers/pack.py` as live code) and no `.gitattributes`. Worth
+     reviewing before it rots - note it tightens four gameline patterns from
+     `re.search` to `re.fullmatch` anchored on `TEAM @ TEAM` and adds
+     `market_type != "GAMELINE" -> skip`, so it is worth checking against the
+     `market_type` values real ledger rows actually carry before merging.
+   - **Still unanswered from 2026-11-03**: whether to re-grade three-way rows
+     already settled as PUSH in `feedback.sqlite3`. Not doable from an agent session
+     (calibration lock).
+   - **`outlier_nba` is not type-checked in CI.** `typecheck.yml` runs mypy and
+     pyright on `outlier_scrapers outlier_nfl` only, while `[tool.pyright]` in
+     `pyproject.toml` includes `outlier_nba`. 11k lines of new NBA code just landed
+     with no CI type gate; adding `outlier_nba` to both CI commands is a one-line
+     change the owner should rule on. No claim here that it is currently broken:
+     `mypy outlier_nba` in this sandbox reports 190 errors, but they are dominated
+     by `Value of type FArr? is not indexable`, which is what happens when numpy is
+     absent and `NDArray` degrades to `Any` under `ignore_missing_imports` - and the
+     2026-10-22 handoff records `python -m mypy outlier_nba` passing on a machine
+     that has numpy. Run it somewhere with the real dependencies before acting.
+   - **Sandbox cannot run the suite as CI does** (unchanged): PyPI is unreachable
+     (`pypi.org` sits in `NO_PROXY` and resolves to nothing), so `structlog`,
+     `numpy`, `sqlalchemy`, `google-genai`, `anthropic`, `openai` and `dateutil` are
+     unavailable. This run used the same local `structlog` shim kept outside the
+     repo (PYTHONPATH only, never committed) and compared before/after runs so the
+     shim could not flatter the result. The nine numpy-importing NBA test modules -
+     including the two that cover `closing.py` - cannot be collected at all here.
+
+
 ---
 
 # HANDOFF - 2026-10-24 (Claude, second shadow pass + first settlement)

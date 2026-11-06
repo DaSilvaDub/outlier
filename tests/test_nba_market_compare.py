@@ -447,6 +447,47 @@ def test_closing_lines_can_come_from_a_csv(tmp_path: Path) -> None:
     assert lines["g2"].spread_home is None and lines["g2"].neutral
 
 
+def test_an_unreadable_csv_row_is_dropped_not_raised_over(tmp_path: Path) -> None:
+    """A blank, absent or non-numeric cell is an unknown number, not a crash.
+
+    ``blank cell = unknown`` is the documented layout and the loader drops what it cannot
+    use, so one bad row must not take the whole file -- and the run -- down with it. SBRO
+    writes a missing line as ``NL``, and this is the source meant to replace it.
+    """
+    from outlier_nba.market import closing
+
+    header = (
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+    )
+    path = tmp_path / "ragged.csv"
+    path.write_text(
+        header
+        + "g1,2018-19,2018-10-16,BOS,PHI,-200,170,-4.5,211.5,208.5,-5,\n"
+        + "g2,2018-19,2018-10-16,GSW,OKC,,,-12.5,234.5,233,-12,\n"  # blank moneylines
+        + "g3,2018-19,2018-10-17,MIA,UTA,NL,120,NL,NL,NL,NL,\n"  # no line, as text
+        + "g4,2018-19,not-a-date,MIA,UTA,-140,120,,,,,\n"  # unreadable date
+        + ",2018-19,2018-10-18,MIA,UTA,-140,120,,,,,\n"  # no game id
+        + "g6,2018-19,2018-10-19,MIA,UTA,-140,120,NL,,,,\n"  # usable price, unknown spread
+        + "g7,2018-19,2018-10-20,MIA,UTA,nan,120,inf,nan,,,\n"  # an exporter's missing values
+        + "g8,2018-19,2018-10-21,MIA,UTA,-140,120,nan,inf,,,\n",  # usable price, unknown lines
+        encoding="utf-8",
+    )
+    lines = closing.lines_from_csv(path)
+    assert set(lines) == {"g1", "g6", "g8"}
+    assert lines["g6"].spread_home is None and lines["g6"].day == date(2018, 10, 19)
+    assert lines["g8"].spread_home is None and lines["g8"].total_close is None
+
+    # a column that is absent altogether is unknown too, not a KeyError
+    narrow = tmp_path / "narrow.csv"
+    narrow.write_text(
+        "game_id,season,date,home,away,ml_away,spread_home,total_close\n"
+        "g1,2018-19,2018-10-16,BOS,PHI,170,-4.5,211.5\n",
+        encoding="utf-8",
+    )
+    assert closing.lines_from_csv(narrow) == {}
+
+
 def test_a_row_with_no_moneyline_is_dropped_not_a_crash(tmp_path: Path) -> None:
     """A blank cell is documented as "unknown"; a missing price makes the row unusable, and an
     unusable row is dropped. Parsing it as a number instead aborted the whole backtest."""
