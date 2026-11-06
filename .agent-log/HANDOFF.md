@@ -1,3 +1,86 @@
+# Session Handoff: Daily Debug Review (2026-11-06, agent `claude`)
+
+1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-orcc5e`
+   (started from `fd5f5f6`, which is `origin/master`). Reviewed the whole NBA
+   phase-2 stack merged in PR #294 (~2.5k new lines: `ingest/sbro.py`,
+   `market/closing.py`, `track/{evidence,market_compare,model_ledger}.py`, the
+   level-correction / pace-efficiency changes in `ratings/model.py`,
+   `sim/engine.py`, `track/backtest.py`, and the `team_run.py` / `cli.py`
+   wiring). Fixed two reproducible defects:
+   - **`results._grade_row` graded rows outside its scope.** A period line
+     (`1st Half Total`, `1st Quarter Total`, `1H Spread`, `2nd Half Money Line`)
+     was graded off the **full-game** result, and
+     `"<matchup> <tri> Team Total OVER 87.5"` off the **game** total (178 on an
+     86-92 game, against an 87.5 team line) because the bare `TOTAL`
+     alternative matched the "Total" inside "Team Total". Period markets are a
+     shape the pipeline really produces -- `normalize_games` keeps them and
+     records `scope == "first_half"`
+     (`tests/test_games.py::test_scope_metadata_preserved`) -- and the box
+     score this collector fetches holds only the final line, so a half or
+     quarter cannot be settled from it at all. A wrong W/L is worse than an
+     ungraded row: `calibration.py` keeps only W/L rows for the hit rate and
+     the reliability fit. Both paths now return `None`, which
+     `collect_settlement_rows` counts as `unsupported_count` and leaves
+     unsettled. This was the "latent, not fixed" item left open by the
+     2026-11-03 run.
+   - **`closing.lines_from_csv` aborted the whole load on a blank moneyline.**
+     It documents a blank cell as "unknown" and promises unusable-price rows
+     are dropped, but `int(float(cell))` raised `ValueError` and lost every
+     other row in the file. Missing/non-numeric prices are now dropped per row.
+2. **Last Commit SHA**: `b7ed4f2` (plus this handoff commit).
+3. **Files Touched**: `outlier_scrapers/results.py`,
+   `outlier_nba/market/closing.py`, `tests/test_results.py`,
+   `tests/test_nba_market_compare.py`, `.agent-log/HANDOFF.md`.
+4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/332
+5. **Verification**: `pytest tests/test_results.py` 27 passed (25 -> 27).
+   Full runnable suite before vs. after: **2238 -> 2240 passed** with a
+   byte-identical failed/errored set (71 failed / 41 collection errors, all
+   missing `sqlalchemy` / `numpy` / `google-genai` / `dateutil` / `openai`).
+   `ruff check` on the four touched files: no new findings vs. the same files
+   on master. `mypy outlier_scrapers`: no errors of its own. `mypy
+   outlier_nba`: 190 errors in 11 files, identical to baseline, all in
+   numpy-typed modules (sandbox artifact; `closing.py` clean).
+   `pyright outlier_scrapers outlier_nfl`: 1 error, pre-existing and
+   sandbox-only (`genai`). The extended `test_nba_market_compare.py` case
+   could not execute here (module imports numpy); its assertions were run
+   standalone against the patched loader and pass. No reasoning / desk models
+   invoked.
+6. **Next Steps / open items**:
+   - **Needs a ruling (behaviour change, not a safety fix):** a
+     matchup-prefixed team total is now *skipped* but still not *graded* --
+     `_team_total_event_match` does not recognise `<matchup> <tri> Team Total`,
+     so no event matches it. Related and reproducible: `"ATL @ WAS Washington
+     Mystics - Points OVER 87.5"` also fails to match when the event's teams
+     are tricodes, because the full club name is compared against `WSH`.
+     Decide whether those forms should be graded or stay out of the ledger.
+   - **Still open from 2026-11-03 (unchanged, needs a human):** three-way rows
+     already settled as `PUSH` in `feedback.sqlite3` stay wrong until
+     re-graded. The ledger is not in this clone, so the blast radius is
+     unknown. Do not do this from an agent session (calibration lock).
+   - Minor, not fixed: `track/model_ledger.record_model_probs` reports
+     `len(recs)` as `model_rows` although `INSERT OR IGNORE` may insert fewer,
+     so a re-run's `model_ledger` receipt overstates what it wrote.
+   - **Still open from previous runs (unchanged):** `.worktrees/test-pr97/` is
+     364 tracked files (~4 MB) duplicating the whole repo. It still pollutes
+     every repo-wide scan -- this run's `ruff --select B023` reported 7
+     findings from the stale copy of `portfolio.py` alongside the live 7 -- and
+     the path collides with the live worktrees AGENTS.md tells agents to
+     create. Owner decision: `git rm -r --cached .worktrees` plus a
+     `.worktrees/` entry in `.gitignore`. Not done here: deleting 364 tracked
+     files is outside a daily debug review's remit.
+   - **Sandbox still cannot run the test suite as CI does.** PyPI egress is a
+     403 at the proxy *and* DNS does not resolve it, so `numpy`, `sqlalchemy`,
+     `structlog`, `google-genai`, `openai` and `dateutil` are unavailable;
+     `uv --offline` has none of them cached. Coverage was obtained with the
+     same approach as 2026-11-03: the uv tool `pytest` (Python 3.13) plus a
+     hand-written `structlog` shim kept **outside** the repo (`PYTHONPATH`
+     only, never committed), with before/after runs compared so the shim could
+     not flatter the result. Every `outlier_nba` test module and all 41
+     collection errors stay unreachable here, so the phase-2 code merged in
+     #294 was reviewed by reading, not by running its tests.
+
+---
+
 # HANDOFF - 2026-10-24 (Claude, second shadow pass + first settlement)
 
 - Re-ran `scripts/nba_shadow_daily.ps1` (live): ratings > capture > run > settle > promote all OK; the first 14 games settled (28,367 outcomes). Samples are tiny (ML log loss model 0.687 vs market 0.629 on 14 games); promotion fails every key on sample size, as expected.

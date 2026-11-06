@@ -51,7 +51,21 @@ def market_probability(ml_home: int, ml_away: int, method: str = "shin") -> floa
 def _opt(value: str | None) -> float | None:
     if value is None or not value.strip():
         return None
-    return float(value)
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _price(value: str | None) -> int | None:
+    """An American price, or None when the cell is blank or not a number.
+
+    A blank cell is documented as "unknown", so a row missing a moneyline is one
+    whose price is unusable: it is dropped like any other, not allowed to abort
+    the load of every other row in the file.
+    """
+    parsed = _opt(value)
+    return None if parsed is None else int(parsed)
 
 
 def lines_from_csv(path: Path) -> dict[str, MarketLine]:
@@ -59,7 +73,9 @@ def lines_from_csv(path: Path) -> dict[str, MarketLine]:
     out: dict[str, MarketLine] = {}
     with Path(path).open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            ml_home, ml_away = int(float(row["ml_home"])), int(float(row["ml_away"]))
+            ml_home, ml_away = _price(row.get("ml_home")), _price(row.get("ml_away"))
+            if ml_home is None or ml_away is None:
+                continue
             prob = market_probability(ml_home, ml_away)
             if prob is None:
                 continue
