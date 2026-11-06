@@ -283,6 +283,37 @@ def test_three_way_total_landing_on_the_number_loses_both_sides():
             {"selection": selection, "line": "178", "market_type": "GAMELINE"}, event
         ) == (178, "L"), selection
 
+
+def test_game_total_grading_rejects_unknown_scope_and_embedded_patterns():
+    event = results.FinalEvent(
+        provider_event_id="3",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="ATL",
+        home="WSH",
+        away_score=91,
+        home_score=87,
+        players={},
+    )
+    for selection in (
+        "ATL @ WAS 1H Total O/U OVER 178.5",
+        "ATL @ WAS Unknown Period Total O/U OVER 178.5",
+        "commentary Total O/U OVER 178.5 ATL @ WAS",
+        "ATL @ WAS Team Total OVER 91.5",
+        "ATL @ WAS WSH Team Total OVER 87.5",
+        "ATL @ WAS 1st Half Total OVER 90.5",
+        "ATL @ WAS 1H Spread HOME -2",
+        "ATL @ WAS 1st Half Moneyline HOME 0",
+    ):
+        assert results._grade_row(
+            {"selection": selection, "line": "178.5", "market_type": "GAMELINE"}, event
+        ) is None, selection
+
+    assert results._grade_row(
+        {"selection": "ATL @ WAS Total O/U OVER 178.5", "line": "178.5", "market_type": "GAMELINE"},
+        event,
+    ) == (178, "L")
+
     # A two-way total landing on the number still pushes.
     assert results._grade_row(
         {"selection": "ATL @ WAS Total O/U UNDER 178", "line": "178", "market_type": "GAMELINE"},

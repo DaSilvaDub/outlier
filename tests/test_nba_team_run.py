@@ -12,6 +12,7 @@ import pytest
 
 from outlier_nba import team_run
 from outlier_nba.ratings.model import TeamParams
+from outlier_nba.sim.engine import SimInputError
 from outlier_nba.track import promotion
 from tests import nba_fixtures as fx
 from tests.nba_synth import synth_history
@@ -419,3 +420,56 @@ def test_rows_say_whether_the_venue_is_known(tmp_path, games, promo) -> None:
     assert venue == {fx.EV1: "home", fx.EV2: "neutral"}
     plain = _rows(tmp_path / "p", _run(tmp_path / "p", games, promo))
     assert {r["venue"] for r in plain} == {"unknown"}
+
+
+class _StructlogSignatureLogger:
+    """A logger with structlog's real signature: the message is the parameter ``event``.
+
+    ``FilteringBoundLogger`` (the default wrapper class) and ``structlog.stdlib.BoundLogger``
+    both declare their level methods as ``def warning(self, event, *args, **kw)``, so a call
+    that passes the message positionally *and* ``event=...`` binds ``event`` twice.
+    """
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, str, dict]] = []
+
+    def _record(self, level: str, event: str, *args, **kw) -> None:
+        self.records.append((level, event, kw))
+
+    def debug(self, event, *args, **kw):
+        self._record("debug", event, *args, **kw)
+
+    def info(self, event, *args, **kw):
+        self._record("info", event, *args, **kw)
+
+    def warning(self, event, *args, **kw):
+        self._record("warning", event, *args, **kw)
+
+    def error(self, event, *args, **kw):
+        self._record("error", event, *args, **kw)
+
+
+def test_an_event_that_cannot_be_simulated_is_logged_and_degraded_not_raised(monkeypatch) -> None:
+    """The except clause must survive its own logging call.
+
+    ``event`` is structlog's parameter for the message, so logging the failed event under that
+    keyword raises TypeError inside the handler; the pipeline counts a crashing stage as FAILED,
+    so one unsimulable game would fail the whole run instead of being flagged MODEL_UNAVAILABLE.
+    """
+    log = _StructlogSignatureLogger()
+    monkeypatch.setattr(team_run, "logger", log)
+
+    def refuse(*args, **kw):
+        raise SimInputError("sigma_e is not finite")
+
+    monkeypatch.setattr(team_run, "event_draws", refuse)
+    events = fx.schedule()["events"]
+    teams = team_run.event_teams(events)
+    assert teams, "the fixture schedule must resolve its teams for this to test anything"
+
+    draws, neutral = team_run.simulate_events(None, events, "2026-10-21", 10, 1)
+
+    assert set(draws.values()) == {None} and set(neutral) == set(draws)
+    failed = [r for r in log.records if r[1] == "event_sim_failed"]
+    assert {r[2]["event_id"] for r in failed} == set(teams)
+    assert all("event" not in r[2] for r in failed)  # structlog's own keyword, never reused

@@ -1,0 +1,4 @@
+.gitignore text eol=lf
+docs/CLOUD-SANDBOX-LIMITATIONS.md text eol=lf
+scripts/organize_today_run2.py text eol=lf
+.agents/skills/export-manual-outlier-packs/scripts/generate_prompts.py text eol=lf
