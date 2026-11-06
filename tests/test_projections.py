@@ -766,7 +766,7 @@ def test_export_projections_skips_a_current_feed_with_no_slate_on_the_target_dat
     blocks the MLB pack, which is what happened on 2026-09-01.
     """
     now = datetime.now().astimezone()
-    _props_file(
+    fake_paths = _props_file(
         tmp_path,
         monkeypatch,
         generated_at=now.isoformat(),
@@ -778,6 +778,9 @@ def test_export_projections_skips_a_current_feed_with_no_slate_on_the_target_dat
     assert status["status"] == "skipped"
     assert status["record_count"] == 0
     assert "slate" in status["reason"]
+    written = json.loads(fake_paths.projections_latest().read_text(encoding="utf-8"))
+    assert written["date"] == now.date().isoformat()
+    assert written["projections"] == []
 
 
 def test_export_projections_still_errors_when_the_props_feed_is_stale(tmp_path, monkeypatch):
