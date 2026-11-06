@@ -552,12 +552,31 @@ def _matchup_team_score(event: FinalEvent, raw_team: str) -> float | None:
 # pushing it. ``pack_market.NO_PUSH_MARKETS`` states the same rule.
 _THREE_WAY_LABEL = re.compile(r"(?:THREE|3)[-\s_]?WAY", re.IGNORECASE)
 
+# Period / partial-game scopes (halves, quarters, periods, first-five innings).
+# Generation is full-game only, so such a row should never reach the ledger --
+# but the box score this collector fetches holds only the final line, so a
+# half or quarter line cannot be graded from it. Grading one off the full-game
+# result would book a wrong W/L, and this module's contract is to skip what it
+# cannot settle rather than guess at it.
+_PARTIAL_SCOPE = re.compile(
+    r"\b(?:"
+    r"(?:[1-4]|first|second|third|fourth)(?:st|nd|rd|th)?\s+(?:half|quarter|period|innings?)"
+    r"|[1-4][HQ]"
+    r"|(?:1st|first)\s+5"
+    r"|F5"
+    r"|halftime"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     selection = str(row["selection"] or "")
     line = _number(row["line"])
     if line is None:
         return None
+    if _PARTIAL_SCOPE.search(selection):
+        return None  # a half/quarter/period line cannot be graded from a final box score
     market_type = _token(row["market_type"])
     player_match = re.fullmatch(
         r"(.+?)\s+-\s+(.+?)\s+(OVER|UNDER)\s+(-?\d+(?:\.\d+)?)", selection, re.IGNORECASE
@@ -614,8 +633,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
     # substring search lets "TOTAL" inside "Team Total" (or a period market)
     # inherit the game's final score and settle against the wrong scope.
     total = re.fullmatch(
-        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Total\s+O/U|Total\s+(?:Three|3)[-\s]Way|TOTAL)\s+(OVER|UNDER)(?:\s+-?\d+(?:\.\d+)?)?",
-        selection,
+        r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Total\s+O/U|Total\s+(?:Three|3)[-\s]Way|TOTAL)\s+(OVER|UNDER)(?:\s+-?\d+(?:\.\d+)?)?",        selection,
         re.IGNORECASE,
     )
     if total:

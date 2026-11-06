@@ -434,11 +434,15 @@ def test_closing_lines_can_come_from_a_csv(tmp_path: Path) -> None:
         "spread_open_home,neutral\n"
         "g1,2018-19,2018-10-16,BOS,PHI,-200,170,-4.5,211.5,208.5,-5,\n"
         "g2,2018-19,2018-10-17,MIA,UTA,-140,120,,,,,true\n"
-        "g3,2018-19,2018-10-18,MIA,UTA,0,120,,,,,\n",
+        "g3,2018-19,2018-10-18,MIA,UTA,0,120,,,,,\n"
+        # a blank price is documented as unknown: the row is dropped, and it must not
+        # abort the load of the rows around it
+        "g4,2018-19,2018-10-19,DEN,SAC,,,,215.5,,,\n"
+        "g5,2018-19,2018-10-20,DEN,SAC,-110,n/a,,215.5,,,\n",
         encoding="utf-8",
     )
     lines = closing.lines_from_csv(path)
-    assert set(lines) == {"g1", "g2"}  # g3 has an unusable price
+    assert set(lines) == {"g1", "g2"}  # g3/g4/g5 have an unusable or missing price
     assert lines["g1"].spread_home == -4.5 and 0.6 < lines["g1"].p_home_ml < 0.7
     assert lines["g2"].spread_home is None and lines["g2"].neutral
 
