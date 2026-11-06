@@ -9,13 +9,23 @@ environment.
 Codex sandboxes block outbound network access to PyPI. Packages installed via
 `pip install` or `uv pip install` will fail with connection errors.
 
-**Affected dependencies:** sqlalchemy, openai, anthropic, google-generativeai,
-playwright, and any other package not pre-installed in the sandbox image.
+**Affected dependencies observed in this environment:** `structlog`,
+`sqlalchemy`, `numpy`, `google-genai`, and `python-dateutil`, along with any
+other package not pre-installed in the sandbox image.
 
-**Impact:** Tests and modules that import these packages at the top level will
-fail at collection time. Use `--continue-on-collection-errors` when running
-pytest in sandboxes to exercise the tests that can actually import their
-dependencies.
+**Impact:** Tests and modules that import these packages at the top level can
+fail at collection time. `--continue-on-collection-errors` reports additional
+collection failures; it does not supply the missing dependencies or guarantee
+that any tests run. In one documented attempt, a local wheel cache plus a
+temporary logging shim allowed pytest to start, but zero tests passed, so that
+attempt provided no test coverage and is not equivalent to CI. Do not describe
+such a run as partial coverage unless the test report shows passing tests with
+the real dependencies installed.
+
+Prefer an available local wheel cache with the project's declared dependencies.
+If required packages are missing and cannot be installed, report the suite as
+blocked and list the affected modules; do not replace dependencies with shims
+and treat the result as CI-equivalent evidence.
 
 **Not affected:**
 - CI (GitHub Actions) — has full PyPI access and installs from `requirements.txt`.
