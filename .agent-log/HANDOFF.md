@@ -1,3 +1,118 @@
+# Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
+
+1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
+   (started from `8bb0363`, which is `origin/master`). Reviewed everything merged
+   since the 2026-11-06 baseline `fd5f5f6`: the three new helper scripts
+   (`scripts/export_nba_extra_pack.py`, `scripts/filter_nba_ruled_out.py`,
+   `scripts/organize_desktop_today.py`), the three new PowerShell drivers
+   (`refresh_nba_pack.ps1`, `run_nba_audit.ps1`, `run_nba_pack_refresh.ps1`),
+   the `team_run.py` log-key fix and the new tests.
+   `scripts/organize_today_run2.py` shows 825/825 lines changed but is a pure
+   CRLF -> LF normalisation (the `.gitattributes` the 2026-11-06 handoff asked
+   for now exists); `--ignore-cr-at-eol` reports an empty diff.
+   Fixed one reproducible defect:
+   - **`export_nba_extra_pack.py --allow-latest-fallback` could never be turned
+     off.** It was declared `action="store_true", default=True`, so it resolved
+     to `True` passed or omitted, and `--no-allow-latest-fallback` did not
+     exist. The `allow_latest_fallback=False` branch in `export_nba_pack()`
+     (`use_rows = []`) was unreachable from the CLI, so whenever the source
+     carried no rows for `--date`, every row from another slate was exported and
+     re-ranked `1..N` as today's pack -- which `refresh_nba_pack.ps1` publishes
+     to `today/extra_packs_<date>_latest`, `today/extra_packs` and
+     `BETTING REPORTS\NBA`. Now `argparse.BooleanOptionalAction`: the default is
+     unchanged (fallback on, so `refresh_nba_pack.ps1` behaves exactly as
+     before) and `--fail-on-empty` can finally halt a publish instead of
+     shipping a stale-slate pack.
+2. **Last Commit SHA**: `b25bea8` (plus this handoff commit).
+3. **Files Touched**: `scripts/export_nba_extra_pack.py`,
+   `tests/test_export_nba_extra_pack.py` (new), `.agent-log/HANDOFF.md`.
+4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/334
+5. **Verification**: **The test suite could not be run in this sandbox at all**
+   -- see item 6. `pytest -q --continue-on-collection-errors`: 2 skipped,
+   **2086 errors**, every one `ModuleNotFoundError` for a dependency that
+   `requirements.lock` does not carry (`structlog`, `sqlalchemy`, `numpy`, ...).
+   `tests/conftest.py`'s autouse `_no_real_feedback_ledger` fixture imports
+   `outlier_scrapers.feedback` -> `structlog`, so the missing dependency errors
+   *every* test, including ones that touch none of it. PyPI is unreachable from
+   this container (DNS blocked) and the uv cache holds no project wheels, so the
+   environment could not be repaired. The 2026-11-06 run's 2240-passed figure is
+   therefore not comparable.
+   What did run: the 7 new tests in `tests/test_export_nba_extra_pack.py`,
+   executed from a scratch directory outside `tests/` so the repo conftest does
+   not apply -- **7 passed** against the patched script, and **1 failed /
+   6 passed** against `HEAD:scripts/export_nba_extra_pack.py`
+   (`error: unrecognized arguments: --no-allow-latest-fallback`), so the
+   regression test does catch the defect. `mypy scripts/export_nba_extra_pack.py
+   tests/test_export_nba_extra_pack.py`: no issues. `pyright
+   scripts/export_nba_extra_pack.py`: 0 errors. `ruff check` on the two files:
+   no new findings -- the one `RUF100` on the new test's `# noqa: E402` is
+   identical to the one `tests/test_filter_nba_ruled_out.py` already carries on
+   master, and the `BLE001`/`PLW1510` hits in the script are pre-existing and
+   untouched. No reasoning / desk models invoked.
+6. **Next Steps / open items**:
+   - **Needs a human, highest priority: `uv.lock` and `requirements.lock` are
+     stale and carry 4 of the 10 runtime dependencies `pyproject.toml`
+     declares.** Missing: `tzdata`, `structlog`, `SQLAlchemy`,
+     `psycopg2-binary`, `numpy`. `uv.lock`'s `[package.metadata] requires-dist`
+     for `outlier-multisport-scraper` lists only `anthropic`, `google-genai`,
+     `openai`, `python-dateutil` (+ the `dev` extra). Both lockfiles were last
+     exported in `436de00` (2026-10-06) -- the very merge that added `structlog`
+     and `SQLAlchemy` to `pyproject.toml` -- and `numpy` arrived later still in
+     `ebb332a` (2026-10-20). Consequences: `pip install -r requirements.lock`
+     yields an environment where **no test can even be collected** (reproduced
+     above); `uv sync --frozen` / `uv lock --check` fail; and CI's
+     "Install frozen dependencies" step is not frozen, because the
+     `pip install -e .` that follows silently resolves those five **unpinned**
+     from PyPI at job time. Fix needs network: `uv lock` then
+     `uv export --frozen --no-hashes --all-extras -o requirements.lock`, then
+     re-run `pytest` to re-establish the pass/fail baseline. Do not hand-edit
+     the lockfiles.
+   - **Needs a ruling: `filter_nba_ruled_out.py`'s default registry does not
+     exist.** `REGISTRY_PATH = <repo>/resources/nba_roster_registry.json`, but
+     there is no `resources/` directory in the checkout, nothing creates one,
+     it is not in `.gitignore`, and no other file in the repo mentions the
+     filename. `refresh_nba_pack.ps1:218` calls the filter without
+     `--registry`, and `Invoke-CheckedPython` throws on the deliberate exit-2
+     fail-closed path, so the NBA refresh aborts before publish on any checkout
+     that does not have that file out of band. Decide whether the registry is a
+     local-only artifact (then document the path, or have the PS driver pass
+     `--registry`) or a tracked file that was never committed.
+   - **Low, reported not fixed: `.pytest_pr1_tmp/` is 334 tracked files /
+     2.2 MB** of pytest temp output, committed accidentally in `436de00` --
+     the same `.worktrees/test-pr97/` class of problem the 2026-11-06 run
+     flagged and that has since been cleaned up. `.gitignore` covers
+     `.pytest_cache/` and `.pytest_temp/` but not this name, and the directory
+     holds stale copies of `prompts/*.md` that can drift from the real prompts.
+     Recommend `git rm -r --cached .pytest_pr1_tmp` plus a `.pytest_pr1_tmp/`
+     entry in `.gitignore`. Left alone here because deleting 334 tracked files
+     unattended is the user's call, not an agent's.
+   - **Low, reported not fixed: dead guard at `refresh_nba_pack.ps1:247.**
+     `if (-not $ScratchOut -and (Resolve-Path $filteredCsv).Path -ne
+     (Resolve-Path $exportCsv).Path)` can never be true: without `-ScratchOut`
+     the two paths are the same variable, and with it `-not $ScratchOut` is
+     false. The copy-back it guards therefore never runs, so a
+     `-ScratchOut -ForceDrive` run publishes the filtered pack to Drive (that
+     part is correct, `$publishSrc = $filteredCsv`) but leaves
+     `data\NBA\exports\nba_only.csv` holding the **unfiltered** export -- and
+     that file is the last entry in `export_nba_extra_pack.CANDIDATE_SOURCES`,
+     so a later run can read the unfiltered pack back in as a source. Needs a
+     ruling on what the branch was meant to do.
+   - Still open from 2026-11-06 (unchanged, needs a human): the
+     `<matchup> <tri> Team Total` / club-name-vs-tricode forms are skipped but
+     still not graded by `_team_total_event_match`; and three-way rows already
+     settled as `PUSH` in `feedback.sqlite3` stay wrong until re-graded (the
+     ledger is not in this clone, and the calibration lock bars doing it from an
+     agent session).
+   - Checked and clean: the 15 `PLR0124` self-comparisons are all deliberate
+     `x == x` NaN guards, and the 11 `B023` loop-variable closures
+     (`portfolio.collapse_duplicate_outcomes`, `gemini_research`,
+     `tape_nflverse`) are all defined and called within one iteration, so none
+     of them is a late-binding bug. `organize_desktop_today.py`'s claim that
+     `shutil.Error` subclasses `OSError` (so `main()`'s except clause catches
+     copy failures) is correct.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-06, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-orcc5e`
