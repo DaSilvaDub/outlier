@@ -230,8 +230,12 @@ def main() -> int:
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="Output CSV path")
     parser.add_argument("--min-edge", type=float, default=None, help="Minimum edge_pct filter")
     parser.add_argument(
+        # BooleanOptionalAction (not store_true): with store_true and default=True
+        # the flag could never be turned off, so --no-allow-latest-fallback -- the
+        # only way to require rows that actually carry --date -- did not exist and
+        # a different slate's rows were always exported as today's pack.
         "--allow-latest-fallback",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Use latest available active slate rows if requested date has no direct rows",
     )
