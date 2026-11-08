@@ -475,6 +475,17 @@ WHERE excluded.as_of_utc >= COALESCE(ctg_team_game.as_of_utc, '')
 """
 
 
+# One static, fully parameterised query: a NULL parameter switches that filter off.
+_LOAD_GAMES = """
+SELECT season, season_type, game_date, team, opp, venue, team_pts, opp_pts,
+       off_pp100, def_pp100, metrics_json
+FROM ctg_team_game
+WHERE (? IS NULL OR season = ?)
+  AND (? IS NULL OR as_of_utc < ?)
+ORDER BY game_date, team
+"""
+
+
 def _upsert_games(
     conn: sqlite3.Connection, games: Sequence[CTGGame], file_sha256: str, as_of_utc: datetime
 ) -> None:
@@ -520,18 +531,8 @@ def load_team_games(
     backtest can refuse values a later download revised. Rows without a per-row as-of (stores
     created before the column existed) are excluded whenever a cutoff is given.
     """
-    sql = (
-        "SELECT season, season_type, game_date, team, opp, venue, team_pts, opp_pts,"
-        " off_pp100, def_pp100, metrics_json FROM ctg_team_game WHERE 1 = 1"
-    )
-    params: list[str] = []
-    if season is not None:
-        sql += " AND season = ?"
-        params.append(season)
-    if as_of_before is not None:
-        sql += " AND as_of_utc < ?"
-        params.append(_iso(as_of_before))
-    rows = conn.execute(sql + " ORDER BY game_date, team", params).fetchall()
+    cutoff = _iso(as_of_before) if as_of_before is not None else None
+    rows = conn.execute(_LOAD_GAMES, (season, season, cutoff, cutoff)).fetchall()
     return [
         CTGGame(r[0], r[1], date.fromisoformat(r[2]), r[3], r[4], r[5], r[6], r[7], r[8], r[9],
                 json.loads(r[10]))
