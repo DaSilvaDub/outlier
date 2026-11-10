@@ -19,7 +19,9 @@ class PublicationHoldError(RuntimeError):
     """A hold file exists but cannot be interpreted; callers must treat it as held."""
 
 
-def hold_paths(repo_root: Path, extra_paths: Iterable[Path] = (QUARANTINE_HOLD_PATH,)) -> list[Path]:
+def hold_paths(
+    repo_root: Path, extra_paths: Iterable[Path] = (QUARANTINE_HOLD_PATH,)
+) -> list[Path]:
     """Hold files to consult, repo file first (same order as publication_guards.ps1)."""
     return [Path(repo_root) / REPO_HOLD_RELPATH, *(Path(p) for p in extra_paths)]
 
@@ -40,7 +42,5 @@ def publication_hold_active(
 ) -> bool:
     """True when any existing hold file says ``"active": true``."""
     return any(
-        _read_active_flag(path)
-        for path in hold_paths(repo_root, extra_paths)
-        if path.is_file()
+        _read_active_flag(path) for path in hold_paths(repo_root, extra_paths) if path.is_file()
     )

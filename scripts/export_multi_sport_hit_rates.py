@@ -1,12 +1,17 @@
-"""Export Outlier 100% Hit Rate Props for NFL, NBA, and NCAA (CFB).
+"""Export Outlier perfect-hit-rate player props for NFL, NBA, and NCAA football.
 
-Fetches player props from the Outlier REST API using the active session,
-identifies props where the player has achieved a 100% hit rate in their last 5
-and/or last 10 games (L5/L10), maps the team and matchup from the schedule,
-applies sport-specific hygiene filters, and writes:
-  - data/<SPORT>/exports/<SPORT>_100_hit_rate.csv
-  - Today/Fresh_Data/<SPORT>/01_Packs/<SPORT>_100_hit_rate.csv
-  - Google Drive Today/Fresh_Data/<SPORT>/01_Packs/<SPORT>_100_hit_rate.csv (if mounted)
+A prop qualifies when the player hit it in 100% of the last 5 games AND 100% of the last
+10 games (both windows present), with at least ``--min-games`` games behind the L10
+window when Outlier supplies the per-game results array.
+
+This is a descriptive feed, not a selection model: at a true 50% hit rate, 5/5 happens
+about 3% of the time by chance, and prices already reflect recent form. Nothing here
+promotes a row to a board or sizes a stake.
+
+Output: ``<out-dir>/<SPORT>_100_hit_rate.csv`` (default ``data/<LEAGUE>/exports``). This
+script never writes to Desktop or Google Drive; ``organize_desktop_today.py`` stages the
+CSV into Fresh_Data under the publication hold. A fetch failure raises, leaves the
+previous CSV untouched, and makes ``main`` exit 1.
 """
 
 from __future__ import annotations
@@ -14,25 +19,36 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
-import json
 import logging
 import os
 import re
+import sys
+import tempfile
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
-from zoneinfo import ZoneInfo
+from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DESKTOP_TODAY = Path(r"C:\Users\dasil\Desktop\Today")
-DRIVE_ROOTS = [
-    Path(r"G:\My Drive\today"),
-    Path(r"C:\Users\dasil\My Drive (dasilvadub@gmail.com)\today"),
-]
+for _p in (REPO_ROOT, REPO_ROOT / "scripts"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+from filter_perfect_hit_props import HR_RE, MILESTONE_RE  # noqa: E402
+
+from outlier_scrapers.normalizer import percent_number  # noqa: E402
+
 logger = logging.getLogger("export_hit_rates")
 
+EASTERN = "America/New_York"
+SPORTS = ("NFL", "NBA", "NCAA")
+LEAGUE_TOKEN = {"NFL": "NFL", "NBA": "NBA", "NCAA": "NCAAFB"}
+WEEKLY_SPORTS = frozenset({"NFL", "NCAA"})
+WEEKLY_WINDOW_DAYS = 6  # weekly sports: the slate date plus the coming week
+TD_RE = re.compile(r"\btouchdowns?\b|\btds?\b", re.I)
+
 FIELDNAMES = [
+    "slate_date",
     "player",
     "market_label",
     "side",
@@ -42,241 +58,249 @@ FIELDNAMES = [
     "l5_hit_rate",
     "l10_hit_rate",
     "season_hit_rate",
+    "sample_n",
     "best_odds",
     "books",
     "orf",
     "game_time",
 ]
 
-SPORT_TOKEN_MAP = {
-    "NFL": "NFL",
-    "NBA": "NBA",
-    "NCAA": "NCAAFB",
-    "CFB": "NCAAFB",
-}
 
+class PropsClient(Protocol):
+    def fetch_schedule(self, league: str) -> dict[str, Any]: ...
 
-def get_drive_today() -> Path | None:
-    for dr in DRIVE_ROOTS:
-        if dr.parent.exists():
-            return dr
-    return None
+    def fetch_player_props(self, league: str) -> dict[str, Any]: ...
 
 
 def resolve_today_str() -> str:
     try:
-        return datetime.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-    except Exception:
+        return datetime.datetime.now(ZoneInfo(EASTERN)).date().isoformat()
+    except ZoneInfoNotFoundError:  # Windows without tzdata
         return datetime.date.today().isoformat()
 
 
-def extract_hit_props_for_sport(
-    client: Any,
-    sport_name: str,
-    target_date: str | None = None,
-    min_l5: float = 1.0,
-    min_l10: float = 0.8,
-) -> list[dict[str, Any]]:
-    league_token = SPORT_TOKEN_MAP.get(sport_name.upper(), sport_name.upper())
-    logger.info("Fetching schedule and props for %s (token: %s)...", sport_name, league_token)
+def default_out_dir(sport: str) -> Path:
+    return REPO_ROOT / "data" / LEAGUE_TOKEN[sport.upper()] / "exports"
 
-    try:
-        schedule = client.fetch_schedule(league_token)
-        events = schedule.get("events") or []
-    except Exception as exc:
-        logger.error("Failed to fetch schedule for %s: %s", league_token, exc)
-        return []
 
-    # Map eventId -> {home, away, matchup, scheduledTime}
-    event_map: dict[str, dict[str, Any]] = {}
-    team_alias_map: dict[str, str] = {}
-
+def build_event_index(
+    events: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, dict], dict[str, str]]:
+    """Map eventId -> {matchup, scheduled_time} and teamId -> alias."""
+    event_map: dict[str, dict] = {}
+    team_alias: dict[str, str] = {}
     for ev in events:
         eid = ev.get("eventId")
         if not eid:
             continue
-        home = ev.get("home") or {}
-        away = ev.get("away") or {}
+        home, away = ev.get("home") or {}, ev.get("away") or {}
         home_alias = home.get("alias") or home.get("name") or "HOME"
         away_alias = away.get("alias") or away.get("name") or "AWAY"
-        matchup = f"{away_alias} @ {home_alias}"
-        sched_time = ev.get("scheduledTime") or ""
-
         event_map[eid] = {
-            "home_id": home.get("teamId"),
-            "away_id": away.get("teamId"),
-            "home_alias": home_alias,
-            "away_alias": away_alias,
-            "matchup": matchup,
-            "scheduled_time": sched_time,
+            "matchup": f"{away_alias} @ {home_alias}",
+            "scheduled_time": ev.get("scheduledTime") or "",
         }
-        if home.get("teamId"):
-            team_alias_map[home["teamId"]] = home_alias
-        if away.get("teamId"):
-            team_alias_map[away["teamId"]] = away_alias
+        for team, alias in ((home, home_alias), (away, away_alias)):
+            if team.get("teamId"):
+                team_alias[team["teamId"]] = alias
+    return event_map, team_alias
 
-    # Fetch props
+
+def event_slate_date(scheduled_time: str) -> datetime.date | None:
+    """Eastern calendar date of an ISO-8601 start time, or None when unparseable."""
     try:
-        props_payload = client.fetch_player_props(league_token)
-        raw_props = props_payload.get("props") or []
-    except Exception as exc:
-        logger.error("Failed to fetch props for %s: %s", league_token, exc)
-        return []
+        dt = datetime.datetime.fromisoformat(scheduled_time.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.astimezone(ZoneInfo(EASTERN)).date()
 
-    logger.info("Found %d raw props for %s across %d events", len(raw_props), sport_name, len(event_map))
 
-    qualifying: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
+def in_slate_window(sport: str, event_date: datetime.date, slate: datetime.date) -> bool:
+    if sport in WEEKLY_SPORTS:
+        return slate <= event_date <= slate + datetime.timedelta(days=WEEKLY_WINDOW_DAYS)
+    return event_date == slate
 
+
+def is_excluded_market(market_name: str, side: str) -> bool:
+    """Milestone/longshot UNDERs (HR, touchdowns, 'to record') are hygiene drops."""
+    if side != "UNDER":
+        return False
+    return any(rx.search(market_name) for rx in (HR_RE, MILESTONE_RE, TD_RE))
+
+
+def sample_size(stats: Mapping[str, Any]) -> int | None:
+    for key in ("l10Results", "l5Results"):
+        results = stats.get(key)
+        if isinstance(results, list):
+            return len(results)
+    return None
+
+
+def qualifying_rates(
+    stats: Mapping[str, Any], min_l5: float, min_l10: float, min_games: int
+) -> tuple[float, float, int | None] | None:
+    """(l5, l10, sample_n) on a 0-100 scale when the prop qualifies, else None."""
+    l5, l10 = percent_number(stats.get("l5")), percent_number(stats.get("l10"))
+    if l5 is None or l10 is None or l5 < min_l5 or l10 < min_l10:
+        return None
+    n = sample_size(stats)
+    if n is not None and n < min_games:
+        return None
+    return l5, l10, n
+
+
+def _pct(value: float | None) -> str:
+    return f"{int(round(value))}%" if value is not None else ""
+
+
+def build_row(
+    item: Mapping[str, Any],
+    rates: tuple[float, float, int | None],
+    ev_info: Mapping[str, Any],
+    team_alias: Mapping[str, str],
+    slate_date: str,
+) -> dict[str, Any]:
+    outcome = item.get("outcome") or {}
+    label = outcome.get("marketLabel") or ""
+    player, _, market = label.partition(" - ") if " - " in label else ("", "", label)
+    books = outcome.get("books") or []
+    l5, l10, n = rates
+    return {
+        "slate_date": slate_date,
+        "player": player.strip(),
+        "market_label": label,
+        "market_name": market.strip(),
+        "side": (outcome.get("position") or outcome.get("outcomeLabel") or "").upper(),
+        "line": "" if outcome.get("line") is None else str(outcome.get("line")),
+        "team": team_alias.get(outcome.get("teamId") or "", ""),
+        "matchup": ev_info.get("matchup") or "",
+        "l5_hit_rate": _pct(l5),
+        "l10_hit_rate": _pct(l10),
+        "season_hit_rate": _pct(percent_number((item.get("stats") or {}).get("curSeason"))),
+        "sample_n": "" if n is None else str(n),
+        "best_odds": str(outcome.get("bestOdds") or ""),
+        "books": ";".join(map(str, books)) if isinstance(books, list) else str(books),
+        "orf": str(item.get("orf") or ""),
+        "game_time": ev_info.get("scheduled_time") or "",
+        "_sort": (-l10, -l5),
+    }
+
+
+def _event_for(
+    item: Mapping[str, Any], event_map: Mapping[str, dict], sport: str, slate: datetime.date
+) -> dict | None:
+    """The prop's event when it is on this slate; props with no/unparseable event are dropped."""
+    ev_info = event_map.get((item.get("outcome") or {}).get("eventId") or "")
+    if not ev_info:
+        return None
+    ev_date = event_slate_date(ev_info["scheduled_time"])
+    if ev_date is None or not in_slate_window(sport, ev_date, slate):
+        return None
+    return ev_info
+
+
+def extract_hit_props_for_sport(
+    client: PropsClient,
+    sport: str,
+    target_date: str,
+    *,
+    min_l5: float = 100.0,
+    min_l10: float = 100.0,
+    min_games: int = 5,
+) -> list[dict[str, Any]]:
+    """Qualifying rows for one sport. API errors propagate (never swallowed into [])."""
+    sp = sport.upper()
+    league = LEAGUE_TOKEN[sp]
+    slate = datetime.date.fromisoformat(target_date)
+    event_map, team_alias = build_event_index(client.fetch_schedule(league).get("events") or [])
+    raw_props = client.fetch_player_props(league).get("props") or []
+    logger.info("%s: %d raw props across %d events", sp, len(raw_props), len(event_map))
+
+    rows: dict[str, dict[str, Any]] = {}
     for item in raw_props:
-        outcome = item.get("outcome") or {}
-        stats = item.get("stats") or {}
-        l5 = stats.get("l5")
-        l10 = stats.get("l10")
-        cur_season = stats.get("curSeason")
-
-        # 100% in L5 and at least min_l10 in L10
-        if l5 is None or l5 < min_l5:
+        rates = qualifying_rates(item.get("stats") or {}, min_l5, min_l10, min_games)
+        ev_info = _event_for(item, event_map, sp, slate) if rates else None
+        if not rates or not ev_info:
             continue
-        if l10 is not None and l10 < min_l10:
+        row = build_row(item, rates, ev_info, team_alias, target_date)
+        if is_excluded_market(row["market_name"], row["side"]):
             continue
+        key = "|".join(str(row[k]) for k in ("player", "market_name", "side", "line", "matchup"))
+        rows.setdefault(key, row)
 
-        eid = outcome.get("eventId")
-        ev_info = event_map.get(eid or "", {})
-        sched_time = ev_info.get("scheduled_time") or ""
-
-        # Filter by slate date if target_date provided
-        if target_date and sched_time:
-            try:
-                dt = datetime.datetime.fromisoformat(sched_time.replace("Z", "+00:00"))
-                ev_date = dt.astimezone(ZoneInfo("America/New_York")).date().isoformat()
-                # Allow within next 3 days for weekly sports like NFL / CFB
-                if sport_name.upper() in ("NFL", "NCAA", "CFB"):
-                    target_dt = datetime.date.fromisoformat(target_date)
-                    ev_d = datetime.date.fromisoformat(ev_date)
-                    if not (target_dt <= ev_d <= target_dt + datetime.timedelta(days=6)):
-                        continue
-                else:
-                    if ev_date != target_date:
-                        continue
-            except Exception:
-                pass
-
-        # Determine team
-        tid = outcome.get("teamId")
-        team = team_alias_map.get(tid or "", "")
-        matchup = ev_info.get("matchup") or ""
-
-        # Market & Player
-        market_label = outcome.get("marketLabel") or ""
-        player = ""
-        market_name = market_label
-        if " - " in market_label:
-            parts = market_label.split(" - ", 1)
-            player = parts[0].strip()
-            market_name = parts[1].strip()
-
-        side = (outcome.get("position") or outcome.get("outcomeLabel") or "").upper()
-        line = outcome.get("line")
-        best_odds = outcome.get("bestOdds") or ""
-        books = outcome.get("books") or []
-        books_str = ";".join(str(b) for b in books) if isinstance(books, list) else str(books)
-        orf = item.get("orf") or ""
-
-        # Hygiene check: drop Home Runs Under or Milestone Under
-        if side == "UNDER" and re.search(r"\b(home\s*run|touchdown|td)\b", market_name, re.I):
-            continue
-
-        dedup_key = f"{player}|{market_name}|{side}|{line}|{matchup}"
-        if dedup_key in seen_keys:
-            continue
-        seen_keys.add(dedup_key)
-
-        qualifying.append({
-            "player": player,
-            "market_label": market_label,
-            "side": side,
-            "line": str(line) if line is not None else "",
-            "team": team,
-            "matchup": matchup,
-            "l5_hit_rate": f"{int(round(l5 * 100))}%" if l5 is not None else "",
-            "l10_hit_rate": f"{int(round(l10 * 100))}%" if l10 is not None else "",
-            "season_hit_rate": f"{int(round(cur_season * 100))}%" if cur_season is not None else "",
-            "best_odds": str(best_odds),
-            "books": books_str,
-            "orf": str(orf),
-            "game_time": sched_time,
-        })
-
-    # Sort by L10 hit rate (desc), then player
-    qualifying.sort(key=lambda r: (r.get("l10_hit_rate") or "0%", r.get("player") or ""), reverse=True)
-    logger.info("Found %d qualified 100%% L5 hit rate props for %s", len(qualifying), sport_name)
-    return qualifying
+    ordered = sorted(rows.values(), key=lambda r: (*r["_sort"], r["player"]))
+    logger.info("%s: %d perfect-hit props for %s", sp, len(ordered), target_date)
+    return ordered
 
 
 def write_hit_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Atomic write: a crash mid-write never leaves a truncated CSV in place."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow({k: r.get(k, "") for k in FIELDNAMES})
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     logger.info("Wrote %d rows -> %s", len(rows), path)
 
 
 def export_hit_rates_for_sport(
-    client: Any,
-    sport: str,
-    target_date: str,
-    export_to_fresh_data: bool = True,
-) -> list[dict[str, Any]]:
+    client: PropsClient, sport: str, target_date: str, *, out_dir: Path | None = None
+) -> Path:
     sp = sport.upper()
-    league_dir_name = "NCAAFB" if sp in ("NCAA", "CFB") else sp
-    rows = extract_hit_props_for_sport(client, sp, target_date=target_date)
-
-    # 1. Write to repo exports
-    repo_export = REPO_ROOT / "data" / league_dir_name / "exports" / f"{sp}_100_hit_rate.csv"
-    write_hit_csv(repo_export, rows)
-
-    # 2. Write to Fresh_Data
-    if export_to_fresh_data:
-        roots = [DESKTOP_TODAY]
-        drive_today = get_drive_today()
-        if drive_today:
-            roots.append(drive_today)
-
-        for root in roots:
-            fresh_pack_dir = root / "Fresh_Data" / sp / "01_Packs"
-            dest_csv = fresh_pack_dir / f"{sp}_100_hit_rate.csv"
-            write_hit_csv(dest_csv, rows)
-
-    return rows
+    rows = extract_hit_props_for_sport(client, sp, target_date)
+    dest = (out_dir or default_out_dir(sp)) / f"{sp}_100_hit_rate.csv"
+    write_hit_csv(dest, rows)
+    return dest
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sport", default="ALL", choices=["NFL", "NBA", "NCAA", "ALL"], help="Target sport")
-    parser.add_argument("--date", default=None, help="Slate date YYYY-MM-DD")
-    parser.add_argument("--no-fresh-data", action="store_true", help="Skip exporting to Fresh_Data")
-    args = parser.parse_args()
-
-    date_str = args.date or resolve_today_str()
+def make_client() -> PropsClient:
     from outlier_scrapers.api import OutlierApiClient
 
-    client = OutlierApiClient()
-    sports = ["NFL", "NBA", "NCAA"] if args.sport == "ALL" else [args.sport]
+    return OutlierApiClient()
 
+
+def _slate_date(value: str) -> str:
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid slate date {value!r}; use YYYY-MM-DD") from exc
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--sport", default="ALL", choices=[*SPORTS, "ALL"], help="Target sport")
+    parser.add_argument("--date", default=None, type=_slate_date, help="Slate date YYYY-MM-DD")
+    parser.add_argument("--out-dir", type=Path, default=None, help="Override output directory")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    date_str = args.date or resolve_today_str()
+    sports = list(SPORTS) if args.sport == "ALL" else [args.sport]
+    try:
+        client = make_client()
+    except Exception as exc:  # auth/session problems: nothing can be exported
+        logger.error("Could not create Outlier client: %s", exc)
+        return 1
+
+    failures = 0
     for sp in sports:
         try:
-            export_hit_rates_for_sport(
-                client,
-                sp,
-                target_date=date_str,
-                export_to_fresh_data=not args.no_fresh_data,
-            )
-        except Exception as exc:
-            logger.error("Error exporting hit rates for %s: %s", sp, exc)
+            export_hit_rates_for_sport(client, sp, date_str, out_dir=args.out_dir)
+        except Exception as exc:  # report every sport, then fail the run
+            failures += 1
+            logger.error("%s: hit-rate export failed, previous CSV left untouched: %s", sp, exc)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
