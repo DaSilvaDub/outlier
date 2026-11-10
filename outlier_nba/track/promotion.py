@@ -164,6 +164,11 @@ def _failures(ev: Evidence, th: Mapping[str, Any]) -> list[str]:
     return bad
 
 
+def failed_keys(ev: Evidence, thresholds: Mapping[str, Any] | None = None) -> list[str]:
+    """The keys ``ev`` fails (empty means every key passes); read-only, no config needed."""
+    return _failures(ev, THRESHOLDS if thresholds is None else thresholds)
+
+
 def _decide(cfg: dict[str, Any], evidence: Mapping[str, Evidence]) -> dict[str, dict[str, Any]]:
     cap = float(cfg["max_model_weight"])
     decisions: dict[str, dict[str, Any]] = {}

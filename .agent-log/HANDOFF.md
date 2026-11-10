@@ -1,3 +1,15 @@
+# Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
+
+1. **Work**: Branch `claude/nba-gate-evidence-d54fd8`. `nba_model_probs` now stores `market_id`/`side` (in-place
+   migration); `evidence.build_report` joins only on a verified market_id + line match and counts every exclusion
+   (key mismatch/unverifiable, no prob, unsettled, push, CLV with no verified close / outside 60 min / no value) -
+   nothing imputed; new read-only `cli gate-status [--json]` prints per-family gate status; `promotion.failed_keys`.
+   Blend weights and promotion config untouched. Docs: `docs/nba/phase2-evidence.md`.
+2. **Current ledger**: all 7 families `insufficient evidence`, 0 usable settled rows (old rows predate keys).
+3. **Next**: let `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-06, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-orcc5e`

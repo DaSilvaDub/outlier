@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS nba_model_probs (
     event_id TEXT NOT NULL,
     outcome_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
+    market_id TEXT,
+    side TEXT,
     as_of TEXT NOT NULL,
     family TEXT NOT NULL,
     market TEXT NOT NULL,
@@ -58,6 +60,7 @@ aligned AS (
            m.model_push AS model_push, m.model_loss AS model_loss,
            m.market_prob AS model_market_prob, m.model_weight AS model_weight,
            m.final_prob AS final_prob, m.flags AS model_flags,
+           m.market_id AS model_market_id, m.line AS model_line, m.side AS model_side,
            s.snapshot_id, s.event_id, s.outcome_id, s.market_id, s.market_type, s.selection,
            s.line, s.price, s.book, s.market_consensus_prob, s.push_prob, s.captured_at,
            s.event_starts_at, s.data_quality_flags,
@@ -72,7 +75,7 @@ aligned AS (
      AND s.captured_at <= m.as_of AND m.as_of < s.event_starts_at
 )
 SELECT a.*, d.units AS units, x.win_loss_push, x.actual_result, x.closing_price, x.clv_price,
-       c.status AS close_status, c.clv_prob
+       c.status AS close_status, c.clv_prob, c.minutes_before_tip AS clv_minutes_before_tip
 FROM aligned a
 LEFT JOIN decisions d ON d.snapshot_id = a.snapshot_id
 LEFT JOIN settlements x ON x.decision_id = d.decision_id
@@ -89,9 +92,20 @@ def _num(value: Any) -> float | None:
     return float(value)
 
 
+KEY_COLUMNS = ("market_id", "side")  # added after the first ledgers were written
+
+
 def ensure_model_schema(conn: sqlite3.Connection) -> None:
-    """Table now; the view needs ``nba_outcome_eval``, so it is created only once that exists."""
+    """Table now; the view needs ``nba_outcome_eval``, so it is created only once that exists.
+
+    A table written before the key columns existed is migrated in place; its old rows keep
+    NULL keys, so the evidence loader can never verify (and therefore never uses) them.
+    """
     conn.execute(MODEL_TABLE_SQL)
+    have_cols = {r[1] for r in conn.execute("PRAGMA table_info(nba_model_probs)")}
+    for col in KEY_COLUMNS:
+        if col not in have_cols:
+            conn.execute(f"ALTER TABLE nba_model_probs ADD COLUMN {col} TEXT")
     have = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'nba_outcome_eval'").fetchone()
     if have:
         conn.execute(
@@ -113,6 +127,8 @@ def model_rows(rows: Sequence[Mapping[str, Any]], run_id: str) -> list[dict[str,
                 "event_id": str(r["event_id"]),
                 "outcome_id": str(r["outcome_id"]),
                 "run_id": run_id,
+                "market_id": None if r.get("market_id") in (None, "") else str(r["market_id"]),
+                "side": None if r.get("side") in (None, "") else str(r["side"]),
                 "as_of": str(r["as_of"]),
                 "family": str(r["family"]),
                 "market": str(r["market"]),
@@ -144,9 +160,9 @@ def record_model_probs(
         conn.executemany(
             """
             INSERT OR IGNORE INTO nba_model_probs
-                (event_id, outcome_id, run_id, as_of, family, market, line, model_prob,
+                (event_id, outcome_id, run_id, market_id, side, as_of, family, market, line, model_prob,
                  model_win, model_push, model_loss, market_prob, model_weight, final_prob, flags)
-            VALUES (:event_id, :outcome_id, :run_id, :as_of, :family, :market, :line,
+            VALUES (:event_id, :outcome_id, :run_id, :market_id, :side, :as_of, :family, :market, :line,
                     :model_prob, :model_win, :model_push, :model_loss, :market_prob,
                     :model_weight, :final_prob, :flags)
             """,

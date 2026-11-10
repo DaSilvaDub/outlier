@@ -89,3 +89,26 @@ Caveats: CLV here is the change in the consensus probability of the captured out
 book. The weight validation is a single time split; a rolling scheme would be stronger once there is a season of
 data. A stacked PR does not trigger the repository's CI workflows (they run for PRs into `master`), so retarget
 after #292 merges.
+
+## Gate evidence plumbing (key-checked join, counted exclusions, `gate-status`)
+
+`python -m outlier_nba.cli gate-status [--db FILE] [--config FILE] [--json]` prints, for every team family, n settled,
+games, dates, model vs vig-free-market log loss, calibration gap, median CLV, the verdict (`PASS`,
+`insufficient evidence` when a sample-size key fails, `FAIL` when only quality keys fail), the blocking keys and the
+exclusion counts. It is read-only: it reads a throwaway local copy of the ledger (brought to the current schema there),
+never the promotion writer, and cannot change a weight. `promote --apply` remains the only path that does.
+
+**Keying.** A model forecast is joined to a snapshot on `(event_id, outcome_id)` at-or-before the forecast (15 minutes
+at most). `nba_model_probs` now also stores `market_id` and `side`; the loader additionally requires the stored
+`market_id` to equal the snapshot's and the lines to match numerically (blank equals the `0` placeholder only for
+`team.ML`). A mismatch is `key_mismatch`; a row recorded before keys were stored cannot be verified and is
+`key_unverifiable`. Both are excluded.
+
+**Fail closed, never imputed.** Row exclusions: `no_model_prob`, `no_market_prob`, `key_unverifiable`, `key_mismatch`,
+`unsettled`, `push_or_void`. CLV exclusions (the row still counts for calibration and log loss): `clv_no_verified_close`,
+`clv_outside_window` (verified status but minutes before tip outside 0-60), `clv_value_missing`. All are counted per
+family in the report.
+
+**Current local ledger (2026-11-10).** Every family reads `insufficient evidence` with 0 usable settled rows: the ledger
+was last written 2026-10-24, before keys were stored, so all of its model rows are `key_unverifiable`. Fresh shadow days
+(`scripts/nba_shadow_daily.ps1`) accumulate keyed rows.

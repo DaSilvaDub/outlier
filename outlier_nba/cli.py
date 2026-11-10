@@ -378,6 +378,21 @@ def run_promote(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_gate_status(args: argparse.Namespace) -> int:
+    """Per-family promotion-gate status. Read-only: reads a temp copy, writes nothing."""
+    from outlier_nba.track import gate_report
+
+    if not args.db.exists():
+        print(f"ledger not found: {args.db}")
+        return 2
+    gates = gate_report.build_gates(args.db, args.config)
+    if args.json:
+        print(json.dumps(gate_report.to_payload(gates), sort_keys=True, default=str))
+    else:
+        print(gate_report.format_gates(gates))
+    return EXIT_OK
+
+
 def run_backfill(args: argparse.Namespace) -> int:
     """Network stages fill the cache; ``build`` builds in local temp, then installs + verifies."""
     from outlier_nba.ingest import espn
@@ -469,6 +484,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     pm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
     pm.add_argument("--apply", action="store_true", help="let the evaluator write the decision")
     pm.add_argument("--config", type=Path, default=None, help="promotion file (default: config/)")
+    gs = sub.add_parser("gate-status", help="read-only promotion-gate status per market family")
+    gs.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    gs.add_argument("--config", type=Path, default=None, help="promotion file (read only)")
+    gs.add_argument("--json", action="store_true", help="machine-readable output")
     bk = sub.add_parser("backtest", help="walk-forward backtest of the team model")
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
@@ -504,6 +523,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_team(args)
     if args.command == "promote":
         return run_promote(args)
+    if args.command == "gate-status":
+        return run_gate_status(args)
     if args.command == "backtest":
         return run_backtest_cmd(args)
 
