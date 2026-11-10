@@ -58,3 +58,10 @@ def test_unparseable_hold_fails_closed(tmp_path: Path) -> None:
 def test_hold_paths_includes_repo_file_first(tmp_path: Path) -> None:
     paths = hold_paths(tmp_path)
     assert paths[0] == tmp_path / "docs" / "remediation" / "publication_hold.json"
+
+
+def test_default_paths_include_canonical_repo_hold(tmp_path: Path) -> None:
+    from outlier_scrapers.publication_hold import CANONICAL_HOLD_PATH
+
+    # A worktree/clone without the untracked hold file still sees the canonical one.
+    assert CANONICAL_HOLD_PATH in hold_paths(tmp_path)

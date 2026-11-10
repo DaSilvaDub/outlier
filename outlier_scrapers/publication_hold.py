@@ -13,17 +13,23 @@ from pathlib import Path
 
 REPO_HOLD_RELPATH = Path("docs") / "remediation" / "publication_hold.json"
 QUARANTINE_HOLD_PATH = Path(r"C:\Users\dasil\outlier-quarantine\2026-11-05\publication_hold.json")
+# The hold file is operational state kept untracked in the canonical checkout, so a run
+# from a worktree or clone must still consult it there.
+CANONICAL_HOLD_PATH = Path(r"C:\Users\dasil\Dev\GitHub\outlier") / REPO_HOLD_RELPATH
+DEFAULT_EXTRA_PATHS = (CANONICAL_HOLD_PATH, QUARANTINE_HOLD_PATH)
 
 
 class PublicationHoldError(RuntimeError):
     """A hold file exists but cannot be interpreted; callers must treat it as held."""
 
 
-def hold_paths(
-    repo_root: Path, extra_paths: Iterable[Path] = (QUARANTINE_HOLD_PATH,)
-) -> list[Path]:
-    """Hold files to consult, repo file first (same order as publication_guards.ps1)."""
-    return [Path(repo_root) / REPO_HOLD_RELPATH, *(Path(p) for p in extra_paths)]
+def hold_paths(repo_root: Path, extra_paths: Iterable[Path] = DEFAULT_EXTRA_PATHS) -> list[Path]:
+    """Hold files to consult, repo file first, duplicates removed."""
+    paths = [Path(repo_root) / REPO_HOLD_RELPATH]
+    for extra in map(Path, extra_paths):
+        if extra not in paths:
+            paths.append(extra)
+    return paths
 
 
 def _read_active_flag(path: Path) -> bool:
@@ -38,7 +44,7 @@ def _read_active_flag(path: Path) -> bool:
 
 
 def publication_hold_active(
-    repo_root: Path, extra_paths: Iterable[Path] = (QUARANTINE_HOLD_PATH,)
+    repo_root: Path, extra_paths: Iterable[Path] = DEFAULT_EXTRA_PATHS
 ) -> bool:
     """True when any existing hold file says ``"active": true``."""
     return any(

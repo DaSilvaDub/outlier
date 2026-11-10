@@ -27,6 +27,7 @@ Fresh_Data staging (only when --today-root is the real Desktop Today):
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime
 import json
 import re
@@ -244,8 +245,30 @@ def _files(directory: Path, pattern: str = "*") -> list[Path]:
     return sorted(p for p in directory.glob(pattern) if p.is_file()) if directory.is_dir() else []
 
 
+def is_stageable_csv(path: Path, dates: list[str]) -> bool:
+    """A CSV needs at least one data row; one with a slate_date column must match an active date.
+
+    Undated rolling CSVs can be left over from an earlier run (exporters keep the last good
+    file when a fetch fails, and an empty-slate export leaves a header-only file), so the
+    filename alone cannot prove they are current.
+    """
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        first = next(reader, None)
+        if first is None:
+            return False
+        if "slate_date" in (reader.fieldnames or []):
+            return (first.get("slate_date") or "") in dates
+    return True
+
+
 def _current_exports(export_dir: Path, dates: list[str]) -> list[Source]:
-    return [(f, "01_Packs") for f in _files(export_dir) if is_current_artifact(f.name, dates)]
+    return [
+        (f, "01_Packs")
+        for f in _files(export_dir)
+        if is_current_artifact(f.name, dates)
+        and (f.suffix.lower() != ".csv" or is_stageable_csv(f, dates))
+    ]
 
 
 def nba_sources(repo_root: Path, slate_date: str) -> list[Source]:

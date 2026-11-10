@@ -214,7 +214,7 @@ $emptyAfterEvents = ($afterRows -eq 0) -and (
 )
 
 if ($emptyAfterEvents) {
-    Write-Error "Filtered nfl_only.csv is empty but events exist for $Date (events_count=$eventsCount). Refusing Drive publish."
+    [Console]::Error.WriteLine("Filtered nfl_only.csv is empty but events exist for $Date (events_count=$eventsCount). Refusing Drive publish.")
     exit 2
 }
 
@@ -227,10 +227,9 @@ if ($ScratchOut -and -not $ForceDrive) {
 # Local Desktop staging runs before the Drive publish so an active publication
 # hold (which throws below) never blocks local staging.
 $organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (Test-Path -LiteralPath $organizerScript) {
-    Write-Output "Organizing Desktop Today folders for NFL (local only)..."
-    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NFL", "--date", $Date, "--skip-drive")
-}
+if (-not (Test-Path -LiteralPath $organizerScript -PathType Leaf)) { throw "Required file missing: $organizerScript" }
+Write-Output "Organizing Desktop Today folders for NFL (local only)..."
+Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NFL", "--date", $Date, "--skip-drive")
 
 if ($shouldPublish) {
     Assert-PublicationHold $repoRoot

@@ -172,7 +172,7 @@ def test_main_accepts_date_argument(tmp_path, monkeypatch):
 # --- Fresh_Data staging (publication hold, no out-of-repo generators) -------------------
 
 
-def _touch(path: Path, text: str = "x") -> Path:
+def _touch(path: Path, text: str = "a,b\n1,2\n") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
@@ -250,7 +250,7 @@ def test_ncaa_lookahead_corrupt_sim_raises(tmp_path):
 
 def test_populate_copies_into_every_root(tmp_path):
     repo = tmp_path / "repo"
-    _touch(repo / "data" / "NBA" / "exports" / "nba_only.csv", "a,b\n")
+    _touch(repo / "data" / "NBA" / "exports" / "nba_only.csv")
     local, drive = tmp_path / "local", tmp_path / "drive"
 
     copied = org.populate_sport_deliverables(
@@ -308,3 +308,22 @@ def test_main_exits_3_when_drive_is_held(tmp_path, monkeypatch):
 def test_main_rejects_invalid_date(tmp_path):
     with pytest.raises(SystemExit):
         org.main(["--sport", "NBA", "--date", "11/10/2026", "--today-root", str(tmp_path)])
+
+
+def test_header_only_csv_is_not_staged(tmp_path):
+    exports = tmp_path / "data" / "NCAAFB" / "exports"
+    _touch(exports / "ncaafb_only.csv", "player,market\n")  # empty today
+    _touch(exports / "ncaafb_only_2026-11-11.csv", "player,market\nA,B\n")  # lookahead slate
+
+    names = [src.name for src, _ in org._current_exports(exports, ["2026-11-10", "2026-11-11"])]
+
+    assert names == ["ncaafb_only_2026-11-11.csv"]
+
+
+def test_csv_with_stale_slate_date_column_is_not_staged(tmp_path):
+    exports = tmp_path / "data" / "NBA" / "exports"
+    _touch(exports / "NBA_100_hit_rate.csv", "slate_date,player\n2026-11-09,A\n")
+    assert org.nba_sources(tmp_path, "2026-11-10") == []
+
+    _touch(exports / "NBA_100_hit_rate.csv", "slate_date,player\n2026-11-10,A\n")
+    assert [s.name for s, _ in org.nba_sources(tmp_path, "2026-11-10")] == ["NBA_100_hit_rate.csv"]

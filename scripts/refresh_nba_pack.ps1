@@ -57,7 +57,7 @@ $freeGb = [math]::Round($cDrive.Free / 1GB, 2)
 Write-Output "[$(Get-Date -Format 'o')] Host C: storage check: $freeGb GB free."
 
 if ($freeGb -lt $MinDiskSpaceGB) {
-    Write-Error "[NBA-SYS-001 VIOLATION] Critical low disk space on C: ($freeGb GB free < $MinDiskSpaceGB GB minimum required). Aborting to prevent Errno 28 capture failure."
+    [Console]::Error.WriteLine("[NBA-SYS-001 VIOLATION] Critical low disk space on C: ($freeGb GB free < $MinDiskSpaceGB GB minimum required). Aborting to prevent Errno 28 capture failure.")
     exit 2
 } elseif ($freeGb -lt 10.0) {
     Write-Warning "[NBA-SYS-001 WARNING] Host storage ($freeGb GB free) is below recommended 10.0 GB threshold."
@@ -240,10 +240,9 @@ if ($ScratchOut -and -not $ForceDrive) {
 # Local Desktop staging runs before the Drive publish so an active publication
 # hold (which throws below) never blocks local staging.
 $organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (Test-Path -LiteralPath $organizerScript) {
-    Write-Output "Organizing Desktop Today folders for NBA (local only)..."
-    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date, "--skip-drive")
-}
+if (-not (Test-Path -LiteralPath $organizerScript -PathType Leaf)) { throw "Required file missing: $organizerScript" }
+Write-Output "Organizing Desktop Today folders for NBA (local only)..."
+Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date, "--skip-drive")
 
 if ($shouldPublish -and $driveRoot) {
     Assert-PublicationHold $repoRoot

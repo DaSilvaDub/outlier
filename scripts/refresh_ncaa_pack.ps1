@@ -56,7 +56,7 @@ $freeGb = [math]::Round($cDrive.Free / 1GB, 2)
 Write-Output "[$(Get-Date -Format 'o')] Host C: storage check: $freeGb GB free."
 
 if ($freeGb -lt $MinDiskSpaceGB) {
-    Write-Error "[NCAA-SYS-001 VIOLATION] Critical low disk space on C: ($freeGb GB free < $MinDiskSpaceGB GB minimum required). Aborting."
+    [Console]::Error.WriteLine("[NCAA-SYS-001 VIOLATION] Critical low disk space on C: ($freeGb GB free < $MinDiskSpaceGB GB minimum required). Aborting.")
     exit 2
 } elseif ($freeGb -lt 10.0) {
     Write-Warning "[NCAA-SYS-001 WARNING] Host storage ($freeGb GB free) is below recommended 10.0 GB threshold."
@@ -92,25 +92,27 @@ function Get-CsvDataRowCount {
     return $n
 }
 
-# Runs the cfb exporter for one date into a fresh file. The previous file is removed
-# first and the new one must be written during this run, so a silent no-op export
-# can never leave yesterday's rows behind under today's name.
+# Runs the cfb exporter for one date into a temp file that must be written during this
+# run, then swaps it over $OutCsv. A silent no-op export can never leave yesterday's rows
+# behind under today's name, and a failed export leaves the last good file in place.
 function Invoke-FreshExport {
     param([Parameter(Mandatory = $true)][string]$SlateDate, [Parameter(Mandatory = $true)][string]$OutCsv)
-    if (Test-Path -LiteralPath $OutCsv) { Remove-Item -LiteralPath $OutCsv -Force }
+    $tmpCsv = "$OutCsv.tmp.csv"
+    if (Test-Path -LiteralPath $tmpCsv) { Remove-Item -LiteralPath $tmpCsv -Force }
     $startedUtc = [DateTime]::UtcNow.AddSeconds(-2)
     Push-Location $cfbRepo
     try {
         # Out-Host keeps exporter stdout visible without polluting this function's return value.
-        Invoke-CheckedPython -Arguments @($exportScript, "--date", $SlateDate, "--out", $OutCsv) | Out-Host
+        Invoke-CheckedPython -Arguments @($exportScript, "--date", $SlateDate, "--out", $tmpCsv) | Out-Host
     }
     finally {
         Pop-Location
     }
-    Assert-RequiredFile $OutCsv
-    if ((Get-Item -LiteralPath $OutCsv).LastWriteTimeUtc -lt $startedUtc) {
-        throw "Stale export (not written this run): $OutCsv"
+    Assert-RequiredFile $tmpCsv
+    if ((Get-Item -LiteralPath $tmpCsv).LastWriteTimeUtc -lt $startedUtc) {
+        throw "Stale export (not written this run): $tmpCsv"
     }
+    Move-Item -LiteralPath $tmpCsv -Destination $OutCsv -Force
     return (Get-CsvDataRowCount -Path $OutCsv)
 }
 
@@ -188,7 +190,7 @@ if ($exportRows -eq 0) {
 }
 
 if ($exportRows -eq 0) {
-    Write-Error "ncaafb_only.csv is empty for $Date and the next slate. Refusing to stage or publish an empty pack."
+    [Console]::Error.WriteLine("ncaafb_only.csv is empty for $Date and the next slate. Refusing to stage or publish an empty pack.")
     exit 2
 }
 
