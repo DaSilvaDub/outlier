@@ -6,7 +6,12 @@
    nothing imputed; new read-only `cli gate-status [--json]` prints per-family gate status; `promotion.failed_keys`.
    Blend weights and promotion config untouched. Docs: `docs/nba/phase2-evidence.md`.
 2. **Current ledger**: all 7 families `insufficient evidence`, 0 usable settled rows (old rows predate keys).
-3. **Next**: let `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+3. **Backfill**: `cli backfill-model-probs` (dry run default; `--apply --out` writes a temp copy only, never the
+   original/shared ledger or a repo path). Local ledger: 13,533 rows, all `no_bundle` (bundles were in a cleaned
+   `%TEMP%
+ba_runs`), so 0 keyed; temp copy `%TEMP%
+ba_backfilleedback_backfilled.sqlite3` is NOT swapped in.
+4. **Next**: let `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
 
 ---
 

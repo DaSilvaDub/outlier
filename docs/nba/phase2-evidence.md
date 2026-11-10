@@ -112,3 +112,18 @@ family in the report.
 **Current local ledger (2026-11-10).** Every family reads `insufficient evidence` with 0 usable settled rows: the ledger
 was last written 2026-10-24, before keys were stored, so all of its model rows are `key_unverifiable`. Fresh shadow days
 (`scripts/nba_shadow_daily.ps1`) accumulate keyed rows.
+
+### Backfilling keys from run bundles
+
+`python -m outlier_nba.cli backfill-model-probs --db LEDGER --bundles ROOT [--bundles ROOT2 ...] [--apply --out COPY]`
+recovers `market_id`/`side` for model rows recorded before keys existed, from `runs/<run_id>/team_shadow.csv`.
+It is a **dry run by default**. A bundle counts only if its sha256 matches its sealed `manifest.json`; a ledger row is
+matched to rows of the same run on event, outcome, `as_of`, family and line and must resolve to exactly one
+`(market_id, side)`. Counts: `matched`, `ambiguous` (several different keys: left unkeyed), `unmatched`, `no_bundle`,
+`already_keyed` (never overwritten). The original ledger is only read (work happens on a temp copy); `--apply`
+requires `--out`, which must be a new path that is not the source, not the shared ledger and not inside the repo
+checkout. Swapping the copy into place is a separate, manual decision. Check the copy with `gate-status --db COPY`.
+
+Run on the local ledger on 2026-11-10: 13,533 model rows, all `no_bundle` (the daily script writes bundles to
+`%TEMP%
+ba_runs`, which no longer exists), so nothing could be keyed and every gate verdict is unchanged.
