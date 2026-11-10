@@ -378,6 +378,42 @@ def run_promote(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def run_gate_status(args: argparse.Namespace) -> int:
+    """Per-family promotion-gate status. Read-only: reads a temp copy, writes nothing."""
+    from outlier_nba.track import gate_report
+
+    if not args.db.exists():
+        print(f"ledger not found: {args.db}")
+        return 2
+    gates = gate_report.build_gates(args.db, args.config)
+    if args.json:
+        print(json.dumps(gate_report.to_payload(gates), sort_keys=True, default=str))
+    else:
+        print(gate_report.format_gates(gates))
+    return EXIT_OK
+
+
+def run_backfill_model_probs(args: argparse.Namespace) -> int:
+    """Recover model-row keys from run bundles. Dry run unless ``--apply`` with ``--out``."""
+    from outlier_nba.track import backfill as bf
+
+    if not args.db.exists():
+        print(f"ledger not found: {args.db}")
+        return 2
+    if args.apply and args.out is None:
+        print(
+            "--apply requires --out (a copy outside the repository; the original is never written)"
+        )
+        return 2
+    try:
+        result = bf.backfill(args.db, args.bundles, out=args.out, apply=args.apply)
+    except bf.UnsafeOutputError as exc:
+        print(f"refused: {exc}")
+        return 2
+    print(json.dumps(bf.describe(result), sort_keys=True))
+    return EXIT_OK
+
+
 def run_backfill(args: argparse.Namespace) -> int:
     """Network stages fill the cache; ``build`` builds in local temp, then installs + verifies."""
     from outlier_nba.ingest import espn
@@ -469,6 +505,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     pm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
     pm.add_argument("--apply", action="store_true", help="let the evaluator write the decision")
     pm.add_argument("--config", type=Path, default=None, help="promotion file (default: config/)")
+    gs = sub.add_parser("gate-status", help="read-only promotion-gate status per market family")
+    gs.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    gs.add_argument("--config", type=Path, default=None, help="promotion file (read only)")
+    gs.add_argument("--json", action="store_true", help="machine-readable output")
+    bm = sub.add_parser(
+        "backfill-model-probs", help="recover market_id/side on old model rows from run bundles"
+    )
+    bm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    bm.add_argument(
+        "--bundles", type=Path, action="append", default=[], help="bundle root (repeatable)"
+    )
+    bm.add_argument(
+        "--apply", action="store_true", help="write the result to --out (default: dry run)"
+    )
+    bm.add_argument("--out", type=Path, default=None, help="new ledger copy (never the original)")
     bk = sub.add_parser("backtest", help="walk-forward backtest of the team model")
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
@@ -504,6 +555,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_team(args)
     if args.command == "promote":
         return run_promote(args)
+    if args.command == "backfill-model-probs":
+        return run_backfill_model_probs(args)
+    if args.command == "gate-status":
+        return run_gate_status(args)
     if args.command == "backtest":
         return run_backtest_cmd(args)
 
