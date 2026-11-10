@@ -5,8 +5,8 @@ automated access. This module only reads files that already exist on the NBA Dri
 (``NBA_ROOT``), where ``nba-props-pipeline`` puts every NBA extract. The owner ruled on
 2026-11-08 that the CTG game logs already there may be imported (docs/nba/data-sources.md
 section 6). The hub is read, never written, and its ``cache`` folder (session cookies) is never
-opened. Nothing is imported from ``nba-props-pipeline``; its folder layout is copied as
-constants below and pinned by a test.
+opened. Nothing is imported from ``nba-props-pipeline``; hub discovery and sync live in
+``outlier_nba.ingest.ctg_hub``.
 
 All CTG stats exclude garbage time and end-of-quarter heaves, and they are NOT
 opponent-adjusted, so they must never be averaged into a column that holds ESPN full-game
@@ -20,11 +20,9 @@ import hashlib
 import json
 import math
 import os
-import re
 import sqlite3
-from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -82,22 +80,35 @@ class CTGIdentityError(CTGParseError):
 
 
 def parse_value(raw: Any) -> float | None:
-    """``"54.7%"`` -> 0.547, ``"+11.9"`` -> 11.9, numbers pass through, blank/dash/NaN -> None."""
+    """``"54.7%"`` -> 0.547, ``"+11.9"`` -> 11.9, numbers pass through, blank/dash/NaN -> None.
+
+    Infinite values raise: no CTG stat is unbounded, so ``inf`` is always a broken cell.
+    """
     if raw is None or isinstance(raw, bool):
         return None
+    pct = False
     if isinstance(raw, int | float):
-        return None if math.isnan(raw) else float(raw)
-    text = str(raw).strip()
-    if text.lower() in _BLANK:
-        return None
-    pct = text.endswith("%")
-    try:
-        number = float(text[:-1] if pct else text)
-    except ValueError as exc:
-        raise CTGParseError(f"not a CTG number: {raw!r}") from exc
+        number = _to_float(raw, raw)
+    else:
+        text = str(raw).strip()
+        if text.lower() in _BLANK:
+            return None
+        pct = text.endswith("%")
+        number = _to_float(text[:-1] if pct else text, raw)
     if math.isnan(number):
         return None
+    if math.isinf(number):
+        raise CTGParseError(f"not a finite CTG number: {raw!r}")
     return number / 100.0 if pct else number
+
+
+def _to_float(value: Any, raw: Any) -> float:
+    try:
+        return float(value)
+    except OverflowError as exc:  # an int too large for a float
+        raise CTGParseError(f"not a finite CTG number: {raw!r}") from exc
+    except ValueError as exc:
+        raise CTGParseError(f"not a CTG number: {raw!r}") from exc
 
 
 def season_for(day: date) -> str:
@@ -275,14 +286,41 @@ def _check_identity(doc: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], t
         )
 
 
-def parse_gamelog(raw: bytes, *, team: str, name: str, season: str | None = None) -> list[CTGGame]:
-    """Parse one team game-log JSON (either Drive layout), oldest game first."""
+# A game can sit in both views of one file; the more specific label wins.
+_LABEL_RANK = {"unspecified": 0, "regular": 1, "playoffs": 2}
+
+
+def load_gamelog_doc(raw: bytes, *, name: str) -> Mapping[str, Any]:
+    """Decode one game-log file to its JSON object (no row validation)."""
     try:
         doc = json.loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CTGUnusableError(f"{name}: not JSON ({exc})") from exc
     if not isinstance(doc, Mapping):
         raise CTGUnusableError(f"{name}: not a game-log object")
+    return doc
+
+
+def _merge_game(by_date: dict[date, CTGGame], game: CTGGame, name: str) -> None:
+    prior = by_date.get(game.game_date)
+    if prior is None:
+        by_date[game.game_date] = game
+        return
+    if replace(prior, season_type=game.season_type) != game:
+        raise CTGParseError(f"{name}: conflicting rows for {game.game_date}")
+    if _LABEL_RANK[game.season_type] > _LABEL_RANK[prior.season_type]:
+        by_date[game.game_date] = game
+
+
+def parse_gamelog(raw: bytes, *, team: str, name: str, season: str | None = None) -> list[CTGGame]:
+    """Parse one team game-log JSON (either Drive layout), oldest game first."""
+    return games_from_doc(load_gamelog_doc(raw, name=name), team=team, name=name, season=season)
+
+
+def games_from_doc(
+    doc: Mapping[str, Any], *, team: str, name: str, season: str | None = None
+) -> list[CTGGame]:
+    """Validate and parse the rows of a decoded game-log object, oldest game first."""
     views = [(label, rows) for label, rows in _views(doc) if rows]
     if not views:
         raise CTGUnusableError(f"{name}: no game rows")
@@ -303,10 +341,7 @@ def parse_gamelog(raw: bytes, *, team: str, name: str, season: str | None = None
                 raise
             except (TypeError, ValueError, OverflowError) as exc:
                 raise CTGParseError(f"{name}: bad row {rec.get('Date')!r} ({exc})") from exc
-            prior = by_date.get(game.game_date)
-            if prior is not None and prior != game:
-                raise CTGParseError(f"{name}: conflicting rows for {game.game_date}")
-            by_date[game.game_date] = game
+            _merge_game(by_date, game, name)
     games = sorted(by_date.values(), key=lambda g: g.game_date)
     seasons = {g.season for g in games}
     if len(seasons) != 1:
@@ -325,29 +360,36 @@ def read_gamelog(path: Path, *, team: str, season: str | None = None) -> list[CT
 
 # --------------------------------------------------------------------------- store
 
+# Append-only. Every download is a capture; every game row it carried is a version of that game.
+# Reads choose the latest version a cutoff allows, so re-downloading a game never moves it
+# later in time and an older file imported late never loses its explicit playoff label.
+SCHEMA_VERSION = 2
+_SET_SCHEMA_VERSION = "PRAGMA user_version = 2"  # static SQL; must equal SCHEMA_VERSION
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS ctg_import (
-    import_id    INTEGER PRIMARY KEY,
-    file_sha256  TEXT NOT NULL UNIQUE,
+CREATE TABLE IF NOT EXISTS ctg_capture (
+    capture_id   INTEGER PRIMARY KEY,
+    file_sha256  TEXT NOT NULL,
     table_name   TEXT NOT NULL,
     season       TEXT NOT NULL,
-    season_type  TEXT NOT NULL DEFAULT 'regular',
+    season_type  TEXT NOT NULL DEFAULT 'regular',   -- 'mixed' when a game log spans both
     team         TEXT,                 -- set for per-team tables (game logs)
     source_path  TEXT,                 -- relative to NBA_ROOT for hub files
-    as_of_utc    TEXT NOT NULL,        -- upper bound on what the file can know
+    as_of_utc    TEXT NOT NULL,        -- earliest moment the file can be assumed to exist
     imported_utc TEXT NOT NULL,
-    n_rows       INTEGER NOT NULL
+    n_rows       INTEGER NOT NULL,
+    UNIQUE (file_sha256, as_of_utc)    -- same bytes captured again later is a new capture
 );
-CREATE TABLE IF NOT EXISTS ctg_team_metric (
-    import_id INTEGER NOT NULL REFERENCES ctg_import(import_id),
-    team      TEXT NOT NULL,
-    metric    TEXT NOT NULL,
-    value     REAL,
-    PRIMARY KEY (import_id, team, metric)
+CREATE INDEX IF NOT EXISTS ix_ctg_capture_lookup
+    ON ctg_capture(table_name, season, season_type, as_of_utc);
+CREATE TABLE IF NOT EXISTS ctg_capture_metric (
+    capture_id INTEGER NOT NULL REFERENCES ctg_capture(capture_id),
+    team       TEXT NOT NULL,
+    metric     TEXT NOT NULL,
+    value      REAL,
+    PRIMARY KEY (capture_id, team, metric)
 );
-CREATE INDEX IF NOT EXISTS ix_ctg_import_lookup
-    ON ctg_import(table_name, season, season_type, as_of_utc);
-CREATE TABLE IF NOT EXISTS ctg_team_game (
+CREATE TABLE IF NOT EXISTS ctg_game_version (
+    capture_id   INTEGER NOT NULL REFERENCES ctg_capture(capture_id),
     season       TEXT NOT NULL,
     season_type  TEXT NOT NULL,
     game_date    TEXT NOT NULL,
@@ -359,10 +401,45 @@ CREATE TABLE IF NOT EXISTS ctg_team_game (
     off_pp100    REAL,
     def_pp100    REAL,
     metrics_json TEXT NOT NULL,
-    file_sha256  TEXT NOT NULL,
-    as_of_utc    TEXT,                 -- as-of of the file that supplied the current values
-    PRIMARY KEY (season, game_date, team)
+    PRIMARY KEY (capture_id, game_date, team)
 );
+CREATE INDEX IF NOT EXISTS ix_ctg_game_version_game
+    ON ctg_game_version(season, game_date, team);
+"""
+
+# Version-1 stores (one mutable row per game) are copied into the tables above once. The legacy
+# tables are left in place, unread. A v1 game row is dated by the import record of the file that
+# last wrote it; a row with no import record has an unknown capture time and is dated at the
+# migration, so it can only ever appear in a "latest" read, never in a historical one.
+_MIGRATE_CAPTURES = """
+INSERT OR IGNORE INTO ctg_capture (capture_id, file_sha256, table_name, season, season_type,
+                                   team, source_path, as_of_utc, imported_utc, n_rows)
+SELECT import_id, file_sha256, table_name, season, season_type, team, source_path, as_of_utc,
+       imported_utc, n_rows
+FROM ctg_import
+"""
+_MIGRATE_METRICS = """
+INSERT OR IGNORE INTO ctg_capture_metric (capture_id, team, metric, value)
+SELECT import_id, team, metric, value FROM ctg_team_metric
+"""
+_MIGRATE_ORPHAN_CAPTURES = """
+INSERT OR IGNORE INTO ctg_capture (file_sha256, table_name, season, season_type, team,
+                                   source_path, as_of_utc, imported_utc, n_rows)
+SELECT file_sha256, 'gamelog', MIN(season),
+       CASE WHEN COUNT(DISTINCT season_type) = 1 THEN MIN(season_type) ELSE 'mixed' END,
+       MIN(team), NULL, ?, ?, COUNT(*)
+FROM ctg_team_game
+WHERE file_sha256 NOT IN (SELECT file_sha256 FROM ctg_capture)
+GROUP BY file_sha256
+"""
+_MIGRATE_GAMES = """
+INSERT OR IGNORE INTO ctg_game_version (capture_id, season, season_type, game_date, team, opp,
+                                        venue, team_pts, opp_pts, off_pp100, def_pp100,
+                                        metrics_json)
+SELECT (SELECT MIN(c.capture_id) FROM ctg_capture AS c WHERE c.file_sha256 = g.file_sha256),
+       g.season, g.season_type, g.game_date, g.team, g.opp, g.venue, g.team_pts, g.opp_pts,
+       g.off_pp100, g.def_pp100, g.metrics_json
+FROM ctg_team_game AS g
 """
 
 
@@ -372,18 +449,46 @@ def default_store() -> Path:
     return root / "ctg" / "ctg.sqlite3"
 
 
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    hit = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,))
+    return hit.fetchone() is not None
+
+
+def _schema_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the v2 tables and, once, copy a v1 store into them (atomic, safe to re-run)."""
     conn.executescript(SCHEMA)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(ctg_team_game)")}
-    if "as_of_utc" not in cols:  # stores created before per-row as-of existed
-        conn.execute("ALTER TABLE ctg_team_game ADD COLUMN as_of_utc TEXT")
+    if _schema_version(conn) >= SCHEMA_VERSION:
+        return
+    conn.execute("BEGIN IMMEDIATE")  # a second process waits here, then sees the new version
+    try:
+        if _schema_version(conn) < SCHEMA_VERSION:
+            _migrate_v1(conn)
+            conn.execute(_SET_SCHEMA_VERSION)
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v1(conn: sqlite3.Connection) -> None:
+    if _has_table(conn, "ctg_import"):
+        conn.execute(_MIGRATE_CAPTURES)
+    if _has_table(conn, "ctg_team_metric"):
+        conn.execute(_MIGRATE_METRICS)
+    if _has_table(conn, "ctg_team_game"):
+        now = _iso(datetime.now(UTC))
+        conn.execute(_MIGRATE_ORPHAN_CAPTURES, (now, now))
+        conn.execute(_MIGRATE_GAMES)
 
 
 @dataclass(frozen=True)
 class ImportResult:
-    inserted: bool
-    import_id: int
+    inserted: bool  # False: this exact capture (same bytes, same as-of) was already stored
+    capture_id: int
 
 
 @dataclass(frozen=True)
@@ -392,8 +497,25 @@ class Snapshot:
     teams: dict[str, dict[str, float | None]]
 
 
+@dataclass(frozen=True)
+class _Capture:
+    sha256: str
+    table_name: str
+    season: str
+    season_type: str
+    as_of_utc: datetime
+    n_rows: int
+    team: str | None = None
+    source_path: str | None = None
+
+
 def _iso(ts: datetime) -> str:
     return ts.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def et_midnight_utc(day: date) -> datetime:
+    """The Eastern midnight that opens ``day``, in UTC."""
+    return datetime.combine(day, time(0), tzinfo=ET).astimezone(UTC)
 
 
 def _check_as_of(as_of_utc: datetime) -> None:
@@ -403,106 +525,123 @@ def _check_as_of(as_of_utc: datetime) -> None:
         raise CTGParseError(f"as_of {as_of_utc} is in the future")
 
 
-def _known_import(conn: sqlite3.Connection, sha256: str) -> int | None:
-    hit = conn.execute("SELECT import_id FROM ctg_import WHERE file_sha256 = ?", (sha256,))
-    row = hit.fetchone()
-    return int(row[0]) if row else None
+_INSERT_CAPTURE = """
+INSERT INTO ctg_capture (file_sha256, table_name, season, season_type, team, source_path,
+                         as_of_utc, imported_utc, n_rows)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (file_sha256, as_of_utc) DO NOTHING
+"""
+
+
+def _insert_capture(conn: sqlite3.Connection, cap: _Capture) -> ImportResult:
+    """Record a capture, or find the identical one already stored.
+
+    The duplicate check is the ``INSERT`` itself, under SQLite's write lock, so two processes
+    importing the same file can never both insert it or fail on the unique key. Callers hold
+    the transaction so the capture and its rows commit together.
+    """
+    as_of = _iso(cap.as_of_utc)
+    cur = conn.execute(
+        _INSERT_CAPTURE,
+        (cap.sha256, cap.table_name, cap.season, cap.season_type, cap.team, cap.source_path,
+         as_of, _iso(datetime.now(UTC)), cap.n_rows),
+    )  # fmt: skip
+    if cur.rowcount == 1 and cur.lastrowid is not None:
+        return ImportResult(True, int(cur.lastrowid))
+    row = conn.execute(
+        "SELECT capture_id FROM ctg_capture WHERE file_sha256 = ? AND as_of_utc = ?",
+        (cap.sha256, as_of),
+    ).fetchone()
+    return ImportResult(False, int(row[0]))
 
 
 def import_season_table(
     conn: sqlite3.Connection, table: SeasonTable, *, season: str, as_of_utc: datetime,
     season_type: str = "regular",
 ) -> ImportResult:  # fmt: skip
+    """Store one season-table capture.
+
+    The same bytes captured at a new time are a new capture, so a table that changes and then
+    changes back reads as its latest state, not as the change in between.
+    """
     _check_as_of(as_of_utc)
-    known = _known_import(conn, table.sha256)
-    if known is not None:
-        return ImportResult(False, known)
+    cap = _Capture(table.sha256, table.name, season, season_type, as_of_utc, len(table.rows))
     with conn:
-        cur = conn.execute(
-            "INSERT INTO ctg_import (file_sha256, table_name, season, season_type, as_of_utc,"
-            " imported_utc, n_rows) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (table.sha256, table.name, season, season_type, _iso(as_of_utc),
-             _iso(datetime.now(UTC)), len(table.rows)),
-        )  # fmt: skip
-        import_id = int(cur.lastrowid or 0)
-        conn.executemany(
-            "INSERT INTO ctg_team_metric (import_id, team, metric, value) VALUES (?, ?, ?, ?)",
-            [(import_id, r.team, m, v) for r in table.rows for m, v in r.metrics.items()],
-        )
-    return ImportResult(True, import_id)
+        result = _insert_capture(conn, cap)
+        if result.inserted:
+            conn.executemany(
+                "INSERT INTO ctg_capture_metric (capture_id, team, metric, value)"
+                " VALUES (?, ?, ?, ?)",
+                [(result.capture_id, r.team, m, v) for r in table.rows
+                 for m, v in r.metrics.items()],
+            )  # fmt: skip
+    return result
 
 
 def slate_cutoff_utc(slate_date: str) -> datetime:
     """Eastern midnight that opens the slate date: anything downloaded later is unusable."""
-    return datetime.combine(date.fromisoformat(slate_date), time(0), tzinfo=ET).astimezone(UTC)
+    return et_midnight_utc(date.fromisoformat(slate_date))
 
 
 def snapshot_asof(
     conn: sqlite3.Connection, table: str, season: str, slate_date: str,
     season_type: str = "regular",
 ) -> Snapshot | None:  # fmt: skip
-    """Latest season-table import downloaded strictly before the slate's Eastern midnight."""
+    """Latest season-table capture taken strictly before the slate's Eastern midnight."""
     row = conn.execute(
-        "SELECT import_id, as_of_utc FROM ctg_import WHERE table_name = ? AND season = ?"
-        " AND season_type = ? AND team IS NULL AND as_of_utc < ? ORDER BY as_of_utc DESC LIMIT 1",
+        "SELECT capture_id, as_of_utc FROM ctg_capture WHERE table_name = ? AND season = ?"
+        " AND season_type = ? AND team IS NULL AND as_of_utc < ?"
+        " ORDER BY as_of_utc DESC, capture_id DESC LIMIT 1",
         (table, season, season_type, _iso(slate_cutoff_utc(slate_date))),
     ).fetchone()
     if row is None:
         return None
     teams: dict[str, dict[str, float | None]] = {}
     for team, metric, value in conn.execute(
-        "SELECT team, metric, value FROM ctg_team_metric WHERE import_id = ?", (row[0],)
+        "SELECT team, metric, value FROM ctg_capture_metric WHERE capture_id = ?", (row[0],)
     ):
         teams.setdefault(team, {})[metric] = value
     return Snapshot(datetime.fromisoformat(row[1]), teams)
 
 
-_UPSERT_GAME = """
-INSERT INTO ctg_team_game (season, season_type, game_date, team, opp, venue, team_pts, opp_pts,
-                           off_pp100, def_pp100, metrics_json, file_sha256, as_of_utc)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (season, game_date, team) DO UPDATE SET
-    season_type = CASE
-        WHEN ctg_team_game.season_type = 'playoffs' THEN 'playoffs'
-        WHEN excluded.season_type = 'unspecified' THEN ctg_team_game.season_type
-        ELSE excluded.season_type END,
-    opp = excluded.opp, venue = COALESCE(excluded.venue, ctg_team_game.venue),
-    team_pts = excluded.team_pts, opp_pts = excluded.opp_pts,
-    off_pp100 = excluded.off_pp100, def_pp100 = excluded.def_pp100,
-    metrics_json = excluded.metrics_json, file_sha256 = excluded.file_sha256,
-    as_of_utc = excluded.as_of_utc
-WHERE excluded.as_of_utc >= COALESCE(ctg_team_game.as_of_utc, '')
-"""
-
-
-# One static, fully parameterised query: a NULL parameter switches that filter off.
-_LOAD_GAMES = """
-SELECT season, season_type, game_date, team, opp, venue, team_pts, opp_pts,
-       off_pp100, def_pp100, metrics_json
-FROM ctg_team_game
-WHERE (? IS NULL OR season = ?)
-  AND (? IS NULL OR as_of_utc < ?)
-ORDER BY game_date, team
-"""
-
-
-def _upsert_games(
-    conn: sqlite3.Connection, games: Sequence[CTGGame], file_sha256: str, as_of_utc: datetime
-) -> None:
-    """No transaction of its own: callers wrap it so the import record and rows commit together.
-
-    A file older than the one that supplied a row never overwrites it (``WHERE`` above), and a
-    ``playoffs`` label is never downgraded: one scraper view labels playoff games "regular".
-    """
+def _insert_versions(conn: sqlite3.Connection, capture_id: int, games: Sequence[CTGGame]) -> None:
+    """No transaction of its own: callers wrap it so the capture and rows commit together."""
     conn.executemany(
-        _UPSERT_GAME,
+        "INSERT INTO ctg_game_version (capture_id, season, season_type, game_date, team, opp,"
+        " venue, team_pts, opp_pts, off_pp100, def_pp100, metrics_json)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            (g.season, g.season_type, g.game_date.isoformat(), g.team, g.opp, g.venue,
-             g.team_pts, g.opp_pts, g.off_pp100, g.def_pp100,
-             json.dumps(g.metrics, sort_keys=True), file_sha256, _iso(as_of_utc))
+            (capture_id, g.season, g.season_type, g.game_date.isoformat(), g.team, g.opp,
+             g.venue, g.team_pts, g.opp_pts, g.off_pp100, g.def_pp100,
+             json.dumps(g.metrics, sort_keys=True))
             for g in games
         ],
     )  # fmt: skip
+
+
+def import_gamelog(
+    conn: sqlite3.Connection,
+    games: Sequence[CTGGame],
+    *,
+    file_sha256: str,
+    as_of_utc: datetime,
+    source_path: str | None = None,
+) -> ImportResult:
+    """Store one game-log capture and its game rows in a single transaction."""
+    _check_as_of(as_of_utc)
+    if not games:
+        raise CTGParseError("a game-log capture needs at least one game")
+    season_types = {g.season_type for g in games}
+    cap = _Capture(
+        file_sha256, "gamelog", games[0].season,
+        season_types.pop() if len(season_types) == 1 else "mixed",
+        as_of_utc, len(games), games[0].team, source_path,
+    )  # fmt: skip
+    with conn:
+        result = _insert_capture(conn, cap)
+        if result.inserted:
+            _insert_versions(conn, result.capture_id, games)
+    return result
 
 
 def store_gamelog(
@@ -511,12 +650,46 @@ def store_gamelog(
     *,
     file_sha256: str,
     as_of_utc: datetime | None = None,
-) -> None:
-    """Upsert game rows in one transaction (``as_of_utc`` defaults to now)."""
-    as_of = as_of_utc or datetime.now(UTC)
-    _check_as_of(as_of)
-    with conn:
-        _upsert_games(conn, games, file_sha256, as_of)
+) -> ImportResult:
+    """``import_gamelog`` with ``as_of_utc`` defaulting to now."""
+    return import_gamelog(
+        conn, games, file_sha256=file_sha256, as_of_utc=as_of_utc or datetime.now(UTC)
+    )
+
+
+# One static, fully parameterised query: a NULL parameter switches that filter off.
+# Per game it keeps the latest version the cutoff allows (ties: the later import). The label is
+# the most specific one any allowed version carries (playoffs > regular > unspecified), because
+# one scraper view calls playoff games "regular"; the venue is the latest one any version knew.
+_LOAD_GAMES = """
+WITH eligible AS (
+    SELECT v.*, c.as_of_utc AS captured
+    FROM ctg_game_version AS v
+    JOIN ctg_capture AS c ON c.capture_id = v.capture_id
+    WHERE (? IS NULL OR v.season = ?)
+      AND (? IS NULL OR c.as_of_utc < ?)
+),
+ranked AS (
+    SELECT eligible.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY season, game_date, team ORDER BY captured DESC, capture_id DESC
+           ) AS pick,
+           MAX(CASE season_type WHEN 'playoffs' THEN 2 WHEN 'regular' THEN 1 ELSE 0 END) OVER (
+               PARTITION BY season, game_date, team
+           ) AS label,
+           FIRST_VALUE(venue) OVER (
+               PARTITION BY season, game_date, team
+               ORDER BY venue IS NULL, captured DESC, capture_id DESC
+           ) AS known_venue
+    FROM eligible
+)
+SELECT season,
+       CASE label WHEN 2 THEN 'playoffs' WHEN 1 THEN 'regular' ELSE 'unspecified' END,
+       game_date, team, opp, known_venue, team_pts, opp_pts, off_pp100, def_pp100, metrics_json
+FROM ranked
+WHERE pick = 1
+ORDER BY game_date, team
+"""
 
 
 def load_team_games(
@@ -525,11 +698,10 @@ def load_team_games(
     season: str | None = None,
     as_of_before: datetime | None = None,
 ) -> list[CTGGame]:
-    """Stored game rows, oldest first.
+    """One row per stored game, oldest first.
 
-    ``as_of_before`` keeps only rows whose supplying file is dated strictly before it, so a
-    backtest can refuse values a later download revised. Rows without a per-row as-of (stores
-    created before the column existed) are excluded whenever a cutoff is given.
+    ``as_of_before`` reads the store as it stood just before that moment: each game comes from
+    the latest capture dated strictly earlier, and games first captured later are absent.
     """
     cutoff = _iso(as_of_before) if as_of_before is not None else None
     rows = conn.execute(_LOAD_GAMES, (season, season, cutoff, cutoff)).fetchall()
@@ -538,115 +710,3 @@ def load_team_games(
                 json.loads(r[10]))
         for r in rows
     ]  # fmt: skip
-
-
-# --------------------------------------------------------------------------- NBA Drive hub
-
-DEFAULT_NBA_ROOT = Path(r"G:\My Drive\Sports_Analytics\01_Active\NBA_Active")
-# Copied from nba-props-pipeline core/output_paths.py ("teams", "cleaning_the_glass"); not
-# imported (AGENTS.md). Hand-downloaded CSVs get a glob once their header is verified.
-GAMELOG_GLOBS = (
-    "TEAMS/*/CLEANINGdaGLASS/GAME_LOGS_*.json",
-    "Current_Matchups/CLEANING_THE_GLASS/*/CLEANINGdaGLASS/GAME_LOGS_*.json",
-)
-_FILE_DATE = re.compile(r"_(\d{2})_(\d{2})_(\d{4})\.json$")
-SYNC_OUTCOMES = (
-    "imported", "already_imported", "rejected_mislabeled", "skipped_unusable", "other_season",
-)  # fmt: skip
-
-
-def nba_root() -> Path:
-    """The NBA Drive hub: ``NBA_ROOT`` env (as nba-props-pipeline), else the Drive default."""
-    env = os.environ.get("NBA_ROOT")
-    return Path(env) if env else DEFAULT_NBA_ROOT
-
-
-@dataclass(frozen=True)
-class HubFile:
-    path: Path
-    claimed_team: str | None  # None: the folder name is not a team (reported as unusable)
-    file_date: date
-
-
-@dataclass(frozen=True)
-class FileOutcome:
-    path: Path
-    claimed_team: str | None
-    outcome: str
-    detail: str = ""
-    actual: str | None = None
-    n_rows: int = 0
-
-
-@dataclass(frozen=True)
-class SyncReport:
-    files: tuple[FileOutcome, ...]
-    counts: dict[str, int]
-
-
-def discover_gamelogs(root: Path) -> list[HubFile]:
-    """Game-log files under the hub's CTG folders, oldest file date first."""
-    base = root.resolve()
-    found: list[HubFile] = []
-    for pattern in GAMELOG_GLOBS:
-        for path in root.glob(pattern):
-            if path.is_symlink() or not path.is_file():
-                continue
-            if not path.resolve().is_relative_to(base):
-                continue  # never follow a path out of the hub
-            m = _FILE_DATE.search(path.name)
-            if m is None:
-                continue  # not a dated GAME_LOGS export
-            team = resolve_ctg_team(path.parent.parent.name)
-            found.append(HubFile(path, team, date(int(m[3]), int(m[1]), int(m[2]))))
-    return sorted(found, key=lambda f: (f.file_date, str(f.path)))
-
-
-def _record_gamelog_import(
-    conn: sqlite3.Connection, f: HubFile, root: Path, sha256: str, games: Sequence[CTGGame]
-) -> None:
-    as_of = datetime.fromtimestamp(f.path.stat().st_mtime, UTC)
-    season_types = {g.season_type for g in games}
-    season_type = season_types.pop() if len(season_types) == 1 else "mixed"
-    with conn:  # one transaction: a failure leaves neither the import record nor any rows
-        conn.execute(
-            "INSERT INTO ctg_import (file_sha256, table_name, season, season_type, team,"
-            " source_path, as_of_utc, imported_utc, n_rows) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (sha256, "gamelog", games[0].season, season_type, f.claimed_team,
-             f.path.relative_to(root).as_posix(), _iso(as_of), _iso(datetime.now(UTC)),
-             len(games)),
-        )  # fmt: skip
-        _upsert_games(conn, games, sha256, as_of)
-
-
-def _sync_one(conn: sqlite3.Connection, f: HubFile, root: Path, season: str | None) -> FileOutcome:
-    if f.claimed_team is None:
-        detail = f"folder {f.path.parent.parent.name!r} is not a team"
-        return FileOutcome(f.path, None, "skipped_unusable", detail)
-    try:
-        raw = f.path.read_bytes()
-    except OSError as exc:  # e.g. a Drive file locked by the sync client
-        return FileOutcome(f.path, f.claimed_team, "skipped_unusable", f"unreadable: {exc}")
-    try:
-        games = parse_gamelog(raw, team=f.claimed_team, name=f.path.name)
-    except CTGIdentityError as exc:
-        return FileOutcome(f.path, f.claimed_team, "rejected_mislabeled", str(exc), exc.actual)
-    except CTGParseError as exc:
-        return FileOutcome(f.path, f.claimed_team, "skipped_unusable", str(exc))
-    sha256 = hashlib.sha256(raw).hexdigest()
-    if _known_import(conn, sha256) is not None:
-        return FileOutcome(f.path, f.claimed_team, "already_imported")
-    if season is not None and games[0].season != season:
-        return FileOutcome(f.path, f.claimed_team, "other_season", games[0].season)
-    _record_gamelog_import(conn, f, root, sha256, games)
-    return FileOutcome(f.path, f.claimed_team, "imported", n_rows=len(games))
-
-
-def sync_from_hub(conn: sqlite3.Connection, root: Path, *, season: str | None = None) -> SyncReport:
-    """Import every new game-log file from the hub. Read-only on ``root``; safe to re-run."""
-    if not root.is_dir():
-        raise FileNotFoundError(f"NBA_ROOT not found: {root}")
-    outcomes = tuple(_sync_one(conn, f, root, season) for f in discover_gamelogs(root))
-    counts: Counter[str] = Counter({k: 0 for k in SYNC_OUTCOMES})
-    counts.update(o.outcome for o in outcomes)
-    return SyncReport(outcomes, dict(counts))

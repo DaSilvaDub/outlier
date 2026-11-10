@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -54,6 +55,12 @@ def test_parse_value(raw, value) -> None:
 def test_parse_value_rejects_garbage() -> None:
     with pytest.raises(ctg.CTGParseError):
         ctg.parse_value("12.3abc")
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "inf%", float("inf"), float("-inf")])
+def test_parse_value_rejects_infinite_values(raw) -> None:
+    with pytest.raises(ctg.CTGParseError, match="finite"):
+        ctg.parse_value(raw)
 
 
 # --- season tables ----------------------------------------------------------------------------
@@ -169,3 +176,26 @@ def test_infer_season() -> None:
     assert ctg.season_for(date(2025, 10, 22)) == "2025-26"
     assert ctg.season_for(date(2026, 4, 12)) == "2025-26"
     assert ctg.season_for(date(2026, 8, 1)) == "2026-27"
+
+
+def _new_layout_doc() -> dict:
+    return json.loads((FIX / "gamelog_new_synthetic.json").read_text(encoding="utf-8"))
+
+
+def test_a_game_listed_in_both_views_is_one_playoff_game() -> None:
+    doc = _new_layout_doc()
+    regular = doc["season_views"]["regular_season"]["four_factors"]
+    doc["season_views"]["playoffs"]["four_factors"] = [dict(regular[0])]
+    games = ctg.parse_gamelog(json.dumps(doc).encode(), team="BOS", name="x.json")
+    assert len(games) == 4
+    by_date = {g.game_date: g.season_type for g in games}
+    assert by_date[date(2026, 11, 3)] == "playoffs"
+    assert set(by_date.values()) == {"regular", "playoffs"}
+
+
+def test_different_rows_for_one_date_still_conflict() -> None:
+    doc = _new_layout_doc()
+    regular = doc["season_views"]["regular_season"]["four_factors"]
+    doc["season_views"]["playoffs"]["four_factors"] = [dict(regular[0], **{"Team Pts": 1})]
+    with pytest.raises(ctg.CTGParseError, match="conflicting"):
+        ctg.parse_gamelog(json.dumps(doc).encode(), team="BOS", name="x.json")

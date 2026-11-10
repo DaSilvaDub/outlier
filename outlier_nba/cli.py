@@ -294,9 +294,9 @@ def run_ctg_sync(args: argparse.Namespace) -> int:
     """Copy CTG game logs from the NBA Drive hub into the local store (hub is read-only)."""
     import sqlite3
 
-    from outlier_nba.ingest import ctg
+    from outlier_nba.ingest import ctg, ctg_hub
 
-    root = args.nba_root or ctg.nba_root()
+    root = args.nba_root or ctg_hub.nba_root()
     if not root.is_dir():
         print(json.dumps({"error": f"NBA_ROOT not found: {root} (is the Drive mounted?)"}))
         return EXIT_NO_HUB
@@ -305,10 +305,10 @@ def run_ctg_sync(args: argparse.Namespace) -> int:
         print(json.dumps({"error": f"store {store} is inside NBA_ROOT; the hub is read-only"}))
         return 2
     store.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(store)
+    conn = sqlite3.connect(store, timeout=30)  # wait out a concurrent sync
     try:
         ctg.ensure_schema(conn)
-        report = ctg.sync_from_hub(conn, root, season=args.season)
+        report = ctg_hub.sync_from_hub(conn, root, season=args.season)
     finally:
         conn.close()
 
