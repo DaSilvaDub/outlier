@@ -18,12 +18,14 @@
   junction is created for the duration of the run and removed afterwards (never the target); the
   credentials are not read or copied.
 
+  Run bundles are kept under <DataDir>\bundles (see outlier_nba/data_dirs.py), not in %TEMP%.
+
   First time on a machine: build the history once with `python -m outlier_nba.cli backfill --stage all`
   (or copy the store and ESPN cache) and keep it under <DataDir>.
 #>
 [CmdletBinding()]
 param(
-  [string]$DataDir = 'C:\Users\dasil\outlier_nba_data',
+  [string]$DataDir = $(if ($env:OUTLIER_NBA_DATA_DIR) { $env:OUTLIER_NBA_DATA_DIR } else { Join-Path $env:USERPROFILE 'outlier_nba_data' }),
   [string]$Ledger = '',
   [string]$SessionDir = '',
   [string]$Date = '',
@@ -36,6 +38,10 @@ Set-Location $repo
 if (-not $Ledger) { $Ledger = Join-Path $DataDir 'ledger\feedback.sqlite3' }
 $store = Join-Path $DataDir 'store\nba_games.sqlite3'
 $env:OUTLIER_NBA_CACHE = Join-Path $DataDir 'cache'
+# Run bundles (team_shadow.csv + sealed manifest.json) are the only record of each model row's market id
+# and side, so they must outlive %TEMP%. The CLI resolves their location (outlier_nba/data_dirs.py:
+# <DataDir>\bundles\{team,capture}, or OUTLIER_NBA_BUNDLES_DIR); this script leaves the bundle root to the CLI default.
+$env:OUTLIER_NBA_DATA_DIR = $DataDir
 New-Item -ItemType Directory -Force -Path (Split-Path $Ledger) | Out-Null
 if (-not (Test-Path $store)) { throw "No games store at $store. Build it: python -m outlier_nba.cli backfill --stage all --store $store" }
 
@@ -67,9 +73,9 @@ try {
     if ($Date) { $ratings += @('--date', $Date) }
     Invoke-Step 'ratings (refresh results, fit as of today)' $ratings
   }
-  Invoke-Step 'capture (market snapshots into the ledger)' @('capture', '--db', $Ledger, '--nba-dir', (Join-Path $env:TEMP 'nba_runs_capture'))
+  Invoke-Step 'capture (market snapshots into the ledger)' @('capture', '--db', $Ledger)
   if (-not $CaptureOnly) {
-    $run = @('run', '--db', $Ledger, '--store', $store, '--draws', $Draws, '--nba-dir', (Join-Path $env:TEMP 'nba_runs'))
+    $run = @('run', '--db', $Ledger, '--store', $store, '--draws', $Draws)
     if ($Date) { $run += @('--date', $Date) }
     Invoke-Step 'run (price the slate, record model probabilities)' $run
   }

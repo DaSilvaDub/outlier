@@ -25,6 +25,7 @@ from typing import Any
 
 import structlog
 
+from outlier_nba import data_dirs
 from outlier_nba.ingest import outlier as ingest
 from outlier_nba.pipeline import EXIT_OK, NbaPipeline, PipelineResult, Stage
 from outlier_nba.receipts import StageReceipt, failing, receipt
@@ -258,10 +259,13 @@ def run_team(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"auth_required: {exc}")
         return 1
+    nba_dir = _bundle_root(args.nba_dir, data_dirs.team_bundle_root)
+    if nba_dir is None:
+        return 2
     result = team_run.run_team_shadow(
         client,
         games_loader=lambda: team_run.load_store_games(args.store),
-        nba_dir=args.nba_dir,
+        nba_dir=nba_dir,
         fixture=args.fixture,
         slate_date=args.date,
         n_draws=args.draws,
@@ -393,6 +397,17 @@ def run_gate_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _bundle_root(explicit: Path | None, default: Callable[[], Path]) -> Path | None:
+    """The explicit ``--nba-dir`` or the durable default; None (with a message) if refused."""
+    if explicit is not None:
+        return explicit
+    try:
+        return default()
+    except data_dirs.NonDurableLocationError as exc:
+        print(f"refused: {exc}")
+        return None
+
+
 def run_backfill_model_probs(args: argparse.Namespace) -> int:
     """Recover model-row keys from run bundles. Dry run unless ``--apply`` with ``--out``."""
     from outlier_nba.track import backfill as bf
@@ -406,8 +421,9 @@ def run_backfill_model_probs(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        result = bf.backfill(args.db, args.bundles, out=args.out, apply=args.apply)
-    except bf.UnsafeOutputError as exc:
+        roots = args.bundles or [data_dirs.team_bundle_root()]
+        result = bf.backfill(args.db, roots, out=args.out, apply=args.apply)
+    except (bf.UnsafeOutputError, data_dirs.NonDurableLocationError) as exc:
         print(f"refused: {exc}")
         return 2
     print(json.dumps(bf.describe(result), sort_keys=True))
@@ -462,7 +478,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             default=paths.FEEDBACK_DB_PATH,
             help="feedback ledger (default: the shared ledger, D3)",
         )
-    sub.choices["capture"].add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR)
+    sub.choices["capture"].add_argument(
+        "--nba-dir", type=Path, default=None, help="bundle root (default: durable bundles/capture)"
+    )
     sub.choices["capture"].add_argument(
         "--fixture", action="store_true", help="treat the run as a fixture run (publishes)"
     )
@@ -491,7 +509,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     rn = sub.add_parser("run", help="price the slate from the team model (SHADOW rows only)")
     rn.add_argument("--date", default=None, help="slate date YYYY-MM-DD (default: first tip, ET)")
     rn.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
-    rn.add_argument("--nba-dir", type=Path, default=DEFAULT_NBA_DIR / "team")
+    rn.add_argument(
+        "--nba-dir", type=Path, default=None, help="bundle root (default: durable bundles/team)"
+    )
     rn.add_argument("--draws", type=int, default=20_000)
     rn.add_argument(
         "--horizon-hours", type=float, default=36.0, help="price only games starting this soon"
@@ -514,7 +534,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
     bm.add_argument(
-        "--bundles", type=Path, action="append", default=[], help="bundle root (repeatable)"
+        "--bundles",
+        type=Path,
+        action="append",
+        default=[],
+        help="bundle root (repeatable; default: the durable bundles/team root)",
     )
     bm.add_argument(
         "--apply", action="store_true", help="write the result to --out (default: dry run)"
@@ -593,7 +617,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         print(f"auth_required: {exc}")
         return 1
-    result = run_capture(client, db_path=args.db, nba_dir=args.nba_dir, fixture=args.fixture)
+    nba_dir = _bundle_root(args.nba_dir, data_dirs.capture_bundle_root)
+    if nba_dir is None:
+        return 2
+    result = run_capture(client, db_path=args.db, nba_dir=nba_dir, fixture=args.fixture)
     print(
         json.dumps(
             {**dataclasses.asdict(result), "receipts": [r.to_dict() for r in result.receipts]},
