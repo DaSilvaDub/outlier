@@ -19,11 +19,16 @@ try {
     & powershell.exe @refreshArgs
     if ($LASTEXITCODE -ne 0) { throw "refresh_nba_pack.ps1 failed with exit code $LASTEXITCODE" }
 
-    Write-Output "[$(Get-Date -Format 'o')] Organizing Desktop Today for NBA..."
-    $organizerArgs = @((Join-Path $outlierRepo "scripts\organize_desktop_today.py"), "--sport", "NBA")
-    if ($Date) { $organizerArgs += @("--date", $Date) }
-    & $python @organizerArgs
-    if ($LASTEXITCODE -ne 0) { throw "organize_desktop_today.py failed with exit code $LASTEXITCODE" }
+    # The refresh script already staged Desktop Today locally. This pass only stages
+    # Fresh_Data to Drive, and the organizer refuses that (exit 3) while a publication
+    # hold is active. -SkipDrive therefore has nothing left to do here.
+    if (-not $SkipDrive) {
+        Write-Output "[$(Get-Date -Format 'o')] Staging NBA Fresh_Data to Drive..."
+        $organizerArgs = @((Join-Path $outlierRepo "scripts\organize_desktop_today.py"), "--sport", "NBA")
+        if ($Date) { $organizerArgs += @("--date", $Date) }
+        & $python @organizerArgs
+        if ($LASTEXITCODE -ne 0) { throw "organize_desktop_today.py failed with exit code $LASTEXITCODE" }
+    }
 
     Write-Output "[$(Get-Date -Format 'o')] NBA Daily Pack Refresh completed successfully."
 }

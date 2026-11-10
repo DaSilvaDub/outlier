@@ -1,8 +1,12 @@
 <#
 .SYNOPSIS
-  Same-day NCAA (CFB) pack refresh: pre-flight host disk check, live pipeline execution,
-  export ncaafb_only.csv, strip ruled-out players, and publish to Google Drive
-  dated + rolling folders and BETTING REPORTS\NCAA.
+  Same-day NCAA (CFB) pack refresh: pre-flight host disk check, live cfb-analytics
+  pipeline, export ncaafb_only.csv, stage Desktop Today locally, then (unless held or
+  -SkipDrive) publish to Google Drive dated + rolling folders and BETTING REPORTS\NCAA.
+
+  Fails closed: every pipeline stage, the export, and the freshness/empty-slate gates
+  exit nonzero instead of warning, so a stale CSV can never be published under a
+  new date. No injury filter exists for NCAA yet; rows are published as exported.
 
 .PARAMETER Date
   Slate date YYYY-MM-DD (default: current America/New_York calendar date).
@@ -11,16 +15,13 @@
   Re-export from existing data only (no live pipeline).
 
 .PARAMETER SkipDrive
-  Do not copy into G:\My Drive\today (useful for scratch / dry-run).
+  Do not copy into Google Drive (local staging still runs).
 
 .PARAMETER ScratchOut
-  Write the filtered CSV here instead of the repo export.
+  Write the CSV here instead of publishing from the repo export.
 
 .PARAMETER ForceDrive
   Publish to Drive even when -ScratchOut is set.
-
-.PARAMETER SkipInjuryFilter
-  Export only; do not filter ruled-out / inactive players.
 
 .PARAMETER MinDiskSpaceGB
   Minimum required free GB on C:\ drive (default: 5.0 GB, optimal >= 10.0 GB).
@@ -35,12 +36,12 @@ param(
     [switch]$SkipDrive,
     [string]$ScratchOut = "",
     [switch]$ForceDrive,
-    [switch]$SkipInjuryFilter,
     [double]$MinDiskSpaceGB = 5.0,
     [int]$WindowDays = 5
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "publication_guards.ps1")
 
 $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
 $cfbRepo = "C:\Users\dasil\Dev\GitHub\cfb-analytics"
@@ -75,16 +76,6 @@ foreach ($dr in $driveRoots) {
 }
 $driveToday = if ($driveRoot) { Join-Path $driveRoot "today" } else { "G:\My Drive\today" }
 
-function Get-EasternDateString {
-    try {
-        $tz = [TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
-        return [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz).ToString("yyyy-MM-dd")
-    }
-    catch {
-        return (Get-Date).ToString("yyyy-MM-dd")
-    }
-}
-
 function Invoke-CheckedPython {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
     & $python @Arguments
@@ -101,116 +92,114 @@ function Get-CsvDataRowCount {
     return $n
 }
 
-if (-not $Date) {
-    $Date = Get-EasternDateString
+# Runs the cfb exporter for one date into a fresh file. The previous file is removed
+# first and the new one must be written during this run, so a silent no-op export
+# can never leave yesterday's rows behind under today's name.
+function Invoke-FreshExport {
+    param([Parameter(Mandatory = $true)][string]$SlateDate, [Parameter(Mandatory = $true)][string]$OutCsv)
+    if (Test-Path -LiteralPath $OutCsv) { Remove-Item -LiteralPath $OutCsv -Force }
+    $startedUtc = [DateTime]::UtcNow.AddSeconds(-2)
+    Push-Location $cfbRepo
+    try {
+        # Out-Host keeps exporter stdout visible without polluting this function's return value.
+        Invoke-CheckedPython -Arguments @($exportScript, "--date", $SlateDate, "--out", $OutCsv) | Out-Host
+    }
+    finally {
+        Pop-Location
+    }
+    Assert-RequiredFile $OutCsv
+    if ((Get-Item -LiteralPath $OutCsv).LastWriteTimeUtc -lt $startedUtc) {
+        throw "Stale export (not written this run): $OutCsv"
+    }
+    return (Get-CsvDataRowCount -Path $OutCsv)
 }
+
+if (-not $Date) {
+    $Date = Get-EasternSlateDate
+}
+Assert-SlateDate $Date
 
 Set-Location -LiteralPath $repoRoot
 Write-Output "refresh_ncaa_pack: date=$Date skipPipeline=$SkipPipeline skipDrive=$SkipDrive scratchOut=$ScratchOut"
 
+if (-not (Test-Path -LiteralPath $cfbRepo)) {
+    throw "cfb-analytics repo not found at $cfbRepo"
+}
+$exportScript = Join-Path $cfbRepo "scripts\export_ncaafb_extra_pack.py"
+Assert-RequiredFile $exportScript
+
 if (-not $SkipPipeline) {
-    if (Test-Path -LiteralPath $cfbRepo) {
-        Write-Output "Running NCAA CFB pipeline updates in $cfbRepo..."
-        Push-Location $cfbRepo
-        try {
-            # 1. Run daily ingest and market update
-            Write-Output "Running cfb_analytics daily with props..."
-            Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "daily", "--with-props")
+    Write-Output "Running NCAA CFB pipeline updates in $cfbRepo..."
+    Push-Location $cfbRepo
+    try {
+        Write-Output "Running cfb_analytics daily with props..."
+        Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "daily", "--with-props")
 
-            # 2. Generate board, mispriced and over-board outputs
-            $reportDir = Join-Path $cfbRepo "data\reports\$Date"
-            if (-not (Test-Path -LiteralPath $reportDir)) {
-                New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
-            }
-
-            Write-Output "Generating CFB board, mispriced and over-board..."
-            try {
-                Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "board", "--date", $Date, "--with-reasoning")
-            } catch { Write-Warning "board generation warning: $_" }
-
-            try {
-                Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "mispriced", "--date", $Date, "--min-edge", "0.01")
-            } catch { Write-Warning "mispriced generation warning: $_" }
-
-            try {
-                Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "over-board", "--date", $Date)
-            } catch { Write-Warning "over-board generation warning: $_" }
-
-            # 3. Run master V2 simulation engine
-            $simScript = Join-Path $cfbRepo "scripts\run_master_v2_pipeline.py"
-            if (Test-Path -LiteralPath $simScript) {
-                Write-Output "Running master V2 simulation engine..."
-                try {
-                    Invoke-CheckedPython -Arguments @($simScript, "--date", $Date, "--window-days", $WindowDays)
-                } catch { Write-Warning "master v2 simulation warning: $_" }
-            }
+        $reportDir = Join-Path $cfbRepo "data\reports\$Date"
+        if (-not (Test-Path -LiteralPath $reportDir)) {
+            New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
         }
-        finally {
-            Pop-Location
+
+        # --with-reasoning is cfb_analytics' offline MultiFactorReasoningEngine, not an LLM call.
+        Write-Output "Generating CFB board, mispriced and over-board..."
+        Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "board", "--date", $Date, "--with-reasoning")
+        Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "mispriced", "--date", $Date, "--min-edge", "0.01")
+        Invoke-CheckedPython -Arguments @("-m", "cfb_analytics.cli", "over-board", "--date", $Date)
+
+        $simScript = Join-Path $cfbRepo "scripts\run_master_v2_pipeline.py"
+        if (Test-Path -LiteralPath $simScript) {
+            Write-Output "Running master V2 simulation engine..."
+            Invoke-CheckedPython -Arguments @($simScript, "--date", $Date, "--window-days", $WindowDays)
         }
-    } else {
-        Write-Warning "cfb-analytics repo not found at $cfbRepo; skipping live pipeline run."
+        else {
+            Write-Output "master V2 simulation script not present; skipping (optional stage)."
+        }
+    }
+    finally {
+        Pop-Location
     }
 }
 
-$exportCsv = Join-Path $repoRoot "data\NCAAFB\exports\ncaafb_only.csv"
-$exportDir = Split-Path -Parent $exportCsv
+$exportDir = Join-Path $repoRoot "data\NCAAFB\exports"
 if (-not (Test-Path -LiteralPath $exportDir)) {
     New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
 }
 
-$exportScript = Join-Path $cfbRepo "scripts\export_ncaafb_extra_pack.py"
-if (Test-Path -LiteralPath $exportScript) {
-    Write-Output "Exporting ncaafb_only.csv from cfb-analytics..."
-    Push-Location $cfbRepo
-    try {
-        Invoke-CheckedPython -Arguments @($exportScript, "--date", $Date, "--out", $exportCsv)
-    }
-    finally {
-        Pop-Location
-    }
-} else {
-    Write-Warning "export_ncaafb_extra_pack.py not found at $exportScript"
-}
+$exportCsv = Join-Path $exportDir "ncaafb_only.csv"
+Write-Output "Exporting ncaafb_only.csv for $Date from cfb-analytics..."
+$exportRows = Invoke-FreshExport -SlateDate $Date -OutCsv $exportCsv
+$publishDate = $Date
+$publishCsv = $exportCsv
+Write-Output "Export rows for ${Date}: $exportRows"
 
-$beforeRows = Get-CsvDataRowCount -Path $exportCsv
-Write-Output "Export rows before injury filter: $beforeRows"
-
-# If current date has 0 rows (e.g. Monday), check next slate in window to ensure active extra pack
-if ($beforeRows -eq 0 -and (Test-Path -LiteralPath $exportScript)) {
-    $nextDate = [DateTime]::Parse($Date).AddDays(1).ToString("yyyy-MM-dd")
-    Write-Output "Checking next slate date ($nextDate) for upcoming game props..."
-    Push-Location $cfbRepo
-    try {
-        $tempOut = Join-Path $exportDir "ncaafb_only_${nextDate}.csv"
-        Invoke-CheckedPython -Arguments @($exportScript, "--date", $nextDate, "--out", $tempOut)
-        $nextRows = Get-CsvDataRowCount -Path $tempOut
-        if ($nextRows -gt 0) {
-            Write-Output "Found $nextRows upcoming props for $nextDate. Staging into extra pack."
-            Copy-Item -LiteralPath $tempOut -Destination $exportCsv -Force
-            $beforeRows = $nextRows
-        }
-    }
-    catch {
-        Write-Warning "Next slate check skipped: $_"
-    }
-    finally {
-        Pop-Location
+# No games today (e.g. Monday): look one day ahead, but publish that slate under its
+# own date. Never relabel tomorrow's rows as today's pack.
+if ($exportRows -eq 0) {
+    $nextDate = [DateTime]::ParseExact($Date, "yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture).AddDays(1).ToString("yyyy-MM-dd")
+    Write-Output "No rows for $Date; checking next slate date $nextDate..."
+    $nextCsv = Join-Path $exportDir "ncaafb_only_${nextDate}.csv"
+    $nextRows = Invoke-FreshExport -SlateDate $nextDate -OutCsv $nextCsv
+    if ($nextRows -gt 0) {
+        Write-Output "Found $nextRows props for $nextDate; publishing them under $nextDate."
+        $publishDate = $nextDate
+        $publishCsv = $nextCsv
+        $exportRows = $nextRows
     }
 }
 
-$filteredCsv = $exportCsv
+if ($exportRows -eq 0) {
+    Write-Error "ncaafb_only.csv is empty for $Date and the next slate. Refusing to stage or publish an empty pack."
+    exit 2
+}
+
 if ($ScratchOut) {
     $scratchDir = Split-Path -Parent $ScratchOut
     if ($scratchDir -and -not (Test-Path -LiteralPath $scratchDir)) {
         New-Item -ItemType Directory -Path $scratchDir -Force | Out-Null
     }
-    Copy-Item -LiteralPath $exportCsv -Destination $ScratchOut -Force
-    $filteredCsv = $ScratchOut
+    Copy-Item -LiteralPath $publishCsv -Destination $ScratchOut -Force
+    $publishCsv = $ScratchOut
 }
-
-$afterRows = Get-CsvDataRowCount -Path $filteredCsv
-Write-Output "Export rows after injury filter: $afterRows (before=$beforeRows)"
 
 $shouldPublish = -not $SkipDrive
 if ($ScratchOut -and -not $ForceDrive) {
@@ -218,33 +207,32 @@ if ($ScratchOut -and -not $ForceDrive) {
     Write-Output "ScratchOut set without -ForceDrive; skipping Drive publish."
 }
 
+# Local Desktop staging runs before the Drive publish so an active publication
+# hold (which throws below) never blocks local staging.
+$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
+Assert-RequiredFile $organizerScript
+Write-Output "Organizing Desktop Today folders for NCAA (local only)..."
+Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NCAA", "--date", $publishDate, "--skip-drive")
+
 if ($shouldPublish -and $driveRoot) {
-    $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
+    Assert-PublicationHold $repoRoot
+    $datedDir = Join-Path $driveToday "extra_packs_${publishDate}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
     $driveNcaa = Join-Path $driveRoot "BETTING REPORTS\NCAA"
 
     New-Item -ItemType Directory -Force -Path $datedDir, $rollingDir, $driveNcaa | Out-Null
 
-    $publishSrc = $filteredCsv
-    if (-not $ScratchOut -and (Resolve-Path $filteredCsv).Path -ne (Resolve-Path $exportCsv).Path) {
-        Copy-Item -LiteralPath $filteredCsv -Destination $exportCsv -Force
+    foreach ($dst in @(
+        (Join-Path $datedDir "ncaafb_only.csv"),
+        (Join-Path $rollingDir "ncaafb_only.csv"),
+        (Join-Path $driveNcaa "ncaafb_only_${publishDate}.csv"),
+        (Join-Path $driveNcaa "ncaafb_only_latest.csv")
+    )) {
+        Copy-Item -LiteralPath $publishCsv -Destination $dst -Force
+        Write-Output "Published ncaafb_only.csv -> $dst"
     }
 
-    $dstDated = Join-Path $datedDir "ncaafb_only.csv"
-    $dstRolling = Join-Path $rollingDir "ncaafb_only.csv"
-    Copy-Item -LiteralPath $publishSrc -Destination $dstDated -Force
-    Copy-Item -LiteralPath $publishSrc -Destination $dstRolling -Force
-    Write-Output "Published ncaafb_only.csv -> $dstDated"
-    Write-Output "Published ncaafb_only.csv -> $dstRolling"
-
-    # Also publish to BETTING REPORTS\NCAA
-    $dstNcaaDated = Join-Path $driveNcaa "ncaafb_only_${Date}.csv"
-    $dstNcaaLatest = Join-Path $driveNcaa "ncaafb_only_latest.csv"
-    Copy-Item -LiteralPath $publishSrc -Destination $dstNcaaDated -Force
-    Copy-Item -LiteralPath $publishSrc -Destination $dstNcaaLatest -Force
-
-    # Sync CFB simulation reports if present
-    $cfbReportDir = Join-Path $cfbRepo "data\reports\$Date"
+    $cfbReportDir = Join-Path $cfbRepo "data\reports\$publishDate"
     if (Test-Path -LiteralPath $cfbReportDir) {
         Get-ChildItem -LiteralPath $cfbReportDir -File | Where-Object { $_.Name -match "\.(md|txt|json)$" } | ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $driveToday $_.Name) -Force
@@ -260,12 +248,5 @@ else {
     Write-Output "Drive publish skipped."
 }
 
-# Sync to Desktop Today organized subfolders
-$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (Test-Path -LiteralPath $organizerScript) {
-    Write-Output "Organizing Desktop Today folders for NCAA..."
-    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NCAA", "--date", $Date)
-}
-
-Write-Output "refresh_ncaa_pack done: before=$beforeRows after=$afterRows date=$Date"
+Write-Output "refresh_ncaa_pack done: rows=$exportRows slate=$publishDate requested=$Date"
 exit 0

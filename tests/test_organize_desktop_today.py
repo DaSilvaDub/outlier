@@ -167,3 +167,144 @@ def test_main_returns_nonzero_when_any_sport_fails(tmp_path, monkeypatch, capsys
 def test_main_accepts_date_argument(tmp_path, monkeypatch):
     monkeypatch.setattr(org.shutil, "disk_usage", _plenty)
     assert org.main(["--sport", "NFL", "--date", "2026-11-04", "--today-root", str(tmp_path)]) == 0
+
+
+# --- Fresh_Data staging (publication hold, no out-of-repo generators) -------------------
+
+
+def _touch(path: Path, text: str = "x") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_is_current_artifact_keeps_undated_and_active_dates_only():
+    dates = ["2026-11-10"]
+    assert org.is_current_artifact("nba_only.csv", dates)
+    assert org.is_current_artifact("nba_only_2026-11-10.csv", dates)
+    assert not org.is_current_artifact("nba_only_2026-11-03.csv", dates)
+
+
+def test_nba_sources_come_only_from_repo_exports(tmp_path):
+    exports = tmp_path / "data" / "NBA" / "exports"
+    _touch(exports / "nba_only.csv")
+    _touch(exports / "NBA_100_hit_rate.csv")
+    _touch(exports / "nba_only_2026-11-10.csv")
+    _touch(exports / "nba_only_2026-11-03.csv")
+
+    names = sorted(src.name for src, sub in org.nba_sources(tmp_path, "2026-11-10"))
+
+    assert names == ["NBA_100_hit_rate.csv", "nba_only.csv", "nba_only_2026-11-10.csv"]
+
+
+def test_organizer_has_no_out_of_repo_generator_path():
+    import ast
+
+    tree = ast.parse((REPO / "scripts" / "organize_desktop_today.py").read_text(encoding="utf-8"))
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in (node.names if isinstance(node, ast.Import) else [ast.alias(node.module or "")])
+    }
+    string_literals = [
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    path_literals = [s for s in string_literals if s.startswith(("C:\\", "G:\\"))]
+
+    assert "export_deliverables" not in imported
+    assert not any(".gemini" in s or "nba-props-pipeline" in s for s in path_literals)
+
+
+def test_nfl_sources_route_reports_and_audits(tmp_path):
+    _touch(tmp_path / "data" / "NFL" / "exports" / "NFL_100_hit_rate.csv")
+    _touch(tmp_path / "data" / "NFL" / "normalized" / "nfl_props_2026-11-10.json")
+    _touch(tmp_path / "data" / "NFL" / "normalized" / "nfl_props_latest.json")  # not staged
+    _touch(tmp_path / "reports" / "NFL" / "2026-11-10_master_daily_report.md")
+    _touch(tmp_path / "reports" / "NFL" / "2026-11-10_Postgame_Prediction_Audit.md")
+
+    routed = {src.name: sub for src, sub in org.nfl_sources(tmp_path, "2026-11-10")}
+
+    assert routed == {
+        "NFL_100_hit_rate.csv": "01_Packs",
+        "nfl_props_2026-11-10.json": "02_Full_Pipeline",
+        "2026-11-10_master_daily_report.md": "04_Reports",
+        "2026-11-10_Postgame_Prediction_Audit.md": "05_Audits",
+    }
+
+
+def test_ncaa_lookahead_finds_next_slate_in_any_year(tmp_path):
+    reports = tmp_path / "data" / "reports"
+    _touch(reports / "2026-12-31" / "2026-12-31-master-v2-sim.json", '{"games": []}')
+    _touch(reports / "2027-01-01" / "2027-01-01-master-v2-sim.json", '{"games": [1]}')
+
+    assert org.ncaa_active_dates(tmp_path, "2026-12-31") == ["2026-12-31", "2027-01-01"]
+
+
+def test_ncaa_lookahead_corrupt_sim_raises(tmp_path):
+    _touch(tmp_path / "data" / "reports" / "2026-11-10" / "2026-11-10-master-v2-sim.json", "{bad")
+    with pytest.raises(org.OrganizerError):
+        org.ncaa_active_dates(tmp_path, "2026-11-10")
+
+
+def test_populate_copies_into_every_root(tmp_path):
+    repo = tmp_path / "repo"
+    _touch(repo / "data" / "NBA" / "exports" / "nba_only.csv", "a,b\n")
+    local, drive = tmp_path / "local", tmp_path / "drive"
+
+    copied = org.populate_sport_deliverables(
+        "NBA", "2026-11-10", [local, drive], repo_root=repo, cfb_root=tmp_path / "nocfb"
+    )
+
+    assert copied == 2
+    for root in (local, drive):
+        assert (root / "Fresh_Data" / "NBA" / "01_Packs" / "nba_only.csv").is_file()
+
+
+def test_staging_roots_skip_drive_is_local_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(org, "get_drive_today", lambda: tmp_path / "drive")
+    assert org.resolve_staging_roots(tmp_path, skip_drive=True) == ([tmp_path], False)
+
+
+def test_staging_roots_hold_blocks_drive(tmp_path, monkeypatch):
+    monkeypatch.setattr(org, "get_drive_today", lambda: tmp_path / "drive")
+    monkeypatch.setattr(org, "publication_hold_active", lambda _root: True)
+    assert org.resolve_staging_roots(tmp_path, skip_drive=False) == ([tmp_path], True)
+
+
+def test_staging_roots_unreadable_hold_is_treated_as_held(tmp_path, monkeypatch):
+    def broken(_root):
+        raise org.PublicationHoldError("bad json")
+
+    monkeypatch.setattr(org, "get_drive_today", lambda: tmp_path / "drive")
+    monkeypatch.setattr(org, "publication_hold_active", broken)
+    assert org.resolve_staging_roots(tmp_path, skip_drive=False) == ([tmp_path], True)
+
+
+def test_staging_roots_no_hold_includes_drive(tmp_path, monkeypatch):
+    monkeypatch.setattr(org, "get_drive_today", lambda: tmp_path / "drive")
+    monkeypatch.setattr(org, "publication_hold_active", lambda _root: False)
+    roots, held = org.resolve_staging_roots(tmp_path, skip_drive=False)
+    assert roots == [tmp_path, tmp_path / "drive"] and held is False
+
+
+def test_main_exits_3_when_drive_is_held(tmp_path, monkeypatch):
+    monkeypatch.setattr(org.shutil, "disk_usage", _plenty)
+    monkeypatch.setattr(org, "DESKTOP_TODAY", tmp_path)
+    monkeypatch.setattr(org, "get_drive_today", lambda: tmp_path / "drive")
+    monkeypatch.setattr(org, "publication_hold_active", lambda _root: True)
+    staged: list[list[Path]] = []
+    monkeypatch.setattr(
+        org, "populate_sport_deliverables", lambda sp, d, roots: staged.append(roots) or 0
+    )
+
+    rc = org.main(["--sport", "NBA", "--date", "2026-11-10", "--today-root", str(tmp_path)])
+
+    assert rc == org.DRIVE_HELD_EXIT
+    assert staged == [[tmp_path]]  # local staging still happened, Drive did not
+
+
+def test_main_rejects_invalid_date(tmp_path):
+    with pytest.raises(SystemExit):
+        org.main(["--sport", "NBA", "--date", "11/10/2026", "--today-root", str(tmp_path)])

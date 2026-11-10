@@ -40,6 +40,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "publication_guards.ps1")
 
 $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
 $nbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline"
@@ -236,7 +237,16 @@ if ($ScratchOut -and -not $ForceDrive) {
     Write-Output "ScratchOut set without -ForceDrive; skipping Drive publish."
 }
 
+# Local Desktop staging runs before the Drive publish so an active publication
+# hold (which throws below) never blocks local staging.
+$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
+if (Test-Path -LiteralPath $organizerScript) {
+    Write-Output "Organizing Desktop Today folders for NBA (local only)..."
+    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date, "--skip-drive")
+}
+
 if ($shouldPublish -and $driveRoot) {
+    Assert-PublicationHold $repoRoot
     $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
     $driveNba = Join-Path $driveRoot "BETTING REPORTS\NBA"
@@ -304,13 +314,6 @@ elseif ($shouldPublish) {
 }
 else {
     Write-Output "Drive publish skipped."
-}
-
-# Sync to Desktop Today organized subfolders
-$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (Test-Path -LiteralPath $organizerScript) {
-    Write-Output "Organizing Desktop Today folders for NBA..."
-    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date)
 }
 
 Write-Output "refresh_nba_pack done: before=$beforeRows after=$afterRows date=$Date"

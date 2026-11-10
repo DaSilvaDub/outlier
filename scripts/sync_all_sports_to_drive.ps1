@@ -125,20 +125,9 @@ if (Test-Path -LiteralPath $nflRefreshScript) {
 Write-Host "`n[4/4] Syncing MLB & WNBA Pipeline..." -ForegroundColor Yellow
 $todayPack = Join-Path $repoRoot "packs\$Date"
 if (Test-Path -LiteralPath $todayPack) {
-    $organizeScript = Join-Path $PSScriptRoot "organize_today_run2.py"
-    if (Test-Path -LiteralPath $organizeScript) {
-        throw "MLB/WNBA direct sync retired: use run_daily_pipeline.ps1 for current-run attestation."
-        Invoke-CheckedStage "python" @($organizeScript)
-        # Mirror latest playable props and briefing to BETTING REPORTS\MLB_WNBA
-        Get-ChildItem -Path $driveToday -Filter "playable_props*.md" -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $driveMlbWnba -Force }
-        $briefing = Join-Path $driveToday "briefing.md"
-        if (Test-Path -LiteralPath $briefing) {
-            Copy-Item -LiteralPath $briefing -Destination $driveMlbWnba -Force
-        }
-    } else {
-        throw "MLB/WNBA organize script not found at $organizeScript"
-    }
+    # Direct MLB/WNBA sync is retired: run_daily_pipeline.ps1 owns current-run attestation
+    # and publication for those sports. Skip rather than fail after NCAA/NBA/NFL succeeded.
+    Write-Host "MLB/WNBA pack found for $Date; direct sync retired. Publish it via run_daily_pipeline.ps1." -ForegroundColor DarkGray
 } else {
     Write-Host "No active MLB/WNBA pack found for $Date (off-season). Skipping." -ForegroundColor DarkGray
 }

@@ -224,8 +224,16 @@ if ($ScratchOut -and -not $ForceDrive) {
     Write-Output "ScratchOut set without -ForceDrive; skipping Drive publish."
 }
 
+# Local Desktop staging runs before the Drive publish so an active publication
+# hold (which throws below) never blocks local staging.
+$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
+if (Test-Path -LiteralPath $organizerScript) {
+    Write-Output "Organizing Desktop Today folders for NFL (local only)..."
+    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NFL", "--date", $Date, "--skip-drive")
+}
+
 if ($shouldPublish) {
-    Assert-PublicationHold (Split-Path -Parent $PSScriptRoot)
+    Assert-PublicationHold $repoRoot
     $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
 
@@ -320,18 +328,6 @@ if ($shouldPublish) {
 }
 else {
     Write-Output "Drive publish skipped."
-}
-
-$genNflReports = Join-Path $repoRoot "scripts\generate_nfl_master_reports.py"
-if (Test-Path -LiteralPath $genNflReports) {
-    Write-Output "Generating NFL Master Daily & Matchup Master Reports for $Date..."
-    Invoke-CheckedPython -Arguments @($genNflReports, "--date", $Date, "--run-type", "scheduled")
-}
-
-$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (Test-Path -LiteralPath $organizerScript) {
-    Write-Output "Organizing Desktop & Drive Today folders for NFL..."
-    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NFL", "--date", $Date)
 }
 
 Write-Output "refresh_nfl_pack done: before=$beforeRows after=$afterRows date=$Date"
