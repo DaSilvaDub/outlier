@@ -174,6 +174,159 @@ def archive_and_refresh_sport(
     return result
 
 
+def _resolve_eastern_today() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    except Exception:
+        return datetime.date.today().isoformat()
+
+
+def populate_sport_deliverables(sport: str, slate_date: str | None = None) -> None:
+    """Populate Desktop & Google Drive Fresh_Data/<SPORT> with standardized reports, packs, full pipeline & audits."""
+    sp = sport.upper()
+    target_date = slate_date or _resolve_eastern_today()
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    if str(repo_root / "scripts") not in sys.path:
+        sys.path.insert(0, str(repo_root / "scripts"))
+
+    import analysis_audit_logger as audit_logger
+
+    drive_today = get_drive_today()
+    roots = [r for r in (DESKTOP_TODAY, drive_today) if r is not None and r.parent.exists()]
+    for r in roots:
+        for sub in SUBDIRS:
+            (r / "Fresh_Data" / sp / sub).mkdir(parents=True, exist_ok=True)
+
+    if sp == "NBA":
+        nba_skill_scripts = Path(r"C:\Users\dasil\.gemini\config\skills\nba-master-betting-pipeline\scripts")
+        if nba_skill_scripts.exists():
+            if str(nba_skill_scripts) not in sys.path:
+                sys.path.insert(0, str(nba_skill_scripts))
+            import export_deliverables as nba_exp
+
+            nba_exp.export_and_log_nba_deliverables(target_date, run_type="scheduled", print_summary=True)
+        return
+
+    if sp == "NFL":
+        from outlier_nfl.master_reports import generate_nfl_master_reports_for_date
+
+        # Generate and log for target_date (and yesterday if Sunday/game-day reports exist)
+        norm_dir = repo_root / "data" / "NFL" / "normalized"
+        rep_dir = repo_root / "reports" / "NFL"
+        generate_nfl_master_reports_for_date(
+            target_date,
+            normalized_dir=norm_dir,
+            reports_dir=rep_dir,
+            run_type="scheduled",
+            export_to_fresh_data=True,
+            print_summary=True,
+        )
+        for r in roots:
+            fresh = r / "Fresh_Data" / "NFL"
+            # 01_Packs
+            nfl_exports = repo_root / "data" / "NFL" / "exports"
+            if nfl_exports.is_dir():
+                for f in nfl_exports.glob("*"):
+                    if f.is_file():
+                        audit_logger.safe_copy(f, fresh / "01_Packs" / f.name)
+            # 02_Full_Pipeline
+            if norm_dir.is_dir():
+                for pat in (f"*_{target_date}.*", "nfl_best_bets_week_*.json", "*_latest.json"):
+                    for f in norm_dir.glob(pat):
+                        if f.is_file():
+                            audit_logger.safe_copy(f, fresh / "02_Full_Pipeline" / f.name)
+            # 04_Reports
+            if rep_dir.is_dir():
+                for pat in (
+                    f"{target_date}_*master*.md",
+                    f"{target_date}_*.md",
+                    f"{target_date}_*.csv",
+                    "Top_*.md",
+                    "Alt_Floors_latest.md",
+                    "Matchup_Boost_Rankings.csv",
+                ):
+                    for f in rep_dir.glob(pat):
+                        if f.is_file():
+                            audit_logger.safe_copy(f, fresh / "04_Reports" / f.name)
+            # 05_Audits
+            if rep_dir.is_dir():
+                for f in rep_dir.glob("*Audit*.md"):
+                    if f.is_file():
+                        audit_logger.safe_copy(f, fresh / "05_Audits" / f.name)
+                aud_sub = rep_dir / "05_Audits"
+                if aud_sub.is_dir():
+                    for f in aud_sub.glob("*"):
+                        if f.is_file():
+                            audit_logger.safe_copy(f, fresh / "05_Audits" / f.name)
+        return
+
+    if sp == "NCAA":
+        cfb_root = Path(r"C:\Users\dasil\Dev\GitHub\cfb-analytics")
+        if cfb_root.exists():
+            if str(cfb_root) not in sys.path:
+                sys.path.insert(0, str(cfb_root))
+            from cfb_analytics.reporting.master_reports import generate_ncaa_master_reports_for_date
+
+            # Check if target_date has 0 games and a forward lookahead sim exists (e.g. tomorrow's MACtion)
+            sim_path = cfb_root / "data" / "reports" / target_date / f"{target_date}-master-v2-sim.json"
+            active_dates = [target_date]
+            if sim_path.exists():
+                try:
+                    with open(sim_path, "r", encoding="utf-8") as f:
+                        sd = json.load(f)
+                    if not (sd.get("games") or []):
+                        # Find next available report folder with games
+                        for cand_dir in sorted((cfb_root / "data" / "reports").glob("2026-*")):
+                            cand_sim = cand_dir / f"{cand_dir.name}-master-v2-sim.json"
+                            if cand_sim.exists() and cand_dir.name > target_date:
+                                active_dates.append(cand_dir.name)
+                                break
+                except Exception:
+                    pass
+            for d_str in active_dates:
+                generate_ncaa_master_reports_for_date(
+                    d_str,
+                    repo_root=cfb_root,
+                    run_type="scheduled",
+                    export_to_fresh_data=True,
+                    print_summary=(d_str == active_dates[-1]),
+                )
+            for r in roots:
+                fresh = r / "Fresh_Data" / "NCAA"
+                # 01_Packs
+                for pack_src in (
+                    cfb_root / "artifacts" / "exports" / "ncaafb_only.csv",
+                    repo_root / "data" / "NCAAFB" / "exports" / "ncaafb_only.csv",
+                ):
+                    if pack_src.is_file():
+                        audit_logger.safe_copy(pack_src, fresh / "01_Packs" / pack_src.name)
+                # 02_Full_Pipeline, 03_Early_Pipeline, 04_Reports, 05_Audits
+                for d_str in active_dates:
+                    d_rep = cfb_root / "data" / "reports" / d_str
+                    if d_rep.is_dir():
+                        for f in d_rep.glob("*"):
+                            if not f.is_file():
+                                continue
+                            if "audit" in f.name.lower():
+                                audit_logger.safe_copy(f, fresh / "05_Audits" / f.name)
+                            elif f.suffix == ".md":
+                                audit_logger.safe_copy(f, fresh / "04_Reports" / f.name)
+                            else:
+                                audit_logger.safe_copy(f, fresh / "02_Full_Pipeline" / f.name)
+                        snap_dir = d_rep / "snapshots"
+                        if snap_dir.is_dir():
+                            for sf in snap_dir.glob("*"):
+                                if sf.is_file():
+                                    audit_logger.safe_copy(sf, fresh / "03_Early_Pipeline" / sf.name)
+                lessons = cfb_root / "docs" / "scorecards" / "lessons_learned.md"
+                if lessons.is_file():
+                    audit_logger.safe_copy(lessons, fresh / "05_Audits" / lessons.name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -200,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
             result = archive_and_refresh_sport(
                 sp, args.date, today_root=args.today_root, min_free_gb=args.min_free_gb
             )
+            if Path(args.today_root).resolve() == DESKTOP_TODAY.resolve():
+                populate_sport_deliverables(sp, args.date)
         except (OrganizerError, OSError) as exc:  # shutil.Error subclasses OSError
             failures += 1
             print(f"[FAIL] {sp}: archiving aborted: {exc}", file=sys.stderr)
