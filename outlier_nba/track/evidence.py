@@ -20,8 +20,10 @@ Conventions, all chosen to be conservative:
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import statistics
+import tempfile
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -32,7 +34,8 @@ from typing import Any
 import numpy as np
 
 from outlier_nba.run_context import try_parse_utc
-from outlier_nba.track import metrics
+from outlier_nba.track import metrics, model_ledger
+from outlier_nba.track.clv import VERIFIED, VERIFIED_WINDOW
 from outlier_nba.track.promotion import MAX_MODEL_WEIGHT, Evidence
 
 MIN_BUCKET_N = 100  # plan M14: min_bucket_n_for_gap_test
@@ -58,34 +61,122 @@ class Obs:
     clv_prob: float | None = None
 
 
-def _load(conn: sqlite3.Connection) -> dict[str, list[Obs]]:
+EXCLUSION_REASONS = (
+    "no_model_prob",
+    "no_market_prob",
+    "key_unverifiable",
+    "key_mismatch",
+    "unsettled",
+    "push_or_void",
+    "clv_no_verified_close",
+    "clv_outside_window",
+    "clv_value_missing",
+)
+ROW_REASONS = EXCLUSION_REASONS[:6]  # drop the whole row; the rest only drop its CLV
+
+
+@dataclass
+class Exclusions:
+    """Rows (or CLV observations) left out of the evidence, by reason. Never imputed."""
+
+    counts: dict[str, int]
+
+    @classmethod
+    def empty(cls) -> Exclusions:
+        return cls({r: 0 for r in EXCLUSION_REASONS})
+
+    def add(self, reason: str) -> None:
+        self.counts[reason] += 1
+
+    @property
+    def rows_dropped(self) -> int:
+        return sum(self.counts[r] for r in ROW_REASONS)
+
+
+@dataclass(frozen=True)
+class FamilyReport:
+    evidence: Evidence
+    exclusions: Exclusions
+    logloss_model: float
+    logloss_market: float
+
+
+def _same_line(a: Any, b: Any, moneyline: bool = False) -> bool:
+    """Lines match numerically (``221.5`` == ``221.50``); both blank matches. A moneyline has
+    no line (the snapshot stores a ``0`` placeholder), so only there is blank equal to ``0``."""
+    if moneyline:
+        a, b = (None if x in (None, "", 0, "0", "0.0") else x for x in (a, b))
+    blank_a, blank_b = a in (None, ""), b in (None, "")
+    if blank_a or blank_b:
+        return blank_a and blank_b
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_reason(r: sqlite3.Row) -> str | None:
+    """Why a joined row may not enter the evidence, or None. Checked in a fixed order."""
+    if r["model_prob"] is None:
+        return "no_model_prob"
+    if r["model_market_id"] in (None, ""):
+        return "key_unverifiable"  # recorded before keys were stored: cannot prove the match
+    if str(r["model_market_id"]) != str(r["market_id"]) or not _same_line(
+        r["model_line"], r["line"], moneyline=r["family"] == "team.ML"
+    ):
+        return "key_mismatch"
+    if r["model_market_prob"] is None:
+        return "no_market_prob"
+    if r["win_loss_push"] in (None, ""):
+        return "unsettled"
+    if r["win_loss_push"] not in ("W", "L"):
+        return "push_or_void"
+    return None
+
+
+def _clv_value(r: sqlite3.Row, excl: Exclusions) -> float | None:
+    """CLV of a backed row: only a verified close inside the 60-minute policy, else None."""
+    if r["close_status"] != VERIFIED:
+        excl.add("clv_no_verified_close")
+        return None
+    minutes = r["clv_minutes_before_tip"]
+    limit = VERIFIED_WINDOW.total_seconds() / 60.0
+    if minutes in (None, "") or not 0.0 <= float(minutes) <= limit:
+        excl.add("clv_outside_window")
+        return None
+    if r["clv_prob"] in (None, ""):
+        excl.add("clv_value_missing")
+        return None
+    return float(r["clv_prob"])
+
+
+def _load_report(conn: sqlite3.Connection) -> tuple[dict[str, list[Obs]], dict[str, Exclusions]]:
     conn.row_factory = sqlite3.Row
     have = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'nba_model_eval'").fetchone()
     if not have:
-        return {}
+        return {}, {}
     rows = conn.execute(
         """
         SELECT family, event_id, market_id, line, selection, event_starts_at, model_prob,
-               model_market_prob, win_loss_push, close_status, clv_prob
+               model_market_prob, win_loss_push, close_status, clv_prob, model_market_id,
+               model_line, clv_minutes_before_tip
         FROM nba_model_eval
-        WHERE win_loss_push IN ('W', 'L') AND model_prob IS NOT NULL
-          AND model_market_prob IS NOT NULL
         ORDER BY event_id, market_id, line, selection
         """
     ).fetchall()
+    excl: dict[str, Exclusions] = defaultdict(Exclusions.empty)
     sides: dict[tuple[str, str, str, str], list[sqlite3.Row]] = defaultdict(list)
     for r in rows:
+        reason = _row_reason(r)
+        if reason is not None:
+            excl[r["family"]].add(reason)
+            continue
         sides[(r["family"], r["event_id"], r["market_id"], str(r["line"]))].append(r)
     out: dict[str, list[Obs]] = defaultdict(list)
     for (family, event_id, market_id, line), group in sides.items():
         first = group[0]  # either side serves calibration and log loss
         favoured = next((r for r in group if r["model_prob"] > r["model_market_prob"]), None)
-        clv_row = (
-            favoured if favoured is not None and favoured["close_status"] == "verified" else None
-        )
-        clv = None
-        if clv_row is not None and clv_row["clv_prob"] not in (None, ""):
-            clv = float(clv_row["clv_prob"])
+        clv = None if favoured is None else _clv_value(favoured, excl[family])
         tip = try_parse_utc(first["event_starts_at"])
         out[family].append(
             Obs(
@@ -99,7 +190,11 @@ def _load(conn: sqlite3.Connection) -> dict[str, list[Obs]]:
                 clv_prob=clv,
             )
         )
-    return out
+    return out, excl
+
+
+def _load(conn: sqlite3.Connection) -> dict[str, list[Obs]]:
+    return _load_report(conn)[0]
 
 
 def calibration_gap(model: np.ndarray, won: np.ndarray) -> float | None:
@@ -196,14 +291,60 @@ def family_evidence(obs: Sequence[Obs]) -> Evidence:
     )
 
 
+def _local_copy(db_path: Path, workdir: Path) -> Path:
+    """Copy the ledger (and any WAL sidecars) to local temp: the original is never touched,
+    and the view can be refreshed on the copy without writing a synced file."""
+    dest = workdir / "ledger.sqlite3"
+    shutil.copy2(db_path, dest)
+    for suffix in ("-wal", "-shm"):
+        side = Path(f"{db_path}{suffix}")
+        if side.exists():
+            shutil.copy2(side, Path(f"{dest}{suffix}"))
+    return dest
+
+
+def _logloss(rows: Sequence[Obs]) -> tuple[float, float]:
+    won = np.array([o.won for o in rows])
+    return (
+        metrics.log_loss(np.array([o.model for o in rows]), won),
+        metrics.log_loss(np.array([o.market for o in rows]), won),
+    )
+
+
+def build_report(db_path: Path) -> dict[str, FamilyReport]:
+    """Evidence, exclusion counts and log losses per family, from a throwaway local copy.
+
+    The copy is brought to the current schema first (key columns, current view definition), so
+    a ledger written by an older build is read under today's key checks. ``{}`` if the ledger
+    has no model/market join at all.
+    """
+    with tempfile.TemporaryDirectory(prefix="nba_gate_") as tmp:
+        local = _local_copy(Path(db_path), Path(tmp))
+        conn = sqlite3.connect(local)
+        try:
+            model_ledger.ensure_model_schema(conn)
+            by_family, excl = _load_report(conn)
+        finally:
+            conn.close()
+    out: dict[str, FamilyReport] = {}
+    for family in sorted(set(by_family) | set(excl)):
+        obs = by_family.get(family, [])
+        if obs:
+            ll_model, ll_market = _logloss(obs)
+        else:
+            ll_model = ll_market = float("nan")
+        out[family] = FamilyReport(
+            evidence=family_evidence(obs) if obs else Evidence(n_settled=0),
+            exclusions=excl.get(family, Exclusions.empty()),
+            logloss_model=ll_model,
+            logloss_market=ll_market,
+        )
+    return out
+
+
 def build_evidence(db_path: Path) -> dict[str, Evidence]:
     """One :class:`Evidence` per family that has any settled model forecast."""
-    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-    try:
-        by_family = _load(conn)
-    finally:
-        conn.close()
-    return {family: family_evidence(obs) for family, obs in by_family.items() if obs}
+    return {f: r.evidence for f, r in build_report(db_path).items() if r.evidence.n_settled}
 
 
 def describe(evidence: dict[str, Evidence]) -> dict[str, Any]:

@@ -354,11 +354,18 @@ def _model_eval_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE nba_model_eval (family TEXT, event_id TEXT, market_id TEXT, line TEXT, "
         "selection TEXT, event_starts_at TEXT, model_prob REAL, model_market_prob REAL, "
-        "win_loss_push TEXT, close_status TEXT, clv_prob REAL)"
+        "win_loss_push TEXT, close_status TEXT, clv_prob REAL, "
+        "model_market_id TEXT GENERATED ALWAYS AS (market_id), "
+        "model_line TEXT GENERATED ALWAYS AS (line), "
+        "clv_minutes_before_tip REAL DEFAULT 30)"
     )
 
 
-_ROW = "INSERT INTO nba_model_eval VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+_ROW = (
+    "INSERT INTO nba_model_eval (family, event_id, market_id, line, selection, event_starts_at, "
+    "model_prob, model_market_prob, win_loss_push, close_status, clv_prob) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+)
 
 
 def test_clv_comes_from_the_side_the_model_backs_not_the_first_side_alphabetically(
