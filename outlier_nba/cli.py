@@ -287,6 +287,57 @@ def run_sbro_fetch(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+EXIT_NO_HUB = 5
+
+
+def run_ctg_sync(args: argparse.Namespace) -> int:
+    """Copy CTG game logs from the NBA Drive hub into the local store (hub is read-only)."""
+    import sqlite3
+
+    from outlier_nba.ingest import ctg, ctg_hub
+
+    root = args.nba_root or ctg_hub.nba_root()
+    if not root.is_dir():
+        print(json.dumps({"error": f"NBA_ROOT not found: {root} (is the Drive mounted?)"}))
+        return EXIT_NO_HUB
+    store = args.store or ctg.default_store()
+    if store.resolve().is_relative_to(root.resolve()):
+        print(json.dumps({"error": f"store {store} is inside NBA_ROOT; the hub is read-only"}))
+        return 2
+    store.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(store, timeout=30)  # wait out a concurrent sync
+    try:
+        ctg.ensure_schema(conn)
+        report = ctg_hub.sync_from_hub(conn, root, season=args.season)
+    finally:
+        conn.close()
+
+    def _rel(path: Path) -> str:
+        return path.relative_to(root).as_posix()
+
+    print(
+        json.dumps(
+            {
+                "nba_root": str(root),
+                "store": str(store),
+                "counts": report.counts,
+                "rejected_mislabeled": [
+                    {"file": _rel(f.path), "claimed": f.claimed_team, "actual": f.actual}
+                    for f in report.files
+                    if f.outcome == "rejected_mislabeled"
+                ],
+                "skipped_unusable": [
+                    {"file": _rel(f.path), "reason": f.detail}
+                    for f in report.files
+                    if f.outcome == "skipped_unusable"
+                ],
+            },
+            indent=1,
+        )
+    )
+    return EXIT_OK  # rejections are data-quality findings, not failures
+
+
 def run_backtest_cmd(args: argparse.Namespace) -> int:
     from outlier_nba import team_run
     from outlier_nba.ingest import espn
@@ -375,6 +426,42 @@ def run_promote(args: argparse.Namespace) -> int:
             default=str,
         )
     )
+    return EXIT_OK
+
+
+def run_gate_status(args: argparse.Namespace) -> int:
+    """Per-family promotion-gate status. Read-only: reads a temp copy, writes nothing."""
+    from outlier_nba.track import gate_report
+
+    if not args.db.exists():
+        print(f"ledger not found: {args.db}")
+        return 2
+    gates = gate_report.build_gates(args.db, args.config)
+    if args.json:
+        print(json.dumps(gate_report.to_payload(gates), sort_keys=True, default=str))
+    else:
+        print(gate_report.format_gates(gates))
+    return EXIT_OK
+
+
+def run_backfill_model_probs(args: argparse.Namespace) -> int:
+    """Recover model-row keys from run bundles. Dry run unless ``--apply`` with ``--out``."""
+    from outlier_nba.track import backfill as bf
+
+    if not args.db.exists():
+        print(f"ledger not found: {args.db}")
+        return 2
+    if args.apply and args.out is None:
+        print(
+            "--apply requires --out (a copy outside the repository; the original is never written)"
+        )
+        return 2
+    try:
+        result = bf.backfill(args.db, args.bundles, out=args.out, apply=args.apply)
+    except bf.UnsafeOutputError as exc:
+        print(f"refused: {exc}")
+        return 2
+    print(json.dumps(bf.describe(result), sort_keys=True))
     return EXIT_OK
 
 
@@ -469,6 +556,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     pm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
     pm.add_argument("--apply", action="store_true", help="let the evaluator write the decision")
     pm.add_argument("--config", type=Path, default=None, help="promotion file (default: config/)")
+    gs = sub.add_parser("gate-status", help="read-only promotion-gate status per market family")
+    gs.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    gs.add_argument("--config", type=Path, default=None, help="promotion file (read only)")
+    gs.add_argument("--json", action="store_true", help="machine-readable output")
+    bm = sub.add_parser(
+        "backfill-model-probs", help="recover market_id/side on old model rows from run bundles"
+    )
+    bm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
+    bm.add_argument(
+        "--bundles", type=Path, action="append", default=[], help="bundle root (repeatable)"
+    )
+    bm.add_argument(
+        "--apply", action="store_true", help="write the result to --out (default: dry run)"
+    )
+    bm.add_argument("--out", type=Path, default=None, help="new ledger copy (never the original)")
     bk = sub.add_parser("backtest", help="walk-forward backtest of the team model")
     bk.add_argument("--seasons", default="2018-19:2025-26", help="scoring window FIRST:LAST")
     bk.add_argument("--tune-season", default="2017-18", help="last season used for tuning")
@@ -483,6 +585,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     sf = sub.add_parser("sbro-fetch", help="cache SBRO season pages (private research only)")
     sf.add_argument("--seasons", default="2018-19:2022-23", help="FIRST:LAST season labels")
+    cs = sub.add_parser("ctg-sync", help="import CTG game logs from the NBA Drive hub (read-only)")
+    cs.add_argument("--nba-root", type=Path, default=None, help="default: NBA_ROOT env or Drive")
+    cs.add_argument("--season", default=None, help="only files of this season, e.g. 2025-26")
+    cs.add_argument("--store", type=Path, default=None, help="default: %%LOCALAPPDATA%% cache")
     bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")
     bk.add_argument("--draws", type=int, default=4000)
     bk.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
@@ -495,6 +601,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_backfill(args)
     if args.command == "sbro-fetch":
         return run_sbro_fetch(args)
+    if args.command == "ctg-sync":
+        return run_ctg_sync(args)
     if args.command == "ratings":
         return run_ratings(args)
     if args.command == "run":
@@ -504,6 +612,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_team(args)
     if args.command == "promote":
         return run_promote(args)
+    if args.command == "backfill-model-probs":
+        return run_backfill_model_probs(args)
+    if args.command == "gate-status":
+        return run_gate_status(args)
     if args.command == "backtest":
         return run_backtest_cmd(args)
 

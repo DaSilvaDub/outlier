@@ -117,7 +117,7 @@ def _build_pivetta_row(*, side: str, event_id: str, card_id: str, outcome_id: st
                 outcome_id=outcome_id, event_id=event_id, market_id=card_id, side=side
             )
         },
-        probable_pitchers={"SD": {"pitcher": "Nick Pivetta", "confirmed": True}},
+        probable_pitchers=[{"team": "SD", "pitcher": "Nick Pivetta", "confirmed": True}],
     )
 
 
@@ -360,7 +360,7 @@ def test_severe_line_discount_trap_disqualifies_from_board_a():
         event_starts={"ev_trap": "2026-09-07T20:00:00Z"},
         injuries={"ev_trap": ""},
         projections_by_outcome={"out_trap": proj},
-        probable_pitchers={"SD": {"pitcher": "Nick Pivetta", "confirmed": True}},
+        probable_pitchers=[{"team": "SD", "pitcher": "Nick Pivetta", "confirmed": True}],
     )
 
     assert row is not None

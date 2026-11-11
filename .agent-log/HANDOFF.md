@@ -1,3 +1,45 @@
+# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
+
+1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
+   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
+   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
+   fixed the critical findings: every Drive path gated on the publication hold
+   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
+   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
+   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
+   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
+   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
+3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
+   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
+   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
+   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
+4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
+   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
+   before re-registering tasks; separate PR for master reports with Fresh_Data export
+   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
+   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
+   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
+
+---
+
+# Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
+
+1. **Work**: Branch `claude/nba-gate-evidence-d54fd8`. `nba_model_probs` now stores `market_id`/`side` (in-place
+   migration); `evidence.build_report` joins only on a verified market_id + line match and counts every exclusion
+   (key mismatch/unverifiable, no prob, unsettled, push, CLV with no verified close / outside 60 min / no value) -
+   nothing imputed; new read-only `cli gate-status [--json]` prints per-family gate status; `promotion.failed_keys`.
+   Blend weights and promotion config untouched. Docs: `docs/nba/phase2-evidence.md`.
+2. **Current ledger**: all 7 families `insufficient evidence`, 0 usable settled rows (old rows predate keys).
+3. **Backfill**: `cli backfill-model-probs` (dry run default; `--apply --out` writes a temp copy only, never the
+   original/shared ledger or a repo path). Local ledger: 13,533 rows, all `no_bundle` (bundles were in a cleaned
+   `%TEMP%
+ba_runs`), so 0 keyed; temp copy `%TEMP%
+ba_backfilleedback_backfilled.sqlite3` is NOT swapped in.
+4. **Next**: let `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
@@ -8166,3 +8208,4 @@ this sandbox cannot import.
 4. **Next Steps**:
    - To disable the 8:00 AM `Outlier Daily Pipeline` task in Task Scheduler completely, run `Disable-ScheduledTask -TaskName "Outlier Daily Pipeline"` from an Administrator PowerShell prompt (it requires elevation due to its security descriptor; however, even if left scheduled, `run_daily_pipeline.ps1` in both canonical and `outlier-scheduled` will instantly detect off-season and exit cleanly in milliseconds).
    - In Spring (April), run `powershell -File scripts/manage_mlb_wnba_tasks.ps1 -Enable` to re-enable the daily pipeline tasks when the new MLB/WNBA seasons begin.
+
