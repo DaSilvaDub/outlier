@@ -820,7 +820,7 @@ def test_failed_explicit_projection_is_not_replaced_by_league_average():
         card,
         ev,
         projections={"o1": projection},
-        probable_pitchers={"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
+        probable_pitchers=[{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}],
     )
     assert row["independent_model_prob"] == ""
     assert "projection_line_mismatch" in row["projection_quality_flags"]
