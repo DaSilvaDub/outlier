@@ -287,6 +287,57 @@ def run_sbro_fetch(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+EXIT_NO_HUB = 5
+
+
+def run_ctg_sync(args: argparse.Namespace) -> int:
+    """Copy CTG game logs from the NBA Drive hub into the local store (hub is read-only)."""
+    import sqlite3
+
+    from outlier_nba.ingest import ctg, ctg_hub
+
+    root = args.nba_root or ctg_hub.nba_root()
+    if not root.is_dir():
+        print(json.dumps({"error": f"NBA_ROOT not found: {root} (is the Drive mounted?)"}))
+        return EXIT_NO_HUB
+    store = args.store or ctg.default_store()
+    if store.resolve().is_relative_to(root.resolve()):
+        print(json.dumps({"error": f"store {store} is inside NBA_ROOT; the hub is read-only"}))
+        return 2
+    store.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(store, timeout=30)  # wait out a concurrent sync
+    try:
+        ctg.ensure_schema(conn)
+        report = ctg_hub.sync_from_hub(conn, root, season=args.season)
+    finally:
+        conn.close()
+
+    def _rel(path: Path) -> str:
+        return path.relative_to(root).as_posix()
+
+    print(
+        json.dumps(
+            {
+                "nba_root": str(root),
+                "store": str(store),
+                "counts": report.counts,
+                "rejected_mislabeled": [
+                    {"file": _rel(f.path), "claimed": f.claimed_team, "actual": f.actual}
+                    for f in report.files
+                    if f.outcome == "rejected_mislabeled"
+                ],
+                "skipped_unusable": [
+                    {"file": _rel(f.path), "reason": f.detail}
+                    for f in report.files
+                    if f.outcome == "skipped_unusable"
+                ],
+            },
+            indent=1,
+        )
+    )
+    return EXIT_OK  # rejections are data-quality findings, not failures
+
+
 def run_backtest_cmd(args: argparse.Namespace) -> int:
     from outlier_nba import team_run
     from outlier_nba.ingest import espn
@@ -534,6 +585,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     sf = sub.add_parser("sbro-fetch", help="cache SBRO season pages (private research only)")
     sf.add_argument("--seasons", default="2018-19:2022-23", help="FIRST:LAST season labels")
+    cs = sub.add_parser("ctg-sync", help="import CTG game logs from the NBA Drive hub (read-only)")
+    cs.add_argument("--nba-root", type=Path, default=None, help="default: NBA_ROOT env or Drive")
+    cs.add_argument("--season", default=None, help="only files of this season, e.g. 2025-26")
+    cs.add_argument("--store", type=Path, default=None, help="default: %%LOCALAPPDATA%% cache")
     bk.add_argument("--write-config", action="store_true", help="save tuned params to config/")
     bk.add_argument("--draws", type=int, default=4000)
     bk.add_argument("--store", type=Path, default=DEFAULT_STORE_PATH)
@@ -546,6 +601,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_backfill(args)
     if args.command == "sbro-fetch":
         return run_sbro_fetch(args)
+    if args.command == "ctg-sync":
+        return run_ctg_sync(args)
     if args.command == "ratings":
         return run_ratings(args)
     if args.command == "run":
