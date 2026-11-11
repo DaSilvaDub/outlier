@@ -1,9 +1,33 @@
+# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
+
+1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
+   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
+   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
+   fixed the critical findings: every Drive path gated on the publication hold
+   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
+   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
+   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
+   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
+   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
+3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
+   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
+   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
+   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
+4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
+   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
+   before re-registering tasks; separate PR for master reports with Fresh_Data export
+   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
+   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
+   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
+
 # Session Handoff: NFL required-stage failures (2026-11-11, agent `grok`)
 
 1. **Last commit**: the commit that adds this entry, on `cursor/nfl-required-stage-failures-3b5d`. Code is `c539b55`; tests are `ccde7b5`. PR against `master`.
 2. **Files**: `outlier_nfl/pipeline.py`, `tests/test_nfl_stage_gates.py`, `tests/test_nfl_best_bets.py`, `tests/test_nfl_season_phase.py`.
 3. **What**: best-bets, alt-floor, and game-script exceptions, and zero matchup rankings on a slate with events, now write a required receipt that is not OK. The CLI exits 3. `refresh_nfl_pack.ps1` already fails on that exit; it was not edited. No model weights, thresholds, or card/verdict logic changed.
 4. **Next**: review the publication side effect. A date-shifted January fixture (`shift_days=119`) has a stale tape and 0 ranking rows, so that run is now PARTIAL and bundle-only. `test_january_regular_season_slate_publishes` stubs one ranking row so it still checks season phase. Do not merge from this session.
+
 
 ---
 
