@@ -45,22 +45,17 @@ def test_mlb_so_uses_context_adjustments_when_present():
         "line": 5.5,
         "headline_side": "OVER",
     }
-    base = {
-        "STL": {
+    base = [
+        {
+            "team": "STL",
             "pitcher": "Michael McGreevy",
             "confirmed": True,
             "projected_bf": 22.0,
             "strikeout_rate": 0.20,
             "feature_source": "mlb_stats_gamelog",
         }
-    }
-    with_ctx = {
-        "STL": {
-            **base["STL"],
-            "opponent_k_rate": 0.30,
-            "park_k_factor": 1.0,
-        }
-    }
+    ]
+    with_ctx = [{**base[0], "opponent_k_rate": 0.30, "park_k_factor": 1.0}]
     plain = mlb_so_projection_record(row, base)
     adjusted = mlb_so_projection_record(row, with_ctx)
     assert plain is not None and adjusted is not None

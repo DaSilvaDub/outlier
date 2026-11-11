@@ -60,8 +60,9 @@ def test_mlb_so_projection_uses_gamelog_features_as_independent():
         "line": 5.5,
         "headline_side": "OVER",
     }
-    probable = {
-        "STL": {
+    probable = [
+        {
+            "team": "STL",
             "pitcher": "Michael McGreevy",
             "confirmed": True,
             "pitcher_id": 700241,
@@ -70,7 +71,7 @@ def test_mlb_so_projection_uses_gamelog_features_as_independent():
             "feature_starts": 5,
             "feature_source": "mlb_stats_gamelog",
         }
-    }
+    ]
     record = mlb_so_projection_record(row, probable)
     assert record is not None
     assert record["feature_snapshot_hash"] == GAMELOG_SO_HASH
@@ -91,7 +92,7 @@ def test_mlb_so_projection_without_pitcher_features_stays_league_avg_audit():
         "line": 5.5,
         "headline_side": "OVER",
     }
-    probable = {"STL": {"pitcher": "Michael McGreevy", "confirmed": True, "pitcher_id": 700241}}
+    probable = [{"team": "STL", "pitcher": "Michael McGreevy", "confirmed": True, "pitcher_id": 700241}]
     record = mlb_so_projection_record(row, probable)
     assert record is not None
     assert record["feature_snapshot_hash"] == LEAGUE_AVG_SO_HASH
@@ -101,18 +102,10 @@ def test_mlb_so_projection_without_pitcher_features_stays_league_avg_audit():
 def test_enrich_probable_with_so_features_attaches_gamelog_rates():
     from outlier_scrapers.projections import enrich_probable_with_so_features
 
-    by_team = {
-        "STL": {
-            "pitcher": "Michael McGreevy",
-            "pitcher_id": 700241,
-            "confirmed": True,
-        },
-        "CHC": {
-            "pitcher": None,
-            "pitcher_id": None,
-            "confirmed": False,
-        },
-    }
+    by_team = [
+        {"team": "STL", "pitcher": "Michael McGreevy", "pitcher_id": 700241, "confirmed": True},
+        {"team": "CHC", "pitcher": None, "pitcher_id": None, "confirmed": False},
+    ]
 
     def _fake_fetch(_url: str) -> dict:
         return {
@@ -136,7 +129,10 @@ def test_enrich_probable_with_so_features_attaches_gamelog_rates():
             ]
         }
 
-    enriched = enrich_probable_with_so_features(by_team, season=2026, fetch_json=_fake_fetch)
+    enriched = {
+        row["team"]: row
+        for row in enrich_probable_with_so_features(by_team, season=2026, fetch_json=_fake_fetch)
+    }
     assert enriched["STL"]["feature_source"] == "mlb_stats_gamelog"
     assert enriched["STL"]["starts"] == 3
     assert enriched["STL"]["projected_bf"] == pytest.approx((24 + 22 + 23) / 3)
@@ -162,18 +158,17 @@ def test_compute_starter_so_features_caps_at_max_starts():
 def test_enrich_probable_fail_closed_on_fetch_error():
     from outlier_scrapers.projections import enrich_probable_with_so_features
 
-    by_team = {
-        "STL": {
-            "pitcher": "Michael McGreevy",
-            "pitcher_id": 700241,
-            "confirmed": True,
-        }
-    }
+    by_team = [
+        {"team": "STL", "pitcher": "Michael McGreevy", "pitcher_id": 700241, "confirmed": True}
+    ]
 
     def _boom(_url: str) -> dict:
         raise TimeoutError("statsapi timeout")
 
-    enriched = enrich_probable_with_so_features(by_team, season=2026, fetch_json=_boom)
+    enriched = {
+        row["team"]: row
+        for row in enrich_probable_with_so_features(by_team, season=2026, fetch_json=_boom)
+    }
     assert "projected_bf" not in enriched["STL"]
     assert enriched["STL"]["pitcher_id"] == 700241
 
@@ -191,16 +186,16 @@ def test_mlb_so_projection_requires_feature_source_for_independent():
         "line": 5.5,
         "headline_side": "OVER",
     }
-    probable = {
-        "STL": {
+    probable = [
+        {
+            "team": "STL",
             "pitcher": "Michael McGreevy",
             "confirmed": True,
             "pitcher_id": 700241,
             "projected_bf": 22.5,
             "strikeout_rate": 0.27,
-            # missing feature_source — must stay audit-only
         }
-    }
+    ]
     record = mlb_so_projection_record(row, probable)
     assert record is not None
     assert record["feature_snapshot_hash"] == LEAGUE_AVG_SO_HASH
@@ -226,8 +221,9 @@ def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
         "line": 5.5,
         "headline_side": "OVER",
     }
-    probable = {
-        "STL": {
+    probable = [
+        {
+            "team": "STL",
             "pitcher": "Michael McGreevy",
             "confirmed": True,
             "pitcher_id": 700241,
@@ -238,7 +234,7 @@ def test_promoted_calibrated_model_drives_so_inference(tmp_path, monkeypatch):
             "total_k": 30.0,
             "feature_source": "mlb_stats_gamelog",
         }
-    }
+    ]
     baseline = mlb_so_projection_record(row, probable)
 
     artifact = tmp_path / "MLB_so_model.json"
