@@ -83,3 +83,27 @@ day or one game per request, in bursts of 5 with a pause between bursts; `cdn.nb
 | NBA Cup final | **V** | ESPN files the championship game under the regular season (so 2023-24 shows 1,231 "regular" games). It is kept as a real neutral-site game; the coverage report counts it separately. |
 | Postponements | **V** | 62 games are `STATUS_POSTPONED` in the scoreboard on their original date (COVID and weather). They are recorded as `NOT_FINAL` gaps; a rescheduled game appears again on its new date. |
 | All-Star, Rising Stars, celebrity games | **V** | 11 events with non-NBA "teams" (WEST/EAST, USA/WORLD, ...) are recorded as `UNRESOLVED_TEAM` gaps and excluded. |
+
+## 6. Cleaning the Glass (2026-11-08)
+
+**Owner ruling, 2026-11-08 (verbatim answer to "May the team model import the CTG game logs
+already on the Drive?"):** "Yes, use them". The ruling covers the game-log JSON files the legacy
+`nba-props-pipeline` scraper already wrote under the NBA Drive hub
+(`G:\My Drive\Sports_Analytics\01_Active\NBA_Active`). It is the owner's call, not CTG's: CTG's
+terms (last updated 2017-10-10) are silent on scraping and export, and CTG's consent was not
+obtained, the same standing as the SBRO archive in section 4. How *new* CTG data is obtained
+(manual subscriber export, an email to CTG, or neither) is **still open**. This repository does
+not run, port or extend the legacy scraper, and never reads the hub's `cache\` folder (it holds
+session cookies).
+
+| Item | Status | Note |
+|---|---|---|
+| Access path | **V** | `outlier_nba/ingest/ctg_hub.py` reads the hub read-only (`NBA_ROOT` env, else the Drive path) and copies rows into `%LOCALAPPDATA%\outlier_nba\ctg\ctg.sqlite3`. No network code. |
+| Garbage time | **V** | All CTG stats drop Q4 garbage time (margin rule + at most two starters on the floor) and end-of-quarter heaves. They are **not** opponent-adjusted and are never averaged with ESPN full-game numbers. |
+| Game-log JSON layouts | **V** | Old (`TEAMS\<TRI>\CLEANINGdaGLASS\GAME_LOGS_<MM_DD_YYYY>.json`): top-level `four_factors`. New (`Current_Matchups\CLEANING_THE_GLASS\<TRI>\CLEANINGdaGLASS\...`, from 2026-05-25): `season_views.regular_season.four_factors`. Keys used: `Date`, `column_2` (venue), `Opp`, `Team Pts`, `Opp Pts`, `Offense Pts/Poss #`, `Defense Pts/Poss #`, four-factor `#` columns. |
+| Mislabeled files | **V** | Every `Current_Matchups` game log written from 2026-05-26 holds **Toronto's** games whatever team it claims (cross-checked against ESPN). The importer rejects any file whose claimed team appears in its own `Opp` column. |
+| Coverage | **V** | 2025-26 only; about 1,139 of 1,230 regular-season games from correctly labeled files. No 2016-17 → 2024-25 logs exist on the Drive. |
+| First real sync (2026-11-08) | **V** | `python -m outlier_nba.cli ctg-sync` over the live hub: 80 game-log files; **59 imported**, **14 rejected as mislabeled** (every one `actual=TOR`: 5 claiming ATL, 3 NYK, 3 SAS, 1 each BKN/BOS/CHA), **7 skipped** (broken `Col_0`/`Average` header). A second run imported nothing (all `already_imported`). The store holds **1,140 regular-season 2025-26 games**; 821 of them appear in both teams' logs and **none disagree** (same scores, offense/defense pts/poss within 0.15). |
+| Season-type labels | **V, unreliable** | The scraper's `regular_season` view for CLE (06/05 file) runs to 2026-05-25, so it contains playoff games. `season_type` in the store is advisory; reconciliation against ESPN decides regular vs postseason. |
+| Store history | **V by construction** | The store is append-only (schema v2): each download is a capture in `ctg_capture`, each game row it carried a version in `ctg_game_version`. `load_team_games(as_of_before=...)` returns each game from the latest capture dated strictly earlier, so a re-download never hides a game from a historical read. A capture is dated by the latest of the file mtime, its `scraped_at` (Eastern), its filename date and the day after its last game, never by the mtime alone. A v1 store is migrated in place on first open; rows with no import record are dated at the migration and only appear in latest reads. |
+| `Spread` column | **U** | Book and timestamp unknown; stored as metadata only, never a model input. |

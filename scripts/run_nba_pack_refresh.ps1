@@ -1,6 +1,7 @@
 # NBA Daily Pack Refresh Runner
 param(
-    [string]$Date = ""
+    [string]$Date = "",
+    [switch]$SkipDrive
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,22 +12,23 @@ if (-not (Test-Path $python)) { $python = "python" }
 try {
     Write-Output "[$(Get-Date -Format 'o')] Starting NBA Daily Pack Refresh..."
     $refreshScript = Join-Path $outlierRepo "scripts\refresh_nba_pack.ps1"
-    # Native commands do not trip $ErrorActionPreference = "Stop" in Windows PowerShell 5.1;
-    # check $LASTEXITCODE so a failed refresh is never reported as success.
-    if ($Date) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $refreshScript -Date $Date
-    } else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $refreshScript
-    }
+    $refreshArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $refreshScript)
+    if ($Date) { $refreshArgs += @("-Date", $Date) }
+    if ($SkipDrive) { $refreshArgs += @("-SkipDrive") }
+
+    & powershell.exe @refreshArgs
     if ($LASTEXITCODE -ne 0) { throw "refresh_nba_pack.ps1 failed with exit code $LASTEXITCODE" }
 
-    # refresh_nba_pack.ps1 already ran the organizer; this pass is a no-op when nothing
-    # changed. --date goes as two arguments: one "--date X" string is rejected by argparse.
-    Write-Output "[$(Get-Date -Format 'o')] Organizing Desktop Today for NBA..."
-    $organizerArgs = @((Join-Path $outlierRepo "scripts\organize_desktop_today.py"), "--sport", "NBA")
-    if ($Date) { $organizerArgs += @("--date", $Date) }
-    & $python @organizerArgs
-    if ($LASTEXITCODE -ne 0) { throw "organize_desktop_today.py failed with exit code $LASTEXITCODE" }
+    # The refresh script already staged Desktop Today locally. This pass only stages
+    # Fresh_Data to Drive, and the organizer refuses that (exit 3) while a publication
+    # hold is active. -SkipDrive therefore has nothing left to do here.
+    if (-not $SkipDrive) {
+        Write-Output "[$(Get-Date -Format 'o')] Staging NBA Fresh_Data to Drive..."
+        $organizerArgs = @((Join-Path $outlierRepo "scripts\organize_desktop_today.py"), "--sport", "NBA")
+        if ($Date) { $organizerArgs += @("--date", $Date) }
+        & $python @organizerArgs
+        if ($LASTEXITCODE -ne 0) { throw "organize_desktop_today.py failed with exit code $LASTEXITCODE" }
+    }
 
     Write-Output "[$(Get-Date -Format 'o')] NBA Daily Pack Refresh completed successfully."
 }
