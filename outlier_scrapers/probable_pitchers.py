@@ -2,8 +2,7 @@
 
 Fetches MLB probable starting pitchers from the public MLB Stats API
 (statsapi.mlb.com — no auth required) and normalizes them into one starter
-record per team side per game. Callers match a row to its own game by
-game_pk, or by opponent and start time.
+record per team side per game. Callers match a row by game_pk.
 
 Only MLB has a wired source today; other leagues (e.g. WNBA) don't have
 starting pitchers, so ``export_probable_pitchers`` returns a no-op "skipped"
@@ -15,8 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -104,9 +102,8 @@ def normalize_probable_pitchers(
 ) -> dict[str, Any]:
     """Return ``{generated_at, date, record_count, games, starters}``.
 
-    ``starters`` has one record per team side per game, using the same
-    canonical team codes as the rest of the pipeline. A doubleheader keeps
-    both starters instead of letting the later game overwrite the earlier one.
+    ``starters`` is one record per team side per game, so a doubleheader keeps
+    both starters.
     """
     config = get_sport_config(league)
     games: list[dict[str, Any]] = []
@@ -188,144 +185,27 @@ def normalize_probable_pitchers(
     }
 
 
-def iter_starter_entries(lookup: Any) -> list[dict[str, Any]]:
-    """Flatten a per-game starter list, or a legacy team-keyed map, into rows."""
-    if isinstance(lookup, Mapping):
-        entries: list[dict[str, Any]] = []
-        for key, info in lookup.items():
-            if not isinstance(info, Mapping):
-                continue
-            row = dict(info)
-            row.setdefault("team", str(key).strip().upper())
-            entries.append(row)
-        return entries
-    if isinstance(lookup, Sequence) and not isinstance(lookup, (str, bytes)):
-        return [dict(item) for item in lookup if isinstance(item, Mapping)]
-    return []
-
-
-def _parse_start(value: Any) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
-
-
-def _same_start(left: Any, right: Any) -> bool:
-    parsed_left = _parse_start(left)
-    parsed_right = _parse_start(right)
-    if parsed_left is not None and parsed_right is not None:
-        return parsed_left.astimezone(UTC) == parsed_right.astimezone(UTC)
-    return bool(str(left or "").strip()) and str(left).strip() == str(right).strip()
-
-
-def resolve_starter(
-    lookup: Any,
-    *,
-    team: str,
-    game_pk: Any = None,
-    opponent: str | None = None,
-    scheduled_time: Any = None,
-) -> dict[str, Any] | None:
-    """Return the starter for ``team`` in one game.
-
-    Match ``game_pk`` first, then opponent plus start time. A team with only
-    one starter that day resolves without either key.
-    """
+def resolve_starter(starters: Any, *, team: str, game_pk: Any = None) -> dict[str, Any] | None:
+    """Starter for ``team`` in ``game_pk``, or the team's only starter that day."""
     team_code = str(team or "").strip().upper()
-    if not team_code:
+    if not team_code or not isinstance(starters, list):
         return None
     entries = [
         entry
-        for entry in iter_starter_entries(lookup)
-        if str(entry.get("team") or "").strip().upper() == team_code
+        for entry in starters
+        if isinstance(entry, dict) and str(entry.get("team") or "").strip().upper() == team_code
     ]
-    if not entries:
-        return None
     pk = str(game_pk).strip() if game_pk not in (None, "") else ""
     if pk:
         matched = [entry for entry in entries if str(entry.get("game_pk") or "").strip() == pk]
-        if len(matched) == 1:
-            return matched[0]
-    opponent_code = str(opponent or "").strip().upper()
-    if opponent_code and str(scheduled_time or "").strip():
-        matched = [
-            entry
-            for entry in entries
-            if str(entry.get("opponent") or "").strip().upper() == opponent_code
-            and _same_start(entry.get("scheduled_time"), scheduled_time)
-        ]
-        if len(matched) == 1:
-            return matched[0]
-    if len(entries) == 1:
-        return entries[0]
-    return None
+        return matched[0] if len(matched) == 1 else None
+    return entries[0] if len(entries) == 1 else None
 
 
-def _row_game_pk(row: Mapping[str, Any]) -> Any:
-    for key in ("game_pk", "gamePk"):
-        if row.get(key) not in (None, ""):
-            return row.get(key)
-    return None
-
-
-def _row_opponent(row: Mapping[str, Any], team: str) -> str:
-    opponent = str(row.get("opponent") or "").strip()
-    if opponent:
-        return opponent
-    matchup = str(row.get("matchup") or "")
-    if " @ " not in matchup:
-        return ""
-    away, home = [part.strip() for part in matchup.split(" @ ", 1)]
-    team_code = team.strip().upper()
-    if team_code == away.upper():
-        return home
-    if team_code == home.upper():
-        return away
-    return ""
-
-
-def _row_start(row: Mapping[str, Any]) -> Any:
-    for key in ("scheduled_time", "_event_starts_at", "event_starts_at"):
-        if row.get(key) not in (None, ""):
-            return row.get(key)
-    context = row.get("sport_context")
-    if isinstance(context, Mapping):
-        return context.get("event_starts_at")
-    return None
-
-
-def starter_for_row(
-    lookup: Any, row: Mapping[str, Any], *, team: str | None = None
-) -> dict[str, Any] | None:
-    """Resolve the starter that belongs to this row's game."""
-    team_code = str(team if team is not None else row.get("team") or "")
-    return resolve_starter(
-        lookup,
-        team=team_code,
-        game_pk=_row_game_pk(row),
-        opponent=_row_opponent(row, team_code),
-        scheduled_time=_row_start(row),
-    )
-
-
-def known_starter_teams(lookup: Any) -> list[str]:
-    teams: list[str] = []
-    seen: set[str] = set()
-    for entry in iter_starter_entries(lookup):
-        code = str(entry.get("team") or "").strip().upper()
-        if code and code not in seen:
-            seen.add(code)
-            teams.append(code)
-    return sorted(teams)
+def starter_for_row(starters: Any, row: Any, *, team: str | None = None) -> dict[str, Any] | None:
+    team_code = team if team is not None else (row.get("team") if isinstance(row, dict) else None)
+    game_pk = row.get("game_pk") if isinstance(row, dict) else None
+    return resolve_starter(starters, team=str(team_code or ""), game_pk=game_pk)
 
 
 write_json = safe_write_json
@@ -401,27 +281,26 @@ def export_probable_pitchers(
     return {"status": "ok", "record_count": normalized["record_count"]}
 
 
-def load_probable_pitcher_lookup(league: str) -> list[dict[str, Any]] | dict[str, dict[str, Any]]:
-    """Return per-game ``starters``, or a legacy team-keyed map from an older file.
+def load_probable_pitcher_lookup(league: str) -> list[dict[str, Any]]:
+    """Return the per-game ``starters`` list.
 
-    Returns ``{}`` when no probable-pitchers file exists yet for this league
+    Returns ``[]`` when no probable-pitchers file exists yet for this league
     (not yet scraped, or a league with no such source) rather than raising —
     callers treat a missing lookup as "unknown", not as an error.
     """
     path = league_paths(league).probable_pitchers_latest()
     if not path.exists():
-        return {}
+        return []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
+        return []
     if not isinstance(payload, dict):
-        return {}
+        return []
     starters = payload.get("starters")
-    if isinstance(starters, list):
-        return [row for row in starters if isinstance(row, dict)]
-    by_team = payload.get("by_team")
-    return by_team if isinstance(by_team, dict) else {}
+    if not isinstance(starters, list):
+        return []
+    return [row for row in starters if isinstance(row, dict)]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -581,8 +581,7 @@ def _starter_flags_for_row(
     kind: str,
     team: str,
     matchup: str,
-    probable_pitchers: dict[str, dict[str, Any]] | list[dict[str, Any]] | None,
-    scheduled_time: Any = None,
+    probable_pitchers: list[dict[str, Any]] | None,
     game_pk: Any = None,
 ) -> str:
     """Return comma-joined ``STARTER_UNCONFIRMED:<TEAM>`` tokens for any side of
@@ -601,24 +600,11 @@ def _starter_flags_for_row(
     from outlier_scrapers.probable_pitchers import resolve_starter
 
     teams = (team,) if kind == TOTAL_KIND_TEAM else _teams_from_matchup(matchup)
-    away, home = _teams_from_matchup(matchup)
     tokens: list[str] = []
     for code in teams:
         if not code:
             continue
-        if code == away:
-            opponent = home
-        elif code == home:
-            opponent = away
-        else:
-            opponent = ""
-        entry = resolve_starter(
-            probable_pitchers,
-            team=code,
-            game_pk=game_pk,
-            opponent=opponent,
-            scheduled_time=scheduled_time,
-        )
+        entry = resolve_starter(probable_pitchers, team=code, game_pk=game_pk)
         if entry is None:
             continue
         if not entry.get("confirmed"):
@@ -633,7 +619,7 @@ def build_totals(
     sport: str,
     kind: str,
     now: datetime | None = None,
-    probable_pitchers: dict[str, dict[str, Any]] | list[dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for one totals stream (game or team)."""
     if kind not in (TOTAL_KIND_GAME, TOTAL_KIND_TEAM):
@@ -988,11 +974,10 @@ def build_totals(
                 "injury_flags": cand.get("injury_flags") or "",
                 "starter_flags": _starter_flags_for_row(
                     kind=kind,
-                    team=str(team or ""),
-                    matchup=str(matchup or ""),
+                    team=team,
+                    matchup=matchup,
                     probable_pitchers=probable_pitchers,
-                    scheduled_time=event_start,
-                    game_pk=identity.get("game_pk") or identity.get("gamePk"),
+                    game_pk=identity.get("game_pk"),
                 ),
                 "research_leverage": cand.get("research_leverage")
                 or _research_leverage(prop, scope, sport),
@@ -1019,7 +1004,7 @@ def build_game_totals(
     *,
     sport: str,
     now: datetime | None = None,
-    probable_pitchers: dict[str, dict[str, Any]] | list[dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
     alt_team_totals_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for game totals only (GAMELINE / TOTAL)."""
@@ -1183,7 +1168,7 @@ def build_team_totals(
     *,
     sport: str,
     now: datetime | None = None,
-    probable_pitchers: dict[str, dict[str, Any]] | list[dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build projection rows for sport-aware full-game TEAM_PROP totals."""
     return build_totals(

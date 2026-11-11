@@ -17,11 +17,7 @@ from typing import Any, Callable, Sequence
 
 from outlier_scrapers import feedback, pack, paths, probability_blend, refresh
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, TEAM_TOTALS_HEADER
-from outlier_scrapers.probable_pitchers import (
-    known_starter_teams,
-    load_probable_pitcher_lookup,
-    starter_for_row,
-)
+from outlier_scrapers.probable_pitchers import starter_for_row
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.utils import _parse_start, _write_csv
 
@@ -605,16 +601,16 @@ def _build_current_context(leagues: Sequence[str], *, now: datetime) -> dict[str
 
         probable_payload = _read_json(league_paths.probable_pitchers_latest())
         starters = probable_payload.get("starters")
-        if isinstance(starters, list):
-            probable[league] = [row for row in starters if isinstance(row, dict)]
-        else:
-            probable_rows = probable_payload.get("by_team")
-            probable[league] = (
-                probable_rows
-                if isinstance(probable_rows, dict)
-                else load_probable_pitcher_lookup(league)
-            )
-        starter_known_teams_by_league[league] = known_starter_teams(probable[league])
+        probable[league] = (
+            [row for row in starters if isinstance(row, dict)] if isinstance(starters, list) else []
+        )
+        starter_known_teams_by_league[league] = sorted(
+            {
+                str(row.get("team") or "").strip().upper()
+                for row in probable[league]
+                if row.get("team")
+            }
+        )
         if league == "MLB":
             probable_generated_at = _parse_start(probable_payload.get("generated_at"))
             probable_age = (

@@ -1,14 +1,3 @@
-# Session Handoff: doubleheader probable pitchers (agent `grok`)
-
-1. **Work**: MLB probable pitchers on doubleheader days. `by_team` was keyed by team only, so a NYY/BOS twinbill kept Carlos Rodon (game_pk 1002) and dropped Gerrit Cole (game_pk 1001). `normalize_probable_pitchers` now writes `starters` (one record per team side per game). Rows resolve by `game_pk`, or by opponent plus start time. SO projections, game-totals starter flags, and T-30 starter checks use that resolver. An older file that only has `by_team` still loads. `results.py` grading, model weights, thresholds, EB priors, and Kelly settings were not touched.
-2. **Last Commit SHA**: `78d1c56088784d6ff183b2c5652ffa043c881afb` (the fix). Handoff notes are the commits on top of it.
-3. **Files Touched**: `outlier_scrapers/probable_pitchers.py`, `projections.py`, `game_totals.py`, `t30_reprice.py`, `slate_quality.py`, `pack.py`, `pack_selection.py`, `tests/test_probable_pitchers.py`, `.agent-log/HANDOFF.md`.
-4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/342
-5. **Verification**: Regression `test_doubleheader_so_row_resolves_to_its_own_starter` failed on master (`cole_by_pk is None`) and passes after the fix. `pytest` of probable pitchers, projections, game totals, T-30, slate quality, pitcher SO features, context fetchers, SO shrinkage, and SO eval: **196 passed**. `mypy --follow-imports=silent` on the touched modules: no issues. Pack tests matching probable/pitcher/SO: 14 passed.
-6. **Next**: Review PR #342. Do not merge from this session. No deploy. Open PRs were checked first; none already covered this lookup.
-
----
-
 # Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-gate-evidence-d54fd8`. `nba_model_probs` now stores `market_id`/`side` (in-place

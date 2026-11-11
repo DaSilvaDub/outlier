@@ -249,7 +249,7 @@ def _is_mlb_so_row(row: Mapping[str, Any]) -> bool:
 
 def pitcher_identity_flags(
     row: Mapping[str, Any],
-    probable_pitchers: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
+    probable_pitchers: Sequence[Mapping[str, Any]] | None,
     *,
     player_name: str | None = None,
 ) -> list[str]:
@@ -262,9 +262,11 @@ def pitcher_identity_flags(
     """
     if not _is_mlb_so_row(row):
         return []
-    from outlier_scrapers.probable_pitchers import iter_starter_entries, starter_for_row
+    if not isinstance(probable_pitchers, list) or not probable_pitchers:
+        return [PITCHER_IDENTITY_UNCONFIRMED]
+    from outlier_scrapers.probable_pitchers import starter_for_row
 
-    entries = iter_starter_entries(probable_pitchers)
+    entries = [info for info in probable_pitchers if isinstance(info, Mapping)]
     if not entries:
         return [PITCHER_IDENTITY_UNCONFIRMED]
     player = _so_player_name(row, player_name)

@@ -807,25 +807,21 @@ def park_k_factor_for_venue_team(team_code: str | None) -> float | None:
 
 
 def enrich_probable_with_so_features(
-    by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]],
+    starters: Sequence[Mapping[str, object]],
     *,
     season: int,
     fetch_json: Any | None = None,
     min_starts: int = DEFAULT_SO_MIN_STARTS,
     max_starts: int = DEFAULT_SO_MAX_STARTS,
     min_total_bf: int = DEFAULT_SO_MIN_TOTAL_BF,
-) -> dict[str, dict[str, object]] | list[dict[str, object]]:
-    """Attach starter SO + opponent/park context onto probable-pitcher entries.
-
-    A list of per-game starters is returned as a list so two games for the same
-    team both keep their features. A legacy team-keyed map is returned as a map.
-    """
-    from outlier_scrapers.probable_pitchers import iter_starter_entries
-
+) -> list[dict[str, object]]:
+    """Attach starter SO + opponent/park context onto each per-game starter."""
     enriched_rows: list[dict[str, object]] = []
     cache: dict[str, dict[str, object] | None] = {}
     opponent_cache: dict[tuple[str, str | None], float | None] = {}
-    for info in iter_starter_entries(by_team):
+    for info in starters:
+        if not isinstance(info, Mapping):
+            continue
         row = dict(info)
         team = str(row.get("team") or "").strip().upper()
         pitcher_id = str(row.get("pitcher_id") or "").strip()
@@ -904,14 +900,12 @@ def enrich_probable_with_so_features(
                 row["park_k_source"] = "curated_home_park_so"
                 row["park_team"] = venue_team
         enriched_rows.append(row)
-    if isinstance(by_team, Mapping):
-        return {str(item.get("team") or ""): item for item in enriched_rows}
     return enriched_rows
 
 
 def mlb_so_projection_record(
     row: Mapping[str, object],
-    probable_by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]] | None,
+    probable_by_team: Sequence[Mapping[str, object]] | None,
 ) -> dict[str, object] | None:
     """Build a starter-SO projection from probable pitchers.
 
@@ -1556,7 +1550,7 @@ def project_rows(rows: Iterable[Mapping[str, object]], sport: str) -> list[dict[
 
 def build_mlb_so_projections(
     props_rows: Iterable[Mapping[str, object]],
-    probable_by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]] | None,
+    probable_by_team: Sequence[Mapping[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Compute starter-SO projections for every eligible row in normalized props.
 

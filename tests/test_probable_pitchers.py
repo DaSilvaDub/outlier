@@ -83,103 +83,72 @@ def test_normalize_probable_pitchers_empty_schedule():
     assert normalized["starters"] == []
 
 
-def _doubleheader_nyy_bos() -> dict:
-    """Two NYY @ BOS games. Game 1002 is listed last so a team-keyed map keeps Rodon."""
+def _dh_game(
+    pk: int, when: str, away_name: str, away_id: int, home_name: str, home_id: int
+) -> dict:
     return {
-        "dates": [
-            {
-                "date": "2026-08-04",
-                "games": [
-                    {
-                        "gamePk": 1001,
-                        "gameDate": "2026-08-04T17:05:00-04:00",
-                        "teams": {
-                            "away": {
-                                "team": {"name": "New York Yankees"},
-                                "probablePitcher": {"id": 543037, "fullName": "Gerrit Cole"},
-                            },
-                            "home": {
-                                "team": {"name": "Boston Red Sox"},
-                                "probablePitcher": {"id": 678906, "fullName": "Brayan Bello"},
-                            },
-                        },
-                    },
-                    {
-                        "gamePk": 1002,
-                        "gameDate": "2026-08-04T19:10:00-04:00",
-                        "teams": {
-                            "away": {
-                                "team": {"name": "New York Yankees"},
-                                "probablePitcher": {"id": 607074, "fullName": "Carlos Rodon"},
-                            },
-                            "home": {
-                                "team": {"name": "Boston Red Sox"},
-                                "probablePitcher": {"id": 676979, "fullName": "Garrett Crochet"},
-                            },
-                        },
-                    },
-                ],
-            }
-        ]
+        "gamePk": pk,
+        "gameDate": when,
+        "teams": {
+            "away": {
+                "team": {"name": "New York Yankees"},
+                "probablePitcher": {"id": away_id, "fullName": away_name},
+            },
+            "home": {
+                "team": {"name": "Boston Red Sox"},
+                "probablePitcher": {"id": home_id, "fullName": home_name},
+            },
+        },
     }
-
-
-def _so_row(*, player: str, outcome_id: str, game_pk: int | None, start: str) -> dict:
-    row = {
-        "sport": "MLB",
-        "market_type": "SO",
-        "selection": f"{player} - Strikeouts OVER 5.5",
-        "player": player,
-        "team": "NYY",
-        "opponent": "BOS",
-        "matchup": "NYY @ BOS",
-        "event_starts_at": start,
-        "line": 5.5,
-        "headline_side": "OVER",
-        "outcome_id": outcome_id,
-    }
-    if game_pk is not None:
-        row["game_pk"] = game_pk
-    return row
-
-
-def _starter_lookup(normalized: dict):
-    """Per-game starters once the team-keyed map is gone; by_team until then."""
-    if "starters" in normalized:
-        return normalized["starters"]
-    return normalized["by_team"]
 
 
 def test_doubleheader_so_row_resolves_to_its_own_starter():
-    """A 17:05 Cole strikeout row must not pick up the night game's Rodon."""
-    normalized = normalize_probable_pitchers(_doubleheader_nyy_bos())
-    assert normalized["record_count"] == 2
-    assert [game["game_pk"] for game in normalized["games"]] == [1001, 1002]
-    lookup = _starter_lookup(normalized)
+    """17:05 Cole (game_pk 1001) must not resolve as the night game's Rodon."""
+    normalized = normalize_probable_pitchers(
+        {
+            "dates": [
+                {
+                    "date": "2026-08-04",
+                    "games": [
+                        _dh_game(
+                            1001,
+                            "2026-08-04T17:05:00-04:00",
+                            "Gerrit Cole",
+                            543037,
+                            "Brayan Bello",
+                            678906,
+                        ),
+                        _dh_game(
+                            1002,
+                            "2026-08-04T19:10:00-04:00",
+                            "Carlos Rodon",
+                            607074,
+                            "Garrett Crochet",
+                            676979,
+                        ),
+                    ],
+                }
+            ]
+        }
+    )
+    lookup = normalized["starters"]
 
-    afternoon = "2026-08-04T17:05:00-04:00"
-    night = "2026-08-04T19:10:00-04:00"
-    cole_by_pk = mlb_so_projection_record(
-        _so_row(player="Gerrit Cole", outcome_id="cole-1705", game_pk=1001, start=afternoon),
-        lookup,
-    )
-    rodon_by_pk = mlb_so_projection_record(
-        _so_row(player="Carlos Rodon", outcome_id="rodon-1910", game_pk=1002, start=night),
-        lookup,
-    )
-    cole_by_time = mlb_so_projection_record(
-        _so_row(player="Gerrit Cole", outcome_id="cole-time", game_pk=None, start=afternoon),
-        lookup,
-    )
-    rodon_by_time = mlb_so_projection_record(
-        _so_row(player="Carlos Rodon", outcome_id="rodon-time", game_pk=None, start=night),
-        lookup,
-    )
+    def so(player: str, outcome_id: str, game_pk: int) -> dict:
+        return {
+            "sport": "MLB",
+            "market_type": "SO",
+            "player": player,
+            "team": "NYY",
+            "line": 5.5,
+            "headline_side": "OVER",
+            "outcome_id": outcome_id,
+            "game_pk": game_pk,
+        }
 
-    assert cole_by_pk is not None and cole_by_pk["row_id"] == "cole-1705"
-    assert rodon_by_pk is not None and rodon_by_pk["row_id"] == "rodon-1910"
-    assert cole_by_time is not None and cole_by_time["row_id"] == "cole-time"
-    assert rodon_by_time is not None and rodon_by_time["row_id"] == "rodon-time"
+    cole = mlb_so_projection_record(so("Gerrit Cole", "cole-1705", 1001), lookup)
+    rodon = mlb_so_projection_record(so("Carlos Rodon", "rodon-1910", 1002), lookup)
+    assert cole is not None and cole["row_id"] == "cole-1705"
+    assert rodon is not None and rodon["row_id"] == "rodon-1910"
 
 
 def test_export_probable_pitchers_skips_non_mlb():
@@ -200,7 +169,7 @@ def test_load_probable_pitcher_lookup_missing_file_returns_empty(tmp_path, monke
         reports=tmp_path / "reports",
     )
     monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
-    assert load_probable_pitcher_lookup("MLB") == {}
+    assert load_probable_pitcher_lookup("MLB") == []
 
 
 def test_load_probable_pitcher_lookup_reads_written_file(tmp_path, monkeypatch):
@@ -217,11 +186,11 @@ def test_load_probable_pitcher_lookup_reads_written_file(tmp_path, monkeypatch):
     monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
     fake_paths.normalized.mkdir(parents=True, exist_ok=True)
     fake_paths.probable_pitchers_latest().write_text(
-        json.dumps({"by_team": {"BAL": {"pitcher": None, "confirmed": False}}}),
+        json.dumps({"starters": [{"team": "BAL", "pitcher": None, "confirmed": False}]}),
         encoding="utf-8",
     )
     lookup = load_probable_pitcher_lookup("MLB")
-    assert lookup == {"BAL": {"pitcher": None, "confirmed": False}}
+    assert lookup == [{"team": "BAL", "pitcher": None, "confirmed": False}]
 
 
 def test_export_probable_pitchers_writes_normalized_and_raw(tmp_path, monkeypatch):
