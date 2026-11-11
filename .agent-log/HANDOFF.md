@@ -1,9 +1,33 @@
+# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
+
+1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
+   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
+   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
+   fixed the critical findings: every Drive path gated on the publication hold
+   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
+   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
+   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
+   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
+   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
+3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
+   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
+   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
+   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
+4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
+   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
+   before re-registering tasks; separate PR for master reports with Fresh_Data export
+   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
+   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
+   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
+
 # Session Handoff: NBA capture-due attempt marker (2026-11-11, agent `grok`)
 
 1. **Last Commit SHA**: fix `39c906d` on `cursor/nba-capture-attempt-after-success-c7fb` (this handoff is the tip commit).
 2. **Files Touched**: `outlier_nba/cli.py`, `tests/test_nba_capture_due.py`.
 3. **PR**: https://github.com/DaSilvaDub/outlier/pull/341 — do not merge. A raise (or non-zero exit) on `capture --only-if-due` no longer writes `.last-capture-attempt`; exit 0 still does, including an empty slate. No new backoff state.
 4. **Next**: if #338 lands, keep `record_attempt` after a successful `run_capture`. That PR still stamps before capture. #295/#335 touch `cli.py` elsewhere (help text, CTG parsers).
+
 
 ---
 
