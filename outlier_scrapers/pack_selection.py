@@ -283,7 +283,7 @@ def _freeze_t30_originals(
     injuries_by_league: dict[str, dict[str, str]] = {}
     lineups_by_league: dict[str, dict[str, Any]] = {}
     event_starts: dict[str, str] = {}
-    probable_pitchers_by_league: dict[str, dict[str, dict[str, Any]]] = {}
+    probable_pitchers_by_league: dict[str, Any] = {}
     league_tokens = set((games_norm_by_league or {}).keys()) | set(
         (props_norm_by_league or {}).keys()
     )
@@ -711,7 +711,7 @@ def _apply_projection_fields(
     card: dict[str, Any],
     identity: dict[str, Any],
     projections_by_outcome: dict[str, dict[str, Any]] | None,
-    probable_pitchers: dict[str, dict[str, Any]] | None,
+    probable_pitchers: list[dict[str, Any]] | None,
 ) -> None:
     """Populate independent-projection fields, generating a fallback if needed."""
 
@@ -781,7 +781,7 @@ def _apply_quality_and_signal_flags(
     health_payload: dict[str, Any] | None,
     stream: str,
     blend_artifact: dict[str, Any] | None,
-    probable_pitchers: dict[str, dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, list[str]]:
     """Build data-quality/signal flags and gates. Returns ``(disqualifying, dq_flags)``."""
 
@@ -1122,7 +1122,7 @@ def build_row(
     blend_artifact: dict[str, Any] | None = None,
     stream: str = "props",
     health_payload: dict[str, Any] | None = None,
-    probable_pitchers: dict[str, dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     identity = _resolve_candidate_identity(card, ev_records, by_outcome, sport)
     if identity is None:
