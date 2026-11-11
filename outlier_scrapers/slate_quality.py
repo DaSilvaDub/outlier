@@ -249,7 +249,7 @@ def _is_mlb_so_row(row: Mapping[str, Any]) -> bool:
 
 def pitcher_identity_flags(
     row: Mapping[str, Any],
-    probable_pitchers: Mapping[str, Any] | None,
+    probable_pitchers: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
     *,
     player_name: str | None = None,
 ) -> list[str]:
@@ -262,7 +262,10 @@ def pitcher_identity_flags(
     """
     if not _is_mlb_so_row(row):
         return []
-    if not probable_pitchers:
+    from outlier_scrapers.probable_pitchers import iter_starter_entries, starter_for_row
+
+    entries = iter_starter_entries(probable_pitchers)
+    if not entries:
         return [PITCHER_IDENTITY_UNCONFIRMED]
     player = _so_player_name(row, player_name)
     team = str(row.get("team") or "").strip().upper()
@@ -270,18 +273,16 @@ def pitcher_identity_flags(
         return [PITCHER_IDENTITY_UNCONFIRMED]
 
     listed_teams = [
-        str(code).strip().upper()
-        for code, info in probable_pitchers.items()
-        if isinstance(info, Mapping)
-        and bool(info.get("confirmed"))
-        and _normalize_person_name(info.get("pitcher")) == player
+        str(info.get("team") or "").strip().upper()
+        for info in entries
+        if bool(info.get("confirmed")) and _normalize_person_name(info.get("pitcher")) == player
     ]
     if listed_teams:
         if team in listed_teams:
             return []
         return [PITCHER_IDENTITY_MISMATCH]
 
-    listed = probable_pitchers.get(team)
+    listed = starter_for_row(probable_pitchers, row, team=team)
     if isinstance(listed, Mapping) and listed.get("confirmed"):
         starter = _normalize_person_name(listed.get("pitcher"))
         if starter and starter != player:

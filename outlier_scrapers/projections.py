@@ -807,20 +807,27 @@ def park_k_factor_for_venue_team(team_code: str | None) -> float | None:
 
 
 def enrich_probable_with_so_features(
-    by_team: Mapping[str, Mapping[str, object]],
+    by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]],
     *,
     season: int,
     fetch_json: Any | None = None,
     min_starts: int = DEFAULT_SO_MIN_STARTS,
     max_starts: int = DEFAULT_SO_MAX_STARTS,
     min_total_bf: int = DEFAULT_SO_MIN_TOTAL_BF,
-) -> dict[str, dict[str, object]]:
-    """Attach starter SO + opponent/park context onto a probable-pitcher lookup."""
-    enriched: dict[str, dict[str, object]] = {}
+) -> dict[str, dict[str, object]] | list[dict[str, object]]:
+    """Attach starter SO + opponent/park context onto probable-pitcher entries.
+
+    A list of per-game starters is returned as a list so two games for the same
+    team both keep their features. A legacy team-keyed map is returned as a map.
+    """
+    from outlier_scrapers.probable_pitchers import iter_starter_entries
+
+    enriched_rows: list[dict[str, object]] = []
     cache: dict[str, dict[str, object] | None] = {}
     opponent_cache: dict[tuple[str, str | None], float | None] = {}
-    for team, info in by_team.items():
-        row = dict(info) if isinstance(info, Mapping) else {}
+    for info in iter_starter_entries(by_team):
+        row = dict(info)
+        team = str(row.get("team") or "").strip().upper()
         pitcher_id = str(row.get("pitcher_id") or "").strip()
         handedness: str | None = None
         if row.get("confirmed") and pitcher_id:
@@ -890,18 +897,21 @@ def enrich_probable_with_so_features(
                     row["opponent_k_source"] = f"mlb_stats_team_hitting_vs_{handedness}" if handedness else "mlb_stats_team_hitting"
 
             home_away = str(row.get("home_away") or "").strip().upper()
-            venue_team = str(team).strip().upper() if home_away == "HOME" else opponent
+            venue_team = team if home_away == "HOME" else opponent
             park_factor = park_k_factor_for_venue_team(venue_team)
             if park_factor is not None:
                 row["park_k_factor"] = park_factor
                 row["park_k_source"] = "curated_home_park_so"
                 row["park_team"] = venue_team
-        enriched[team] = row
-    return enriched
+        enriched_rows.append(row)
+    if isinstance(by_team, Mapping):
+        return {str(item.get("team") or ""): item for item in enriched_rows}
+    return enriched_rows
 
 
 def mlb_so_projection_record(
-    row: Mapping[str, object], probable_by_team: Mapping[str, Mapping[str, object]] | None
+    row: Mapping[str, object],
+    probable_by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]] | None,
 ) -> dict[str, object] | None:
     """Build a starter-SO projection from probable pitchers.
 
@@ -924,7 +934,9 @@ def mlb_so_projection_record(
     team = str(row.get("team") or "").strip().upper()
     if not player or not probable_by_team or not team:
         return None
-    listed = probable_by_team.get(team)
+    from outlier_scrapers.probable_pitchers import starter_for_row
+
+    listed = starter_for_row(probable_by_team, row, team=team)
     if not isinstance(listed, Mapping):
         return None
     if _normalize_person_name(listed.get("pitcher")) != player or not listed.get("confirmed"):
@@ -1544,7 +1556,7 @@ def project_rows(rows: Iterable[Mapping[str, object]], sport: str) -> list[dict[
 
 def build_mlb_so_projections(
     props_rows: Iterable[Mapping[str, object]],
-    probable_by_team: Mapping[str, Mapping[str, object]] | None,
+    probable_by_team: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Compute starter-SO projections for every eligible row in normalized props.
 

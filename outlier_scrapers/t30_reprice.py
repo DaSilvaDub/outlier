@@ -17,7 +17,11 @@ from typing import Any, Callable, Sequence
 
 from outlier_scrapers import feedback, pack, paths, probability_blend, refresh
 from outlier_scrapers.game_totals import GAME_TOTALS_HEADER, TEAM_TOTALS_HEADER
-from outlier_scrapers.probable_pitchers import load_probable_pitcher_lookup
+from outlier_scrapers.probable_pitchers import (
+    known_starter_teams,
+    load_probable_pitcher_lookup,
+    starter_for_row,
+)
 from outlier_scrapers.sizing import compute_sizing
 from outlier_scrapers.utils import _parse_start, _write_csv
 
@@ -333,8 +337,8 @@ def _starter_changed(
         (current_context.get("probable_pitchers_by_league") or {}).get(league) or {}
     )
     for team in _teams_for_row(row):
-        original = original_by_team.get(team)
-        current = current_by_team.get(team)
+        original = starter_for_row(original_by_team, row, team=team)
+        current = starter_for_row(current_by_team, row, team=team)
         if not isinstance(original, dict) or not isinstance(current, dict):
             continue
         original_pitcher = _text(original.get("pitcher"))
@@ -553,7 +557,7 @@ def reprice_row(
 def _build_current_context(leagues: Sequence[str], *, now: datetime) -> dict[str, Any]:
     injuries: dict[str, dict[str, str]] = {}
     lineups: dict[str, dict[str, Any]] = {}
-    probable: dict[str, dict[str, dict[str, Any]]] = {}
+    probable: dict[str, Any] = {}
     injury_stale_leagues: set[str] = set()
     injury_stale_events: set[str] = set()
     lineup_stale_events: set[str] = set()
@@ -600,11 +604,17 @@ def _build_current_context(leagues: Sequence[str], *, now: datetime) -> dict[str
                 lineup_stale_events.add(f"{league}:{event_id}")
 
         probable_payload = _read_json(league_paths.probable_pitchers_latest())
-        probable_rows = probable_payload.get("by_team")
-        probable[league] = (
-            probable_rows if isinstance(probable_rows, dict) else load_probable_pitcher_lookup(league)
-        )
-        starter_known_teams_by_league[league] = sorted(str(team) for team in probable[league])
+        starters = probable_payload.get("starters")
+        if isinstance(starters, list):
+            probable[league] = [row for row in starters if isinstance(row, dict)]
+        else:
+            probable_rows = probable_payload.get("by_team")
+            probable[league] = (
+                probable_rows
+                if isinstance(probable_rows, dict)
+                else load_probable_pitcher_lookup(league)
+            )
+        starter_known_teams_by_league[league] = known_starter_teams(probable[league])
         if league == "MLB":
             probable_generated_at = _parse_start(probable_payload.get("generated_at"))
             probable_age = (

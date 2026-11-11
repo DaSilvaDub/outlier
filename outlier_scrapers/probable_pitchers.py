@@ -1,10 +1,9 @@
 """Probable-pitchers scraper.
 
 Fetches MLB probable starting pitchers from the public MLB Stats API
-(statsapi.mlb.com — no auth required) and normalizes them into a per-team
-lookup. game_totals.py reads that lookup to flag totals rows whose starter is
-not yet confirmed, replacing the ad-hoc web search a reasoning pass otherwise
-has to do per game.
+(statsapi.mlb.com — no auth required) and normalizes them into one starter
+record per team side per game. Callers match a row to its own game by
+game_pk, or by opponent and start time.
 
 Only MLB has a wired source today; other leagues (e.g. WNBA) don't have
 starting pitchers, so ``export_probable_pitchers`` returns a no-op "skipped"
@@ -16,7 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import date, datetime, timedelta
+from collections.abc import Mapping, Sequence
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -102,15 +102,15 @@ def _pitcher_from_side(side_payload: dict[str, Any]) -> tuple[str | None, bool, 
 def normalize_probable_pitchers(
     raw_payload: dict[str, Any], *, league: str = "MLB"
 ) -> dict[str, Any]:
-    """Return ``{generated_at, date, record_count, games, by_team}``.
+    """Return ``{generated_at, date, record_count, games, starters}``.
 
-    ``by_team`` is keyed by the same canonical team code used elsewhere in the
-    pipeline (e.g. ``registry.MLB_TEAM_ALIASES``), so callers can look a team
-    up without re-deriving its abbreviation.
+    ``starters`` has one record per team side per game, using the same
+    canonical team codes as the rest of the pipeline. A doubleheader keeps
+    both starters instead of letting the later game overwrite the earlier one.
     """
     config = get_sport_config(league)
     games: list[dict[str, Any]] = []
-    by_team: dict[str, dict[str, Any]] = {}
+    starters: list[dict[str, Any]] = []
 
     dates = raw_payload.get("dates")
     schedule_date = ""
@@ -131,11 +131,13 @@ def normalize_probable_pitchers(
 
         away_pitcher, away_confirmed, away_pitcher_id = _pitcher_from_side(away)
         home_pitcher, home_confirmed, home_pitcher_id = _pitcher_from_side(home)
+        game_pk = raw_game.get("gamePk")
+        scheduled_time = raw_game.get("gameDate")
 
         games.append(
             {
-                "game_pk": raw_game.get("gamePk"),
-                "scheduled_time": raw_game.get("gameDate"),
+                "game_pk": game_pk,
+                "scheduled_time": scheduled_time,
                 "away_team": away_team,
                 "away_team_raw": away_team_raw,
                 "away_pitcher": away_pitcher,
@@ -150,25 +152,31 @@ def normalize_probable_pitchers(
         )
 
         if away_team:
-            by_team[away_team] = {
-                "pitcher": away_pitcher,
-                "pitcher_id": away_pitcher_id,
-                "confirmed": away_confirmed,
-                "opponent": home_team,
-                "home_away": "AWAY",
-                "game_pk": raw_game.get("gamePk"),
-                "scheduled_time": raw_game.get("gameDate"),
-            }
+            starters.append(
+                {
+                    "team": away_team,
+                    "pitcher": away_pitcher,
+                    "pitcher_id": away_pitcher_id,
+                    "confirmed": away_confirmed,
+                    "opponent": home_team,
+                    "home_away": "AWAY",
+                    "game_pk": game_pk,
+                    "scheduled_time": scheduled_time,
+                }
+            )
         if home_team:
-            by_team[home_team] = {
-                "pitcher": home_pitcher,
-                "pitcher_id": home_pitcher_id,
-                "confirmed": home_confirmed,
-                "opponent": away_team,
-                "home_away": "HOME",
-                "game_pk": raw_game.get("gamePk"),
-                "scheduled_time": raw_game.get("gameDate"),
-            }
+            starters.append(
+                {
+                    "team": home_team,
+                    "pitcher": home_pitcher,
+                    "pitcher_id": home_pitcher_id,
+                    "confirmed": home_confirmed,
+                    "opponent": away_team,
+                    "home_away": "HOME",
+                    "game_pk": game_pk,
+                    "scheduled_time": scheduled_time,
+                }
+            )
 
     return {
         "league": league,
@@ -176,8 +184,148 @@ def normalize_probable_pitchers(
         "generated_at": datetime.now().astimezone().isoformat(),
         "record_count": len(games),
         "games": games,
-        "by_team": by_team,
+        "starters": starters,
     }
+
+
+def iter_starter_entries(lookup: Any) -> list[dict[str, Any]]:
+    """Flatten a per-game starter list, or a legacy team-keyed map, into rows."""
+    if isinstance(lookup, Mapping):
+        entries: list[dict[str, Any]] = []
+        for key, info in lookup.items():
+            if not isinstance(info, Mapping):
+                continue
+            row = dict(info)
+            row.setdefault("team", str(key).strip().upper())
+            entries.append(row)
+        return entries
+    if isinstance(lookup, Sequence) and not isinstance(lookup, (str, bytes)):
+        return [dict(item) for item in lookup if isinstance(item, Mapping)]
+    return []
+
+
+def _parse_start(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _same_start(left: Any, right: Any) -> bool:
+    parsed_left = _parse_start(left)
+    parsed_right = _parse_start(right)
+    if parsed_left is not None and parsed_right is not None:
+        return parsed_left.astimezone(UTC) == parsed_right.astimezone(UTC)
+    return bool(str(left or "").strip()) and str(left).strip() == str(right).strip()
+
+
+def resolve_starter(
+    lookup: Any,
+    *,
+    team: str,
+    game_pk: Any = None,
+    opponent: str | None = None,
+    scheduled_time: Any = None,
+) -> dict[str, Any] | None:
+    """Return the starter for ``team`` in one game.
+
+    Match ``game_pk`` first, then opponent plus start time. A team with only
+    one starter that day resolves without either key.
+    """
+    team_code = str(team or "").strip().upper()
+    if not team_code:
+        return None
+    entries = [
+        entry
+        for entry in iter_starter_entries(lookup)
+        if str(entry.get("team") or "").strip().upper() == team_code
+    ]
+    if not entries:
+        return None
+    pk = str(game_pk).strip() if game_pk not in (None, "") else ""
+    if pk:
+        matched = [entry for entry in entries if str(entry.get("game_pk") or "").strip() == pk]
+        if len(matched) == 1:
+            return matched[0]
+    opponent_code = str(opponent or "").strip().upper()
+    if opponent_code and str(scheduled_time or "").strip():
+        matched = [
+            entry
+            for entry in entries
+            if str(entry.get("opponent") or "").strip().upper() == opponent_code
+            and _same_start(entry.get("scheduled_time"), scheduled_time)
+        ]
+        if len(matched) == 1:
+            return matched[0]
+    if len(entries) == 1:
+        return entries[0]
+    return None
+
+
+def _row_game_pk(row: Mapping[str, Any]) -> Any:
+    for key in ("game_pk", "gamePk"):
+        if row.get(key) not in (None, ""):
+            return row.get(key)
+    return None
+
+
+def _row_opponent(row: Mapping[str, Any], team: str) -> str:
+    opponent = str(row.get("opponent") or "").strip()
+    if opponent:
+        return opponent
+    matchup = str(row.get("matchup") or "")
+    if " @ " not in matchup:
+        return ""
+    away, home = [part.strip() for part in matchup.split(" @ ", 1)]
+    team_code = team.strip().upper()
+    if team_code == away.upper():
+        return home
+    if team_code == home.upper():
+        return away
+    return ""
+
+
+def _row_start(row: Mapping[str, Any]) -> Any:
+    for key in ("scheduled_time", "_event_starts_at", "event_starts_at"):
+        if row.get(key) not in (None, ""):
+            return row.get(key)
+    context = row.get("sport_context")
+    if isinstance(context, Mapping):
+        return context.get("event_starts_at")
+    return None
+
+
+def starter_for_row(
+    lookup: Any, row: Mapping[str, Any], *, team: str | None = None
+) -> dict[str, Any] | None:
+    """Resolve the starter that belongs to this row's game."""
+    team_code = str(team if team is not None else row.get("team") or "")
+    return resolve_starter(
+        lookup,
+        team=team_code,
+        game_pk=_row_game_pk(row),
+        opponent=_row_opponent(row, team_code),
+        scheduled_time=_row_start(row),
+    )
+
+
+def known_starter_teams(lookup: Any) -> list[str]:
+    teams: list[str] = []
+    seen: set[str] = set()
+    for entry in iter_starter_entries(lookup):
+        code = str(entry.get("team") or "").strip().upper()
+        if code and code not in seen:
+            seen.add(code)
+            teams.append(code)
+    return sorted(teams)
 
 
 write_json = safe_write_json
@@ -238,12 +386,12 @@ def export_probable_pitchers(
     normalized = normalize_probable_pitchers(raw_payload, league=league)
     from .projections import enrich_probable_with_so_features
 
-    enriched_by_team = enrich_probable_with_so_features(
-        normalized.get("by_team") or {},
+    enriched_starters = enrich_probable_with_so_features(
+        normalized.get("starters") or [],
         season=target_date.year,
         fetch_json=fetch_json,
     )
-    normalized = {**normalized, "by_team": enriched_by_team}
+    normalized = {**normalized, "starters": enriched_starters}
     write_json(paths_for_league.probable_pitchers_latest(), normalized)
     write_json(
         paths_for_league.timestamped(paths_for_league.normalized, "probable_pitchers"),
@@ -253,8 +401,8 @@ def export_probable_pitchers(
     return {"status": "ok", "record_count": normalized["record_count"]}
 
 
-def load_probable_pitcher_lookup(league: str) -> dict[str, dict[str, Any]]:
-    """Return the ``{team_code: {pitcher, confirmed, opponent, ...}}`` lookup.
+def load_probable_pitcher_lookup(league: str) -> list[dict[str, Any]] | dict[str, dict[str, Any]]:
+    """Return per-game ``starters``, or a legacy team-keyed map from an older file.
 
     Returns ``{}`` when no probable-pitchers file exists yet for this league
     (not yet scraped, or a league with no such source) rather than raising —
@@ -267,6 +415,11 @@ def load_probable_pitcher_lookup(league: str) -> dict[str, dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(payload, dict):
+        return {}
+    starters = payload.get("starters")
+    if isinstance(starters, list):
+        return [row for row in starters if isinstance(row, dict)]
     by_team = payload.get("by_team")
     return by_team if isinstance(by_team, dict) else {}
 
