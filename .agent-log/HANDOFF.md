@@ -21,14 +21,6 @@
    403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
    as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
 
-# Session Handoff: NFL required-stage failures (2026-11-11, agent `grok`)
-
-1. **Last commit**: the commit that adds this entry, on `cursor/nfl-required-stage-failures-3b5d`. Code is `c539b55`; tests are `ccde7b5`. PR against `master`.
-2. **Files**: `outlier_nfl/pipeline.py`, `tests/test_nfl_stage_gates.py`, `tests/test_nfl_best_bets.py`, `tests/test_nfl_season_phase.py`.
-3. **What**: best-bets, alt-floor, and game-script exceptions, and zero matchup rankings on a slate with events, now write a required receipt that is not OK. The CLI exits 3. `refresh_nfl_pack.ps1` already fails on that exit; it was not edited. No model weights, thresholds, or card/verdict logic changed.
-4. **Next**: review the publication side effect. A date-shifted January fixture (`shift_days=119`) has a stale tape and 0 ranking rows, so that run is now PARTIAL and bundle-only. `test_january_regular_season_slate_publishes` stubs one ranking row so it still checks season phase. Do not merge from this session.
-
-
 ---
 
 # Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
