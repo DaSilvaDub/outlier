@@ -187,6 +187,16 @@ def export_nba_pack(
             use_rows = date_matches
         elif not allow_latest_fallback:
             use_rows = []
+        elif raw_rows:
+            # Substituting another slate must never be silent: these rows are published under
+            # the requested date, and a non-empty pack never trips --fail-on-empty.
+            present = sorted({str(r.get("slate_date") or "") for r in raw_rows})
+            print(
+                f"[PIPELINE WARNING] Source={src_path} has no rows for slate_date "
+                f"'{slate_date}'; falling back to {len(raw_rows)} row(s) from "
+                f"{present}. Pass --no-allow-latest-fallback to export an empty pack instead.",
+                file=sys.stderr,
+            )
 
     rows: list[dict[str, Any]] = []
     for row in use_rows:
@@ -231,9 +241,10 @@ def main() -> int:
     parser.add_argument("--min-edge", type=float, default=None, help="Minimum edge_pct filter")
     parser.add_argument(
         "--allow-latest-fallback",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use latest available active slate rows if requested date has no direct rows",
+        help="Use latest available active slate rows if requested date has no direct rows "
+        "(--no-allow-latest-fallback exports an empty pack instead)",
     )
     parser.add_argument(
         "--fail-on-empty",
