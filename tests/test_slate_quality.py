@@ -162,21 +162,21 @@ def _gore_so_row(**extra):
 def test_pitcher_identity_flags_gore_on_wrong_team():
     # 2026-09-06-style leak: Gore is the confirmed TEX starter but the card
     # attached him to WSH @ LAD. Fail closed — do not ship as a clean identity.
-    probable = {
-        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
-        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
-    }
+    probable = [
+        {"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True},
+        {"team": "WSH", "pitcher": "Andrew Alvarez", "confirmed": True},
+    ]
     flags = pitcher_identity_flags(_gore_so_row(team="WSH", matchup="WSH @ LAD"), probable)
     assert "pitcher_identity_mismatch" in flags
 
 
 def test_pitcher_identity_flags_clean_when_gore_matches_confirmed_starter():
-    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    probable = [{"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True}]
     assert pitcher_identity_flags(_gore_so_row(), probable) == []
 
 
 def test_pitcher_identity_flags_reliever_against_confirmed_starter():
-    probable = {"CWS": {"pitcher": "Bryan Hudson", "confirmed": True}}
+    probable = [{"team": "CWS", "pitcher": "Bryan Hudson", "confirmed": True}]
     row = {
         "sport": "MLB",
         "market_type": "SO",
@@ -189,7 +189,7 @@ def test_pitcher_identity_flags_reliever_against_confirmed_starter():
 
 
 def test_pitcher_identity_unconfirmed_when_player_not_on_slate():
-    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    probable = [{"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True}]
     row = {
         "sport": "MLB",
         "market_type": "SO",
@@ -205,7 +205,7 @@ def test_pitcher_identity_unconfirmed_when_player_not_on_slate():
 def test_pitcher_identity_parses_token_so_selection():
     # Pack rows have no player column; token market_label builds
     # "Jackson Jobe SO OVER 5.5" without a " - " delimiter.
-    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    probable = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
     row = {
         "sport": "MLB",
         "market_type": "SO",
