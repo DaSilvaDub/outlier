@@ -1,3 +1,26 @@
+# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
+
+1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
+   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
+   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
+   fixed the critical findings: every Drive path gated on the publication hold
+   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
+   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
+   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
+   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
+   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
+3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
+   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
+   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
+   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
+4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
+   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
+   before re-registering tasks; separate PR for master reports with Fresh_Data export
+   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
+   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
+   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
+
 # Session Handoff: Daily Debug Review (2026-11-10, agent `claude`)
 
 1. **Work**: Automated daily debug review, branch `claude/inspiring-fermat-tv272a` (started from
@@ -45,6 +68,7 @@
    measure, so a family with ample CLV but poor coverage reads `insufficient evidence` rather
    than `FAIL` -- conservative, but a judgement call worth confirming. (c) Still let
    `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+
 
 ---
 
