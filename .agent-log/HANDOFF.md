@@ -21,14 +21,6 @@
    403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
    as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
 
-# Session Handoff: NBA capture-due attempt marker (2026-11-11, agent `grok`)
-
-1. **Last Commit SHA**: fix `39c906d` on `cursor/nba-capture-attempt-after-success-c7fb` (this handoff is the tip commit).
-2. **Files Touched**: `outlier_nba/cli.py`, `tests/test_nba_capture_due.py`.
-3. **PR**: https://github.com/DaSilvaDub/outlier/pull/341 — do not merge. A raise (or non-zero exit) on `capture --only-if-due` no longer writes `.last-capture-attempt`; exit 0 still does, including an empty slate. No new backoff state.
-4. **Next**: if #338 lands, keep `record_attempt` after a successful `run_capture`. That PR still stamps before capture. #295/#335 touch `cli.py` elsewhere (help text, CTG parsers).
-
-
 ---
 
 # Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
