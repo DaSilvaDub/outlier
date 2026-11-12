@@ -930,7 +930,7 @@ def mlb_so_projection_record(
         return None
     from outlier_scrapers.probable_pitchers import starter_for_row
 
-    listed = starter_for_row(probable_by_team, row, team=team)
+    listed = starter_for_row(probable_by_team, row, team=team, pitcher=player)
     if not isinstance(listed, Mapping):
         return None
     if _normalize_person_name(listed.get("pitcher")) != player or not listed.get("confirmed"):

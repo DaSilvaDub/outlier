@@ -185,8 +185,22 @@ def normalize_probable_pitchers(
     }
 
 
-def resolve_starter(starters: Any, *, team: str, game_pk: Any = None) -> dict[str, Any] | None:
-    """Starter for ``team`` in ``game_pk``, or the team's only starter that day."""
+def _normalize_person_name(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def resolve_starter(
+    starters: Any, *, team: str, game_pk: Any = None, pitcher: Any = None
+) -> dict[str, Any] | None:
+    """Starter for ``team``, disambiguated by ``game_pk`` then by ``pitcher``.
+
+    ``game_pk`` is the only exact key, but it is an MLB Stats API id: normalized
+    provider rows (``outlier_scrapers.normalizer``) carry ``event_id``, not
+    ``gamePk``, so in practice callers pass ``None`` and a doubleheader team has
+    two entries. ``pitcher`` resolves that case for callers that know which
+    starter the row is about -- the name identifies the game, so nothing is
+    guessed. Ambiguity that neither key resolves returns ``None``.
+    """
     team_code = str(team or "").strip().upper()
     if not team_code or not isinstance(starters, list):
         return None
@@ -199,13 +213,24 @@ def resolve_starter(starters: Any, *, team: str, game_pk: Any = None) -> dict[st
     if pk:
         matched = [entry for entry in entries if str(entry.get("game_pk") or "").strip() == pk]
         return matched[0] if len(matched) == 1 else None
-    return entries[0] if len(entries) == 1 else None
+    if len(entries) == 1:
+        return entries[0]
+    name = _normalize_person_name(pitcher)
+    if name:
+        by_name = [
+            entry for entry in entries if _normalize_person_name(entry.get("pitcher")) == name
+        ]
+        if len(by_name) == 1:
+            return by_name[0]
+    return None
 
 
-def starter_for_row(starters: Any, row: Any, *, team: str | None = None) -> dict[str, Any] | None:
+def starter_for_row(
+    starters: Any, row: Any, *, team: str | None = None, pitcher: Any = None
+) -> dict[str, Any] | None:
     team_code = team if team is not None else (row.get("team") if isinstance(row, dict) else None)
     game_pk = row.get("game_pk") if isinstance(row, dict) else None
-    return resolve_starter(starters, team=str(team_code or ""), game_pk=game_pk)
+    return resolve_starter(starters, team=str(team_code or ""), game_pk=game_pk, pitcher=pitcher)
 
 
 write_json = safe_write_json
