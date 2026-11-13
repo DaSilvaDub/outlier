@@ -430,7 +430,7 @@ def test_run_week_forwards_reports_dir_to_each_slate_run(tmp_path, monkeypatch):
 
 def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeypatch):
     import outlier_nfl.pipeline as pipeline_mod
-    from outlier_nfl.weekly import run_week
+    from outlier_nfl.weekly import RequiredStageError, run_week
 
     normalized = tmp_path / "NFL" / "normalized"
     normalized.mkdir(parents=True)
@@ -464,7 +464,7 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale_latest.exists()
     events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
-    with pytest.raises(RuntimeError, match="trace exploded"):
+    with pytest.raises(RequiredStageError, match="best_bets=FAILED"):
         run_week(pipeline, date(2026, 9, 13), events=events, offline_fixtures_dir=FIXTURES_DIR,
                  reports_dir=tmp_path / "reports")
 
