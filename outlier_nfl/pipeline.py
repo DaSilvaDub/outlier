@@ -737,6 +737,15 @@ class NflPipeline:
             publish_latest=publish_latest,
             writer=writer,
         )
+        if best_bets.get("error"):
+            receipts.append(
+                receipt(
+                    "best_bets",
+                    "FAILED",
+                    reason=str(best_bets["error"]),
+                    errors=[str(best_bets["error"])],
+                )
+            )
 
         # Compute counts and breakdown
         spreads_count = sum(1 for g in all_game_lines if g.market == "SPREAD")
@@ -788,7 +797,16 @@ class NflPipeline:
                 target_alt_book,
             )
         except Exception as exc:
-            logger.warning("Failed generating alt floor props: %s", exc)
+            logger.error("Failed generating alt floor props: %s", exc)
+            receipts.append(
+                receipt(
+                    "alt_floors",
+                    "FAILED",
+                    reason=f"alt floors failed: {exc}",
+                    errors=[str(exc)],
+                )
+            )
+            errors.append(f"alt floors failed: {exc}")
 
         # =====================================================================
         # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
@@ -810,16 +828,22 @@ class NflPipeline:
                 suffix=suffix,
                 write_latest=publish_latest,
             )
+            ranked = matchup_rankings_summary.get("count", 0)
             if len(slate_events) == 0:
                 receipts.append(receipt("matchup_rankings", "EMPTY", received=0))
-            else:
+            elif ranked == 0:
+                # props_admission_check: events on the slate and zero rows is INCOMPLETE.
                 receipts.append(
                     receipt(
                         "matchup_rankings",
-                        "OK",
-                        received=matchup_rankings_summary.get("count", 0),
+                        "INCOMPLETE",
+                        reason=f"0 matchup rankings for {len(slate_events)} slate events",
+                        expected=len(slate_events),
+                        received=0,
                     )
                 )
+            else:
+                receipts.append(receipt("matchup_rankings", "OK", received=ranked))
             logger.info(
                 "Matchup Advantage Rankings generated: %d finalists (Top 10 ranked)",
                 matchup_rankings_summary.get("count", 0),
@@ -931,7 +955,30 @@ class NflPipeline:
                         "Generated %d matchup game scripts under %s", len(written), report_root
                     )
             except Exception as exc:
-                logger.warning("Failed generating game script: %s", exc)
+                logger.error("Failed generating game script: %s", exc)
+                receipts.append(
+                    receipt(
+                        "game_script",
+                        "FAILED",
+                        reason=f"game script failed: {exc}",
+                        errors=[str(exc)],
+                    )
+                )
+                errors.append(f"game script failed: {exc}")
+                # Summary was snapshotted before this stage; copy the gate back onto it.
+                if publish:
+                    writer.withhold_publication()
+                    publish, publish_latest = False, False
+                    publication_reason = gate_reason(receipts)
+                    logger.warning("Bundle-only run (%s)", publication_reason)
+                status = run_status(receipts)
+                summary["status"] = status
+                summary["publication"] = "published" if publish else "bundle_only"
+                summary["publication_reason"] = publication_reason
+                summary["stage_receipts"] = [r.to_dict() for r in receipts]
+                summary["errors"] = errors + (
+                    [best_bets["error"]] if best_bets.get("error") else []
+                )
 
         # Reports (alt floors, game scripts) publish under the reports root; summary
         # paths name the published copies, not the staging directory.

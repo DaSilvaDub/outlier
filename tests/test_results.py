@@ -796,3 +796,117 @@ def test_a_team_total_is_never_graded_off_the_game_total():
         {"selection": "WSH Team Total OVER 87.5", "line": "87.5", "market_type": "TEAM_PROP"},
         event,
     ) == (92.0, "W")  # fmt: skip
+
+
+EARLY_DH = "2026-08-07T21:05:00Z"  # 17:05 ET
+LATE_DH = "2026-08-07T23:10:00Z"  # 19:10 ET
+
+
+def _mlb_schedule_game(
+    game_pk: int,
+    game_date: str,
+    away_score: int,
+    home_score: int,
+    *,
+    final: bool,
+) -> dict:
+    return {
+        "gamePk": game_pk,
+        "gameDate": game_date,
+        "status": {"abstractGameState": "Final" if final else "Live"},
+        "teams": {
+            "away": {"score": away_score, "team": {"abbreviation": "NYY"}},
+            "home": {"score": home_score, "team": {"abbreviation": "BOS"}},
+        },
+    }
+
+
+def _seed_mlb_total(
+    conn: sqlite3.Connection,
+    suffix: str,
+    selection: str,
+    line: str,
+    starts_at: str,
+) -> None:
+    snapshot_id = f"snapshot-{suffix}"
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, market_type, event_starts_at, created_at
+        ) VALUES (?, ?, 'MLB', ?, ?, ?, ?, ?, -110, 'Book', 'GAMELINE', ?, ?)
+        """,
+        (
+            snapshot_id,
+            "2026-08-07T16:00:00+00:00",
+            f"event-{suffix}",
+            f"market-{suffix}",
+            f"outcome-{suffix}",
+            selection,
+            line,
+            starts_at,
+            "2026-08-07T16:00:00+00:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO decisions (
+            decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+            created_at, updated_at
+        ) VALUES (?, ?, 'PLAY', 'PLAY', 1, ?, ?)
+        """,
+        (f"decision-{suffix}", snapshot_id, NOW.isoformat(), NOW.isoformat()),
+    )
+
+
+def _collect_doubleheader(tmp_path, *, late_final: bool):
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    games = [
+        _mlb_schedule_game(746001, EARLY_DH, 2, 1, final=True),
+        _mlb_schedule_game(746002, LATE_DH, 10, 8, final=late_final),
+    ]
+    with feedback.open_database(db) as conn:
+        _seed_mlb_total(conn, "early", "NYY @ BOS Total O/U OVER 8.5", "8.5", EARLY_DH)
+        _seed_mlb_total(conn, "late", "NYY @ BOS Total O/U OVER 9.5", "9.5", LATE_DH)
+
+        def fake_fetch(url: str) -> dict:
+            if "/boxscore" in url:
+                return {}
+            return {"dates": [{"date": "2026-08-07", "games": games}]}
+
+        return results.collect_settlement_rows(
+            conn, ["MLB"], lookback_days=3, now=NOW, fetch_json=fake_fetch
+        )
+
+
+def test_mlb_doubleheader_totals_grade_on_their_own_finals(tmp_path):
+    """Each NYY@BOS total settles on the final that started with that row.
+
+    Both games share away/home labels. The early total is the 2-1 game and the
+    late total is the 10-8 game; grading either off the other books the wrong
+    result.
+    """
+    rows, summary = _collect_doubleheader(tmp_path, late_final=True)
+
+    assert summary["unmatched_event_count"] == 0
+    assert summary["settlement_rows"] == 2
+    by_market = {row["market_id"]: row for row in rows}
+    assert by_market["market-early"]["actual_result"] == "3"
+    assert by_market["market-late"]["actual_result"] == "18"
+    assert by_market["market-late"]["win_loss_push"] == "W"
+
+
+def test_mlb_doubleheader_live_game_stays_unsettled(tmp_path):
+    """A still-live twin must not inherit the finished game's 2-1 total.
+
+    OVER 9.5 on the night game would be booked as a loss against 3 runs if the
+    only final with those team labels were accepted.
+    """
+    rows, summary = _collect_doubleheader(tmp_path, late_final=False)
+
+    assert summary["settlement_rows"] == 1
+    assert summary["unmatched_event_count"] == 1
+    assert rows[0]["market_id"] == "market-early"
+    assert rows[0]["actual_result"] == "3"
+    assert all(row["market_id"] != "market-late" for row in rows)

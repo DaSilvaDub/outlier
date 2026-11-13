@@ -46,6 +46,7 @@ from statistics import mean, median, pstdev
 from typing import Any, Iterable, Mapping
 
 from outlier_nfl.calibration import compute_shrunk_empirical_model_p, select_empirical_hit_rate
+from outlier_nfl.games import is_excluded_from_sportsbook_best, sportsbook_best_american
 from outlier_nfl.matchup import PropSignal, _names_match, resolve_signal_conflicts
 from outlier_nfl.snapshots import prop_key
 from outlier_nfl.tape_nflverse import _name_key
@@ -83,6 +84,7 @@ SHARP_GAP_PTS = 2.0
 ASSUMED_OVERROUND = 1.0476  # -110 / -110 two-way market, used only when one side is quoted
 QUARTER_KELLY = 0.25
 MAX_STAKE = 0.02  # bankroll fraction
+_DFS_BOOKS = frozenset({"underdog", "prizepicks", "sleeper", "dabble"})
 
 SIDES = ("OVER", "UNDER")
 
@@ -754,15 +756,41 @@ def price_gate(final_p: float, decimal: float, line: Any, edge: float) -> tuple[
     return ev, None, []
 
 
+def _quoted_books(prop: Mapping[str, Any]) -> set[str]:
+    return {
+        str(b.get("book") or "").strip().lower()
+        for b in (prop.get("books") or [])
+        if isinstance(b, Mapping) and str(b.get("book") or "").strip()
+    }
+
+
+def _priced_american(prop: Mapping[str, Any]) -> int | None:
+    """American price for edge, EV and stake. All-pick'em boards keep ``best_odds``."""
+    raw = prop.get("best_odds")
+    quoted = _quoted_books(prop)
+    if quoted and not quoted.issubset(_DFS_BOOKS):
+        sportsbook = sportsbook_best_american(prop.get("books"))
+        if sportsbook is not None:
+            return int(sportsbook)
+    if raw is None:
+        return None
+    return int(raw)
+
+
 def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
     pillar = Pillar()
-    odds = prop.get("best_odds")
+    odds = _priced_american(prop)
     implied = _pct(prop.get("implied_probability"))
     if odds is None:
         pillar.notes.append("no price quoted")
         return pillar
-    dec = american_to_decimal(int(odds))
-    if implied is None:
+    dec = american_to_decimal(odds)
+    raw = prop.get("best_odds")
+    try:
+        same_quote = raw is not None and int(raw) == odds
+    except (TypeError, ValueError):
+        same_quote = False
+    if implied is None or not same_quote:
         implied = 1.0 / dec
     opp = _opposite_implied(prop, by_line)
     if opp is not None and implied + opp > 0:
@@ -778,12 +806,8 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
     edge = final_p - fair
     ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
     market = str(prop.get("market") or "").upper()
-    books_quoted = {
-        str(b.get("book") or "").strip().lower()
-        for b in (prop.get("books") or [])
-        if isinstance(b, Mapping) and str(b.get("book") or "").strip()
-    }
-    if books_quoted and books_quoted.issubset({"underdog", "prizepicks", "sleeper", "dabble"}):
+    books_quoted = _quoted_books(prop)
+    if books_quoted and books_quoted.issubset(_DFS_BOOKS):
         if cap != CONTRADICTS:
             cap = ESTIMATED
         gate_notes.append(
@@ -907,7 +931,7 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         "market": prop.get("market"),
         "position": position,
         "line": prop.get("line"),
-        "best_odds": prop.get("best_odds"),
+        "best_odds": price.get("best_odds", prop.get("best_odds")),
         "best_book": _best_book(prop),
         "confidence_tier": prop.get("confidence_tier"),
         "base_p": round(base, 4),
@@ -934,10 +958,19 @@ def _rank_key(pick: Mapping[str, Any]) -> tuple[int, float]:
 
 
 def _best_book(prop: Mapping[str, Any]) -> str | None:
-    best = prop.get("best_odds")
+    target = _priced_american(prop)
+    if target is None:
+        return None
+    regulated = bool(_quoted_books(prop) - _DFS_BOOKS)
     for entry in prop.get("books") or []:
-        if isinstance(entry, Mapping) and entry.get("odds") == best:
-            return str(entry.get("book"))
+        if not isinstance(entry, Mapping) or entry.get("odds") != target:
+            continue
+        book = entry.get("book")
+        if book is None:
+            continue
+        if regulated and is_excluded_from_sportsbook_best(str(book)):
+            continue
+        return str(book)
     return None
 
 
