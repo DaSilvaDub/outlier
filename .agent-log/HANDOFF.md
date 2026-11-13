@@ -1,28 +1,3 @@
-# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
-
-1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
-   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
-   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
-   fixed the critical findings: every Drive path gated on the publication hold
-   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
-   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
-   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
-   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
-   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
-2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
-3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
-   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
-   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
-   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
-4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
-   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
-   before re-registering tasks; separate PR for master reports with Fresh_Data export
-   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
-   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
-   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
-
----
-
 # Session Handoff: Daily Debug Review (2026-11-11, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-lg316a`
@@ -111,6 +86,31 @@
 
 ---
 
+# Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
+
+1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
+   uncommitted NFL/NBA/NCAA refresh work sitting in the canonical checkout, then moved
+   the coupled files into branch `claude/outlier-games-pipeline-integration-a991f6` and
+   fixed the critical findings: every Drive path gated on the publication hold
+   (`outlier_scrapers/publication_hold.py`; organizer exits 3 when held), the retired NBA
+   Gemini generator removed from `organize_desktop_today.py`, `refresh_ncaa_pack.ps1`
+   fail-closed (fresh export, empty slate exits 2, lookahead keeps its real date), and
+   `export_multi_sport_hit_rates.py` corrected (numeric sort, TD-Under regex, both L5/L10
+   at 100%, fail-closed atomic writes, writes only to `--out-dir`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/339
+3. **Left uncommitted in canonical on purpose**: `outlier_nfl/master_reports.py`, its
+   `pipeline.py` hook, `scripts/generate_nfl_master_reports.py`,
+   `scripts/analysis_audit_logger.py`, `docs/remediation/publication_hold.json`
+   (operational state; still `active: true`), `scratch/*` probes, generated `reports/*`.
+4. **Next steps**: delete `scratch/find_endpoints.py` (it sent the Outlier bearer token to
+   every script URL) and refresh the session; dry-run each refresh with `-SkipDrive`
+   before re-registering tasks; separate PR for master reports with Fresh_Data export
+   off by default; fix the Desktop path (OneDrive\Desktop); implement or amend the
+   403 -> REFRESH_TOKEN_AUTH invariant; re-scope the plan (popular_bets / injury_impacts
+   as descriptive, tested ingestion only; resolve overlap with `outlier_nfl.usage`).
+
+---
+
 # Session Handoff: NBA gate-evidence plumbing (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-gate-evidence-d54fd8`. `nba_model_probs` now stores `market_id`/`side` (in-place
@@ -127,6 +127,103 @@ ba_backfilleedback_backfilled.sqlite3` is NOT swapped in.
 4. **Next**: let `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
 
 ---
+
+# Session Handoff: Daily Debug Review (2026-11-07, agent `claude`)
+
+1. **Work**: Automated daily debug review. Branch
+   `claude/inspiring-fermat-jyfix8` (started from `8bb0363` = `origin/master`).
+   Code new since the 2026-11-06 review (`fd5f5f6..8bb0363`) is three new
+   scripts + three new `.ps1` orchestrators; `scripts/organize_today_run2.py`'s
+   1650-line churn is a pure CRLF->LF change (`git diff -w` is empty), and
+   `outlier_nba/team_run.py` is the one-line `event=` -> `event_id=` structlog
+   kwarg-collision fix. Reviewed all of it; the two tested scripts
+   (`filter_nba_ruled_out.py`, `organize_desktop_today.py`) look sound.
+   `export_nba_extra_pack.py` had **no tests** and two reproducible defects,
+   both in the row-selection path that decides what lands in the published
+   `nba_only.csv`:
+   - **The stale-slate fallback could not be turned off, and was silent.**
+     `--allow-latest-fallback` was `action="store_true", default=True`, so the
+     value was unconditionally True and `elif not allow_latest_fallback:
+     use_rows = []` was unreachable from the CLI. `refresh_nba_pack.ps1` always
+     passes `--date $Date`, so a source with no rows for that date published
+     *every* row in the file -- typically the previous slate -- re-ranked
+     1..N into `extra_packs_<today>_latest`, exit 0. `--fail-on-empty` cannot
+     catch it (row count non-zero). Reproduced: source holding only
+     `2026-11-06`, queried `--date 2026-11-07`, exported both rows.
+     `argparse.BooleanOptionalAction` keeps the default enabled (no caller
+     changes behaviour) while making `--no-allow-latest-fallback` work; the
+     fallback now also warns on stderr, as the 0-row case already did.
+   - **`--min-edge` compared `abs(edge)`**, so `--min-edge 5` kept an
+     `edge_pct` of `-9.0`: the worst bet on the board cleared a *minimum*
+     edge gate. Every other edge gate in the repo compares the signed value
+     (`game_totals.MIN_EDGE_TOTALS`, `ultimate_alt.MIN_EDGE_PCT`,
+     `t30_reprice.T30_MIN_EDGE`) and CLAUDE.md invariant 5 requires
+     `edge_pct > 0`. A non-numeric edge (`"7.5%"`) was also passed through
+     unfiltered while an absent column dropped the row; both now drop.
+2. **Last Commit SHA**: `986089d` (plus this handoff commit).
+3. **Files Touched**: `scripts/export_nba_extra_pack.py`,
+   `tests/test_export_nba_extra_pack.py` (new), `.agent-log/HANDOFF.md`.
+4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/333
+5. **Verification**: `pytest tests/test_export_nba_extra_pack.py` 8 passed; the
+   4 regression cases were confirmed to **fail on the parent commit** and pass
+   after (original file restored and re-run), the 4 characterization cases pass
+   both ways. Full runnable suite before vs. after: **2258 -> 2266 passed**
+   (+8, exactly the new tests) with a byte-identical failed/errored set (71
+   failed / 41 collection errors, all missing `sqlalchemy` / `numpy` /
+   `google` / `anthropic` / `openai` / `dateutil`). `ruff check` on
+   changed+untracked files: 5 findings in the script, all pre-existing on
+   untouched lines, byte-identical to the parent apart from one line-number
+   shift; new test file clean under `ruff check` **and** `ruff format --check`.
+   `mypy scripts/export_nba_extra_pack.py` clean; `mypy outlier_scrapers
+   outlier_nfl` 190 errors in 11 files = baseline; `pyright outlier_scrapers
+   outlier_nfl` 1 error, pre-existing/sandbox-only. No reasoning / desk models
+   invoked.
+6. **Next Steps / open items**:
+   - **NEW, needs a human (blocks the whole NBA refresh):**
+     `refresh_nba_pack.ps1:208` invokes `filter_nba_ruled_out.py` with no
+     `--registry`, so it uses the default
+     `resources/nba_roster_registry.json`. **That path does not exist anywhere
+     in the repo and nothing in the repo creates it** (only reference is the
+     script's own constant). The filter correctly fails closed (exit 2), so
+     `Invoke-CheckedPython` throws and the refresh aborts before the Drive
+     publish on *every* run. Fail-closed is right and was deliberately added
+     2026-11-04, so it was not touched. Decide: produce the registry upstream
+     and pass `--registry`, commit it under `resources/`, or run
+     `-SkipInjuryFilter` deliberately.
+   - Minor, not fixed: `export_nba_extra_pack.check_disk_space` hardcodes
+     `shutil.disk_usage("C:\\")` and swallows every non-NBA-SYS-001 exception
+     into a printed warning, so the NBA-SYS-001 gate is a no-op off Windows and
+     checks the wrong volume when `--out` is on `G:`.
+     `organize_desktop_today._check_free_space` already checks the actual
+     target; worth aligning.
+   - Minor, not fixed: `trigger_live_prop_pipeline` returns `True` even when
+     both subprocesses exit non-zero (only prints a warning), after which
+     `resolve_source` keeps the stale path -- so a failed refresh still exports
+     stale data. Note `DEFAULT_OUT` is the last `CANDIDATE_SOURCES` entry, so
+     with no live source the exporter can re-read its own previous
+     `nba_only.csv` and republish it.
+   - **Still open from 2026-11-06 (unchanged, needs a ruling):**
+     `_team_total_event_match` does not recognise `<matchup> <tri> Team Total`,
+     and `"ATL @ WAS Washington Mystics - Points OVER 87.5"` fails to match
+     when the event's teams are tricodes. Those rows are skipped but never
+     graded. Decide whether they should be graded or stay out of the ledger.
+   - **Still open from 2026-11-03 (unchanged, needs a human):** three-way rows
+     already settled as `PUSH` in `feedback.sqlite3` stay wrong until
+     re-graded. The ledger is not in this clone, so the blast radius is
+     unknown. Do not do this from an agent session (calibration lock).
+   - Minor, not fixed: `track/model_ledger.record_model_probs` reports
+     `len(recs)` as `model_rows` although `INSERT OR IGNORE` may insert fewer.
+   - **RESOLVED since the last run:** `.worktrees/test-pr97/` (364 tracked
+     files) is gone from `master`, so repo-wide scans are no longer polluted by
+     a stale duplicate of the tree.
+   - **Sandbox still cannot run the test suite as CI does.** PyPI egress is
+     still blocked, so `numpy`, `sqlalchemy`, `structlog`, `google-genai`,
+     `openai` and `dateutil` are unavailable. Coverage was obtained as on
+     2026-11-06: the uv tool `pytest` plus a hand-written `structlog` shim kept
+     **outside** the repo (`PYTHONPATH` only, never committed), with
+     before/after runs compared so the shim cannot flatter the result. All 41
+     collection errors and every `outlier_nba` test module stay unreachable
+     here, so the `.ps1` orchestrators were reviewed by reading, not running.
 
 # Session Handoff: Daily Debug Review (2026-11-06, agent `claude`)
 
