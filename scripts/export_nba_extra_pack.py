@@ -187,16 +187,33 @@ def export_nba_pack(
             use_rows = date_matches
         elif not allow_latest_fallback:
             use_rows = []
+        elif raw_rows:
+            # Publishing another slate's rows under today's date is as damaging as
+            # publishing an empty pack, so say so on stderr instead of silently
+            # substituting them.
+            print(
+                f"[PIPELINE WARNING] No rows match slate_date '{slate_date}'; falling back to "
+                f"all {len(raw_rows)} row(s) in {src_path}, which may belong to another slate. "
+                "Pass --no-allow-latest-fallback to publish an empty pack instead.",
+                file=sys.stderr,
+            )
 
     rows: list[dict[str, Any]] = []
     for row in use_rows:
         if min_edge_pct is not None:
+            # Signed comparison: a strongly negative edge is the worst bet on the
+            # board, not a strong one. abs() let -9% clear --min-edge 5. Every other
+            # edge gate in the repo compares the signed value (game_totals.py
+            # MIN_EDGE_TOTALS, ultimate_alt.py MIN_EDGE_PCT), and CLAUDE.md
+            # invariant 5 requires edge_pct > 0 for an actionable row.
             try:
                 edge = float(row.get("edge_pct", 0) or 0)
-                if abs(edge) < min_edge_pct:
-                    continue
             except (ValueError, TypeError):
-                pass
+                # An edge that cannot be read as a number has not cleared the bar.
+                # Dropping matches the absent-column path, which already yields 0.
+                continue
+            if edge < min_edge_pct:
+                continue
 
         clean_row = {fn: row.get(fn, "") for fn in FIELDNAMES}
         rows.append(clean_row)
@@ -237,7 +254,9 @@ def main() -> int:
         "--allow-latest-fallback",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use latest available active slate rows if requested date has no direct rows",
+        help="Use latest available active slate rows if requested date has no direct rows "
+        "(default: enabled; --no-allow-latest-fallback publishes an empty pack instead of "
+        "another slate's rows)",
     )
     parser.add_argument(
         "--fail-on-empty",
