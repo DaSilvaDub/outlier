@@ -1,3 +1,17 @@
+# Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
+
+1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to
+   `%TEMP%\nba_runs`, which gets wiped, so old model rows can never be keyed. New `outlier_nba/data_dirs.py` is the one
+   resolver: `~/outlier_nba_data/bundles/{team,capture}`, overrides `OUTLIER_NBA_DATA_DIR` / `OUTLIER_NBA_BUNDLES_DIR`,
+   refuses repo-checkout and temp locations. `cli run`/`capture` (no `--nba-dir`) and `backfill-model-probs` (no
+   `--bundles`) default to it; the script no longer passes `--nba-dir` and exports `OUTLIER_NBA_DATA_DIR`. Manifest/sha256
+   behaviour unchanged; nothing existing moved or deleted.
+2. **Notes**: `scripts/install_pack_refresh_tasks.ps1` does not exist in this tree. `run_nba_shadow.ps1` (the scheduled
+   task) already used `%LOCALAPPDATA%\Outlier\NBA` for capture bundles and a separate trial ledger; left as is.
+   Not merged by the agent.
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
