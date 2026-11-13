@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from outlier_nba.market.devig import (
     DEFAULT_METHOD,
@@ -65,10 +65,18 @@ def median(values: Sequence[float]) -> float:
     return ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
-def _best(quotes: Iterable[tuple[str, Any]]) -> tuple[Any, str] | None:
-    best: tuple[Any, str] | None = None
+_Odds = TypeVar("_Odds")
+
+
+def best_american(
+    quotes: Iterable[tuple[str, _Odds]], eligible_books: Iterable[str]
+) -> tuple[_Odds, str] | None:
+    allowed = set(eligible_books)
+    best: tuple[_Odds, str] | None = None
     best_dec = 0.0
     for book, odds in quotes:
+        if book not in allowed:
+            continue
         dec = american_to_decimal(odds)
         if dec is not None and dec > best_dec:
             best_dec, best = dec, (odds, book)
@@ -108,8 +116,8 @@ def consensus_two_way(
         side_b.append(pb)
 
     priced = [q for q in quotes if book_key(q.book) not in excluded_books]
-    best_a = _best((q.book, q.a) for q in priced)
-    best_b = _best((q.book, q.b) for q in priced)
+    best_a = best_american(((q.book, q.a) for q in priced), used)
+    best_b = best_american(((q.book, q.b) for q in priced), used)
     n = len(used)
     flags: list[str] = []
     if n == 0:
