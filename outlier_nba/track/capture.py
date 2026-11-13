@@ -26,6 +26,7 @@ from outlier_nba.market.consensus import (
     DFS_BOOKS,
     BookQuote,
     Consensus,
+    best_american,
     book_key,
     consensus_two_way,
 )
@@ -147,16 +148,16 @@ def _rung_consensus(
     return consensus_two_way(quotes, method=method) if quotes else None
 
 
-def _best_price(rec: OutcomeRecord) -> tuple[str, int] | None:
-    best: tuple[str, int] | None = None
-    best_dec = 0.0
-    for book, odds in rec.quotes:
-        if book_key(book) in DFS_BOOKS:  # flat pick'em payouts are not comparable prices
-            continue
-        prob = american_to_prob(odds)
-        if prob is not None and 1.0 / prob > best_dec:
-            best_dec, best = 1.0 / prob, (book, odds)
-    return best
+def _best_price(rec: OutcomeRecord, cons: Consensus | None) -> tuple[str, int] | None:
+    if cons is None:
+        eligible = [book for book, _odds in rec.quotes if book_key(book) not in DFS_BOOKS]
+    else:
+        eligible = cons.books_used
+    picked = best_american(rec.quotes, eligible)
+    if picked is None:
+        return None
+    odds, book = picked
+    return book, odds
 
 
 def build_shadow_capture(
@@ -182,7 +183,7 @@ def build_shadow_capture(
         for x, pair in rungs.items():
             cons = per_rung[x]
             for side, rec in pair.items():
-                if _best_price(rec) is None:
+                if _best_price(rec, cons) is None:
                     # priced only by DFS pick'em books (or not at all): nothing to record
                     stats["no_price_skipped"] += 1
                     continue
@@ -240,7 +241,7 @@ def _row(
             push = wlp[1]
     elif x is not None:
         push = 0.0
-    best = _best_price(rec)
+    best = _best_price(rec, cons)
     edge = None
     if p_side is not None and best is not None:
         implied = american_to_prob(best[1])
