@@ -1,3 +1,50 @@
+# Session Handoff: Daily Debug Review (2026-11-12, agent `claude`)
+
+1. **Work**: Automated daily debug review on branch `claude/inspiring-fermat-hm2v45`
+   (started from `8e578fb` = `origin/master`). Cloud STEP 0 done (fetch, HEAD ==
+   origin/master, all 5 upgrade markers present). Reviewed everything merged since the
+   2026-11-06 review: PR #335 (NBA Cleaning the Glass ingest + schema v2 versioning),
+   PR #337 (NBA gate evidence / backfill), PR #339 (multi-sport pack refresh hardening,
+   already reviewed last session) and PR #342 (doubleheader probable pitchers, Cursor
+   Agent -- not previously agent-reviewed).
+2. **Fixed** (`1634db5`): PR #342's doubleheader fix never took effect in production.
+   It matches a row to a starter by `game_pk`, but `outlier_scrapers.normalizer` emits
+   `event_id` and never the MLB Stats API `gamePk`, so `resolve_starter` always fell
+   through to "the team's only starter that day" and returned `None` for both halves of
+   a doubleheader. `mlb_so_projection_record` consequently dropped the starter-SO
+   projection for *every* doubleheader team -- worse than the old `by_team` dict, which
+   at least kept the last game's starter. Its new test only passed because the fixture
+   rows inject a `game_pk` the pipeline never produces. `resolve_starter` now accepts an
+   optional `pitcher` and uses the confirmed starter's name to pick the game when no
+   `game_pk` is given; a supplied `game_pk` stays authoritative. Regression tests use
+   rows shaped exactly as the normalizer emits them.
+3. **Reported, not fixed** (same root cause -- rows carry no game identity):
+   - `game_totals._starter_flags_for_row` never emits `STARTER_UNCONFIRMED` for a
+     doubleheader team (fail-open, but the field is documented as informational only
+     and never affects `actionable`).
+   - `t30_reprice._starter_changed` never detects a starter change for a doubleheader
+     team: `starter_for_row` returns `None` and the loop `continue`s. Name
+     disambiguation cannot help here -- the function exists to compare the names.
+   - A pack frozen before PR #342 has `probable_pitchers_by_league` in
+     `original_t30_context.json` as a dict-of-dicts; `resolve_starter` requires a list,
+     so starter-change repricing is silently off for that pack's remaining life
+     (one slate, fails open). Same for a stale `*_probable_pitchers_latest.json` with
+     `by_team` and no `starters`, until the scraper next runs.
+   Recommended next step: give normalized rows a real game identity (map `event_id` ->
+   `gamePk` via matchup + start time in the probable-pitchers export) and make
+   `resolve_starter` key on it; that fixes all three at once.
+4. **Verification**: `pytest` 3528 passed / 4 skipped / 0 failed; `mypy outlier_scrapers
+   outlier_nba outlier_nfl` clean; `ruff` on the changed files identical to the
+   pre-change baseline (6 pre-existing findings, none new); `compileall` clean.
+   No reasoning models run -- no provider API keys exist in this sandbox, so the
+   provider-SDK tests stayed on their mock paths.
+5. **Next steps**: the `game_pk` plumbing above; repo-wide `ruff` baseline is 914
+   findings (I001/UP017/BLE001 dominate) -- a separate cleanup PR if wanted, not a
+   debug-run change. The 15 `PLR0124` and 11 `B023` hits were each checked and are
+   false positives (NaN self-comparison; closures called inside their own iteration).
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the

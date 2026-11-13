@@ -7,6 +7,7 @@ from outlier_scrapers.probable_pitchers import (
     export_probable_pitchers,
     load_probable_pitcher_lookup,
     normalize_probable_pitchers,
+    resolve_starter,
 )
 from outlier_scrapers.projections import mlb_so_projection_record
 
@@ -149,6 +150,84 @@ def test_doubleheader_so_row_resolves_to_its_own_starter():
     rodon = mlb_so_projection_record(so("Carlos Rodon", "rodon-1910", 1002), lookup)
     assert cole is not None and cole["row_id"] == "cole-1705"
     assert rodon is not None and rodon["row_id"] == "rodon-1910"
+
+
+def test_doubleheader_so_row_resolves_without_a_game_pk():
+    """Normalized rows carry no gamePk, so the name has to separate the two games.
+
+    ``outlier_scrapers.normalizer`` emits ``event_id``, never the MLB Stats API
+    ``gamePk``, so every production SO row reaches ``resolve_starter`` with
+    ``game_pk=None``. Matching on game_pk alone left both halves of a
+    doubleheader ambiguous and dropped the projection for each of them.
+    """
+    normalized = normalize_probable_pitchers(
+        {
+            "dates": [
+                {
+                    "date": "2026-08-04",
+                    "games": [
+                        _dh_game(
+                            1001,
+                            "2026-08-04T17:05:00-04:00",
+                            "Gerrit Cole",
+                            543037,
+                            "Brayan Bello",
+                            678906,
+                        ),
+                        _dh_game(
+                            1002,
+                            "2026-08-04T19:10:00-04:00",
+                            "Carlos Rodon",
+                            607074,
+                            "Garrett Crochet",
+                            676979,
+                        ),
+                    ],
+                }
+            ]
+        }
+    )
+    lookup = normalized["starters"]
+
+    def so(player: str, outcome_id: str) -> dict:
+        # Exactly the shape normalize_props emits: no game_pk anywhere.
+        return {
+            "sport": "MLB",
+            "market_type": "SO",
+            "player": player,
+            "team": "NYY",
+            "event_id": "evt-nyy-bos",
+            "market_id": "m1",
+            "line": 5.5,
+            "headline_side": "OVER",
+            "outcome_id": outcome_id,
+        }
+
+    cole = mlb_so_projection_record(so("Gerrit Cole", "cole-1705"), lookup)
+    rodon = mlb_so_projection_record(so("Carlos Rodon", "rodon-1910"), lookup)
+    assert cole is not None and cole["row_id"] == "cole-1705"
+    assert rodon is not None and rodon["row_id"] == "rodon-1910"
+
+    # Still fail-closed: a pitcher who is not one of this team's starters, and a
+    # starter attached to the wrong team, both stay unresolved.
+    assert mlb_so_projection_record(so("Clay Holmes", "holmes"), lookup) is None
+    bello_on_nyy = {**so("Brayan Bello", "bello"), "team": "NYY"}
+    assert mlb_so_projection_record(bello_on_nyy, lookup) is None
+
+
+def test_resolve_starter_keeps_game_pk_authoritative():
+    """A supplied game_pk that matches nothing must not fall back to the name."""
+    starters = [
+        {"team": "NYY", "pitcher": "Gerrit Cole", "confirmed": True, "game_pk": 1001},
+        {"team": "NYY", "pitcher": "Carlos Rodon", "confirmed": True, "game_pk": 1002},
+    ]
+    assert resolve_starter(starters, team="NYY", game_pk=1002)["pitcher"] == "Carlos Rodon"
+    assert resolve_starter(starters, team="NYY", game_pk=9999, pitcher="Gerrit Cole") is None
+    assert resolve_starter(starters, team="NYY") is None
+    assert resolve_starter(starters, team="NYY", pitcher="Gerrit Cole")["game_pk"] == 1001
+    # An ambiguous name resolves nothing rather than picking one.
+    same_name = [{**row, "pitcher": "Gerrit Cole"} for row in starters]
+    assert resolve_starter(same_name, team="NYY", pitcher="Gerrit Cole") is None
 
 
 def test_export_probable_pitchers_skips_non_mlb():
