@@ -1,3 +1,54 @@
+# Session Handoff: Daily Debug Review (2026-11-10, agent `claude`)
+
+1. **Work**: Automated daily debug review, branch `claude/inspiring-fermat-tv272a` (started from
+   `7006983` = `origin/master`). Reviewed the whole NBA gate-evidence stack merged in PR #337
+   (`track/evidence.py`, `track/gate_report.py`, `track/model_ledger.py`, `track/backfill.py`,
+   `promotion.failed_keys`, and the `gate-status` / `backfill-model-probs` CLI wiring). Fixed one
+   reproducible defect:
+   - **`evidence._load_report` counted one quoted spread as two observations.** It grouped the
+     two sides of a line on the stored `line` string. A total quotes the same number to both
+     sides, but `capture._fmt_line` stores the raw per-side line, so a spread is `-5.5` to HOME
+     and `+5.5` to AWAY and the sides never paired -- against the module's own convention that
+     "the two sides of one quoted line are one observation". `n_settled` was inflated ~2x for
+     `team.SPREAD` / `team.ALT_SPREAD`, so those families would cross `min_settled_outcomes`
+     (1500) on about half the required evidence, on a gate that governs a blend weight up to
+     0.25; the mirrored side also forced the reliability curve symmetric. Now grouped on the
+     threshold the two sides share, as `capture.orientation` defines it (HOME `h` -> `-h`,
+     AWAY `a` -> `a`), so a rung pairs while the mirror rung of a ladder keeps its own. Needed
+     `model_side` in the view SELECT (already exposed by `MODEL_VIEW_SQL`). Strictly stricter:
+     it removes observations, never adds them. Latent, not live -- all 7 families still report
+     `insufficient evidence` with 0 usable settled rows.
+2. **Last Commit SHA**: `eee04e7`.
+3. **Files Touched**: `outlier_nba/track/evidence.py`, `tests/test_nba_gate_evidence.py`,
+   `tests/test_nba_evidence.py`, `.agent-log/HANDOFF.md`.
+4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/340
+5. **Verification**: new spread regression test fails on the old grouping (`assert 2 == 1`) and
+   passes now, confirmed by reverting the one-line change; two guard tests added (ladder mirror
+   rung stays separate; totals + moneylines still pair). Full runnable suite **3322 -> 3325
+   passed**, byte-identical failure set (10, all missing `openai`/`anthropic`/`google-genai`;
+   5 modules excluded from collection for the same reason). `ruff check` on the three touched
+   files: 4 findings, identical to the same files on master (all pre-existing style, none in
+   changed lines). `mypy outlier_nba/track/evidence.py`: clean in `evidence.py`; the 12 errors
+   are all `metrics.py`, the known numpy-unavailable sandbox artifact. `cli gate-status`
+   smoke-tested end to end (7 families, exit 0, ledger unmodified).
+6. **Sandbox note**: `structlog`, `numpy`, `SQLAlchemy` and `python-dateutil` are declared in
+   `pyproject.toml` but were absent from the cloud sandbox, which blocked **53** test modules
+   from collecting. Installed into a throwaway venv (no dependency files changed) to get a real
+   baseline -- worth adding to the cloud bootstrap, since earlier runs reported a much smaller
+   suite without noticing the gap. Provider SDKs left uninstalled on purpose (house rule).
+7. **Next**: (a) reported but deliberately NOT changed -- `backfill._plan` treats
+   `market_id = ''` as unkeyed and counts such a row `matched`, but its `UPDATE ... WHERE
+   market_id IS NULL` would not write it, so `counts["matched"]` could overstate what was
+   applied. Unreachable today (`model_rows` normalises `''` -> `None`, and the `ALTER TABLE`
+   migration yields `NULL`), so left alone rather than touched speculatively. (b) `gate_report`
+   classes `clv_sample` as a sample-size key although it also fails on `clv_coverage`, a quality
+   measure, so a family with ample CLV but poor coverage reads `insufficient evidence` rather
+   than `FAIL` -- conservative, but a judgement call worth confirming. (c) Still let
+   `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
