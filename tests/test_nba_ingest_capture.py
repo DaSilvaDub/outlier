@@ -229,6 +229,28 @@ def test_unorientable_outcomes_are_counted_in_the_capture_summary():
     assert capture.summary["unorientable"] == 1
 
 
+def test_placeholder_longshot_does_not_store_a_half_unit_edge():
+    import dataclasses
+
+    _bundle, slate = _slate()
+    by_id = {r.outcome_id: r for r in slate.records}
+    over = dataclasses.replace(
+        by_id["o-pts-26.5-over"],
+        quotes=(*by_id["o-pts-26.5-over"].quotes, ("Stub", -100000)),
+    )
+    under = dataclasses.replace(
+        by_id["o-pts-26.5-under"],
+        quotes=(*by_id["o-pts-26.5-under"].quotes, ("Stub", 100000)),
+    )
+    replaced = {over.outcome_id: over, under.outcome_id: under}
+    records = [replaced.get(rec.outcome_id, rec) for rec in slate.records]
+    capture = build_shadow_capture(records, captured_at=NOW)
+    row = {r["outcome_id"]: r for r in capture.rows}["o-pts-26.5-under"]
+    assert row["book"] != "Stub"
+    assert row["price"] not in {100000, -100000}
+    assert float(row["edge"]) < 0.2
+
+
 def test_outcomes_priced_only_by_dfs_books_are_not_captured():
     import dataclasses
 
