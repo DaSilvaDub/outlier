@@ -1,3 +1,97 @@
+# Session Handoff: Daily Debug Review (2026-11-13, agent `claude`)
+
+1. **Work**: Automated daily debug review on branch `claude/inspiring-fermat-moopnv`
+   (started at `8e578fb`, which is `origin/master`). Cloud STEP 0 done: tree clean,
+   `HEAD == origin/master`, all 5 upgrade markers present. Reviewed everything merged
+   since the 2026-11-06 review (`089372a..HEAD`): PR #335 (NBA Cleaning the Glass
+   ingest + capture versioning), PR #339 (multi-sport pack refresh hardening,
+   `publication_hold.py`, `export_multi_sport_hit_rates.py`, `organize_desktop_today.py`,
+   `filter_nba_ruled_out.py`), PR #342 (doubleheader probable pitchers), and the
+   NBA gate-evidence / backfill / gate-report stack. **No code changes made** — every
+   finding either needs a human decision or is already sitting in an open PR.
+
+2. **Findings** (all reproduced, none speculative):
+   - **HIGH — the NBA pack refresh cannot complete on `master`.**
+     `scripts/refresh_nba_pack.ps1:209-225` always runs
+     `scripts/filter_nba_ruled_out.py` with no `--registry`, so the script falls back to
+     `resources/nba_roster_registry.json`. That path does not exist, `resources/` is not in
+     the tree, nothing on `master` generates it, and it is not gitignored, so the filter
+     raises `RegistryError` and exits 2; `Invoke-CheckedPython` then throws and the run
+     dies before Desktop staging and the Drive publish. Reproduced:
+     `filter_nba_ruled_out: FAILED: roster registry not found: .../resources/nba_roster_registry.json` (exit 2).
+     Root cause: a half-landed change. The fail-closed filter is on `master`, but the
+     generator it needs (`scripts/nba_roster_registry.py`,
+     `scripts/refresh_nba_roster_registry.py`, `resources/.gitignore`,
+     `resources/README-nba-roster.md`) only exists in commit `edc9f24` on
+     `fix/remediation-plan` = **draft PR #330**. Fails closed, so nothing bad ships —
+     but the NBA refresh is dead unless `-SkipInjuryFilter` is passed, which publishes
+     an unfiltered pack.
+   - **MEDIUM — `filter_nba_ruled_out.py:47` over-filters: `or injuries` drops anyone
+     with any injury record, not just OUT players.** A player with
+     `status: "ACTIVE"` and a single `Probable` injury entry is removed from the pack
+     (reproduced: `before=1 after=0 removed=1`). This contradicts the script's own
+     docstring ("confirmed OUT or inactive") and the contract documented in
+     `resources/README-nba-roster.md` on PR #330 ("Only explicit OUT/INACTIVE/SUSPENDED/IR
+     statuses are excluded. A nonempty injury list alone is not OUT."). Unreachable today
+     because of the finding above — but whoever lands the registry generator must
+     reconcile this first, or every probable/questionable player silently leaves the pack.
+   - **MEDIUM — `scripts/organize_desktop_today.py:50` stages to
+     `C:\Users\dasil\Desktop\Today`, while `scripts/organize_today_run2.py:47` uses
+     `C:\Users\dasil\OneDrive\Desktop\today`.** Two organizers disagree about where the
+     Desktop is. With OneDrive Known Folder Move active the non-redirected path is not the
+     visible Desktop, and the organizer `mkdir(parents=True)`s it, so deliverables land in
+     a folder the user never sees. Already listed as a next step in the 2026-11-10 handoff;
+     still unaddressed. Needs a human call on how to resolve the known folder.
+   - **LOW (already fixed in open PR #344) — `filter_nba_ruled_out.py:75` crashes on a
+     short CSV row.** `r.get("player", "").strip()` hits `DictReader`'s `restval` (`None`)
+     and raises `AttributeError: 'NoneType' object has no attribute 'strip'` (reproduced).
+     PR #344 coerces with `str(... or "")` and adds `extrasaction="ignore"`.
+   - **LOW (already fixed in open PR #345) — doubleheader starter flags can never
+     resolve.** `game_totals.py:980` passes `identity.get("game_pk")`, but no normalized
+     record in `outlier_scrapers` ever carries `game_pk` (only the raw MLB API
+     `gamePk` in `form_source.py`/`results.py`/`probable_pitchers.py`). `61e4fd5` removed
+     the opponent+start-time matcher that used to work without it, so on a doubleheader
+     `resolve_starter` sees two entries for the team and returns `None`.
+     `_starter_flags_for_row` then `continue`s and the `STARTER_UNCONFIRMED:<TEAM>` token
+     is silently dropped — fail-open, but the field is documented as purely informational
+     and never affects `actionable`. `slate_quality.pitcher_identity_flags` stays
+     fail-closed (`PITCHER_IDENTITY_UNCONFIRMED`).
+   - **LOW — `scripts/export_multi_sport_hit_rates.py` documents a `--min-games` flag its
+     `main()` never defines.** `min_games` is a keyword-only argument on
+     `extract_hit_props_for_sport` with no CLI path, so the documented knob is unreachable.
+   - **Not bugs (checked and cleared)**: all 15 ruff `PLR0124` "name compared with itself"
+     hits are deliberate NaN checks (`x == x`); all `ISC004` implicit-concat hits are
+     multi-line SQL/markdown strings in list literals, not missing commas in a whitelist;
+     the `B023` loop-variable closures in `portfolio.py` are called inside the same
+     iteration; `model_ledger.py:108`'s f-string `ALTER TABLE` interpolates the module
+     constant `KEY_COLUMNS`, not input.
+
+3. **Verification**: `pytest -q` with the CI ignore list — **3466 passed, 4 skipped**.
+   `python -m mypy outlier_scrapers outlier_nfl` — clean (136 files); `mypy outlier_nba` —
+   clean (45 files). `pyright outlier_scrapers outlier_nfl` — **0 errors, 1 warning**
+   (unresolved optional `playwright`). `compileall` over `scripts/`, `outlier_scrapers/`,
+   `outlier_nba/`, `outlier_nfl/` — clean. Provider tests (`test_reasoning.py`,
+   `test_claude_*`, `test_gemini_research.py`, `test_c_research.py`) **not run** — house
+   rule, no reasoning/provider calls without an explicit ask this turn.
+   Note for cloud agents: `/usr/local/bin/pip` is python3.13's while
+   `/usr/local/bin/python3` is 3.11, and `/root/.local/bin/pytest` is a uv tool on 3.13 —
+   `pip install -r requirements.txt` therefore installs where pytest cannot see it. Build
+   a 3.11 venv (`uv venv --python 3.11`, then `uv pip install --python <venv> -r
+   requirements.lock -e . pytest mypy`) before running anything.
+
+4. **Next steps**: (a) decide PR #330 — either land the roster-registry generator or make
+   `refresh_nba_pack.ps1` stop depending on a file nothing produces; the NBA refresh is
+   broken until one of the two happens. (b) Reconcile the `or injuries` semantics before
+   that lands. (c) Resolve the Desktop known-folder path across both organizers.
+   (d) Merge the queue: ~20 open PRs now, several of them fixes from earlier daily reviews
+   (#319, #321, #322, #344, #345) that have been waiting for days — findings are being
+   re-found because the fixes never land. (e) Still open from earlier reviews:
+   `.pytest_pr1_tmp/` (334 tracked files, 2.2 MB of pytest scratch) is committed and not
+   gitignored; `scripts/organize_today_run2.py` flipped CRLF -> LF wholesale in
+   `089372a..HEAD` (825 lines, no logic change) — worth pinning in `.gitattributes`.
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
