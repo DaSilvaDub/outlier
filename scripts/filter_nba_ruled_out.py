@@ -72,7 +72,9 @@ def filter_csv(
     removed_players: list[str] = []
 
     for r in rows:
-        player_name = r.get("player", "").strip().lower()
+        # A short row leaves DictReader's restval (None) in the cell, so coerce before
+        # stripping: a truncated pack must not abort the filter with an AttributeError.
+        player_name = str(r.get("player") or "").strip().lower()
         if player_name and player_name in ruled_out_set:
             removed_players.append(r.get("player", ""))
         else:
@@ -85,7 +87,9 @@ def filter_csv(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # extrasaction: a row with more cells than the header lands under DictReader's
+        # restkey (None), which DictWriter would otherwise reject outright.
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(kept_rows)
 

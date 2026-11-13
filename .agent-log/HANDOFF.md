@@ -1,3 +1,91 @@
+# Session Handoff: Daily Debug Review (2026-11-11, agent `claude`)
+
+1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-lg316a`
+   (from `7006983` = `origin/master`). **PyPI egress worked this run**, so for the
+   first time in this sandbox the real CI suite ran: `requirements.lock` + `pip
+   install -e .` in a venv outside the repo. Baseline on `master` was fully green
+   (3332 passed / 4 skipped, mypy clean, pyright 0 errors) -- the 71 failures and 41
+   collection errors every previous handoff reported were purely missing
+   dependencies, not code.
+2. **Reviewed**: PR #337 (the only code authored since the 2026-11-06 review):
+   `track/backfill.py`, `track/gate_report.py`, the key-check/exclusion-count
+   rework in `track/evidence.py`, `track/model_ledger.py` (key columns +
+   in-place migration), `promotion.failed_keys`, the `gate-status` /
+   `backfill-model-probs` CLI wiring. No defect found; the analytic core of
+   `evidence.py` is unchanged (the large diff is CRLF plus the new plumbing) and
+   coverage is thorough. Also reviewed the scripts that reached `master` after
+   the last review via #302/#329: `export_nba_extra_pack.py`,
+   `filter_nba_ruled_out.py`, `organize_desktop_today.py`, `organize_today_run2.py`.
+3. **Fixed** (PR https://github.com/DaSilvaDub/outlier/pull/344, commit `328d5d6`):
+   - **`export_nba_extra_pack.py` published another slate's rows under the
+     requested date, silently and undeclinably.** `--allow-latest-fallback` was
+     `action="store_true", default=True`, so the option was a no-op with no
+     negation and `allow_latest_fallback` could never be False from the CLI --
+     the module's own opt-out (`elif not allow_latest_fallback: use_rows = []`)
+     was unreachable, and `refresh_nba_pack.ps1` passes only `--date`/`--out`.
+     With no rows for the requested date, `use_rows = raw_rows` exported whatever
+     slate the source held, re-ranked 1..n, and the PS1 copied it to
+     `extra_packs_<Date>_latest\nba_only.csv` on Drive. Nothing warned and
+     `--fail-on-empty` could not catch it (the pack is not empty). Reproduced: a
+     source holding only 2026-11-09 rows, asked for 2026-11-11, exports the
+     2026-11-09 row. Ordinary path, not a corner case: `prop_edges_latest.csv`
+     holds the previous slate whenever upstream lags, and
+     `trigger_live_prop_pipeline` returns True even when the generator exits
+     non-zero, so `resolve_source` falls through to the stale file. Flag is now
+     `argparse.BooleanOptionalAction` (default unchanged, fallback still on) and
+     the substitution prints a `[PIPELINE WARNING]` naming both dates.
+   - **`filter_nba_ruled_out.py` aborted on a malformed pack row.** A short row
+     leaves DictReader's `restval` (None) in the player cell ->
+     `AttributeError` on `.strip()`; a row with cells past the header lands
+     under `restkey` (None) -> `DictWriter` `ValueError`. Either lost the whole
+     filter pass with a traceback instead of the module's RegistryError/exit-2
+     path. Coerced before stripping; writer uses `extrasaction="ignore"`.
+4. **Last Commit SHA**: `328d5d6` (plus this handoff commit).
+5. **Files Touched**: `scripts/export_nba_extra_pack.py`,
+   `scripts/filter_nba_ruled_out.py`, `tests/test_export_nba_extra_pack.py`
+   (new), `tests/test_filter_nba_ruled_out.py`, `.agent-log/HANDOFF.md`.
+6. **Verification**: full suite 3332 -> **3341 passed**, 4 skipped, zero failures
+   both sides. `mypy outlier_scrapers outlier_nfl` clean; `pyright` 0 errors
+   (1 pre-existing sandbox warning: unresolved `playwright` import).
+   `mypy outlier_nba` also clean now that numpy is installable. `ruff check` on
+   the touched files: identical to `master` apart from one shifted line number.
+   All four new tests fail on the unpatched scripts. No reasoning / desk models
+   invoked.
+7. **Next Steps / open items**:
+   - **Needs a ruling:** should the slate-date fallback stay on by default? It is
+     now visible and declinable; turning it off would stand the board down on
+     days the upstream prop pipeline lags.
+   - `CANDIDATE_SOURCES` in `export_nba_extra_pack.py` lists `DEFAULT_OUT` (the
+     export's own previous output) as a *source*, so with no upstream file the
+     export can re-publish its own prior pack.
+   - `export_nba_pack` writes the output file *before* raising on
+     `--fail-on-empty`, so a halted export has already replaced the staged pack
+     with an empty one. Fix is write-temp-then-`os.replace`; not done here
+     because it touches `data\`.
+   - `resources/nba_roster_registry.json` (the injury filter's default registry)
+     is not in the repo and nothing here creates it, so a fresh clone cannot run
+     the filter at all -- it fails closed, exit 2, and `refresh_nba_pack.ps1`
+     throws. Presumably untracked local data from `nba-props-pipeline`; confirm.
+   - Low, not fixed: `backfill._plan` treats `market_id = ''` as unkeyed and
+     plans an update, but the UPDATE's `WHERE market_id IS NULL` cannot match it,
+     so `counts["matched"]` would overstate what was written. `model_rows()`
+     normalises `''` to NULL, so this is defensive only.
+   - Low, not fixed: `gate_report.load_thresholds` promises never to raise but
+     `{**THRESHOLDS, **loaded.get("thresholds", {})}` raises TypeError if a
+     hash-valid config carries a non-mapping `thresholds`.
+   - Low, carried over: `record_model_probs` still reports `len(recs)` although
+     `INSERT OR IGNORE` may insert fewer. The receipt field is named `received`,
+     which makes it defensible; left alone.
+   - **Resolved since last run:** `.worktrees/test-pr97/` (364 tracked files) is
+     gone from `master`, and repo-wide scans are no longer polluted by it.
+   - **Still open from previous runs (unchanged, needs a human):** three-way rows
+     already settled as `PUSH` in `feedback.sqlite3` stay wrong until re-graded
+     (ledger not in this clone; calibration lock forbids doing it from an agent
+     session). And the ruling on whether `<matchup> <tri> Team Total` / full-club
+     -name-against-tricode selections should be graded or stay out of the ledger.
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
