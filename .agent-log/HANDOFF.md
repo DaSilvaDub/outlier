@@ -1,3 +1,26 @@
+# Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
+
+1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`
+2. **Work Performed**:
+   - Executed STEP 0 multi-agent sync check via `report-sync.ps1` (attested OK, 44/44 worktrees synchronized, HEAD `337ef6f`).
+   - Self-healed expired Outlier API AWS Cognito session token via `REFRESH_TOKEN_AUTH` initiated against `AWSCognitoIdentityProviderService`, successfully refreshing `storage_state.json` and `api_bearer_token.txt` (verified 46,374 props fetched).
+   - Executed the daily NFL pack and odds refresh (`scripts/run_nfl_pack_refresh.ps1 -Date 2026-11-15 -SkipDrive`) for the upcoming 12-game Sunday slate:
+     - `outlier_nfl.pipeline` ingested all 12 matchups, normalizing game lines and player props across all books.
+     - `export_nfl_extra_pack.py` exported 523 candidates to `data/NFL/exports/nfl_only.csv`.
+     - `filter_nfl_ruled_out.py` filtered against ESPN and tape statuses (filtering 1 inactive player, leaving 522 filtered rows, and pruning companion matchup/game script reports).
+     - `organize_desktop_today.py` staged 78 deliverables into local `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` and archived previous run to `Older_Data`.
+     - Publication to Google Drive held appropriately per active hold in `docs/remediation/publication_hold.json`.
+3. **Files Touched**:
+   - `config/.outlier_session/storage_state.json` & `api_bearer_token.txt` (renewed Cognito session token)
+   - `data/NFL/exports/nfl_only.csv` (522 rows)
+   - `data/NFL/normalized/*` and `data/NFL/runs/*` (2026-11-15 run bundle)
+   - `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` (78 deliverables staged)
+   - `.agent-log/HANDOFF.md`
+4. **Next Steps**:
+   - Monitor for Saturday night/Sunday morning injury updates and run pre-lock refresh (`run_nfl_pack_refresh.ps1`) ahead of 1:00 PM ET Sunday kickoffs.
+
+---
+
 # Session Handoff: Multi-sport pack refresh hardening (2026-11-10, agent `claude`)
 
 1. **Work**: Reviewed `outlier_games_popular_pipeline_integration_plan.md` and the
