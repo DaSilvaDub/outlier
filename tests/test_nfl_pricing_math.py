@@ -121,9 +121,9 @@ def test_anytime_td_counts_only_scored_touchdowns(row: dict[str, Any], expected:
 
 
 
-def _quote(final_p: float, line: float, odds: int = -110, opp: float = 0.5238):
+def _quote(final_p: float, line: float, odds: int = -110, opp: float = 52.38):
     prop = {"player_name": "x", "market": "REC", "position": "OVER", "line": line,
-            "best_odds": odds, "implied_probability": 0.5238, "scope": "full_game"}
+            "best_odds": odds, "implied_probability": 52.38, "scope": "full_game"}
     other = {**prop, "position": "UNDER", "implied_probability": opp}
     by_line = {bb.prop_key(other) + (line,): other}
     return bb._price(prop, final_p, by_line)
