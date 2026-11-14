@@ -1,3 +1,46 @@
+# Session Handoff: Daily automated debug review (2026-11-14, agent `claude`)
+
+1. **Last Commit SHA**: `1e81baa` on `claude/inspiring-fermat-5akj66`
+   **PR**: https://github.com/DaSilvaDub/outlier/pull/353
+2. **STEP 0 (cloud equivalent, per AGENTS.md "Cloud / Sandbox Agents")**: HEAD ==
+   `origin/master` at `f39c829`; all 5 upgrade markers present. No PowerShell in this
+   sandbox, so `report-sync.ps1` was not run.
+3. **Work Performed** — daily debug/code-health review:
+   - Baseline: `pytest` 3544 passed / 4 skipped; `mypy` clean; `pyright` 0 errors;
+     `compileall` clean. No broken tests or build failures on `master`.
+   - Reviewed every non-merge commit from the last 7 days. Found and fixed one real
+     defect in `6259f13` (NFL best bets): `_priced_american` moved edge/EV/stake onto
+     the regulated book, but `_opposite_implied` still read the other side's
+     `implied_probability`, which is quoted off `best_odds` and can be a PrizePicks
+     price. On a board where PrizePicks topped both sides the two-sided devig mixed
+     bases, the two implieds summed to 1.000 (zero vig), and `fair_p` came back as our
+     own implied. One-directional: `fair_p` biased high, edge understated.
+     `_fair_prior` left alone (reads `best_odds` on both sides, already consistent).
+   - Cleared as not-bugs: all 11 ruff `B023` late-binding closures (used in-iteration),
+     all 15 `PLR0124` (intentional `x == x` NaN idiom).
+4. **Files Touched**: `outlier_nfl/best_bets.py`, `tests/test_nfl_best_bets.py`,
+   `.agent-log/HANDOFF.md`. Nothing written to `calibration/` or `data/`.
+5. **Next Steps / Needs Human Attention**:
+   - **Lint gate is unusable.** `[tool.ruff]` in `pyproject.toml` sets only `line-length`
+     and `target-version` — no `[tool.ruff.lint] select` — so the effective ruleset is
+     whatever ruff enables by default (~820 rules). Repo-wide: 939 findings on the
+     locked `ruff==0.16.5`, 913 on 0.17.5; only 46 under ruff's documented default
+     `E4,E7,E9,F`. `make lint-check` lints each changed file whole, so touching almost
+     any file fails the gate on pre-existing findings (7 in `outlier_nfl/best_bets.py`
+     alone). Pick an explicit `select`, pin ruff in the dev extra, clear the baseline.
+     Not auto-fixed: choosing the ruleset is a project decision.
+   - `_best_book()` (`outlier_nfl/best_bets.py`) can return `None` on a card that does
+     have a price: if every regulated entry has `odds: None` and PrizePicks has a price,
+     `_priced_american` falls back to that PrizePicks price while `_best_book` skips the
+     only entry holding it. Low confidence this shape occurs in live feeds — left alone
+     rather than guessing at the intended label.
+   - `START_MATCH_WINDOW` (90 min, `outlier_scrapers/results.py`, `1aff8cd`) now gates
+     *every* MLB row, not just totals. Fails closed (unmatched, never mis-graded), but
+     worth watching `unmatched_event_count` for MLB after the next settlement run.
+   - No reasoning models, desk runners or provider calls were invoked this session.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`

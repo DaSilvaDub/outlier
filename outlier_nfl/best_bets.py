@@ -722,12 +722,27 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
     return pillar
 
 
-def _opposite_implied(prop: Mapping[str, Any], by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> float | None:
+def _opposite_implied(
+    prop: Mapping[str, Any],
+    by_line: Mapping[tuple[Any, ...], Mapping[str, Any]],
+    *,
+    at_priced_quote: bool = False,
+) -> float | None:
+    """Implied probability of the other side of the same line.
+
+    ``at_priced_quote`` reads it off the same price the caller is pricing at, so
+    a two-sided devig never mixes a sportsbook quote on one side with a DFS
+    pick'em quote on the other.
+    """
     position = str(prop.get("position") or "").upper()
     other = "UNDER" if position == "OVER" else "OVER"
     key = prop_key({**prop, "position": other}) + (_f(prop.get("line")),)
     row = by_line.get(key)
-    return _pct(row.get("implied_probability")) if row else None
+    if not row:
+        return None
+    if at_priced_quote:
+        return _implied_at_priced_quote(row)
+    return _pct(row.get("implied_probability"))
 
 
 def push_aware_ev(p_win: float, p_push: float, decimal: float) -> float:
@@ -777,22 +792,38 @@ def _priced_american(prop: Mapping[str, Any]) -> int | None:
     return int(raw)
 
 
-def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
-    pillar = Pillar()
-    odds = _priced_american(prop)
+def _implied_at_priced_quote(prop: Mapping[str, Any]) -> float | None:
+    """Implied probability at the price edge, EV and stake are taken from.
+
+    ``implied_probability`` is quoted off ``best_odds``, so it only stands when
+    that is still the priced quote; otherwise it is recomputed from the price
+    actually used.
+    """
     implied = _pct(prop.get("implied_probability"))
+    odds = _priced_american(prop)
     if odds is None:
-        pillar.notes.append("no price quoted")
-        return pillar
-    dec = american_to_decimal(odds)
+        return implied
     raw = prop.get("best_odds")
     try:
         same_quote = raw is not None and int(raw) == odds
     except (TypeError, ValueError):
         same_quote = False
     if implied is None or not same_quote:
+        return 1.0 / american_to_decimal(odds)
+    return implied
+
+
+def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
+    pillar = Pillar()
+    odds = _priced_american(prop)
+    if odds is None:
+        pillar.notes.append("no price quoted")
+        return pillar
+    dec = american_to_decimal(odds)
+    implied = _implied_at_priced_quote(prop)
+    if implied is None:
         implied = 1.0 / dec
-    opp = _opposite_implied(prop, by_line)
+    opp = _opposite_implied(prop, by_line, at_priced_quote=True)
     if opp is not None and implied + opp > 0:
         fair = implied / (implied + opp)
         pillar.evidence["devig"] = "two_sided"
