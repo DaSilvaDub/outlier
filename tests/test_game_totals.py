@@ -28,6 +28,7 @@ from outlier_scrapers.game_totals import (
     logical_market_key,
     period_identity,
 )
+from outlier_scrapers.runner_common import _count_actionable_totals
 from outlier_scrapers.sizing import compute_sizing
 
 
@@ -180,6 +181,59 @@ def test_build_game_totals_actionable_at_three_pct_edge():
     )
     assert row["market_consensus_prob"] == side_probability
     assert row["final_blended_prob"] == side_probability
+
+
+def test_build_game_totals_zero_stake_above_max_edge_is_not_actionable():
+    """A two-book ladder whose EV edge exceeds the sizing cap stakes 0."""
+    games_norm = {
+        "generated_at": "2026-07-07T12:00:00Z",
+        "context": {"events": {"E1": {"starts_at": "2099-12-31T00:00:00Z"}}},
+        "records": [
+            _norm_record(
+                "m1", 7.5, "OVER", [{"book": "DK", "odds": -150}, {"book": "FD", "odds": -150}]
+            ),
+            _norm_record(
+                "m1", 7.5, "UNDER", [{"book": "DK", "odds": 130}, {"book": "FD", "odds": 130}]
+            ),
+            _norm_record(
+                "m1", 8.5, "OVER", [{"book": "DK", "odds": -130}, {"book": "FD", "odds": 130}]
+            ),
+            _norm_record(
+                "m1", 8.5, "UNDER", [{"book": "DK", "odds": 110}, {"book": "FD", "odds": -150}]
+            ),
+        ],
+    }
+    candidates = [
+        {
+            "market_id": "m1",
+            "market_type": "GAMELINE",
+            "player_id": "",
+            "selection": "A @ B Total O/U OVER 8.5",
+            "line": 8.5,
+            "price": 130,
+            "_proposition": "TOTAL",
+            "_event_starts_at": "2099-12-31T00:00:00Z",
+        }
+    ]
+    rows = build_game_totals(
+        candidates, games_norm, sport="MLB", now=datetime(2026, 7, 7, 13, tzinfo=timezone.utc)
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fair_total"] == 8.5
+    assert row["best_side"] == "OVER"
+    assert float(row["best_price"]) == 130
+    assert round(float(row["edge_pct"]), 3) == 0.107
+    assert row["quality_flags"] == ""
+    assert row["actionable"] == "false"
+    assert row["recommended_units_pre_news"] == ""
+    assert row["shadow_actionable_4pct"] == "false"
+    assert row["shadow_recommended_units"] == ""
+    counted = _count_actionable_totals(
+        [{key: "" if value is None else str(value) for key, value in row.items()}],
+        label="game_totals.csv",
+    )
+    assert counted == 0
 
 
 def _build_totals_fixture():
