@@ -6,6 +6,7 @@ from outlier_nba.market.consensus import (
     DFS_BOOKS,
     BookQuote,
     consensus_two_way,
+    is_dfs_book,
     median,
 )
 from outlier_nba.market.devig import (
@@ -153,13 +154,22 @@ def test_dfs_pickem_books_are_excluded_from_the_consensus():
         _quote("FanDuel", -110, -110),
         _quote("Caesars", -110, -110),
         _quote("PrizePicks", 100, 100),  # flat payout, not a priced market
+        _quote("Prize Picks", 100, 100),
         _quote("Underdog", -137, -105),
+        _quote("Underdog Fantasy", -137, -105),
         _quote("Sleeper", 100, 100),
+        _quote("Dabble", 100, 100),
     ]
     c = consensus_two_way(quotes)
     assert c.n_books == 3 and not c.thin_market
-    assert {"prizepicks", "underdog", "sleeper"} <= DFS_BOOKS
-    assert set(c.excluded_books) == {"PrizePicks", "Underdog", "Sleeper"}
+    assert {"prizepicks", "underdog", "sleeper", "dabble"} <= DFS_BOOKS
+    assert is_dfs_book("Underdog Fantasy")
+    assert is_dfs_book("Prize Picks")
+    assert is_dfs_book("PrizePicks")
+    assert not is_dfs_book("DraftKings")
+    assert set(c.excluded_books) == {
+        "PrizePicks", "Prize Picks", "Underdog", "Underdog Fantasy", "Sleeper", "Dabble",
+    }
 
 
 def test_placeholder_prices_are_dropped():

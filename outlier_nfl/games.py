@@ -10,6 +10,7 @@ from collections import Counter
 import logging
 from typing import Any
 
+from outlier_nba.market.consensus import DFS_BOOKS, is_dfs_book
 from outlier_nfl.config import (
     NFL_TEAMS,
     detect_scope,
@@ -160,10 +161,9 @@ def american_to_implied_probability(odds: int | float | str | None) -> float | N
     return round(p, 3)
 
 
-# Compact book keys excluded from sportsbook_best_odds / sportsbook edge.
-# Compact = "".join(ch for ch in book.lower() if ch.isalnum()).
-# PrizePicks only for now (issue #217); widen later if needed.
-EXCLUDED_FROM_SPORTSBOOK_BEST: frozenset[str] = frozenset({"prizepicks"})
+# Pick'em / DFS keys excluded from sportsbook_best_odds / the card price.
+# Same set and compact-prefix match as NBA consensus (is_dfs_book).
+EXCLUDED_FROM_SPORTSBOOK_BEST: frozenset[str] = DFS_BOOKS
 
 
 def book_name_compact(book: str | None) -> str:
@@ -174,8 +174,8 @@ def book_name_compact(book: str | None) -> str:
 
 
 def is_excluded_from_sportsbook_best(book: str | None) -> bool:
-    """True when ``book`` must not drive sportsbook_best_odds / edge."""
-    return book_name_compact(book) in EXCLUDED_FROM_SPORTSBOOK_BEST
+    """True when ``book`` must not drive sportsbook_best_odds / the card price."""
+    return is_dfs_book(book)
 
 
 def _book_odds_pair(entry: Any) -> tuple[str | None, int | None]:
@@ -198,10 +198,10 @@ def _book_odds_pair(entry: Any) -> tuple[str | None, int | None]:
 
 
 def sportsbook_best_american(books: Any) -> int | None:
-    """Best (highest / least-negative) American price excluding PrizePicks.
+    """Best (highest / least-negative) American price excluding pick'em books.
 
     ``best_odds`` across the full ``books`` list is unchanged and may still be
-    PrizePicks flat -137. This helper is for sportsbook-only edge / priors.
+    a DFS flat price. This helper is for sportsbook-only edge / priors / cards.
     """
     if not books:
         return None

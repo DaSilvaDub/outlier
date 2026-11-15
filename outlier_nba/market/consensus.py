@@ -26,12 +26,25 @@ PLACEHOLDER_HIGH = 0.995
 MIN_BOOKS = 3
 
 # Pick'em / DFS operators pay flat multipliers, not priced two-way odds; their
-# "prices" must never enter a vig-free consensus. Compared after book_key().
-DFS_BOOKS = frozenset({"prizepicks", "underdog", "sleeper"})
+# "prices" must never enter a vig-free consensus or a regulated-book card price.
+# Keys are compact (lowercase letters and digits). is_dfs_book() also matches
+# when that key starts with a member, so "Underdog Fantasy" and "Prize Picks"
+# count. NFL card pricing imports this set; do not keep a second copy.
+DFS_BOOKS = frozenset({"prizepicks", "underdog", "sleeper", "dabble"})
 
 
 def book_key(name: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def is_dfs_book(name: Any, books: frozenset[str] | None = None) -> bool:
+    """True when ``name`` is a pick'em/DFS book on the compact-key prefix rule."""
+    key = book_key(name)
+    if not key:
+        return False
+    pool = DFS_BOOKS if books is None else books
+    members = [book_key(item) for item in pool]
+    return any(member and key.startswith(member) for member in members)
 
 
 @dataclass(frozen=True)
@@ -96,7 +109,7 @@ def consensus_two_way(
     side_a: list[float] = []
     side_b: list[float] = []
     for quote in quotes:
-        if book_key(quote.book) in excluded_books:
+        if is_dfs_book(quote.book, excluded_books):
             excluded.append(quote.book)
             continue
         qa, qb = american_to_prob(quote.a), american_to_prob(quote.b)
@@ -115,7 +128,7 @@ def consensus_two_way(
         side_a.append(pa)
         side_b.append(pb)
 
-    priced = [q for q in quotes if book_key(q.book) not in excluded_books]
+    priced = [q for q in quotes if not is_dfs_book(q.book, excluded_books)]
     best_a = best_american(((q.book, q.a) for q in priced), used)
     best_b = best_american(((q.book, q.b) for q in priced), used)
     n = len(used)

@@ -194,6 +194,72 @@ def _by_line(*rows):
     return {prop_key(row) + (_f(row.get("line")),): row for row in rows}
 
 
+def test_pickem_book_does_not_outprice_the_regulated_book():
+    """Underdog -110 must not outrank DraftKings -250 on the validating slate.
+
+    Sleeper, Dabble and the display name "Underdog Fantasy" are the same hole:
+    the card was taking the pick'em price.
+    """
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    for book in ("Underdog", "Sleeper", "Dabble", "Underdog Fantasy"):
+        over = _prop(
+            odds=-110,
+            books=[
+                {"book": book, "odds": -110, "odds_raw": "-110"},
+                {"book": "DraftKings", "odds": -250, "odds_raw": "-250"},
+            ],
+        )
+        pillar = _price(over, 0.62, _by_line(over, under))
+        evidence = pillar.evidence
+        assert evidence["best_odds"] == -250, book
+        assert evidence["decimal"] == 1.4
+        assert evidence["implied"] == 0.7143
+        assert evidence["devig"] == "two_sided"
+        assert evidence["fair_p"] == 0.5769
+        assert evidence["edge"] == 0.0431
+        assert evidence["ev_per_unit"] == -0.132
+        assert evidence["stake_if_validated"] == 0.0
+        assert pillar.status == CONTRADICTS
+        assert _best_book(over) == "DraftKings"
+
+        pick = _pick(build_best_bets(_inputs(props=[over, under])))
+        assert pick["best_book"] == "DraftKings", book
+        assert pick["best_odds"] == -250
+        assert pick["edge"] == 0.0917
+        assert pick["ev_per_unit"] == -0.064
+        assert pick["pillars"]["price"]["status"] == CONTRADICTS
+        assert pick["verdict"] == REJECTED
+        assert pick["stake_fraction"] == 0.0
+
+
+def test_underdog_fantasy_only_board_stays_under_the_dfs_cap():
+    """'Underdog Fantasy' is the same pick'em book as exact 'Underdog'.
+
+    The exact name is already PROVISIONAL. The display name must not validate
+    at stake 0.02 with no DFS note. The 0.02 cap itself stays put.
+    """
+    def board(book: str):
+        over = _prop(odds=-110, books=[{"book": book, "odds": -110, "odds_raw": "-110"}])
+        under = _prop(
+            "UNDER", odds=-110, books=[{"book": book, "odds": -110, "odds_raw": "-110"}],
+        )
+        return _pick(build_best_bets(_inputs(props=[over, under])))
+
+    alias = board("Underdog Fantasy")
+    exact = board("Underdog")
+    assert alias["verdict"] == PROVISIONAL
+    assert alias["stake_fraction"] == 0.0
+    assert alias["best_book"] == "Underdog Fantasy"
+    assert alias["best_odds"] == -110
+    assert alias["pillars"]["price"]["status"] == ESTIMATED
+    assert alias["pillars"]["price"]["evidence"]["stake_if_validated"] == 0.02
+    assert any("DFS pick'em" in note for note in alias["pillars"]["price"]["notes"])
+    assert exact["verdict"] == PROVISIONAL
+    assert exact["stake_fraction"] == 0.0
+    assert exact["pillars"]["price"]["status"] == ESTIMATED
+    assert any("DFS pick'em" in note for note in exact["pillars"]["price"]["notes"])
+
+
 def test_mixed_board_prices_stakes_and_grades_at_the_regulated_book():
     """PrizePicks -137 must not outrank DraftKings -250. Model 0.62, under -110."""
     over = _prop(
