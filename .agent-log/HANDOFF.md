@@ -1,3 +1,14 @@
+# Session Handoff: NFL pick'em card price (2026-11-15, agent `grok`)
+
+1. **Last Commit SHA**: `2379804f1c626b1a266d2db7499383c3d4275959` on `cursor/nfl-pickem-book-price-c355` (this handoff sits on top of that fix)
+   **PR**: https://github.com/DaSilvaDub/outlier/pull/356
+2. **Work**: NFL card price, displayed book, and the all-pick'em cap now use `outlier_nba.market.consensus.DFS_BOOKS` (`prizepicks`, `underdog`, `sleeper`, `dabble`) via `is_dfs_book` (compact key, prefix match). Underdog/Sleeper/Dabble and names like "Underdog Fantasy" no longer outprice a regulated book. DFS-only boards stay PROVISIONAL. Kelly, the 0.02 cap, and devig basis unchanged. Held for Daniel; do not merge.
+3. **Files**: `outlier_nfl/best_bets.py`, `outlier_nfl/games.py`, `outlier_nba/market/consensus.py`, `outlier_nba/track/capture.py`, `tests/test_nfl_best_bets.py`, `tests/test_nba_market.py`
+4. **Tests**: `tests/test_nfl_*.py` 1168 passed / 2 skipped → 1170 passed / 2 skipped. The two new regressions failed on master first.
+5. **Next**: Daniel reviews the card-output change. Rebase against #352 (percent implied) and #353 (opposite-side devig) is the intended follow-up; this diff avoids those lines. Not touched: consensus-line selection, Tier-1 counts, `_fair_prior`.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`

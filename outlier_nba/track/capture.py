@@ -23,12 +23,11 @@ import structlog
 
 from outlier_nba.ingest.outlier import OutcomeRecord
 from outlier_nba.market.consensus import (
-    DFS_BOOKS,
     BookQuote,
     Consensus,
     best_american,
-    book_key,
     consensus_two_way,
+    is_dfs_book,
 )
 from outlier_nba.market.devig import DEFAULT_METHOD, METHODS, american_to_prob
 from outlier_nba.market.ladders import push_win_loss
@@ -150,7 +149,7 @@ def _rung_consensus(
 
 def _best_price(rec: OutcomeRecord, cons: Consensus | None) -> tuple[str, int] | None:
     if cons is None:
-        eligible = [book for book, _odds in rec.quotes if book_key(book) not in DFS_BOOKS]
+        eligible = [book for book, _odds in rec.quotes if not is_dfs_book(book)]
     else:
         eligible = cons.books_used
     picked = best_american(rec.quotes, eligible)
