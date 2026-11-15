@@ -1,3 +1,29 @@
+# Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-15 Afternoon Window, agent `gemini`)
+
+1. **Last Commit SHA**: `d43a9523e9ed6ab13fb98e1692eb090cb2651be6`
+2. **Work Performed**:
+   - Executed mandatory STEP 0 multi-agent sync check via `report-sync.ps1` (attested OK, 44/44 worktrees synchronized, HEAD `d43a952`).
+   - Verified active AWS Cognito session token (over 700 minutes validity remaining).
+   - Executed afternoon daily NFL pack and odds refresh (`scripts/run_nfl_pack_refresh.ps1 -Date 2026-11-15 -SkipDrive`):
+     - `outlier_nfl.pipeline` ingested all 12 events for 2026-11-15, refreshing consensus odds, spreads, totals, and player props.
+     - Generated game script reports and matchup advantage rankings (top 10 overall, top 5 positional).
+     - `export_nfl_extra_pack.py` exported 674 candidate props to `data/NFL/exports/nfl_only.csv`.
+     - `filter_nfl_ruled_out.py` filtered against ESPN and tape statuses (removed 9 ruled-out quotes: Xavier Smith, Justin Jefferson; leaving 665 active candidate props).
+     - Preserved companion artifacts (best bets, alt floors, matchup scripts, rosters, 12 game scripts).
+     - `organize_desktop_today.py` staged 78 deliverables into local `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` and archived prior run to `C:\Users\dasil\Desktop\Today\Older_Data\NFL\Run_2026-11-15_164638`.
+     - Executed `scripts/generate_nfl_master_reports.py --date 2026-11-15` to update master daily and matchup reports.
+     - Publication to Google Drive skipped appropriately per active hold in `docs/remediation/publication_hold.json`.
+3. **Files Touched**:
+   - `data/NFL/exports/nfl_only.csv` (665 filtered rows)
+   - `data/NFL/normalized/*` and `data/NFL/runs/2026-11-15-20261115T214520Z-fad5d031`
+   - `reports/NFL/*` (master reports and game scripts)
+   - `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` (78 staged files)
+   - `.agent-log/HANDOFF.md`
+4. **Next Steps**:
+   - Slate is active for afternoon/evening kickoffs. Ahead of Sunday Night Football (SF @ DAL) or Monday Night Football (LAC @ BAL), run standard pre-game refresh if updated injury inactives or late line movement are required.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-15, agent `gemini`)
 
 1. **Last Commit SHA**: `f39c82910ffd7a5b2de858503ab3759deb0162e8`
