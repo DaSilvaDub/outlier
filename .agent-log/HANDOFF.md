@@ -26,9 +26,10 @@
      follows the price that was actually used rather than the shape of the
      whole board. `_quoted_books` now compares `book_name_compact` keys, so
      "Prize Picks" is recognised as PrizePicks.
-2. **Files Touched**: `outlier_nfl/best_bets.py`,
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/357
+3. **Files Touched**: `outlier_nfl/best_bets.py`,
    `tests/test_nfl_best_bets.py` (+3 tests), `.agent-log/HANDOFF.md`.
-3. **Verification**: full `pytest` before **3544 passed / 4 skipped / 0
+4. **Verification**: full `pytest` before **3544 passed / 4 skipped / 0
    failed**, after **3547 passed / 4 skipped / 0 failed** (+3, exactly the new
    tests). All three new tests were confirmed to **fail on the parent
    `best_bets.py`** and pass after. `mypy outlier_scrapers outlier_nfl` clean
@@ -38,7 +39,7 @@
    (`.venv-review/`, untracked) — with every dependency installed the suite
    has no collection errors, unlike the 71-failed/41-error partial
    environments earlier reviews ran in.
-4. **Not changed, reported only**:
+5. **Not changed, reported only**:
    - `outlier_scrapers/results.py` (`1aff8cd`) now requires every MLB
      settlement row to sit within `START_MATCH_WINDOW` (90 min) of a final's
      `gameDate`. That is what separates doubleheader twins and it has to apply
