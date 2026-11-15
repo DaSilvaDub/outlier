@@ -1,3 +1,13 @@
+# Session Handoff: NBA one main line per team market (2026-11-15, agent `grok`)
+
+1. **Last Commit SHA**: `fd821b2bd2bcd5c0563b0500a6ec4d7432b3b48d` (plus this handoff commit on the same branch).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/354 — do not merge. Title: "NBA: pick one main line per team market, not one per side".
+3. **Files Touched**: `outlier_nba/team_run.py` (`_main_lines` now picks one rung per event/market/team and marks both sides), `tests/test_nba_team_run.py` (110.5/108.5 regression plus lower-line tie-break).
+4. **Tests**: master failed the new tests (110.5 split across `team.TOTAL` and `team.ALT_TOTAL`). After the fix, `pytest tests/test_nba_*.py -q` is 500 passed (498 before the new tests). Offline full pytest, provider modules excluded: 3486 passed, 4 skipped.
+5. **Next Steps**: review #354. Out of scope and still open: placeholder quotes (#350), spread pairing in evidence.py (#340), export flag (#334/#336/#344), bundle location (#338), roster registry / injury filter (#349, draft #330). Do not change blend weights, sigmas, or `config/nba_promotion.json` in a follow-up to this bug.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`
