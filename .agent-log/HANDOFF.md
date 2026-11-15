@@ -4,7 +4,7 @@
 2. **Files Touched**:
    - `outlier_scrapers/results.py` — grade compact `TEAM ±line` alt spreads, including whole-number pushes
    - `tests/test_results.py` — WNBA win, loss, and integer-push regression, plus collector settlement
-3. **PR**: WNBA: grade alt spread rows instead of leaving them unsupported (do not merge). Card output is unchanged.
+3. **PR**: https://github.com/DaSilvaDub/outlier/pull/355 — do not merge. Card output is unchanged.
 4. **Next Steps**:
    - Review the settlement-only diff. MLB alt spreads stay retired.
    - Out of scope and still open: zero-stake totals (#351), doubleheader starter (#345), devig decimal/American split, slate date clock.
