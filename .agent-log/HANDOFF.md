@@ -1,3 +1,26 @@
+# Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-15, agent `gemini`)
+
+1. **Last Commit SHA**: `f39c82910ffd7a5b2de858503ab3759deb0162e8`
+2. **Work Performed**:
+   - Executed STEP 0 multi-agent sync check via `report-sync.ps1` (attested OK, 44/44 worktrees synchronized, HEAD `f39c829`).
+   - Inspected AWS Cognito access token (`exp` 365s remaining) and proactively refreshed session via `REFRESH_TOKEN_AUTH` against `AWSCognitoIdentityProviderService`, extending validity for 24h.
+   - Executed daily NFL pack and odds refresh (`scripts/run_nfl_pack_refresh.ps1 -Date 2026-11-15 -SkipDrive`) for today's 12-game Sunday slate:
+     - `outlier_nfl.pipeline` ingested all 12 matchups, normalizing game lines and player props across all books.
+     - `export_nfl_extra_pack.py` exported 674 candidates to `data/NFL/exports/nfl_only.csv`.
+     - `filter_nfl_ruled_out.py` filtered against ESPN and tape statuses (1 inactive player removed, leaving 673 filtered rows; pruned 10 prop_signals in companion matchup scripts).
+     - `organize_desktop_today.py` staged 78 deliverables into local `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\`.
+     - Publication to Google Drive held appropriately per active hold in `docs/remediation/publication_hold.json`.
+3. **Files Touched**:
+   - `config/.outlier_session/storage_state.json` & `api_bearer_token.txt` (renewed Cognito session token)
+   - `data/NFL/exports/nfl_only.csv` (673 rows)
+   - `data/NFL/normalized/*` and `data/NFL/runs/*` (2026-11-15 run bundle)
+   - `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` (staged deliverables)
+   - `.agent-log/HANDOFF.md`
+4. **Next Steps**:
+   - Monitor for 11:30 AM ET and 4:30 PM ET scheduled pack refreshes (`Sports_NFL_Pack_Refresh_1130` and `Sports_NFL_Pack_Refresh_1630`) or run manual pre-lock refresh ahead of 1:00 PM ET Sunday kickoffs.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`
