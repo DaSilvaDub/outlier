@@ -226,6 +226,83 @@ def test_spread_and_push_grading():
     ) == (178, "W")
 
 
+def test_wnba_compact_alt_spread_grades_win_loss_and_integer_push():
+    """WNBA alt spreads are stored as "TEAM ±line", not a full gameline selection.
+
+    Away ATL 91, home WSH 87. ATL -3 covers, ATL -5 does not, and WAS +4
+    (Outlier's Mystics code; ESPN says WSH) lands on the number and pushes.
+    A team that did not play, or a selection whose sign disagrees with the
+    row line, stays ungraded.
+    """
+    event = results.FinalEvent(
+        provider_event_id="1",
+        sport="WNBA",
+        event_date=NOW.date(),
+        away="ATL",
+        home="WSH",
+        away_score=91,
+        home_score=87,
+        players={},
+    )
+    assert results._grade_row(
+        {"selection": "ATL -3", "line": "-3", "market_type": "GAMELINE"},
+        event,
+    ) == (4, "W")
+    assert results._grade_row(
+        {"selection": "ATL -5", "line": "-5", "market_type": "GAMELINE"},
+        event,
+    ) == (4, "L")
+    assert results._grade_row(
+        {"selection": "WAS +4", "line": "4", "market_type": "GAMELINE"},
+        event,
+    ) == (-4, "PUSH")
+    assert (
+        results._grade_row(
+            {"selection": "NYL +4", "line": "4", "market_type": "GAMELINE"},
+            event,
+        )
+        is None
+    )
+    assert (
+        results._grade_row(
+            {"selection": "ATL +4", "line": "-4", "market_type": "GAMELINE"},
+            event,
+        )
+        is None
+    )
+
+
+def test_wnba_compact_alt_spread_settles_instead_of_staying_unsupported(tmp_path):
+    """The collector must attach the final and grade the compact selection.
+
+    Without a matchup in the selection these rows never reach a W/L/P, so the
+    ledger keeps them unsettled.
+    """
+    db = tmp_path / "feedback.sqlite3"
+    feedback.initialize_database(db)
+    with feedback.open_database(db) as conn:
+        _seed(conn, "alt-win", "ATL -3", "GAMELINE", "-3")
+        _seed(conn, "alt-loss", "ATL -5", "GAMELINE", "-5")
+        _seed(conn, "alt-push", "WAS +4", "GAMELINE", "4")
+        rows, summary = results.collect_settlement_rows(
+            conn,
+            ["WNBA"],
+            lookback_days=3,
+            now=NOW,
+            fetch_json=lambda _url: _scoreboard(),
+        )
+
+    by_market = {row["market_id"]: row for row in rows}
+    assert summary["unsupported_count"] == 0
+    assert summary["unmatched_event_count"] == 0
+    assert summary["settlement_rows"] == 3
+    assert by_market["market-alt-win"]["win_loss_push"] == "W"
+    assert by_market["market-alt-win"]["actual_result"] == "4"
+    assert by_market["market-alt-loss"]["win_loss_push"] == "L"
+    assert by_market["market-alt-push"]["win_loss_push"] == "PUSH"
+    assert by_market["market-alt-push"]["actual_result"] == "-4"
+
+
 def test_three_way_gamelines_lose_on_a_draw_instead_of_pushing():
     """Three-way markets carry a third outcome, so a tie is a loss, not a push.
 
