@@ -1,3 +1,16 @@
+# Session Handoff: WNBA alt-spread settlement (2026-11-15, agent `grok`)
+
+1. **Last Commit SHA**: `0d40270db7ee570debcf18281ff2f881df1cc49b` (grading fix; this handoff commit sits on top of it).
+2. **Files Touched**:
+   - `outlier_scrapers/results.py` — grade compact `TEAM ±line` alt spreads, including whole-number pushes
+   - `tests/test_results.py` — WNBA win, loss, and integer-push regression, plus collector settlement
+3. **PR**: WNBA: grade alt spread rows instead of leaving them unsupported (do not merge). Card output is unchanged.
+4. **Next Steps**:
+   - Review the settlement-only diff. MLB alt spreads stay retired.
+   - Out of scope and still open: zero-stake totals (#351), doubleheader starter (#345), devig decimal/American split, slate date clock.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`
