@@ -1,3 +1,42 @@
+# Session Handoff: Daily automated code-health audit (2026-11-16, agent `claude`)
+
+1. **Base**: `claude/inspiring-fermat-2enxiu` at master `f93a6d0`. Cloud STEP 0 equivalent run (AGENTS.md
+   "Cloud / Sandbox Agents"): `git fetch` + all 5 upgrade markers present, HEAD == `origin/master`.
+   No PowerShell in this sandbox, so `report-sync.ps1` was not run.
+2. **Checks (all offline; no reasoning/desk runs, no provider keys in the environment)**:
+   - `pytest` — 3565 collected, **3561 passed, 4 skipped**, 0 failures (293s).
+   - `mypy outlier_scrapers outlier_nfl` — clean (136 files). `mypy outlier_nba` — clean (46 files).
+   - `pyright outlier_scrapers outlier_nfl` — 0 errors (1 warning: optional `playwright` import).
+   - `python -m compileall` over the tree — no syntax errors.
+   - `ruff` high-signal rules (F821/F811/B006/B023/PLR0124/ISC004...) — reviewed; every hit is a
+     deliberate NaN check, same-iteration closure, or wrapped report string. No defect.
+3. **Code reviewed**: today's two merges (`7ebf215` negative_learned_edge moved into
+   `pack_sizing._apply_learned_stake_before_caps`; `6cf2500` retention keeps
+   `projection_feature_hash`) plus the 2026-11-13 results/NBA/NFL fixes. Both of today's changes
+   check out: the push-aware break-even test is correct (`p < (1-push)/price`), `policy.shadow_mode`
+   and `data_quality_tier(..., disqualifying=True)` match their definitions, and the retention
+   predicate no longer re-selects already-slimmed rows. House-rule invariants verified in code:
+   `ALLOWED_MLB_PLAYER_PROPS == {"SO"}`, `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`, HR/Walks-Allowed
+   in `EXCLUDED_MARKETS`, and `clear_derived_pack_outputs` still refuses to touch `verdicts/`.
+4. **Finding (not fixed — dependency change, owner's call)**: `uv.lock` and `requirements.lock` are
+   frozen at the 2026-10-09 dependency set. `uv lock --check` fails. Both locks predate
+   `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary` and `numpy` being added to
+   `pyproject.toml`, so 5 of 9 runtime deps are unpinned: the "Install frozen dependencies" step in
+   `.github/workflows/pytest.yml` and `typecheck.yml` resolves them from PyPI at the latest release
+   (a breaking `numpy`/`SQLAlchemy` major would land in CI unannounced), and a lock-only install
+   cannot import `outlier_scrapers.results` on Windows for want of `tzdata`. Fix is to re-run
+   `uv lock` then `uv export --frozen --no-hashes --all-extras -o requirements.lock` and review the
+   version bumps that resolution introduces.
+5. **Lower-priority notes**: the `provider` pytest marker declared in `pyproject.toml` is on zero
+   tests, so `pytest -m "not provider"` deselects nothing — CI gets the split from `--ignore` paths
+   instead, which is the convention to follow when an offline run is required. `outlier_nba` (46
+   files) is absent from both CI typecheck jobs and `make typecheck`; mypy is clean on it and pyright
+   reports only two false `possibly unbound` at `outlier_nba/cli.py:681` (`due_mod`/`now` are both
+   bound under the same `args.only_if_due` guard), so adding it would need those two suppressed.
+6. **No source changes.** Working tree clean apart from this handoff entry.
+
+---
+
 # Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to
