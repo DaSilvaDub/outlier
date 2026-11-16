@@ -95,8 +95,17 @@ def test_postseason_slate_is_rejected_before_publication(tmp_path: Path) -> None
     assert _published(tmp_path) == before
 
 
-def test_january_regular_season_slate_publishes(tmp_path: Path) -> None:
+def test_january_regular_season_slate_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # 2026-09-13 + 119 days = Sunday 2027-01-10, Week 18 of the 2026 season.
+    # That shift leaves the frozen tape ~98 days stale, so matchup rankings
+    # return 0 rows and fail on their own. Stub a row so this observes season phase.
+    from outlier_nfl import matchup_rankings
+
+    monkeypatch.setattr(
+        matchup_rankings, "generate_matchup_rankings_pipeline", lambda **_k: {"count": 1}
+    )
     client = snap.FrozenOutlierClient(FIXTURES_DIR, shift_days=119, week=18)
     run = _run(tmp_path, client, "2027-01-10", "2027-01-10T15:00:00+00:00")
     assert run["season_type"] == "REG"

@@ -174,6 +174,8 @@ def test_placeholder_prices_are_dropped():
     c = consensus_two_way(quotes)
     assert c.n_books == 3
     assert set(c.dropped_books) == {"D", "E", "F"}
+    assert c.best_b is not None and c.best_b[1] in {"A", "B", "C"}
+    assert c.best_a is not None and c.best_a[1] in {"A", "B", "C"}
 
 
 def test_no_usable_books_gives_no_probability():

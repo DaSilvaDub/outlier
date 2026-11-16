@@ -41,6 +41,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "publication_guards.ps1")
 
 $repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
 $driveToday = "G:\My Drive\today"
@@ -213,7 +214,7 @@ $emptyAfterEvents = ($afterRows -eq 0) -and (
 )
 
 if ($emptyAfterEvents) {
-    Write-Error "Filtered nfl_only.csv is empty but events exist for $Date (events_count=$eventsCount). Refusing Drive publish."
+    [Console]::Error.WriteLine("Filtered nfl_only.csv is empty but events exist for $Date (events_count=$eventsCount). Refusing Drive publish.")
     exit 2
 }
 
@@ -223,7 +224,15 @@ if ($ScratchOut -and -not $ForceDrive) {
     Write-Output "ScratchOut set without -ForceDrive; skipping Drive publish."
 }
 
+# Local Desktop staging runs before the Drive publish so an active publication
+# hold (which throws below) never blocks local staging.
+$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
+if (-not (Test-Path -LiteralPath $organizerScript -PathType Leaf)) { throw "Required file missing: $organizerScript" }
+Write-Output "Organizing Desktop Today folders for NFL (local only)..."
+Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NFL", "--date", $Date, "--skip-drive")
+
 if ($shouldPublish) {
+    Assert-PublicationHold $repoRoot
     $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
 

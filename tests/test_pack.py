@@ -231,7 +231,7 @@ def test_player_prop_with_insight_stays_capped():
     row = make_row(
         card,
         ev,
-        probable_pitchers={"STL": {"pitcher": "Matthew Liberatore", "confirmed": True}},
+        probable_pitchers=[{"team": "STL", "pitcher": "Matthew Liberatore", "confirmed": True}],
     )
     assert row["actionable"] == "true"
     assert row["recommended_units_pre_news"] == 1.0
@@ -542,7 +542,7 @@ def test_audit_only_projection_side_conflict_is_kept_but_flagged():
             "calculated_ev_pct": 0.05,
         }
     ]
-    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    probable = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
 
     row = make_row(card, ev, probable_pitchers=probable)
 
@@ -694,7 +694,7 @@ def test_league_average_so_projection_is_audit_only(monkeypatch):
             "calculated_ev_pct": 0.05,
         }
     ]
-    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    probable = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
     row = make_row(card, ev, probable_pitchers=probable)
     assert row["independent_model_prob"] == ""
     assert row["projection_model_version"]
@@ -767,8 +767,9 @@ def test_gamelog_so_projection_sets_independent_model_prob():
             "calculated_ev_pct": 0.05,
         }
     ]
-    probable = {
-        "DET": {
+    probable = [
+        {
+            "team": "DET",
             "pitcher": "Jackson Jobe",
             "confirmed": True,
             "pitcher_id": 683242,
@@ -777,7 +778,7 @@ def test_gamelog_so_projection_sets_independent_model_prob():
             "feature_source": "mlb_stats_gamelog",
             "starts": 5,
         }
-    }
+    ]
     row = make_row(card, ev, probable_pitchers=probable)
     assert row["independent_model_prob"] != ""
     assert float(row["independent_model_prob"]) > 0
@@ -819,7 +820,7 @@ def test_failed_explicit_projection_is_not_replaced_by_league_average():
         card,
         ev,
         projections={"o1": projection},
-        probable_pitchers={"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
+        probable_pitchers=[{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}],
     )
     assert row["independent_model_prob"] == ""
     assert "projection_line_mismatch" in row["projection_quality_flags"]
@@ -3156,10 +3157,10 @@ def test_gore_on_wrong_team_is_fail_closed_flagged():
     # Gore confirmed TEX vs TB, but the card put him on WSH @ LAD.
     # Board B identity failures stay on Board B so they do not occupy the
     # Board A EV quota.
-    probable = {
-        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
-        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
-    }
+    probable = [
+        {"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True},
+        {"team": "WSH", "pitcher": "Andrew Alvarez", "confirmed": True},
+    ]
     row = make_row(
         _gore_so_card("WSH", "LAD", "WSH @ LAD"),
         [],
@@ -3175,10 +3176,10 @@ def test_gore_on_wrong_team_is_fail_closed_flagged():
 
 
 def test_board_a_identity_mismatch_is_a_flagged():
-    probable = {
-        "TEX": {"pitcher": "MacKenzie Gore", "confirmed": True},
-        "WSH": {"pitcher": "Andrew Alvarez", "confirmed": True},
-    }
+    probable = [
+        {"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True},
+        {"team": "WSH", "pitcher": "Andrew Alvarez", "confirmed": True},
+    ]
     row = make_row(
         _gore_so_card("WSH", "LAD", "WSH @ LAD", board="A"),
         [],
@@ -3209,7 +3210,7 @@ def test_missing_probable_lookup_fail_closes_so_row():
 
 
 def test_gore_matching_confirmed_starter_stays_unflagged():
-    probable = {"TEX": {"pitcher": "MacKenzie Gore", "confirmed": True}}
+    probable = [{"team": "TEX", "pitcher": "MacKenzie Gore", "confirmed": True}]
     row = make_row(
         _gore_so_card("TEX", "TB", "TB @ TEX"),
         [],
@@ -3237,7 +3238,7 @@ def test_so_token_market_label_does_not_unconfirm_confirmed_starter():
         matchup="DET @ PIT",
         event_id="game-1",
     )
-    probable = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    probable = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
     row = make_row(card, [], sport="MLB", probable_pitchers=probable)
     assert row is not None
     flags = row["data_quality_flags"].split(";") if row["data_quality_flags"] else []

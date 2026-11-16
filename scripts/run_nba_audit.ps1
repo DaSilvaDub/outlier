@@ -78,7 +78,7 @@ try {
     Write-Output "[$(Get-Date -Format 'o')] Organizing Desktop Today for NBA..."
     $organizerPy = Join-Path $outlierRepo "scripts\organize_desktop_today.py"
     if (Test-Path -LiteralPath $organizerPy) {
-        & $python $organizerPy --sport NBA --date $Date
+        & $python $organizerPy --sport NBA --date $Date --skip-drive
         if ($LASTEXITCODE -ne 0) { throw "organize_desktop_today.py failed with exit code $LASTEXITCODE" }
     }
 

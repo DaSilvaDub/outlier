@@ -52,8 +52,9 @@ def test_mlb_so_gamelog_path_is_less_extreme_after_shrinkage():
         "line": 5.5,
         "headline_side": "OVER",
     }
-    probable = {
-        "NYY": {
+    probable = [
+        {
+            "team": "NYY",
             "pitcher": "Cam Schlittler",
             "confirmed": True,
             "projected_bf": 24.0,
@@ -63,7 +64,7 @@ def test_mlb_so_gamelog_path_is_less_extreme_after_shrinkage():
             "total_k": 24.5,
             "feature_source": "mlb_stats_gamelog",
         }
-    }
+    ]
     # Raw distribution without going through shrink helper for comparison:
     from outlier_scrapers.projections import mlb_strikeout_distribution
 

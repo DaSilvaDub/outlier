@@ -274,7 +274,7 @@ def process_stream(
     projections_payload: dict[str, Any] | None = None,
     blend_artifact: dict[str, Any] | None = None,
     health_payload: dict[str, Any] | None = None,
-    probable_pitchers: dict[str, dict[str, Any]] | None = None,
+    probable_pitchers: list[dict[str, Any]] | None = None,
     expected_projection_date: str | None = None,
     games_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:

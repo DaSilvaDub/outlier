@@ -698,6 +698,11 @@ on `outlier_nfl` (no shared extraction); D2 add `numpy`; D3 shared `feedback.sql
 the Phase 0 spike; D5 desk compatibility deferred (desk never run without an explicit request).
 Still open: the shared-core blend-floor ruling in PR #282 (not an NBA decision).
 
+**Resolved 2026-11-08 (user: "Yes, use them"):** §10's "free sources only" is overruled for
+Cleaning the Glass game logs already on the NBA Drive hub, which the team model may import
+read-only (`docs/nba/data-sources.md` §6, `docs/plans/2026-11-08-ctg-integration.md`). How new
+CTG data is obtained is still open. No scraper is run from this repository.
+
 Original options:
 
 - **D1** — Harness reuse: re-implement a slim NBA run harness modeled on `outlier_nfl` (recommended;

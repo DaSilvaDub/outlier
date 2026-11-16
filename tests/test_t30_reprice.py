@@ -83,10 +83,10 @@ def _context(*, injury="", pitcher="Starter A", confirmed=True):
     return {
         "injuries_by_league": {"MLB": {"evt-1": injury} if injury else {}},
         "probable_pitchers_by_league": {
-            "MLB": {
-                "AAA": {"pitcher": pitcher, "confirmed": confirmed},
-                "BBB": {"pitcher": "Starter B", "confirmed": True},
-            }
+            "MLB": [
+                {"team": "AAA", "pitcher": pitcher, "confirmed": confirmed},
+                {"team": "BBB", "pitcher": "Starter B", "confirmed": True},
+            ]
         },
     }
 
@@ -643,7 +643,7 @@ def test_current_context_marks_old_news_and_starter_sources_stale(tmp_path, monk
         json.dumps(
             {
                 "generated_at": (NOW - timedelta(hours=1)).isoformat(),
-                "by_team": {"AAA": {"pitcher": "Starter A", "confirmed": True}},
+                "starters": [{"team": "AAA", "pitcher": "Starter A", "confirmed": True}],
             }
         ),
         encoding="utf-8",

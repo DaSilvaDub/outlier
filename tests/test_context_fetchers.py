@@ -41,22 +41,24 @@ def test_park_k_factor_defaults_and_known_parks():
 
 
 def test_enrich_attaches_opponent_and_park_context():
-    by_team = {
-        "STL": {
+    by_team = [
+        {
+            "team": "STL",
             "pitcher": "Michael McGreevy",
             "pitcher_id": 700241,
             "confirmed": True,
             "opponent": "CHC",
             "home_away": "HOME",
         },
-        "CHC": {
+        {
+            "team": "CHC",
             "pitcher": "Opponent Arm",
             "pitcher_id": 1,
             "confirmed": True,
             "opponent": "STL",
             "home_away": "AWAY",
         },
-    }
+    ]
 
     def _fake(url: str) -> dict:
         if "/people/" in url:
@@ -104,7 +106,10 @@ def test_enrich_attaches_opponent_and_park_context():
             }
         raise AssertionError(url)
 
-    enriched = enrich_probable_with_so_features(by_team, season=2026, fetch_json=_fake)
+    enriched = {
+        row["team"]: row
+        for row in enrich_probable_with_so_features(by_team, season=2026, fetch_json=_fake)
+    }
     assert enriched["STL"]["feature_source"] == "mlb_stats_gamelog"
     assert enriched["STL"]["opponent_k_rate"] == pytest.approx(0.25)
     assert enriched["STL"]["park_k_factor"] == pytest.approx(0.99)  # STL home

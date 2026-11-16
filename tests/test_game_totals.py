@@ -226,7 +226,7 @@ def test_build_game_totals_starter_flags_default_empty_without_lookup():
 
 def test_build_game_totals_flags_unconfirmed_starter_without_touching_actionable():
     candidates, games_norm = _build_totals_fixture()
-    probable_pitchers = {"B": {"pitcher": None, "confirmed": False}}
+    probable_pitchers = [{"team": "B", "pitcher": None, "confirmed": False}]
     rows = build_game_totals(
         candidates,
         games_norm,
@@ -243,10 +243,10 @@ def test_build_game_totals_flags_unconfirmed_starter_without_touching_actionable
 
 def test_build_game_totals_no_flag_when_both_starters_confirmed():
     candidates, games_norm = _build_totals_fixture()
-    probable_pitchers = {
-        "A": {"pitcher": "Pitcher A", "confirmed": True},
-        "B": {"pitcher": "Pitcher B", "confirmed": True},
-    }
+    probable_pitchers = [
+        {"team": "A", "pitcher": "Pitcher A", "confirmed": True},
+        {"team": "B", "pitcher": "Pitcher B", "confirmed": True},
+    ]
     rows = build_game_totals(
         candidates,
         games_norm,

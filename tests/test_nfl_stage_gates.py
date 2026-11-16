@@ -31,14 +31,15 @@ def _published(tmp_path: Path) -> dict[str, bytes]:
     return out
 
 
-def _run(tmp_path: Path, client: Any, clock: str = LATER, day: str = SLATE) -> dict[str, Any]:
+def _run(tmp_path: Path, client: Any, clock: str = LATER, day: str = SLATE,
+         **run_kwargs: Any) -> dict[str, Any]:
     tape = tmp_path / "NFL" / "tape" / "prior_week.json"
     if not tape.exists():
         tape.parent.mkdir(parents=True, exist_ok=True)
         tape.write_text(json.dumps(snap.frozen_tape(FIXTURES_DIR)), encoding="utf-8")
     now = parse_utc(clock)
     return NflPipeline(client=client, data_dir=tmp_path, clock=lambda: now).run(
-        date=day, as_of_utc=clock, reports_dir=tmp_path / "reports"
+        date=day, as_of_utc=clock, reports_dir=tmp_path / "reports", **run_kwargs
     )
 
 
@@ -265,3 +266,70 @@ def test_zero_event_slate_stays_ok_and_props_receipt_empty(tmp_path):
 def test_admitted_props_count_is_recorded(tmp_path, pregame):
     good, _ = pregame
     assert _receipt(good, "player_props")["received"] == good["player_props_count"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Required stages that used to log and stay OK must fail the run (receipt + exit)
+# ---------------------------------------------------------------------------
+
+def _assert_required_failure(run: dict[str, Any], name: str, monkeypatch: pytest.MonkeyPatch,
+                             capsys: pytest.CaptureFixture[str], *, received: int | None = None) -> None:
+    rows = {r["name"]: r for r in run["stage_receipts"]}
+    assert name in rows, [r["name"] for r in run["stage_receipts"]]
+    stage = rows[name]
+    assert stage["required"] is True
+    assert stage["status"] not in ("OK", "EMPTY")
+    if received is not None:
+        assert stage["received"] == received
+    assert run["status"] != "OK"
+    assert run["publication"] == "bundle_only"
+    assert f"{name}=" in (run["publication_reason"] or "")
+    monkeypatch.setattr(NflPipeline, "run", lambda self, **_k: run)
+    monkeypatch.setattr(sys, "argv", ["outlier_nfl.pipeline", "--date", SLATE])
+    assert nfl_pipeline.main() == EXIT_REQUIRED_STAGE_FAILED
+    assert f"{name}:" in capsys.readouterr().err
+
+
+def test_best_bets_exception_fails_the_run(tmp_path, monkeypatch, capsys):
+    def boom(_inputs: Any) -> dict[str, Any]:
+        raise RuntimeError("trace exploded")
+
+    monkeypatch.setattr(nfl_pipeline, "build_best_bets", boom)
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR))
+    _assert_required_failure(run, "best_bets", monkeypatch, capsys)
+
+
+def test_zero_matchup_rankings_with_events_fails_the_run(tmp_path, monkeypatch, capsys):
+    from outlier_nfl import matchup_rankings
+
+    monkeypatch.setattr(
+        matchup_rankings, "generate_matchup_rankings_pipeline", lambda **_k: {"count": 0}
+    )
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR))
+    assert run["events_count"] > 0
+    _assert_required_failure(run, "matchup_rankings", monkeypatch, capsys, received=0)
+
+
+def test_alt_floor_exception_fails_the_run(tmp_path, monkeypatch, capsys):
+    from outlier_nfl import alt_floors
+
+    def boom(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("alt floor exploded")
+
+    monkeypatch.setattr(alt_floors, "generate_alt_floors_pipeline", boom)
+    run = _run(tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR))
+    _assert_required_failure(run, "alt_floors", monkeypatch, capsys)
+
+
+def test_game_script_exception_fails_the_run(tmp_path, monkeypatch, capsys):
+    import scripts.nfl_game_script as game_script
+
+    class _Boom:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            raise RuntimeError("game script exploded")
+
+    monkeypatch.setattr(game_script, "NflGameScriptGenerator", _Boom)
+    run = _run(
+        tmp_path, snap.FrozenOutlierClient(FIXTURES_DIR), generate_game_script=True,
+    )
+    _assert_required_failure(run, "game_script", monkeypatch, capsys)

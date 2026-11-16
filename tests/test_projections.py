@@ -166,17 +166,17 @@ def test_mlb_so_projection_only_emits_for_confirmed_starters():
         "line": 4.5,
         "headline_side": "OVER",
     }
-    confirmed = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    confirmed = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
     record = mlb_so_projection_record(row, confirmed)
     assert record is not None
     assert record["distribution"]["win_prob"] > 0
     assert record["distribution"]["side"] == "OVER"
     assert (
-        mlb_so_projection_record(row, {"DET": {"pitcher": "Jackson Jobe", "confirmed": False}})
+        mlb_so_projection_record(row, [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": False}])
         is None
     )
     assert (
-        mlb_so_projection_record(row, {"DET": {"pitcher": "Tarik Skubal", "confirmed": True}})
+        mlb_so_projection_record(row, [{"team": "DET", "pitcher": "Tarik Skubal", "confirmed": True}])
         is None
     )
     reliever = {**row, "player": "Robert Stock", "selection": "Robert Stock - Strikeouts OVER 3.5"}
@@ -194,15 +194,16 @@ def test_mlb_so_projection_does_not_use_another_teams_starter():
         "line": 4.5,
         "headline_side": "OVER",
     }
-    probable = {
-        "TEX": {
+    probable = [
+        {
+            "team": "TEX",
             "pitcher": "MacKenzie Gore",
             "confirmed": True,
             "projected_bf": 23.6,
             "strikeout_rate": 0.25,
             "feature_source": "mlb_stats_gamelog",
         }
-    }
+    ]
     assert mlb_so_projection_record(row, probable) is None
     tex_row = {**row, "team": "TEX"}
     assert mlb_so_projection_record(tex_row, probable) is not None
@@ -250,7 +251,7 @@ def test_first_inning_yes_no_sides_map_to_over_under_partition():
 
 
 def test_build_mlb_so_projections_only_keeps_eligible_rows():
-    confirmed = {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}}
+    confirmed = [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}]
     props_rows = [
         {
             "sport": "MLB",
@@ -350,7 +351,7 @@ def test_export_projections_writes_normalized_projections_file(tmp_path, monkeyp
     monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
     monkeypatch.setattr(
         "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
-        lambda league: {"DET": {"pitcher": "Jackson Jobe", "confirmed": True}},
+        lambda league: [{"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True}],
     )
 
     status = export_projections("MLB", target_date="2026-08-25")
@@ -501,10 +502,10 @@ def test_export_projections_requires_unambiguous_slate_date(tmp_path, monkeypatc
     monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
     monkeypatch.setattr(
         "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
-        lambda league: {
-            "DET": {"pitcher": "Jackson Jobe", "confirmed": True},
-            "SEA": {"pitcher": "Tarik Skubal", "confirmed": True},
-        },
+        lambda league: [
+            {"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True},
+            {"team": "SEA", "pitcher": "Tarik Skubal", "confirmed": True},
+        ],
     )
 
     status = export_projections("MLB")
@@ -561,10 +562,10 @@ def test_export_projections_filters_mixed_feed_to_explicit_target_date(tmp_path,
     monkeypatch.setattr("outlier_scrapers.paths.league_paths", lambda league: fake_paths)
     monkeypatch.setattr(
         "outlier_scrapers.probable_pitchers.load_probable_pitcher_lookup",
-        lambda league: {
-            "DET": {"pitcher": "Jackson Jobe", "confirmed": True},
-            "SEA": {"pitcher": "Tarik Skubal", "confirmed": True},
-        },
+        lambda league: [
+            {"team": "DET", "pitcher": "Jackson Jobe", "confirmed": True},
+            {"team": "SEA", "pitcher": "Tarik Skubal", "confirmed": True},
+        ],
     )
 
     status = export_projections("MLB", target_date="2026-08-26")

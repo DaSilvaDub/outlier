@@ -43,6 +43,9 @@ DEFAULT_OUTPUT_DIR = (
 )
 USER_AGENT = "outlier-results-collector/1.0"
 EASTERN = ZoneInfo("America/New_York")
+# Same-day twins are a couple of hours apart. A ledger start and the MLB
+# gameDate for one game are not, so anything farther away is a different game.
+START_MATCH_WINDOW = timedelta(minutes=90)
 TEAM_ALIASES = {
     "ARI": "AZ",
     "CHW": "CWS",
@@ -84,6 +87,7 @@ class FinalEvent:
     away_score: float
     home_score: float
     players: dict[str, dict[str, float]]
+    starts_at: datetime | None = None
 
 
 def _fetch_json(url: str, *, timeout: int = 30) -> dict[str, Any]:
@@ -110,6 +114,25 @@ def _team_token(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _parse_aware(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _starts_within(game_start: datetime | None, row_start: datetime) -> bool:
+    if game_start is None:
+        return False
+    return abs(game_start - row_start) <= START_MATCH_WINDOW
 
 
 def _number(value: Any) -> float | None:
@@ -335,6 +358,7 @@ def _mlb_events(
                     away_score=away_score,
                     home_score=home_score,
                     players=_mlb_boxscore_players(boxscore),
+                    starts_at=_parse_aware(game.get("gameDate")),
                 )
             )
     return events
@@ -760,11 +784,8 @@ def collect_settlement_rows(
     by_sport_date: dict[tuple[str, date], list[sqlite3.Row]] = defaultdict(list)
     invalid_time = 0
     for row in pending:
-        try:
-            start = datetime.fromisoformat(str(row["event_starts_at"]).replace("Z", "+00:00"))
-            if start.tzinfo is None:
-                raise ValueError
-        except ValueError:
+        start = _parse_aware(row["event_starts_at"])
+        if start is None:
             invalid_time += 1
             continue
         by_sport_date[(str(row["sport"]).upper(), start.astimezone(EASTERN).date())].append(row)
@@ -807,6 +828,7 @@ def collect_settlement_rows(
 
         for row in rows:
             selection = str(row["selection"] or "")
+            row_start = _parse_aware(row["event_starts_at"])
             if " Team Total " in selection:
                 candidates = [
                     event for event in events if _team_total_event_match(event, selection)
@@ -815,6 +837,12 @@ def collect_settlement_rows(
                 candidates = [event for event in events if _event_match(event, selection)]
             if " - " in selection and not _is_matchup_prefixed(selection):
                 candidates = _player_event_candidates(events, selection)
+            if sport == "MLB":
+                candidates = [
+                    event
+                    for event in candidates
+                    if row_start is not None and _starts_within(event.starts_at, row_start)
+                ]
             if len(candidates) != 1:
                 summary["unmatched_event_count"] += 1
                 continue

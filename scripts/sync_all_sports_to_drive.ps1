@@ -9,10 +9,16 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Date = ""
+    [string]$Date = "",
+    [string]$DriveRoot = "",
+    [double]$MinDiskSpaceGB = 20.0
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "publication_guards.ps1")
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Assert-PublicationHold $repoRoot
+Assert-FreeSpace $repoRoot $MinDiskSpaceGB
 
 try {
     $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
@@ -35,11 +41,12 @@ $driveRoots = @(
     "G:\My Drive",
     "C:\Users\dasil\My Drive (dasilvadub@gmail.com)"
 )
-$driveRoot = $null
-foreach ($dr in $driveRoots) {
-    if (Test-Path -LiteralPath $dr) {
-        $driveRoot = $dr
-        break
+if (-not $DriveRoot) {
+    foreach ($dr in $driveRoots) {
+        if (Test-Path -LiteralPath $dr) {
+            $driveRoot = $dr
+            break
+        }
     }
 }
 
@@ -64,12 +71,14 @@ Write-Host "`n[1/4] Syncing NCAA (CFB) Pipeline..." -ForegroundColor Yellow
 $cfbRefreshScript = Join-Path $PSScriptRoot "refresh_cfb_pack.ps1"
 if (Test-Path -LiteralPath $cfbRefreshScript) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $cfbRefreshScript -SkipPipeline -Date $Date
+    if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
 } else {
     $ncaaScript = "C:\Users\dasil\Dev\GitHub\cfb-analytics\scripts\sync_to_drive.ps1"
     if (Test-Path -LiteralPath $ncaaScript) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ncaaScript -SlateDate $Date
+        if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
     } else {
-        Write-Warning "NCAA sync script not found at $ncaaScript"
+        throw "NCAA sync script not found at $ncaaScript"
     }
 }
 
@@ -80,12 +89,14 @@ Write-Host "`n[2/4] Syncing NBA Pipeline..." -ForegroundColor Yellow
 $nbaRefreshScript = Join-Path $PSScriptRoot "refresh_nba_pack.ps1"
 if (Test-Path -LiteralPath $nbaRefreshScript) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $nbaRefreshScript -SkipPipeline -Date $Date
+    if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
 } else {
     $nbaScript = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline\scripts\sync_nba_to_drive.ps1"
     if (Test-Path -LiteralPath $nbaScript) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $nbaScript
+        if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
     } else {
-        Write-Warning "NBA sync script not found at $nbaScript"
+        throw "NBA sync script not found at $nbaScript"
     }
 }
 
@@ -93,38 +104,30 @@ if (Test-Path -LiteralPath $nbaRefreshScript) {
 # 3. NFL PIPELINE SYNC
 # -------------------------------------------------------------------------
 Write-Host "`n[3/4] Syncing NFL Pipeline..." -ForegroundColor Yellow
-$nflRefreshScript = "C:\Users\dasil\Dev\GitHub\outlier\scripts\refresh_nfl_pack.ps1"
+$nflRefreshScript = Join-Path $PSScriptRoot "refresh_nfl_pack.ps1"
 if (Test-Path -LiteralPath $nflRefreshScript) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $nflRefreshScript -SkipPipeline -Date $Date
+    if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
     # If today has no direct Sunday slate, also check tomorrow (e.g. Sunday)
     $nextDate = ([DateTime]::Parse($Date)).AddDays(1).ToString("yyyy-MM-dd")
     if (Test-Path "C:\Users\dasil\Dev\GitHub\outlier\data\NFL\normalized\nfl_best_bets_$nextDate.json") {
         Write-Host "Also syncing upcoming Sunday slate ($nextDate)..." -ForegroundColor Yellow
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $nflRefreshScript -SkipPipeline -Date $nextDate
+        if ($LASTEXITCODE -ne 0) { throw "Sport sync stage failed with exit code $LASTEXITCODE" }
     }
 } else {
-    Write-Warning "NFL refresh script not found at $nflRefreshScript"
+    throw "NFL refresh script not found at $nflRefreshScript"
 }
 
 # -------------------------------------------------------------------------
 # 4. MLB & WNBA PIPELINE SYNC (Off-Season Guarded)
 # -------------------------------------------------------------------------
 Write-Host "`n[4/4] Syncing MLB & WNBA Pipeline..." -ForegroundColor Yellow
-$todayPack = "C:\Users\dasil\Dev\GitHub\outlier\packs\$Date"
+$todayPack = Join-Path $repoRoot "packs\$Date"
 if (Test-Path -LiteralPath $todayPack) {
-    $organizeScript = "C:\Users\dasil\Dev\GitHub\outlier\scripts\organize_today_run2.py"
-    if (Test-Path -LiteralPath $organizeScript) {
-        & python $organizeScript
-        # Mirror latest playable props and briefing to BETTING REPORTS\MLB_WNBA
-        Get-ChildItem -Path $driveToday -Filter "playable_props*.md" -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $driveMlbWnba -Force }
-        $briefing = Join-Path $driveToday "briefing.md"
-        if (Test-Path -LiteralPath $briefing) {
-            Copy-Item -LiteralPath $briefing -Destination $driveMlbWnba -Force
-        }
-    } else {
-        Write-Warning "MLB/WNBA organize script not found at $organizeScript"
-    }
+    # Direct MLB/WNBA sync is retired: run_daily_pipeline.ps1 owns current-run attestation
+    # and publication for those sports. Skip rather than fail after NCAA/NBA/NFL succeeded.
+    Write-Host "MLB/WNBA pack found for $Date; direct sync retired. Publish it via run_daily_pipeline.ps1." -ForegroundColor DarkGray
 } else {
     Write-Host "No active MLB/WNBA pack found for $Date (off-season). Skipping." -ForegroundColor DarkGray
 }

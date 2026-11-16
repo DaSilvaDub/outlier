@@ -8,6 +8,7 @@ from outlier_scrapers.probable_pitchers import (
     load_probable_pitcher_lookup,
     normalize_probable_pitchers,
 )
+from outlier_scrapers.projections import mlb_so_projection_record
 
 
 def _raw_schedule(*, home_confirmed: bool = True) -> dict:
@@ -36,10 +37,21 @@ def _raw_schedule(*, home_confirmed: bool = True) -> dict:
     }
 
 
+def _side(payload: dict, team: str, *, game_pk: int | None = None) -> dict:
+    rows = [
+        row
+        for row in payload["starters"]
+        if row["team"] == team and (game_pk is None or row["game_pk"] == game_pk)
+    ]
+    assert len(rows) == 1
+    return rows[0]
+
+
 def test_normalize_probable_pitchers_confirms_both_sides():
     normalized = normalize_probable_pitchers(_raw_schedule())
     assert normalized["record_count"] == 1
-    assert normalized["by_team"]["LAA"] == {
+    assert _side(normalized, "LAA") == {
+        "team": "LAA",
         "pitcher": "Yusei Kikuchi",
         "pitcher_id": 608337,
         "confirmed": True,
@@ -48,27 +60,95 @@ def test_normalize_probable_pitchers_confirms_both_sides():
         "game_pk": 12345,
         "scheduled_time": "2026-08-04T23:05:00Z",
     }
-    assert normalized["by_team"]["BAL"]["confirmed"] is True
-    assert normalized["by_team"]["BAL"]["pitcher"] == "Grayson Rodriguez"
-    assert normalized["by_team"]["BAL"]["pitcher_id"] == 669302
+    assert _side(normalized, "BAL")["confirmed"] is True
+    assert _side(normalized, "BAL")["pitcher"] == "Grayson Rodriguez"
+    assert _side(normalized, "BAL")["pitcher_id"] == 669302
     assert normalized["games"][0]["away_pitcher_id"] == 608337
     assert normalized["games"][0]["home_pitcher_id"] == 669302
 
 
 def test_normalize_probable_pitchers_flags_unconfirmed_starter():
     normalized = normalize_probable_pitchers(_raw_schedule(home_confirmed=False))
-    assert normalized["by_team"]["BAL"]["confirmed"] is False
-    assert normalized["by_team"]["BAL"]["pitcher"] is None
-    assert normalized["by_team"]["BAL"]["pitcher_id"] is None
+    assert _side(normalized, "BAL")["confirmed"] is False
+    assert _side(normalized, "BAL")["pitcher"] is None
+    assert _side(normalized, "BAL")["pitcher_id"] is None
     # The away side is unaffected by the home side being TBD.
-    assert normalized["by_team"]["LAA"]["confirmed"] is True
-    assert normalized["by_team"]["LAA"]["pitcher_id"] == 608337
+    assert _side(normalized, "LAA")["confirmed"] is True
+    assert _side(normalized, "LAA")["pitcher_id"] == 608337
 
 
 def test_normalize_probable_pitchers_empty_schedule():
     normalized = normalize_probable_pitchers({"dates": []})
     assert normalized["record_count"] == 0
-    assert normalized["by_team"] == {}
+    assert normalized["starters"] == []
+
+
+def _dh_game(
+    pk: int, when: str, away_name: str, away_id: int, home_name: str, home_id: int
+) -> dict:
+    return {
+        "gamePk": pk,
+        "gameDate": when,
+        "teams": {
+            "away": {
+                "team": {"name": "New York Yankees"},
+                "probablePitcher": {"id": away_id, "fullName": away_name},
+            },
+            "home": {
+                "team": {"name": "Boston Red Sox"},
+                "probablePitcher": {"id": home_id, "fullName": home_name},
+            },
+        },
+    }
+
+
+def test_doubleheader_so_row_resolves_to_its_own_starter():
+    """17:05 Cole (game_pk 1001) must not resolve as the night game's Rodon."""
+    normalized = normalize_probable_pitchers(
+        {
+            "dates": [
+                {
+                    "date": "2026-08-04",
+                    "games": [
+                        _dh_game(
+                            1001,
+                            "2026-08-04T17:05:00-04:00",
+                            "Gerrit Cole",
+                            543037,
+                            "Brayan Bello",
+                            678906,
+                        ),
+                        _dh_game(
+                            1002,
+                            "2026-08-04T19:10:00-04:00",
+                            "Carlos Rodon",
+                            607074,
+                            "Garrett Crochet",
+                            676979,
+                        ),
+                    ],
+                }
+            ]
+        }
+    )
+    lookup = normalized["starters"]
+
+    def so(player: str, outcome_id: str, game_pk: int) -> dict:
+        return {
+            "sport": "MLB",
+            "market_type": "SO",
+            "player": player,
+            "team": "NYY",
+            "line": 5.5,
+            "headline_side": "OVER",
+            "outcome_id": outcome_id,
+            "game_pk": game_pk,
+        }
+
+    cole = mlb_so_projection_record(so("Gerrit Cole", "cole-1705", 1001), lookup)
+    rodon = mlb_so_projection_record(so("Carlos Rodon", "rodon-1910", 1002), lookup)
+    assert cole is not None and cole["row_id"] == "cole-1705"
+    assert rodon is not None and rodon["row_id"] == "rodon-1910"
 
 
 def test_export_probable_pitchers_skips_non_mlb():
@@ -89,7 +169,7 @@ def test_load_probable_pitcher_lookup_missing_file_returns_empty(tmp_path, monke
         reports=tmp_path / "reports",
     )
     monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
-    assert load_probable_pitcher_lookup("MLB") == {}
+    assert load_probable_pitcher_lookup("MLB") == []
 
 
 def test_load_probable_pitcher_lookup_reads_written_file(tmp_path, monkeypatch):
@@ -106,11 +186,11 @@ def test_load_probable_pitcher_lookup_reads_written_file(tmp_path, monkeypatch):
     monkeypatch.setattr(pp, "league_paths", lambda league: fake_paths)
     fake_paths.normalized.mkdir(parents=True, exist_ok=True)
     fake_paths.probable_pitchers_latest().write_text(
-        json.dumps({"by_team": {"BAL": {"pitcher": None, "confirmed": False}}}),
+        json.dumps({"starters": [{"team": "BAL", "pitcher": None, "confirmed": False}]}),
         encoding="utf-8",
     )
     lookup = load_probable_pitcher_lookup("MLB")
-    assert lookup == {"BAL": {"pitcher": None, "confirmed": False}}
+    assert lookup == [{"team": "BAL", "pitcher": None, "confirmed": False}]
 
 
 def test_export_probable_pitchers_writes_normalized_and_raw(tmp_path, monkeypatch):
@@ -168,10 +248,11 @@ def test_export_probable_pitchers_writes_normalized_and_raw(tmp_path, monkeypatc
     assert status == {"status": "ok", "record_count": 1}
     assert fake_paths.probable_pitchers_latest().exists()
     written = json.loads(fake_paths.probable_pitchers_latest().read_text(encoding="utf-8"))
-    assert written["by_team"]["LAA"]["confirmed"] is True
-    assert written["by_team"]["LAA"]["pitcher_id"] == 608337
-    assert written["by_team"]["LAA"]["feature_source"] == "mlb_stats_gamelog"
-    assert written["by_team"]["LAA"]["projected_bf"] == pytest.approx((24 + 22 + 23) / 3)
+    laa = _side(written, "LAA")
+    assert laa["confirmed"] is True
+    assert laa["pitcher_id"] == 608337
+    assert laa["feature_source"] == "mlb_stats_gamelog"
+    assert laa["projected_bf"] == pytest.approx((24 + 22 + 23) / 3)
 
 
 def _raw_schedule_with_status(*, abstract_game_state: str) -> dict:
