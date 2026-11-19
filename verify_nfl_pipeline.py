@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         default=Path(__file__).parent / "data",
-        help="Output directory for normalized data. Default: ./data",
+        help="Output directory for normalized data and published reports. Default: ./data",
     )
     parser.add_argument(
         "--verbose",
@@ -185,7 +185,14 @@ def main() -> int:
 
         print("[2/4] Executing NflPipeline extraction and normalization...")
         pipeline = NflPipeline(client=client, data_dir=args.out_dir)
-        summary = pipeline.run(date=args.date, offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None)
+        # reports_dir defaults to ./reports/NFL relative to the working directory, so
+        # without it a verification run publishes fixture-derived reports over the
+        # tracked ones. Keep every artifact of this run under --out-dir.
+        summary = pipeline.run(
+            date=args.date,
+            offline_fixtures_dir=args.fixtures_dir if args.mode == "fixture" else None,
+            reports_dir=args.out_dir / "NFL" / "reports",
+        )
 
         print("[3/4] Validating extraction summary:")
         print(f"  - Status:             {summary.get('status')}")
