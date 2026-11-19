@@ -1,3 +1,43 @@
+# Session Handoff: Daily automated debug / code-health review (2026-11-19, agent `claude`)
+
+1. **Last Commit SHA**: `0fe5b5c` on `claude/inspiring-fermat-duinwj` (from master `a6c4604`).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/365
+3. **STEP 0**: Linux cloud sandbox, so the AGENTS.md "Cloud / Sandbox Agents" equivalent was used
+   instead of `report-sync.ps1`: `git fetch origin`, HEAD == `origin/master` == `a6c4604`, all 5
+   upgrade markers present (`player_id`, `round_robin_then_fill`, `CANDIDATES_HEADER`,
+   `decisions.csv` in `outlier_scrapers/pack.py`; `_acquire_writer_lock` in `daily_job.py`).
+4. **Checks run** (no reasoning models, no provider calls -- house rule respected):
+   - `pytest` -> 3569 passed, 4 skipped (needed `pip install -r requirements.txt` first; the
+     container ships no project deps, and note `pip` on PATH is python3.13's while `python` is
+     3.11 -- use `python -m pip`).
+   - `mypy outlier_scrapers outlier_nfl` and `mypy outlier_nba` -> clean (182 files).
+   - `pyright outlier_scrapers outlier_nfl` -> clean. `pyright outlier_nba scripts` -> 18 errors,
+     all reviewed and all narrowing/stub artifacts, no runtime defects; `scripts/` is outside the
+     Makefile typecheck target.
+   - Every module in `outlier_scrapers`/`outlier_nfl`/`outlier_nba` and all 24 `scripts/*.py`
+     import cleanly; all tracked .py files parse.
+   - `verify_nfl_pipeline.py --mode fixture` -> exit 0, all market assertions pass.
+5. **Code reviewed**: the three newest fixes (`03d5aee` one-row-per-outcome, `7ebf215`
+   negative_learned_edge, `6cf2500` retention keeps projection_feature_hash) plus `1aff8cd`
+   (MLB doubleheader grading) and `6259f13` (NFL regulated-book pricing). No defects found;
+   the fitters' consumers are order-independent, so `one_row_per_outcome`'s re-sort is safe.
+6. **Fix applied**: `verify_nfl_pipeline.py` passed only `data_dir` to `NflPipeline.run()`, so
+   `reports_dir` fell back to `./reports/NFL` and a fixture-mode run from the repo root
+   overwrote 3 tracked daily reports and dropped 6 untracked files. Now passes
+   `reports_dir=<out-dir>/NFL/reports`. Default runs publish to `./data/NFL/reports`.
+7. **Open question for a human** (not changed, needs a pricing decision): in
+   `outlier_nfl/best_bets.py`, `_price()` now recomputes `implied` from the regulated
+   sportsbook price via `_priced_american()`, but `_opposite_implied()` still reads the
+   opposite row's feed `implied_probability` (derived from `best_odds`, possibly a DFS
+   quote). On a mixed board the two-sided devig mixes a sportsbook price on one side with a
+   DFS price on the other. Separately, `_DFS_BOOKS` has 4 books while
+   `EXCLUDED_FROM_SPORTSBOOK_BEST` has only `prizepicks`, so "sportsbook best" can still be
+   an Underdog/Sleeper/Dabble price. Both may be deliberate scoping of #217; neither was
+   touched.
+8. **Next Steps**: review/merge PR #365. Nothing else outstanding from this run.
+
+---
+
 # Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to
