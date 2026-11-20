@@ -12,7 +12,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-import filter_nba_ruled_out as flt  # noqa: E402
+import filter_nba_ruled_out as flt
 
 FIELDS = ["rank", "player", "market", "line"]
 
@@ -62,6 +62,32 @@ def test_removes_ruled_out_players_and_reranks(tmp_path):
     with open(pack, encoding="utf-8") as f:
         assert [r["rank"] for r in csv.DictReader(f)] == ["1", "2"]
     assert json.loads(summary.read_text(encoding="utf-8"))["removed_count"] == 2
+
+
+def test_ruled_out_jr_period_matches_pack_name_without_period(tmp_path):
+    pack, reg = tmp_path / "pack.csv", tmp_path / "reg.json"
+    _write_pack(pack, ["Jaren Jackson Jr", "Healthy Player"])
+    reg.write_text(
+        json.dumps(
+            {
+                "teams": {
+                    "MEM": {
+                        "roster": [
+                            {"name": "Jaren Jackson Jr.", "status": "OUT"},
+                            {"name": "Healthy Player", "status": "ACTIVE", "injuries": []},
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    before, after, removed = flt.filter_csv(pack, pack, None, reg)
+
+    assert (before, after) == (2, 1)
+    assert removed == ["Jaren Jackson Jr"]
+    assert _players(pack) == ["Healthy Player"]
 
 
 def test_missing_registry_fails_instead_of_filtering_nothing(tmp_path):
