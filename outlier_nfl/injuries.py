@@ -24,6 +24,15 @@ from outlier_nfl.tape_nflverse import load_tape_inactives
 
 logger = logging.getLogger(__name__)
 
+
+class InjurySourceUnavailable(RuntimeError):
+    """A requested injury source failed and no other source had rows."""
+
+    def __init__(self, meta: Mapping[str, Any]):
+        self.meta = dict(meta)
+        super().__init__(str(meta.get("espn_error") or "injury source unavailable"))
+
+
 ESPN_INJURIES_URL = (
     "https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries"
 )
@@ -269,6 +278,9 @@ def load_injury_status(
             meta["espn_error"] = f"{type(exc).__name__}: {exc}"
             logger.warning("ESPN injuries fetch failed: %s", exc)
 
+    # tape_empty is not a source. Fail closed when ESPN was requested and missed
+    # and the tape contributed no rows (empty or not requested).
+    meta["fail_closed"] = bool(meta.get("espn_error")) and "tape" not in meta["sources"]
     return merge_injury_maps(*maps), meta
 
 
@@ -297,6 +309,8 @@ def filter_csv_file(
     injury_map, meta = load_injury_status(
         nfl_dir, use_espn=use_espn, use_tape=use_tape
     )
+    if meta.get("fail_closed"):
+        raise InjurySourceUnavailable(meta)
     ruled = ruled_out_name_keys(injury_map, teams=teams)
     kept, removed = filter_pack_rows(rows, ruled)
 
