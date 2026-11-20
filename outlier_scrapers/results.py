@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from . import feedback
+from .registry import canon_team
 
 logger = logging.getLogger(__name__)
 
@@ -46,31 +47,6 @@ EASTERN = ZoneInfo("America/New_York")
 # Same-day twins are a couple of hours apart. A ledger start and the MLB
 # gameDate for one game are not, so anything farther away is a different game.
 START_MATCH_WINDOW = timedelta(minutes=90)
-TEAM_ALIASES = {
-    "ARI": "AZ",
-    "CHW": "CWS",
-    "CONN": "CON",
-    "CWS": "CWS",
-    "GSV": "GS",
-    # Outlier NBA tricodes -> ESPN NBA abbreviations (ESPN uses GS/NO/NY/SA/UTAH).
-    "GSW": "GS",
-    "NOP": "NO",
-    "NYK": "NY",
-    "SAS": "SA",
-    "UTA": "UTAH",
-    "KCR": "KC",
-    "LAS": "LA",
-    "LVA": "LV",
-    "NYL": "NY",
-    "PDX": "POR",
-    "POR": "POR",
-    "SDP": "SD",
-    "SFG": "SF",
-    "TBR": "TB",
-    "WAS": "WAS",
-    "WSH": "WAS",
-    "WSN": "WAS",
-}
 
 
 class ResultsError(RuntimeError):
@@ -107,9 +83,8 @@ def _token(value: Any) -> str:
     return re.sub(r"[^A-Z0-9]", "", text.encode("ascii", "ignore").decode().upper())
 
 
-def _team_token(value: Any) -> str:
-    token = _token(value)
-    return TEAM_ALIASES.get(token, token)
+def _team_token(value: Any, sport: str) -> str:
+    return canon_team(sport, value)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -430,14 +405,17 @@ def _event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"\b([A-Za-z0-9]+)\s+@\s+([A-Za-z0-9]+)\b", selection)
     return bool(
         match
-        and _team_token(match.group(1)) == _team_token(event.away)
-        and _team_token(match.group(2)) == _team_token(event.home)
+        and _team_token(match.group(1), event.sport) == _team_token(event.away, event.sport)
+        and _team_token(match.group(2), event.sport) == _team_token(event.home, event.sport)
     )
 
 
 def _team_total_event_match(event: FinalEvent, selection: str) -> bool:
     match = re.search(r"^([A-Za-z0-9]+)\s+Team Total\b", selection, re.IGNORECASE)
-    if match and _team_token(match.group(1)) in {_team_token(event.away), _team_token(event.home)}:
+    if match and _team_token(match.group(1), event.sport) in {
+        _team_token(event.away, event.sport),
+        _team_token(event.home, event.sport),
+    }:
         return True
     matchup_match = re.search(
         r"\b(?:[A-Za-z0-9]+)\s+@\s+(?:[A-Za-z0-9]+)\s+(.+?)\s+-\s+(?:Points|Runs|PTS|R)\b",
@@ -451,7 +429,8 @@ def _team_total_event_match(event: FinalEvent, selection: str) -> bool:
         return (
             away_tok in raw_team
             or home_tok in raw_team
-            or _team_token(raw_team) in {_team_token(event.away), _team_token(event.home)}
+            or _team_token(raw_team, event.sport)
+            in {_team_token(event.away, event.sport), _team_token(event.home, event.sport)}
         )
     return False
 
@@ -556,9 +535,9 @@ def _matchup_team_score(event: FinalEvent, raw_team: str) -> float | None:
     Where both sides match -- or neither does -- skip rather than guess, per this
     collector's contract.
     """
-    canonical = _team_token(raw_team)
-    away_exact = canonical == _team_token(event.away)
-    home_exact = canonical == _team_token(event.home)
+    canonical = _team_token(raw_team, event.sport)
+    away_exact = canonical == _team_token(event.away, event.sport)
+    home_exact = canonical == _team_token(event.home, event.sport)
     if away_exact != home_exact:
         return event.away_score if away_exact else event.home_score
 
@@ -627,12 +606,12 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         re.IGNORECASE,
     )
     if team_total:
-        team = _team_token(team_total.group(1))
+        team = _team_token(team_total.group(1), event.sport)
         actual = (
             event.away_score
-            if team == _team_token(event.away)
+            if team == _team_token(event.away, event.sport)
             else event.home_score
-            if team == _team_token(event.home)
+            if team == _team_token(event.home, event.sport)
             else None
         )
         return (

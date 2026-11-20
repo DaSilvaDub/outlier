@@ -43,22 +43,28 @@ WNBA_TEAM_ALIASES = {
     "CHI": "CHI",
     "CHICAGOSKY": "CHI",
     "CON": "CON",
+    "CONN": "CON",
     "CONNECTICUTSUN": "CON",
     "DAL": "DAL",
     "DALLASWINGS": "DAL",
     "GSV": "GSV",
+    "GS": "GSV",
     "GOLDENSTATEVALKYRIES": "GSV",
     "IND": "IND",
     "INDIANAFEVER": "IND",
     "LAS": "LAS",
+    "LA": "LAS",
     "LOSANGELESSPARKS": "LAS",
     "LVA": "LVA",
+    "LV": "LVA",
     "LASVEGASACES": "LVA",
     "MIN": "MIN",
     "MINNESOTALYNX": "MIN",
     "NYL": "NYL",
+    "NY": "NYL",
     "NEWYORKLIBERTY": "NYL",
     "PDX": "PDX",
+    "POR": "PDX",
     "PORTLANDFIRE": "PDX",
     "FIRE": "PDX",
     "PHX": "PHX",
@@ -70,6 +76,7 @@ WNBA_TEAM_ALIASES = {
     "TORONTOTEMPO": "TOR",
     "TEMPO": "TOR",
     "WAS": "WAS",
+    "WSH": "WAS",
     "WASHINGTONMYSTICS": "WAS",
 }
 
@@ -113,6 +120,14 @@ MLB_TEAM_ALIASES.update(
     {
         "AZ": "ARI",
         "ARIZONADIAMONDBACKS": "ARI",
+        "CHW": "CWS",
+        "KCR": "KC",
+        "OAK": "ATH",
+        "SDP": "SD",
+        "SFG": "SF",
+        "TBR": "TB",
+        "WAS": "WSH",
+        "WSN": "WSH",
         "ATLANTABRAVES": "ATL",
         "BALTIMOREORIOLES": "BAL",
         "BOSTONREDSOX": "BOS",
@@ -423,6 +438,26 @@ def normalize_team(config: SportConfig, value: object) -> str | None:
     if not token:
         return None
     return config.team_aliases.get(token)
+
+
+def canon_team(sport: str, value: object) -> str:
+    """Registry code for a team, or the compacted token when none is listed.
+
+    Schedule normalize, form, and settlement share ``team_aliases``. An unknown
+    league or club keeps the compacted token so two copies of one raw name still match.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        config = get_sport_config(str(sport or ""), allow_disabled=True)
+    except ValueError:
+        config = None
+    if config is not None:
+        canonical = normalize_team(config, text)
+        if canonical:
+            return canonical
+    return _compact(text)
 
 
 def normalize_market(config: SportConfig, value: object) -> str | None:
