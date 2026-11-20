@@ -41,6 +41,108 @@
 
 ---
 
+# Session Handoff: Daily automated code-health audit (2026-11-16, agent `claude`)
+
+1. **Base**: `claude/inspiring-fermat-2enxiu` at master `f93a6d0`. Cloud STEP 0 equivalent run (AGENTS.md
+   "Cloud / Sandbox Agents"): `git fetch` + all 5 upgrade markers present, HEAD == `origin/master`.
+   No PowerShell in this sandbox, so `report-sync.ps1` was not run.
+2. **Checks (all offline; no reasoning/desk runs, no provider keys in the environment)**:
+   - `pytest` — 3565 collected, **3561 passed, 4 skipped**, 0 failures (293s).
+   - `mypy outlier_scrapers outlier_nfl` — clean (136 files). `mypy outlier_nba` — clean (46 files).
+   - `pyright outlier_scrapers outlier_nfl` — 0 errors (1 warning: optional `playwright` import).
+   - `python -m compileall` over the tree — no syntax errors.
+   - `ruff` high-signal rules (F821/F811/B006/B023/PLR0124/ISC004...) — reviewed; every hit is a
+     deliberate NaN check, same-iteration closure, or wrapped report string. No defect.
+3. **Code reviewed**: today's two merges (`7ebf215` negative_learned_edge moved into
+   `pack_sizing._apply_learned_stake_before_caps`; `6cf2500` retention keeps
+   `projection_feature_hash`) plus the 2026-11-13 results/NBA/NFL fixes. Both of today's changes
+   check out: the push-aware break-even test is correct (`p < (1-push)/price`), `policy.shadow_mode`
+   and `data_quality_tier(..., disqualifying=True)` match their definitions, and the retention
+   predicate no longer re-selects already-slimmed rows. House-rule invariants verified in code:
+   `ALLOWED_MLB_PLAYER_PROPS == {"SO"}`, `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`, HR/Walks-Allowed
+   in `EXCLUDED_MARKETS`, and `clear_derived_pack_outputs` still refuses to touch `verdicts/`.
+4. **Finding (not fixed — dependency change, owner's call)**: `uv.lock` and `requirements.lock` are
+   frozen at the 2026-10-09 dependency set. `uv lock --check` fails. Both locks predate
+   `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary` and `numpy` being added to
+   `pyproject.toml`, so 5 of 9 runtime deps are unpinned: the "Install frozen dependencies" step in
+   `.github/workflows/pytest.yml` and `typecheck.yml` resolves them from PyPI at the latest release
+   (a breaking `numpy`/`SQLAlchemy` major would land in CI unannounced), and a lock-only install
+   cannot import `outlier_scrapers.results` on Windows for want of `tzdata`. Fix is to re-run
+   `uv lock` then `uv export --frozen --no-hashes --all-extras -o requirements.lock` and review the
+   version bumps that resolution introduces.
+5. **Lower-priority notes**: the `provider` pytest marker declared in `pyproject.toml` is on zero
+   tests, so `pytest -m "not provider"` deselects nothing — CI gets the split from `--ignore` paths
+   instead, which is the convention to follow when an offline run is required. `outlier_nba` (46
+   files) is absent from both CI typecheck jobs and `make typecheck`; mypy is clean on it and pyright
+   reports only two false `possibly unbound` at `outlier_nba/cli.py:681` (`due_mod`/`now` are both
+   bound under the same `args.only_if_due` guard), so adding it would need those two suppressed.
+6. **No source changes.** Working tree clean apart from this handoff entry.
+
+---
+
+# Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
+
+1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to
+   `%TEMP%\nba_runs`, which gets wiped, so old model rows can never be keyed. New `outlier_nba/data_dirs.py` is the one
+   resolver: `~/outlier_nba_data/bundles/{team,capture}`, overrides `OUTLIER_NBA_DATA_DIR` / `OUTLIER_NBA_BUNDLES_DIR`,
+   refuses repo-checkout and temp locations. `cli run`/`capture` (no `--nba-dir`) and `backfill-model-probs` (no
+   `--bundles`) default to it; the script no longer passes `--nba-dir` and exports `OUTLIER_NBA_DATA_DIR`. Manifest/sha256
+   behaviour unchanged; nothing existing moved or deleted.
+2. **Notes**: `scripts/install_pack_refresh_tasks.ps1` does not exist in this tree. `run_nba_shadow.ps1` (the scheduled
+   task) already used `%LOCALAPPDATA%\Outlier\NBA` for capture bundles and a separate trial ledger; left as is.
+   Not merged by the agent.
+
+---
+
+# Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-15 Afternoon Window, agent `gemini`)
+
+1. **Last Commit SHA**: `d43a9523e9ed6ab13fb98e1692eb090cb2651be6`
+2. **Work Performed**:
+   - Executed mandatory STEP 0 multi-agent sync check via `report-sync.ps1` (attested OK, 44/44 worktrees synchronized, HEAD `d43a952`).
+   - Verified active AWS Cognito session token (over 700 minutes validity remaining).
+   - Executed afternoon daily NFL pack and odds refresh (`scripts/run_nfl_pack_refresh.ps1 -Date 2026-11-15 -SkipDrive`):
+     - `outlier_nfl.pipeline` ingested all 12 events for 2026-11-15, refreshing consensus odds, spreads, totals, and player props.
+     - Generated game script reports and matchup advantage rankings (top 10 overall, top 5 positional).
+     - `export_nfl_extra_pack.py` exported 674 candidate props to `data/NFL/exports/nfl_only.csv`.
+     - `filter_nfl_ruled_out.py` filtered against ESPN and tape statuses (removed 9 ruled-out quotes: Xavier Smith, Justin Jefferson; leaving 665 active candidate props).
+     - Preserved companion artifacts (best bets, alt floors, matchup scripts, rosters, 12 game scripts).
+     - `organize_desktop_today.py` staged 78 deliverables into local `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` and archived prior run to `C:\Users\dasil\Desktop\Today\Older_Data\NFL\Run_2026-11-15_164638`.
+     - Executed `scripts/generate_nfl_master_reports.py --date 2026-11-15` to update master daily and matchup reports.
+     - Publication to Google Drive skipped appropriately per active hold in `docs/remediation/publication_hold.json`.
+3. **Files Touched**:
+   - `data/NFL/exports/nfl_only.csv` (665 filtered rows)
+   - `data/NFL/normalized/*` and `data/NFL/runs/2026-11-15-20261115T214520Z-fad5d031`
+   - `reports/NFL/*` (master reports and game scripts)
+   - `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` (78 staged files)
+   - `.agent-log/HANDOFF.md`
+4. **Next Steps**:
+   - Slate is active for afternoon/evening kickoffs. Ahead of Sunday Night Football (SF @ DAL) or Monday Night Football (LAC @ BAL), run standard pre-game refresh if updated injury inactives or late line movement are required.
+
+---
+
+# Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-15, agent `gemini`)
+
+1. **Last Commit SHA**: `f39c82910ffd7a5b2de858503ab3759deb0162e8`
+2. **Work Performed**:
+   - Executed STEP 0 multi-agent sync check via `report-sync.ps1` (attested OK, 44/44 worktrees synchronized, HEAD `f39c829`).
+   - Inspected AWS Cognito access token (`exp` 365s remaining) and proactively refreshed session via `REFRESH_TOKEN_AUTH` against `AWSCognitoIdentityProviderService`, extending validity for 24h.
+   - Executed daily NFL pack and odds refresh (`scripts/run_nfl_pack_refresh.ps1 -Date 2026-11-15 -SkipDrive`) for today's 12-game Sunday slate:
+     - `outlier_nfl.pipeline` ingested all 12 matchups, normalizing game lines and player props across all books.
+     - `export_nfl_extra_pack.py` exported 674 candidates to `data/NFL/exports/nfl_only.csv`.
+     - `filter_nfl_ruled_out.py` filtered against ESPN and tape statuses (1 inactive player removed, leaving 673 filtered rows; pruned 10 prop_signals in companion matchup scripts).
+     - `organize_desktop_today.py` staged 78 deliverables into local `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\`.
+     - Publication to Google Drive held appropriately per active hold in `docs/remediation/publication_hold.json`.
+3. **Files Touched**:
+   - `config/.outlier_session/storage_state.json` & `api_bearer_token.txt` (renewed Cognito session token)
+   - `data/NFL/exports/nfl_only.csv` (673 rows)
+   - `data/NFL/normalized/*` and `data/NFL/runs/*` (2026-11-15 run bundle)
+   - `C:\Users\dasil\Desktop\Today\Fresh_Data\NFL\` (staged deliverables)
+   - `.agent-log/HANDOFF.md`
+4. **Next Steps**:
+   - Monitor for 11:30 AM ET and 4:30 PM ET scheduled pack refreshes (`Sports_NFL_Pack_Refresh_1130` and `Sports_NFL_Pack_Refresh_1630`) or run manual pre-lock refresh ahead of 1:00 PM ET Sunday kickoffs.
+
+---
+
 # Session Handoff: Daily NFL Pack & Odds Refresh (2026-11-14, agent `gemini`)
 
 1. **Last Commit SHA**: `337ef6fc2c2fc2bc781a8fd1dba3fb3336ec929b`

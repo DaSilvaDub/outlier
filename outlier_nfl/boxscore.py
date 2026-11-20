@@ -289,31 +289,35 @@ def resolve_player_stats(
 ) -> tuple[dict[str, float] | None, str | None]:
     """Resolve unique player stats by tokenized name. Skip on ambiguity or miss.
 
-    Players who share a name in one game are keyed ``TOKEN#TEAM#ID`` (F17); a
-    ``team`` picks one of them only when exactly one plays for that team.
+    The name and each box-score key must be the same ``_token``; a shorter
+    token inside a longer one is a different player. Players who share a name
+    in one game are keyed ``TOKEN#TEAM#ID`` (F17); a ``team`` picks one of
+    them only when exactly one plays for that team.
     """
     needle = _token(player_name)
     if not needle:
         return None, "empty_player_name"
-    if needle in event.players:
-        return event.players[needle], None
-    shared = [(k, v) for k, v in event.players.items() if k.split("#", 1)[0] == needle and "#" in k]
+    bare: list[dict[str, float]] = []
+    shared: list[tuple[str, dict[str, float]]] = []
+    for key, stats in event.players.items():
+        base, sep, _rest = key.partition("#")
+        if _token(base) != needle:
+            continue
+        if sep:
+            shared.append((key, stats))
+        else:
+            bare.append(stats)
+    if len(bare) > 1 or (bare and shared):
+        return None, "ambiguous_player_match"
+    if len(bare) == 1:
+        return bare[0], None
     if shared:
         team_code = str(team or "").strip().upper()
-        owned = [(k, v) for k, v in shared if team_code and k.split("#")[1] == team_code]
+        owned = [stats for key, stats in shared if team_code and key.split("#")[1] == team_code]
         if len(owned) == 1:
-            return owned[0][1], None
+            return owned[0], None
         return None, "ambiguous_player_match"
-    hits = [
-        (key, stats)
-        for key, stats in event.players.items()
-        if needle in key or key in needle or key.endswith(needle) or needle.endswith(key)
-    ]
-    if len(hits) == 1:
-        return hits[0][1], None
-    if not hits:
-        return None, "player_not_in_boxscore"
-    return None, "ambiguous_player_match"
+    return None, "player_not_in_boxscore"
 
 
 def fetch_espn_scoreboard(event_date: date, *, timeout: int = 30) -> dict[str, Any]:

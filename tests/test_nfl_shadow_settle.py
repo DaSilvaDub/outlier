@@ -183,8 +183,9 @@ def test_clv_and_model_p_labels_when_fields_present():
     events = load_boxscores(FIXTURES / "boxscores_det_buf.json")
     report = settle_predictions(predictions, events)
     assert report.clv["status"] == "ok"
-    assert report.clv["n"] == 6
-    assert report.clv["mean_clv_implied_pts"] == pytest.approx(0.0)
+    # Fixture closes are pregame_snapshot_best_odds copies of the bet, not book closes.
+    assert report.clv["n"] == 0
+    assert report.clv["mean_clv_implied_pts"] is None
     assert "clv" not in report.blockers
     assert report.n_scored_model >= 1
     assert report.brier_model is not None
@@ -424,8 +425,8 @@ def test_projection_gamelog_rate_fixture():
     assert result.source == MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE
 
 
-def test_book_close_feed_produces_nonzero_clv_when_prices_moved(tmp_path: Path):
-    """Fixture close-feed with moved odds → CLV ≠ 0; never labels snapshot as book_close."""
+def test_synthetic_moved_close_does_not_enter_mean_clv(tmp_path: Path):
+    """A moved synthetic feed keeps its label and stays out of mean CLV."""
     from outlier_nfl.close_feed import (
         snapshot_rows_to_moved_close_feed,
         write_close_feed,
@@ -490,16 +491,16 @@ def test_book_close_feed_produces_nonzero_clv_when_prices_moved(tmp_path: Path):
     assert row0["close_source"] != CLOSE_SOURCE_SNAPSHOT
     assert row0["close_implied"] != row0["implied_probability"]
 
-    # Settle and prove mean CLV ≠ 0
+    # The price moved, but a synthetic label is not a verified book close.
     enriched_path = tmp_path / "enriched.json"
     enriched_path.write_text(json.dumps(enriched), encoding="utf-8")
     predictions = load_prediction_snapshot(enriched_path, source="tier1")
     events = load_boxscores(FIXTURES / "boxscores_det_buf.json")
     report = settle_predictions(predictions, events)
-    assert report.clv["status"] == "ok"
-    assert report.clv["n"] >= 1
-    assert report.clv["mean_clv_implied_pts"] != 0.0
-    assert report.clv.get("close_sources") == ["synthetic_moved_close"]
+    assert any(r.get("clv_implied_pts") not in (None, 0, 0.0) for r in report.rows)
+    assert report.clv["n"] == 0
+    assert report.clv["mean_clv_implied_pts"] is None
+    assert "synthetic_moved_close" not in (report.clv.get("close_sources") or [])
     assert CLOSE_SOURCE_BOOK not in (report.clv.get("close_sources") or [])
 
 
