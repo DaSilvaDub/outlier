@@ -496,6 +496,10 @@ def test_reachable_out_dirs_names_each_unmounted_destination(monkeypatch, capsys
     # The drive check only means anything on Windows, where the scheduled export
     # runs; parse paths with Windows semantics so the skip branch is exercised.
     monkeypatch.setattr(org, "Path", PureWindowsPath)
+    # G:/H: may really be mounted here (Google Drive); treat drive roots as absent.
+    real_exists = org.os.path.exists
+    monkeypatch.setattr(org.os.path, "exists",
+                        lambda p: False if str(p)[1:2] == ":" and len(str(p)) <= 3 else real_exists(p))
 
     kept = org.reachable_out_dirs(["exports\\today", "G:\\My Drive\\today"])
 
@@ -507,6 +511,10 @@ def test_reachable_out_dirs_names_each_unmounted_destination(monkeypatch, capsys
 
 def test_reachable_out_dirs_warns_when_nothing_is_reachable(monkeypatch, capsys):
     monkeypatch.setattr(org, "Path", PureWindowsPath)
+    # G:/H: may really be mounted here (Google Drive); treat drive roots as absent.
+    real_exists = org.os.path.exists
+    monkeypatch.setattr(org.os.path, "exists",
+                        lambda p: False if str(p)[1:2] == ":" and len(str(p)) <= 3 else real_exists(p))
 
     assert org.reachable_out_dirs(["G:\\My Drive\\today", "H:\\today"]) == []
 
