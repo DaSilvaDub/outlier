@@ -308,9 +308,9 @@ def test_capture_persists_blend_segments_and_fits_settled_weights(tmp_path):
     assert not output.exists()
     assert probability_blend.load_weight_artifact(output) == artifact
     assert artifact["status"] == "active"
-    # Both rows share one captured_at, so there's no chronological holdout to
-    # prove OOS improvement; the market-weight floor applies (Phase 1).
-    assert artifact["global"]["market_weight"] == pytest.approx(0.75)
+    # Two rows cannot establish OOS improvement; no model weight is authorized.
+    assert artifact["global"]["market_weight"] == 1.0
+    assert artifact["global"]["model_weight"] == 0.0
     assert artifact["dimensions"]["league"]["WNBA"]["n"] == 2
 
 
@@ -2014,12 +2014,22 @@ def test_recover_corrupted_database_refuses_to_overwrite_output(tmp_path):
         feedback.recover_corrupted_database(corrupted_path, output_path)
 
 
-def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
+def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path, monkeypatch):
     """Corruption in sqlite_master itself (not just a data page) must not
     crash the whole recovery -- _open_for_salvage's own sanity check
     (`SELECT 1`) never touches sqlite_master, so it can succeed even when
     the schema page is the damaged one; the schema/PRAGMA queries inside
     _salvage_rows_directly are where that has to be caught instead."""
+
+    # recover_corrupted_database tries the sqlite3 CLI's `.recover` first and only
+    # falls back to _salvage_rows_directly when the CLI is missing or exits nonzero.
+    # Whether `.recover` exits 0 on this corruption depends on the SQLite build of
+    # the host (ubuntu-24.04 fell back; ubuntu-26.04's newer SQLite exits 0 with
+    # nothing salvaged, so skipped_rows was 0). This test is about the direct
+    # salvage path, so take the host's sqlite3 CLI out of the picture.
+    monkeypatch.setattr(
+        "outlier_scrapers.feedback_recovery._run_sqlite_cli_recover", lambda *_a, **_k: False
+    )
 
     source_db = tmp_path / "feedback.sqlite3"
     feedback.initialize_database(source_db)
@@ -2055,6 +2065,7 @@ def test_recover_corrupted_database_survives_schema_page_corruption(tmp_path):
     assert stats.decisions == 0
     assert stats.settlements == 0
     assert stats.skipped_rows == 4
+    assert stats.used_sqlite_cli is False
     assert output_path.exists()
 
 
