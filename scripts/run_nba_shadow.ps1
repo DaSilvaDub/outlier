@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 #   capture: ticks every 15 min; `--only-if-due` skips unless a tip within 30 min lacks a
 #            capture in its 60-min verified-close window (or the slate is >12h stale), so a
 #            tick is cheap and a real capture (~2 min, ~175 MB) runs only when CLV needs it.
-#   settle : once a morning, grades the last 3 days against box scores.
+#   settle : once a morning, grades every unsettled tip that has already started.
 # Ledger and run bundles live under %LOCALAPPDATA%\Outlier, off the cloud-filtered
 # checkout (see calibration corruption history) and out of %TEMP% (wiped daily at 03:00).
 # Install: scripts\install_nba_shadow_tasks.ps1

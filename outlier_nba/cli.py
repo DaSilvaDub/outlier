@@ -540,7 +540,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="skip unless a tip within 60 min lacks a verified-window capture (scheduler use)",
     )
-    sub.choices["settle"].add_argument("--lookback-days", type=int, default=3)
+    sub.choices["settle"].add_argument(
+        "--lookback-days",
+        type=int,
+        default=3,
+        help=(
+            "recent window in days when it already covers every unsettled tip "
+            "(default 3). Older unsettled tips are still graded, 30 days at a time"
+        ),
+    )
     bf = sub.add_parser("backfill", help="cache + store historical NBA results (ESPN public JSON)")
     bf.add_argument("--seasons", default="2016-17:2025-26", help="FIRST:LAST season labels")
     bf.add_argument(
