@@ -1,3 +1,60 @@
+# Session Handoff: Daily automated debug / code-health review (2026-11-18, agent `claude`)
+
+1. **Base**: `claude/inspiring-fermat-kulpss` at master `a6c4604`. Cloud STEP 0 equivalent run
+   (AGENTS.md "Cloud / Sandbox Agents"): `git fetch` clean, all 5 upgrade markers present,
+   `HEAD == origin/master`. No PowerShell in this sandbox, so `report-sync.ps1` was not run.
+   No reasoning/desk runs; no provider keys in the environment.
+2. **Checks (all offline)**:
+   - `pytest -q` — **3569 passed, 4 skipped**, 0 failures (329s). The +8 vs 2026-11-16 is
+     `tests/test_feedback_outcome_rows.py` arriving with `03d5aee`.
+   - `mypy outlier_scrapers outlier_nfl` — clean (136 files). `mypy outlier_nba` — clean (46).
+   - `pyright outlier_scrapers outlier_nfl` — 0 errors (1 warning: optional `playwright` import).
+   - `pyright outlier_nba` — the same 2 known false `possibly unbound` at `outlier_nba/cli.py:681`;
+     re-verified by reading `cli.py:655-681`: `due_mod` and `now` are bound under `if
+     args.only_if_due:` and read under `if args.only_if_due and ...`. Not a defect.
+   - `compileall` over the tree — clean. Import sweep of every module in the three packages — 0 failures.
+   - Fresh-DB schema probe: `market_snapshots`/`decisions`/`settlements` columns agree exactly with
+     `*_COLUMN_DEFINITIONS` and with `TABLE_COLUMN_ADD_STATEMENTS` (49/19/16, no drift either way).
+   - House-rule invariants re-verified in code: `ALLOWED_MLB_PLAYER_PROPS == {"SO"}`,
+     `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`, HR/Walks-Allowed in `EXCLUDED_MARKETS`,
+     `verdicts/` absent from `DERIVED_PACK_OUTPUTS` and guarded in `clear_derived_pack_outputs`.
+3. **New code since the last run** is one commit, `03d5aee` (PR #360, "fit and score one row per
+   settled outcome"). Reviewed in depth; **no defect found**. The specific hazard chased:
+   `_outcome_rows` returns rows sorted by rank (selected-first, then instant), not by
+   `captured_at` as `_joined_rows` did, so every new consumer was checked for order dependence —
+   `probability_blend._chronological_split` re-sorts by parsed timestamp before the OOS split,
+   `stake_calibration.fit_stake_calibration` only aggregates and takes a `max`, and
+   `totals_paired_oos_loss` is a pure aggregate. None depend on incoming order.
+   Also checked: `_parse_utc` always returns aware UTC (no naive/aware comparison in the rank
+   tuple), the `("__unidentified__", index)` fallback cannot collide with a real 6-tuple key, and
+   `selected` is `INTEGER NOT NULL DEFAULT 0` so `_is_selected` reads it correctly.
+4. **Carry-over, still true, owner's call (not fixed — dependency change, out of scope for this
+   routine)**: `uv.lock` / `requirements.lock` are still frozen at the 2026-10-09 set
+   (`d928e27`). `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary` and `numpy` are absent from
+   `requirements.lock`, so both "Install frozen dependencies" CI jobs resolve 5 of 9 runtime deps
+   from PyPI at latest release. Fix: `uv lock` then
+   `uv export --frozen --no-hashes --all-extras -o requirements.lock`, then review the bumps.
+5. **Standing risk (meta, no safe automated action)**: 20+ PRs are open, the oldest from 2026-11-01,
+   including several `[CARD-CHANGING]` bug fixes (#350, #351, #352, #354, #355, #356) and
+   #361/#363. The 2026-11-01 run already named the merge queue as the problem and it has grown
+   since; fixes for confirmed defects are not reaching the card.
+6. **Low-severity notes (not fixed, deliberately)**:
+   - `stake_calibration.py:422` and `probability_blend.py:352` compute `trained_through` as a
+     lexicographic `max()` over `captured_at` strings whose offsets mix `-04:00` and `+00:00` —
+     the exact hazard `03d5aee`'s own docstring calls out. Reproduced:
+     `max(["2026-11-16T02:00:00+00:00", "2026-11-16T01:30:00-04:00"])` returns the `+00:00` row,
+     but `01:30-04:00` is 4h later. Impact is diagnostic only (the field is never read back for
+     gating), and in the blend artifact it feeds the `model_version` fingerprint, so changing it
+     would renumber artifacts for identical data. Left alone; parse before comparing if touched.
+   - `feedback_db._is_selected` (line 1107) duplicates `_truthy` (line 434) minus the `"y"` form.
+     No behavioural difference on an INTEGER column; worth collapsing next time that file is edited.
+   - The `provider` pytest marker declared in `pyproject.toml` is still on zero tests, so
+     `pytest -m "not provider"` deselects nothing; CI gets the offline split from `--ignore` paths.
+   - `outlier_nba` (46 files) is still absent from both CI typecheck jobs and `make typecheck`.
+7. **No source changes.** Working tree clean apart from this handoff entry.
+
+---
+
 # Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to
