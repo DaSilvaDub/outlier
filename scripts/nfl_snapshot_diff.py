@@ -798,11 +798,16 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> Path:
     return path
 
 
-def _try(fn: Any) -> Any:
+def _try(fn: Any, scrub: tuple[Path, str] | None = None) -> Any:
     try:
         return fn()
     except Exception as exc:  # recorded as the outcome of the case
-        return {"error": type(exc).__name__, "message": str(exc)[:160]}
+        message = str(exc)
+        if scrub is not None:
+            # Scrub before truncating: a cut inside a long path leaves a fragment
+            # no later scrub can match, and the capture stops being deterministic.
+            message = _scrub_path(message, *scrub)
+        return {"error": type(exc).__name__, "message": message[:160]}
 
 
 A12_GAMES = [{"game_id": "2026_01_BUF_KC", "season": "2026", "week": "1", "gameday": "2026-09-13",
@@ -1252,7 +1257,7 @@ def _run_export_pack_step(work: Path, repo: Path) -> str | None:
             header, rows = lines[0].split(","), len(lines) - 1
         out[case] = {"exit_code": code, "csv_written": csv_path.exists(), "csv_rows": rows,
                      "csv_header": header,
-                     "stderr": err.getvalue().replace(str(root), "<case>").strip()}
+                     "stderr": _scrub_path(err.getvalue(), root, "<case>").strip()}
     dest = work / "data" / "NFL" / "math" / "export_explicit_date.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, indent=2, sort_keys=True, default=str), encoding="utf-8")
@@ -1504,9 +1509,9 @@ def _persistence_cases(root: Path) -> dict[str, Any]:
         "replay_refresh_tape": replay_refresh_tape,
         "settle_onto_existing_out_json": settle_onto_existing,
     }
-    out = {name: _try(fn) for name, fn in cases.items()}
+    out = {name: _try(fn, scrub=(root, "<scratch>")) for name, fn in cases.items()}
     # Error messages may carry the scratch path; keep the snapshot independent of it.
-    return json.loads(json.dumps(out, default=str).replace(str(root), "<scratch>"))
+    return json.loads(_scrub_path(json.dumps(out, default=str), root, "<scratch>"))
 
 
 def _run_persistence_step(work: Path) -> str | None:
@@ -1929,8 +1934,22 @@ def _git_head(repo: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _scrub_path(text: str, path: Path, token: str) -> str:
+    """Replace every spelling of ``path``: native, POSIX, and JSON-escaped.
+
+    On Windows ``json.dumps`` doubles backslashes, so a plain ``str(path)``
+    replace never matches inside serialized JSON.
+    """
+    forms: set[str] = set()
+    for base in (path.resolve(), path):
+        forms |= {str(base), base.as_posix(), str(base).replace("\\", "\\\\")}
+    for form in sorted(forms, key=len, reverse=True):
+        text = text.replace(form, token)
+    return text
+
+
 def _normalize_text(text: str, work: Path, run_ids: dict[str, str]) -> str:
-    text = text.replace(str(work.resolve()), "<WORK>").replace(str(work), "<WORK>")
+    text = _scrub_path(text, work, "<WORK>")
     for rid, token in sorted(run_ids.items(), key=lambda kv: -len(kv[0])):
         text = text.replace(rid, token)
     return text
