@@ -46,7 +46,7 @@ from statistics import mean, median, pstdev
 from typing import Any, Iterable, Mapping
 
 from outlier_nfl.calibration import compute_shrunk_empirical_model_p, select_empirical_hit_rate
-from outlier_nfl.games import is_excluded_from_sportsbook_best, sportsbook_best_american
+from outlier_nfl.games import _book_odds_pair, book_name_compact, sportsbook_best_american
 from outlier_nfl.matchup import PropSignal, _names_match, resolve_signal_conflicts
 from outlier_nfl.snapshots import prop_key
 from outlier_nfl.tape_nflverse import _name_key
@@ -757,33 +757,58 @@ def price_gate(final_p: float, decimal: float, line: Any, edge: float) -> tuple[
 
 
 def _quoted_books(prop: Mapping[str, Any]) -> set[str]:
-    return {
-        str(b.get("book") or "").strip().lower()
-        for b in (prop.get("books") or [])
-        if isinstance(b, Mapping) and str(b.get("book") or "").strip()
-    }
+    """Compact keys of the books quoting this prop (``book_name_compact``)."""
+    keys: set[str] = set()
+    for entry in prop.get("books") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        key = book_name_compact(entry.get("book"))
+        if key:
+            keys.add(key)
+    return keys
 
 
-def _priced_american(prop: Mapping[str, Any]) -> int | None:
-    """American price for edge, EV and stake. All-pick'em boards keep ``best_odds``."""
-    raw = prop.get("best_odds")
+def _regulated_quotes(books: Any) -> list[Any]:
+    """Quotes from books that are not DFS pick'em.
+
+    ``sportsbook_best_american`` only drops PrizePicks, so Underdog, Sleeper and
+    Dabble have to be filtered out here before it picks the best price: a flat
+    pick'em payout is not a price this card may stake against.
+    """
+    kept: list[Any] = []
+    for entry in books or []:
+        book, _odds = _book_odds_pair(entry)
+        if book_name_compact(book) in _DFS_BOOKS:
+            continue
+        kept.append(entry)
+    return kept
+
+
+def _priced_quote(prop: Mapping[str, Any]) -> tuple[int, bool] | None:
+    """``(american price for edge/EV/stake, price came from a DFS pick'em book)``.
+
+    A board with a usable regulated quote is priced off it. Otherwise the board
+    keeps ``best_odds``, which is a pick'em price whenever a DFS book quotes it.
+    """
     quoted = _quoted_books(prop)
-    if quoted and not quoted.issubset(_DFS_BOOKS):
-        sportsbook = sportsbook_best_american(prop.get("books"))
+    if quoted - _DFS_BOOKS:
+        sportsbook = sportsbook_best_american(_regulated_quotes(prop.get("books")))
         if sportsbook is not None:
-            return int(sportsbook)
+            return int(sportsbook), False
+    raw = prop.get("best_odds")
     if raw is None:
         return None
-    return int(raw)
+    return int(raw), bool(quoted & _DFS_BOOKS)
 
 
 def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
     pillar = Pillar()
-    odds = _priced_american(prop)
+    priced = _priced_quote(prop)
     implied = _pct(prop.get("implied_probability"))
-    if odds is None:
+    if priced is None:
         pillar.notes.append("no price quoted")
         return pillar
+    odds, dfs_priced = priced
     dec = american_to_decimal(odds)
     raw = prop.get("best_odds")
     try:
@@ -806,8 +831,7 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
     edge = final_p - fair
     ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
     market = str(prop.get("market") or "").upper()
-    books_quoted = _quoted_books(prop)
-    if books_quoted and books_quoted.issubset(_DFS_BOOKS):
+    if dfs_priced:
         if cap != CONTRADICTS:
             cap = ESTIMATED
         gate_notes.append(
@@ -958,17 +982,17 @@ def _rank_key(pick: Mapping[str, Any]) -> tuple[int, float]:
 
 
 def _best_book(prop: Mapping[str, Any]) -> str | None:
-    target = _priced_american(prop)
-    if target is None:
+    priced = _priced_quote(prop)
+    if priced is None:
         return None
-    regulated = bool(_quoted_books(prop) - _DFS_BOOKS)
+    target, dfs_priced = priced
     for entry in prop.get("books") or []:
         if not isinstance(entry, Mapping) or entry.get("odds") != target:
             continue
         book = entry.get("book")
         if book is None:
             continue
-        if regulated and is_excluded_from_sportsbook_best(str(book)):
+        if not dfs_priced and book_name_compact(book) in _DFS_BOOKS:
             continue
         return str(book)
     return None

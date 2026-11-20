@@ -248,6 +248,68 @@ def test_prizepicks_only_board_stays_estimated_under_the_dfs_cap():
     assert _best_book(over) == "PrizePicks"
 
 
+def test_underdog_best_price_never_passes_as_a_regulated_quote():
+    """Underdog -115 beating DraftKings -140 must not price or label the pick.
+
+    ``sportsbook_best_american`` only drops PrizePicks, so a mixed board whose
+    best American price sat at a pick'em book graded VERIFIED off a flat payout:
+    no DFS cap, edge and stake computed at -115, ``best_book`` "Underdog".
+    """
+    over = _prop(
+        odds=-115,
+        implied=53.488,
+        books=[
+            {"book": "Underdog", "odds": -115, "odds_raw": "-115"},
+            {"book": "DraftKings", "odds": -140, "odds_raw": "-140"},
+        ],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -140
+    assert pillar.evidence["devig"] == "two_sided"
+    assert pillar.evidence["implied"] == 0.5833
+    assert _best_book(over) == "DraftKings"
+
+    pick = _pick(build_best_bets(_inputs(props=[over, under])))
+    assert pick["best_odds"] == -140
+    assert pick["best_book"] == "DraftKings"
+    assert pick["pillars"]["price"]["evidence"]["best_odds"] == -140
+    assert not any("DFS pick'em" in note for note in pick["pillars"]["price"]["notes"])
+
+
+def test_a_spaced_pickem_book_name_still_earns_the_dfs_cap():
+    """A "Prize Picks" quote is PrizePicks: compare compact keys, not raw names."""
+    over = _prop(
+        odds=-137,
+        implied=57.806,
+        books=[{"book": "Prize Picks", "odds": -137, "odds_raw": "-137"}],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -137
+    assert pillar.status == ESTIMATED
+    assert any("DFS pick'em" in note for note in pillar.notes)
+    assert _best_book(over) == "Prize Picks"
+
+
+def test_a_regulated_book_with_no_usable_odds_still_earns_the_dfs_cap():
+    """DraftKings quoted but priceless: the pick'em fallback must stay capped."""
+    over = _prop(
+        odds=-115,
+        implied=53.488,
+        books=[
+            {"book": "Underdog", "odds": -115, "odds_raw": "-115"},
+            {"book": "DraftKings", "odds": None, "odds_raw": ""},
+        ],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -115
+    assert pillar.status == ESTIMATED
+    assert any("DFS pick'em" in note for note in pillar.notes)
+    assert _best_book(over) == "Underdog"
+
+
 def test_one_sided_price_is_estimated_not_verified():
     pick = _pick(build_best_bets(_inputs(props=[_prop()])))
     assert pick["pillars"]["price"]["status"] == ESTIMATED

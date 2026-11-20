@@ -1,3 +1,60 @@
+# Session Handoff: Daily Debug Review (2026-11-15, agent `claude`)
+
+1. **Work**: Automated daily debug review on branch
+   `claude/inspiring-fermat-lukltx`. Code new since the 2026-11-07 review
+   (`8bb0363..d43a952`) is 19 non-handoff commits: the 11-08/11-10 NBA CTG +
+   gate-evidence + pack-refresh-hardening work (PRs #335/#337/#339, each
+   reviewed by the session that wrote it) and six unreviewed cursor/grok
+   fixes from 11-11 and 11-13. Reviewed all six.
+   `outlier_nfl/best_bets.py` (PR #348, `6259f13`) had one reproducible
+   defect:
+   - **A pick'em price could still pass as the regulated quote.** The commit
+     routes edge/EV/stake/`best_book` through `sportsbook_best_american` when
+     the board is not all-DFS, but that helper's exclusion set is
+     `{"prizepicks"}` only, while the module's own `_DFS_BOOKS` is
+     `{"underdog", "prizepicks", "sleeper", "dabble"}`. On a mixed board whose
+     best American price sits at Underdog/Sleeper/Dabble (Underdog -115 vs.
+     DraftKings -140 — ordinary, since pick'em payouts are flat), the pick'em
+     price drove the price pillar, `books_quoted.issubset(_DFS_BOOKS)` was
+     False so the DFS cap never applied, and the pillar graded **VERIFIED**
+     with `stake_if_validated` at the 2% `MAX_STAKE` and
+     `best_book: "Underdog"`. Reproduced; after the fix the same board prices
+     at DraftKings -140, grades CONTRADICTS on negative EV and stakes 0.
+     Fixed by filtering the full `_DFS_BOOKS` set out of the quotes handed to
+     `sportsbook_best_american` (`_regulated_quotes`) and by carrying a
+     `dfs_priced` flag out of the new `_priced_quote`, so the pick'em cap now
+     follows the price that was actually used rather than the shape of the
+     whole board. `_quoted_books` now compares `book_name_compact` keys, so
+     "Prize Picks" is recognised as PrizePicks.
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/357
+3. **Files Touched**: `outlier_nfl/best_bets.py`,
+   `tests/test_nfl_best_bets.py` (+3 tests), `.agent-log/HANDOFF.md`.
+4. **Verification**: full `pytest` before **3544 passed / 4 skipped / 0
+   failed**, after **3547 passed / 4 skipped / 0 failed** (+3, exactly the new
+   tests). All three new tests were confirmed to **fail on the parent
+   `best_bets.py`** and pass after. `mypy outlier_scrapers outlier_nfl` clean
+   (136 files); `pyright` clean against the review venv; `ruff` on the two
+   touched files reports only pre-existing findings away from the changed
+   lines. A review venv was built from `pyproject.toml` + `requirements.txt`
+   (`.venv-review/`, untracked) — with every dependency installed the suite
+   has no collection errors, unlike the 71-failed/41-error partial
+   environments earlier reviews ran in.
+5. **Not changed, reported only**:
+   - `outlier_scrapers/results.py` (`1aff8cd`) now requires every MLB
+     settlement row to sit within `START_MATCH_WINDOW` (90 min) of a final's
+     `gameDate`. That is what separates doubleheader twins and it has to apply
+     unconditionally (the live-twin case leaves one candidate), but it also
+     means a single MLB game moved more than 90 minutes after the snapshot —
+     a weather push — silently stops settling and is only visible as
+     `unmatched_event_count`. No safe automatic fix; consider alarming on
+     that counter.
+   - `.pytest_pr1_tmp/` is 334 tracked files / 2.2 MB of pytest temp output,
+     committed on 2026-10-09 (`d38844c`) and not covered by `.gitignore`
+     (which lists `.pytest_cache/` and `.pytest_temp/`). Untracking it is a
+     334-file delete, outside a daily debug review's remit.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
