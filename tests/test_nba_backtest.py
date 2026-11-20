@@ -184,6 +184,28 @@ def test_run_backtest_refuses_a_window_that_overlaps_tuning() -> None:
         )
 
 
+def test_exported_rho_stays_inside_the_interval_simulate_accepts() -> None:
+    from outlier_nba.ratings.model import NoiseTracker
+    from outlier_nba.sim.engine import SimParams, simulate
+
+    empty = NoiseTracker()
+    assert empty.n == 0
+    assert empty.sigma_e == 0.0
+
+    opposed = NoiseTracker()
+    opposed.update(1.0, -1.0, 0.0, 0.0, 0.0, 0.0, False)
+    opposed.update(2.0, -2.0, 0.0, 0.0, 0.0, 0.0, False)
+    assert -0.999 <= opposed.rho <= 0.999 and abs(opposed.rho) < 1
+    simulate(
+        SimParams.single(
+            log_poss=np.log(99.0), sigma_p=0.05, e_home=114.0, e_away=112.0,
+            sigma_e=opposed.sigma_e, rho=opposed.rho, ot_ratio=1.0,
+        ),
+        100,
+        np.random.default_rng(0),
+    )  # fmt: skip
+
+
 def test_noise_tracker_level_bias_needs_history_and_follows_recent_residuals() -> None:
     from outlier_nba.ratings.model import MIN_BIAS_N, NoiseTracker
 
