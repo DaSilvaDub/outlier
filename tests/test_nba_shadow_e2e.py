@@ -281,6 +281,121 @@ def test_settlement_is_idempotent(tmp_path):
     assert _db(tmp_path).execute("SELECT COUNT(*) FROM settlements").fetchone()[0] == 23
 
 
+def _seed_tip(conn, suffix: str, sport: str, starts_at: datetime, now: datetime) -> None:
+    captured = (starts_at - timedelta(hours=2)).isoformat()
+    conn.execute(
+        """
+        INSERT INTO market_snapshots (
+            snapshot_id, captured_at, sport, event_id, market_id, outcome_id,
+            selection, line, price, book, market_type, event_starts_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '200.5', -110, 'Book', 'GAMELINE', ?, ?)
+        """,
+        (
+            f"snapshot-{suffix}",
+            captured,
+            sport,
+            f"event-{suffix}",
+            f"market-{suffix}",
+            f"outcome-{suffix}",
+            "NYK @ BOS Total O/U OVER 200.5",
+            starts_at.isoformat(),
+            captured,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO decisions (
+            decision_id, snapshot_id, pipeline_verdict, final_verdict, units,
+            created_at, updated_at
+        ) VALUES (?, ?, 'STAND_DOWN', 'STAND_DOWN', 0, ?, ?)
+        """,
+        (f"decision-{suffix}", f"snapshot-{suffix}", now.isoformat(), now.isoformat()),
+    )
+
+
+def _nba_final_board() -> dict:
+    return {
+        "events": [
+            {
+                "id": "espn-ny-bos",
+                "status": {"type": {"completed": True}},
+                "competitions": [
+                    {
+                        "id": "espn-ny-bos",
+                        "competitors": [
+                            {"homeAway": "away", "score": "101", "team": {"abbreviation": "NY"}},
+                            {"homeAway": "home", "score": "118", "team": {"abbreviation": "BOS"}},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_settle_grades_unsettled_nba_tips_older_than_the_lookback(tmp_path, monkeypatch):
+    """A tip 10 days ago, and one 40 days ago, still settle. Each results fetch stays <= 30 days."""
+    from outlier_nba.track.settle import settle_nba
+    from outlier_scrapers import feedback, results
+
+    db = tmp_path / "ledger.sqlite3"
+    feedback.initialize_database(db)
+    now = datetime(2026, 11, 20, 15, tzinfo=UTC)
+    with feedback.open_database(db) as conn:
+        _seed_tip(conn, "recent", "NBA", now - timedelta(days=1), now)
+        _seed_tip(conn, "ten", "NBA", now - timedelta(days=10), now)
+        _seed_tip(conn, "forty", "NBA", now - timedelta(days=40), now)
+        _seed_tip(conn, "future", "NBA", now + timedelta(days=2), now)
+        _seed_tip(conn, "mlb", "MLB", now - timedelta(days=10), now)
+
+    lookbacks: list[int] = []
+    real = results.collect_settlement_rows
+
+    def spy(conn, leagues, *, lookback_days=3, now=None, fetch_json=results._fetch_json):
+        lookbacks.append(lookback_days)
+        return real(
+            conn, leagues, lookback_days=lookback_days, now=now, fetch_json=fetch_json
+        )
+
+    monkeypatch.setattr(results, "collect_settlement_rows", spy)
+    first = settle_nba(db, now=now, fetch_json=lambda _url: _nba_final_board())
+    assert lookbacks and max(lookbacks) <= 30 and any(days > 3 for days in lookbacks)
+    # initialize_database rewrites decision ids; the event id is the stable identity here.
+    graded = {
+        row["event_id"]: row["win_loss_push"]
+        for row in _db(tmp_path).execute(
+            """
+            SELECT s.event_id, x.win_loss_push
+            FROM settlements x
+            JOIN decisions d ON d.decision_id = x.decision_id
+            JOIN market_snapshots s ON s.snapshot_id = d.snapshot_id
+            """
+        )
+    }
+    assert graded == {"event-recent": "W", "event-ten": "W", "event-forty": "W"}
+    assert first["settlement_rows"] == 3
+    second = settle_nba(db, now=now, fetch_json=lambda _url: _nba_final_board())
+    assert second["settlement_rows"] == 0
+
+
+def test_other_leagues_still_settle_only_inside_their_lookback(tmp_path):
+    from outlier_scrapers import feedback, results
+
+    db = tmp_path / "ledger.sqlite3"
+    feedback.initialize_database(db)
+    now = datetime(2026, 11, 20, 15, tzinfo=UTC)
+    with feedback.open_database(db) as conn:
+        _seed_tip(conn, "mlb-old", "MLB", now - timedelta(days=10), now)
+        rows, summary = results.collect_settlement_rows(
+            conn, ["MLB"], lookback_days=3, now=now, fetch_json=lambda _url: {"events": []}
+        )
+        assert rows == [] and summary["pending_count"] == 0
+        with pytest.raises(results.ResultsError):
+            results.collect_settlement_rows(
+                conn, ["WNBA"], lookback_days=31, now=now, fetch_json=lambda _url: {}
+            )
+
+
 def test_run_settle_wrapper_delegates(tmp_path, monkeypatch):
     calls = {}
 
