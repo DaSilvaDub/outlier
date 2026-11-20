@@ -166,3 +166,33 @@ def test_untimed_supplied_closes_are_counted_in_the_clv_block():
     timed = dataclasses.replace(_snap(65.5, 65.5, 55.56), close_status="verified")
     report = _settle(_snap(65.5, 65.5, 55.56), timed)
     assert report.clv["n_untimed_supplied_close"] == 1
+
+
+def test_mean_clv_uses_only_verified_book_closes():
+    """One real close must not be averaged with copies of the bet.
+
+    Master reports n=5 and mean 0.636 for one +3.18 book close plus four
+    ``pregame_snapshot_best_odds`` copies (3.18 / 5).
+    """
+    import dataclasses
+
+    verified = dataclasses.replace(_snap(65.5, 65.5, 55.56), close_status="verified")
+    copies = [
+        dataclasses.replace(
+            verified,
+            close_source="pregame_snapshot_best_odds",
+            close_status=None,
+            close_implied=52.38,
+        )
+        for _ in range(4)
+    ]
+    alone = _settle(verified)
+    mixed = _settle(verified, *copies)
+    assert mixed.clv["status"] == "ok"
+    assert mixed.clv["n"] == 1
+    assert mixed.clv["mean_clv_implied_pts"] == pytest.approx(alone.clv["mean_clv_implied_pts"])
+    assert mixed.clv["mean_clv_implied_pts"] == pytest.approx(3.18, abs=0.01)
+    assert mixed.clv.get("close_sources") == ["book_close"]
+
+    # An untimed book_close is trusted at its label and still enters the mean.
+    assert _settle(_snap(65.5, 65.5, 55.56)).clv["n"] == 1
