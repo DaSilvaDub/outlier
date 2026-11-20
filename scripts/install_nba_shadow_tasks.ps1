@@ -32,4 +32,4 @@ Register-NbaTask -Name "Outlier NBA Capture" -Mode "capture" -Trigger $capture `
     -Description "NBA shadow capture; skips unless a tip within 60 min needs a verified close."
 Register-NbaTask -Name "Outlier NBA Settle" -Mode "settle" `
     -Trigger (New-ScheduledTaskTrigger -Daily -At "06:00") `
-    -Description "NBA settlement against box scores (3-day lookback)."
+    -Description "NBA settlement against box scores for every unsettled tip that has started."

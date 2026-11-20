@@ -341,6 +341,11 @@ def _prob_01(raw: float | None) -> float | None:
     return None
 
 
+def _verified_book_close(snap: PredictionSnap) -> bool:
+    """Untimed ``book_close`` is trusted; a timed row must be ``verified``."""
+    return snap.close_source == "book_close" and snap.close_status in (None, "verified")
+
+
 def _brier(prob: float, won: bool) -> float:
     y = 1.0 if won else 0.0
     return (prob - y) ** 2
@@ -404,6 +409,7 @@ def settle_predictions(
     model_briers: list[float] = []
     model_loglosses: list[float] = []
     clv_vals: list[float] = []
+    clv_sources: list[str] = []
     line_moves: list[float] = []
     tier_buckets: dict[str, dict[str, int]] = {}
     source_buckets: dict[str, dict[str, int]] = {}
@@ -533,7 +539,10 @@ def settle_predictions(
                 report.clv["n_excluded_line_mismatch"] += 1
             else:
                 clv_pts = (close_p - market_prob) * 100.0
-                clv_vals.append(clv_pts)
+                if _verified_book_close(snap):
+                    clv_vals.append(clv_pts)
+                    if snap.close_source:
+                        clv_sources.append(snap.close_source)
 
         row = SettleRow(
             prediction=snap,
@@ -611,18 +620,7 @@ def settle_predictions(
         report.clv["status"] = "ok"
         report.clv["n"] = len(clv_vals)
         report.clv["mean_clv_implied_pts"] = sum(clv_vals) / len(clv_vals)
-        sources = sorted(
-            {
-                p.close_source
-                for p in predictions
-                if p.close_source and (
-                    p.close_implied is not None
-                    or p.close_odds is not None
-                    or p.close_line is not None
-                )
-            }
-        )
-        report.clv["close_sources"] = sources
+        report.clv["close_sources"] = sorted(set(clv_sources))
     report.by_tier = {
         key: {
             **vals,
