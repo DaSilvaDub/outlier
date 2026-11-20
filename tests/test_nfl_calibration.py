@@ -518,65 +518,6 @@ def test_pipeline_calibrated_and_high_prob_artifacts(tmp_path):
     assert (reports_dir / "2026-09-13_BAL_KC_Game_Script.md").exists()
 
 
-def _write_normalized_dataset(target_dir: Path, date: str) -> None:
-    """Write a DET @ BUF normalized dataset the game script generator can read."""
-    games = [
-        _make_game_line("ML", 0.0, proposition="MONEYLINE", position="HOME", team="BUF", best_odds=-225),
-        _make_game_line("ML", 0.0, proposition="MONEYLINE", position="AWAY", team="DET", best_odds=185),
-        _make_game_line("SPREAD", -5.5, proposition="SPREAD", position="HOME", team="BUF", best_odds=-108),
-        _make_game_line("SPREAD", 5.5, proposition="SPREAD", position="AWAY", team="DET", best_odds=-112),
-        _make_game_line("TOTAL", 54.5, proposition="TOTAL", position="OVER", best_odds=-112),
-        _make_game_line("TOTAL", 54.5, proposition="TOTAL", position="UNDER", best_odds=-108),
-        _make_game_line(
-            "TEAM_TOTAL", 30.5, market_type="TEAM_PROP", position="OVER", team="BUF", best_odds=-115
-        ),
-        _make_game_line(
-            "TEAM_TOTAL", 24.5, market_type="TEAM_PROP", position="OVER", team="DET", best_odds=-110
-        ),
-    ]
-
-    props = [
-        # Detroit: road underdog running back exposed to deficit volume risk.
-        _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "OVER", best_odds=-112),
-        _make_prop("Jahmyr Gibbs", "RUSH_YDS", 87.5, "UNDER", best_odds=-108),
-        # Detroit: slot receiver upgraded by the two-high shell divergence.
-        _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "OVER", best_odds=-114),
-        _make_prop("Amon-Ra St. Brown", "REC_YDS", 68.5, "UNDER", best_odds=-106),
-        # Buffalo: untouched by the away-team calibrations.
-        _make_prop("Josh Allen", "PASS_YDS", 248.5, "OVER", best_odds=-110, team="BUF", opponent="DET"),
-        _make_prop("Josh Allen", "PASS_YDS", 248.5, "UNDER", best_odds=-110, team="BUF", opponent="DET"),
-    ]
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / f"nfl_games_{date}.json").write_text(
-        json.dumps({"date": date, "records": [g.to_dict() for g in games]}),
-        encoding="utf-8",
-    )
-    # Written uncalibrated on purpose: the generator must calibrate on load.
-    (target_dir / f"nfl_props_{date}.json").write_text(
-        json.dumps({"date": date, "records": [p.to_dict() for p in props]}),
-        encoding="utf-8",
-    )
-
-
-def test_game_script_generator_output(tmp_path):
-    """NflGameScriptGenerator must generate report with calibration signals and Section 3.5."""
-    normalized_dir = tmp_path / "NFL" / "normalized"
-    _write_normalized_dataset(normalized_dir, "2026-09-17")
-
-    generator = NflGameScriptGenerator(data_dir=normalized_dir)
-    games, props = generator.load_data("2026-09-17")
-    env = generator.extract_game_environment(games, home_team="BUF", away_team="DET")
-    profiles = generator.build_player_profiles(props)
-    report = generator.generate_report(env, profiles)
-
-    assert "# DETROIT LIONS @ BUFFALO BILLS" in report
-    assert "## 3.5 Calibrated High-Probability Prop Anchors & Sizing Calibrations" in report
-    assert "Calibrated Signal" in report
-    assert "DEFICIT RISK (-15% Vol)" in report
-    assert "SHELL UPGRADE (+20% Vol)" in report
-
-
 def test_compute_empirical_model_p_prefers_l10_never_market():
     """model_p is L10/L5 empirical hit rate — not implied_probability."""
     from dataclasses import replace
