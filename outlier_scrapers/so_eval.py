@@ -13,10 +13,23 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from outlier_scrapers.feedback_db import one_row_per_outcome
 from outlier_scrapers.paths import FEEDBACK_DB_PATH
 from outlier_scrapers.so_sizing_blend import temper_independent_prob
 
 DEFAULT_DB = FEEDBACK_DB_PATH
+# Columns that identify one gradeable bet and rank its captures. Selected only when
+# the ledger has them, so a legacy schema still evaluates (its rows are never merged).
+_OUTCOME_COLUMNS = (
+    "snapshot_id",
+    "captured_at",
+    "sport",
+    "event_id",
+    "market_id",
+    "outcome_id",
+    "line",
+    "selected",
+)
 GAMELOG_HASH = "so-starter-gamelog-v2"
 GAMELOG_HASHES = frozenset({"so-starter-gamelog-v1", "so-starter-gamelog-v2"})
 DEFAULT_SOFT_RELIABILITY = 0.45
@@ -77,7 +90,10 @@ def evaluate_so_probs(
     soft_reliability: float = DEFAULT_SOFT_RELIABILITY,
     temper_independent_weight: float = DEFAULT_TEMPER_WEIGHT,
 ) -> dict[str, Any]:
-    """Compare independent vs market Brier on settled SO rows.
+    """Compare independent vs market Brier on settled SO outcomes.
+
+    Each outcome is scored once, on its decision-time capture (see
+    ``feedback_db.one_row_per_outcome``); re-captures of one bet are not new evidence.
 
     When ``require_v2_hash`` is set, only current-generation rows
     (``so-starter-gamelog-v2`` and any promoted ``so-starter-calibrated-*``
@@ -102,6 +118,9 @@ def evaluate_so_probs(
     source_expr = (
         "s.model_prob_source" if "model_prob_source" in columns else "NULL AS model_prob_source"
     )
+    outcome_exprs = ",\n                    ".join(
+        f"s.{name}" if name in columns else f"NULL AS {name}" for name in _OUTCOME_COLUMNS
+    )
     # Settlements key to snapshots via snapshot_id (preferred) or decision_id.
     snap_cols = columns
     try:
@@ -115,6 +134,7 @@ def evaluate_so_probs(
                     s.independent_model_prob,
                     {hash_expr},
                     {source_expr},
+                    {outcome_exprs},
                     x.win_loss_push
                 FROM market_snapshots s
                 JOIN settlements x ON x.snapshot_id = s.snapshot_id
@@ -131,6 +151,7 @@ def evaluate_so_probs(
                     s.independent_model_prob,
                     {hash_expr},
                     {source_expr},
+                    {outcome_exprs},
                     x.win_loss_push
                 FROM market_snapshots s
                 JOIN decisions d ON d.snapshot_id = s.snapshot_id
@@ -148,8 +169,13 @@ def evaluate_so_probs(
         }
     conn.close()
 
+    # One row per outcome, chosen at decision time and *before* the hash and
+    # probability filters below: a re-captured bet shares one result, and it is
+    # judged on the probabilities that drove it, not on a later re-score.
+    outcome_rows = one_row_per_outcome([dict(row) for row in rows])
+
     paired: list[dict[str, Any]] = []
-    for row in rows:
+    for row in outcome_rows:
         if not _is_so_selection(str(row["selection"] or ""), str(row["market_type"] or "")):
             continue
         market = _float(row["market_consensus_prob"])

@@ -32,10 +32,8 @@ def test_fit_market_weight_minimizes_brier_loss():
     assert fitted["model_weight"] == pytest.approx(0.3)
 
 
-def test_fit_artifact_floors_segments_without_oos_evidence():
-    """Without a chronological spread to hold out, no segment can prove OOS
-    improvement, so every learned weight is floored rather than trusted at
-    its raw in-sample fit (Phase 1: stop overriding the market on noise)."""
+def test_fit_artifact_uses_market_only_without_oos_evidence():
+    """Small samples cannot authorize model weight globally or by segment."""
     rows = _rows(market_type="PLAYER_PROP", wins=8, losses=2)
     rows += _rows(market_type="GAMELINE", wins=2, losses=8)
     artifact = probability_blend.fit_weight_artifact(
@@ -55,7 +53,8 @@ def test_fit_artifact_floors_segments_without_oos_evidence():
     game = probability_blend.resolve_market_weight(
         artifact, {**rows[-1], "captured_at": "2026-07-21T00:00:00+00:00"}
     )
-    assert player["market_weight"] > game["market_weight"]
+    assert player["market_weight"] == game["market_weight"] == 1.0
+    assert artifact["global"]["market_weight"] == 1.0
     assert set(artifact["dimensions"]) == set(probability_blend.DIMENSIONS)
 
 
@@ -100,18 +99,35 @@ def test_apply_floor_publishes_the_validated_trained_weight_not_the_all_data_fit
     assert result["raw_market_weight"] == pytest.approx(0.9)
 
 
-def test_apply_floor_still_floors_when_holdout_did_not_improve():
-    all_data_fit = {"market_weight": 0.2, "model_weight": 0.8, "n": 100, "brier_score": 0.2}
-    holdout = {"trained_market_weight": 0.1, "improved": False}
+@pytest.mark.parametrize("raw_weight", [0.2, 0.9])
+@pytest.mark.parametrize("holdout", [None, {"trained_market_weight": 0.1, "improved": False}])
+def test_apply_floor_uses_market_only_without_improvement(raw_weight, holdout):
+    all_data_fit = {"market_weight": raw_weight, "model_weight": 1 - raw_weight,
+                    "n": 100, "brier_score": 0.2}
     result = probability_blend._apply_floor(all_data_fit, 0.75, holdout)
-    assert result["market_weight"] == pytest.approx(0.75)
-    assert result["raw_market_weight"] == pytest.approx(0.2)
+    assert result["market_weight"] == 1.0
+    assert result["model_weight"] == 0.0
+    assert result["raw_market_weight"] == pytest.approx(raw_weight)
 
 
-def test_apply_floor_floors_when_holdout_is_none():
-    all_data_fit = {"market_weight": 0.2, "model_weight": 0.8, "n": 100, "brier_score": 0.2}
-    result = probability_blend._apply_floor(all_data_fit, 0.75, None)
-    assert result["market_weight"] == pytest.approx(0.75)
+def test_fit_artifact_failed_holdout_uses_market_only_for_global_and_segments():
+    # Training favors the model; the later outcomes favor the market.
+    rows = _rows(market_type="PLAYER_PROP", wins=0, losses=80,
+                 captured_at="2026-07-18T16:00:00+00:00")
+    for row in rows:
+        row["event_starts_at"] = "2026-07-18T20:00:00+00:00"
+    rows += _rows(market_type="PLAYER_PROP", wins=20, losses=0)
+    artifact = probability_blend.fit_weight_artifact(
+        rows, min_samples=20, prior_strength=30, market_weight_floor=0.75,
+        generated_at="2026-07-20T00:00:00+00:00",
+    )
+    assert artifact["global_holdout"]["improved"] is False
+    assert artifact["global"]["market_weight"] == 1.0
+    for table in artifact["dimensions"].values():
+        for segment in table.values():
+            assert segment["holdout"]["improved"] is False
+            assert segment["market_weight"] == 1.0
+            assert segment["model_weight"] == 0.0
 
 
 def test_fit_artifact_published_weight_matches_trained_weight_with_noisy_data():
