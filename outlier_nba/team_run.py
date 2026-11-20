@@ -279,6 +279,7 @@ def event_neutral(event: Mapping[str, Any]) -> bool | None:
             flag = parse_flag(event[key])
             if flag is None:
                 logger.warning("neutral_flag_unparsed", key=key, value=repr(event[key])[:40])
+                continue
             return flag
     return None
 
