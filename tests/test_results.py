@@ -237,7 +237,7 @@ def test_three_way_gamelines_lose_on_a_draw_instead_of_pushing():
     """
     tied = results.FinalEvent(
         provider_event_id="1",
-        sport="NFL",
+        sport="WNBA",
         event_date=NOW.date(),
         away="ATL",
         home="WSH",
@@ -525,11 +525,12 @@ def test_matchup_prefixed_team_totals_grade_correctly():
     ) == (85, "W")
 
 
-def test_matchup_team_total_skips_when_both_codes_match_the_named_team():
-    """The code "LA" is a substring of "ATLANTADREAM", so containment cannot pick a side.
+def test_atlanta_dream_total_grades_against_atlanta_not_los_angeles():
+    """ESPN stores the Sparks as LA, which is a substring of ATLANTADREAM.
 
-    Grading the away team here settled an Atlanta Dream total against Los Angeles'
-    score; an ambiguous identity must be skipped rather than guessed.
+    The registry resolves the Dream name to ATL and LA to LAS, so the total
+    grades against Atlanta. A name that matches neither side still skips when
+    both abbreviations sit inside it.
     """
     event = results.FinalEvent(
         provider_event_id="401857200",
@@ -541,10 +542,18 @@ def test_matchup_team_total_skips_when_both_codes_match_the_named_team():
         home_score=88,
         players={},
     )
+    assert results._grade_row(
+        {
+            "selection": "LA @ ATL Atlanta Dream - Points OVER 84.5",
+            "line": "84.5",
+            "market_type": "PTS",
+        },
+        event,
+    ) == (88, "W")
     assert (
         results._grade_row(
             {
-                "selection": "LA @ ATL Atlanta Dream - Points OVER 84.5",
+                "selection": "LA @ ATL LAKERSATLANTA - Points OVER 84.5",
                 "line": "84.5",
                 "market_type": "PTS",
             },

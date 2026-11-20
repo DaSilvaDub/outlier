@@ -185,6 +185,23 @@ def detect_scope(*labels: Any) -> str:
     return "full_game"
 
 
+def _resolve_schedule_team(
+    payload: dict[str, Any], config: SportConfig
+) -> tuple[str | None, str | None]:
+    """Try alias, abbr, name, then teamName. The first one that canonicalizes wins."""
+    fallback = ""
+    for key in ("alias", "abbr", "name", "teamName"):
+        text = str(payload.get(key) or "").strip()
+        if not text:
+            continue
+        if not fallback:
+            fallback = text
+        canonical = normalize_team(config, text)
+        if canonical:
+            return canonical, text
+    return None, fallback or None
+
+
 def build_schedule_index(
     schedule_payload: dict[str, Any],
     config: SportConfig,
@@ -199,33 +216,19 @@ def build_schedule_index(
         event_id = str(event.get("eventId") or event.get("id") or "").strip()
         away_payload = event.get("away") if isinstance(event.get("away"), dict) else {}
         home_payload = event.get("home") if isinstance(event.get("home"), dict) else {}
-        away_raw = (
-            away_payload.get("alias")
-            or away_payload.get("abbr")
-            or away_payload.get("name")
-            or away_payload.get("teamName")
-            or ""
-        )
-        home_raw = (
-            home_payload.get("alias")
-            or home_payload.get("abbr")
-            or home_payload.get("name")
-            or home_payload.get("teamName")
-            or ""
-        )
-        away = normalize_team(config, away_raw)
-        home = normalize_team(config, home_raw)
+        away, away_text = _resolve_schedule_team(away_payload, config)
+        home, home_text = _resolve_schedule_team(home_payload, config)
         if not event_id:
             continue
-        matchup = f"{away or away_raw} @ {home or home_raw}".strip()
+        matchup = f"{away or away_text or ''} @ {home or home_text or ''}".strip()
         index[event_id] = {
             "event_id": event_id,
             "matchup": matchup,
             "matchup_raw": matchup,
             "away": away,
-            "away_raw": str(away_raw or "").strip() or None,
+            "away_raw": away_text,
             "home": home,
-            "home_raw": str(home_raw or "").strip() or None,
+            "home_raw": home_text,
             "away_team_id": str(away_payload.get("teamId") or away_payload.get("id") or "").strip(),
             "home_team_id": str(home_payload.get("teamId") or home_payload.get("id") or "").strip(),
             "starts_at": (
@@ -260,16 +263,10 @@ def build_team_index(
             team_id = str(payload.get("teamId") or payload.get("id") or "").strip()
             if not team_id:
                 continue
-            raw = (
-                payload.get("alias")
-                or payload.get("abbr")
-                or payload.get("name")
-                or payload.get("teamName")
-                or ""
-            )
+            team, team_raw = _resolve_schedule_team(payload, config)
             index[team_id] = {
-                "team": normalize_team(config, raw),
-                "team_raw": str(raw or "").strip() or None,
+                "team": team,
+                "team_raw": team_raw,
             }
     return index
 
