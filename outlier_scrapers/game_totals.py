@@ -872,6 +872,8 @@ def build_totals(
 
         hard_flags = [f for f in flags if f not in SOFT_QUALITY_FLAGS]
         has_soft_flag = any(f in SOFT_QUALITY_FLAGS for f in flags)
+        raw_units = sizing.recommended_units_pre_news if sizing is not None else None
+        positive_units = raw_units is not None and raw_units > 0
         actionable = (
             "true"
             if (
@@ -884,6 +886,7 @@ def build_totals(
                 and not hard_flags
                 and not push_blocked
                 and fair_total is not None
+                and positive_units
             )
             else "false"
         )
@@ -907,13 +910,13 @@ def build_totals(
                 quality_flags = "NON_BRACKETING_LADDER"
 
         recommended_units: float | str = ""
-        if actionable == "true" and sizing is not None:
-            recommended_units = sizing.recommended_units_pre_news or 0.0
-            if has_soft_flag and recommended_units:
+        if actionable == "true" and raw_units is not None and raw_units > 0:
+            recommended_units = raw_units
+            if has_soft_flag:
                 recommended_units = round(recommended_units * SOFT_FLAG_UNITS_DISCOUNT, 4)
         shadow_recommended_units: float | str = ""
-        if shadow_actionable == "true" and sizing is not None:
-            shadow_recommended_units = sizing.recommended_units_pre_news or 0.0
+        if shadow_actionable == "true" and raw_units is not None and raw_units > 0:
+            shadow_recommended_units = raw_units
 
         side_for_selection = best_side or "OVER"
         label = "Total O/U" if total_kind == "game" else "Team Total"
