@@ -130,6 +130,26 @@ def test_fraction_and_percent_close_units_compare_on_one_scale():
     assert [round(r["clv_implied_pts"], 2) for r in report.rows] == [2.17, 3.18]
 
 
+def test_plus_10000_implied_percent_scores_near_one_percent():
+    """Stored implied 0.99 is 0.99 percent. Brier must not score that under as 99%."""
+    from outlier_nfl.games import american_to_implied_probability
+
+    stored = american_to_implied_probability(10000)
+    assert stored == 0.99
+    snap = PredictionSnap(
+        source="t", event_id="e1", event_starts_at="2026-09-13T13:00:00-04:00",
+        slate_date="2026-09-13", matchup="BAL @ KC", team="BAL", opponent="KC",
+        player_name="Derrick Henry", player_id=None, market="RUSH_YDS", position="UNDER",
+        line=60.5, best_odds=10000, implied_probability=stored, confidence_tier=None,
+        calibration_tags=(), model_p=0.70,
+    )
+    row = _settle(snap).rows[0]
+    assert row["result"] == "L"
+    assert row["prob"] == pytest.approx(stored / 100.0)
+    assert row["model_prob"] == pytest.approx(0.70)
+    assert row["brier"] == pytest.approx((stored / 100.0) ** 2)
+
+
 def test_unknown_close_line_gives_no_price_clv():
     report = _settle(_snap(65.5, None, 55.0))
     assert report.rows[0]["clv_implied_pts"] is None

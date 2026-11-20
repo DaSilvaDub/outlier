@@ -173,11 +173,11 @@ def american_to_decimal(odds: int) -> float:
 
 
 def _pct(value: Any) -> float | None:
-    """Implied probability as a 0-1 fraction (feed stores percentages)."""
+    """0-1 fraction from implied_probability, always stored as a percentage."""
     p = _f(value)
     if p is None:
         return None
-    return p / 100.0 if p > 1.0 else p
+    return p / 100.0
 
 
 @dataclass

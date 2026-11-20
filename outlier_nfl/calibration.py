@@ -113,17 +113,23 @@ def _normalize_hit_rate(value: Any) -> float | None:
     return None
 
 
-def probability_to_01(value: Any) -> float | None:
-    """Normalize a probability expressed as 0–1 or 0–100 into [0, 1]."""
+def probability_to_01(value: Any, *, percent: bool = False) -> float | None:
+    """Normalize a probability into [0, 1].
+
+    ``percent=True`` divides a percentage field by 100, including values <= 1.
+    Otherwise [0, 1] is already a fraction and (1, 100] is a percentage.
+    """
     try:
         p = float(value)
     except (TypeError, ValueError):
         return None
-    if not (p == p) or p < 0:
+    if not math.isfinite(p) or p < 0:
         return None
-    if 0.0 <= p <= 1.0:
+    if percent:
+        return p / 100.0 if p <= 100.0 else None
+    if p <= 1.0:
         return p
-    if 1.0 < p <= 100.0:
+    if p <= 100.0:
         return p / 100.0
     return None
 
@@ -132,14 +138,15 @@ def compute_sportsbook_edge_pts(
     model_p: float | None,
     sportsbook_implied: float | None,
 ) -> float | None:
-    """``model_p − sportsbook_implied_01`` in probability points on [0, 1].
+    """``model_p − sportsbook_implied`` in probability points on [0, 1].
 
     Multiply by 100 for percentage points (e.g. 0.279 → +27.9 pts).
-    Both sides are normalized with :func:`probability_to_01` (0–1 or 0–100).
+    ``sportsbook_implied`` is a percentage. ``model_p`` may be a fraction or a
+    0–100 rate.
     """
     if model_p is None or sportsbook_implied is None:
         return None
-    prior = probability_to_01(sportsbook_implied)
+    prior = probability_to_01(sportsbook_implied, percent=True)
     mp = probability_to_01(model_p)
     if prior is None or mp is None:
         return None
@@ -349,10 +356,10 @@ def _resolve_market_prior_01(
     prior = probability_to_01(market_prior)
     if prior is not None:
         return prior
-    prior = probability_to_01(sportsbook_implied)
+    prior = probability_to_01(sportsbook_implied, percent=True)
     if prior is not None:
         return prior
-    return probability_to_01(sportsbook_implied_probability_pct(books))
+    return probability_to_01(sportsbook_implied_probability_pct(books), percent=True)
 
 
 def attach_empirical_model_p(

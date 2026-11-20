@@ -322,11 +322,12 @@ def _match_event(
     return candidates[0], None
 
 
-def _prob_01(raw: float | None) -> float | None:
+def _prob_01(raw: float | None, *, percent: bool = False) -> float | None:
     """Normalize a probability to [0, 1].
 
-    Accepts fractions or 0–100 percentages. Extremes 0 and 1 are valid for
-    Brier; ``_logloss`` clips internally. Rejects values outside [0, 100].
+    ``percent=True`` divides ``implied_probability`` by 100, including values
+    <= 1. Otherwise [0, 1] is a fraction and (1, 100] is a percentage.
+    Extremes 0 and 1 stay valid for Brier. Rejects values outside [0, 100].
     """
     if raw is None:
         return None
@@ -334,6 +335,8 @@ def _prob_01(raw: float | None) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
+    if percent:
+        return value / 100.0 if 0.0 <= value <= 100.0 else None
     if 0.0 <= value <= 1.0:
         return value
     if 1.0 < value <= 100.0:
@@ -501,7 +504,7 @@ def settle_predictions(
             _bump(source_buckets, snap.source, "skipped")
             continue
 
-        market_prob = _prob_01(snap.implied_probability)
+        market_prob = _prob_01(snap.implied_probability, percent=True)
         model_prob = _prob_01(snap.model_p)
         brier = logloss = None
         brier_m = logloss_m = None

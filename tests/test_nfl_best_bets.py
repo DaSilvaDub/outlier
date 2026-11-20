@@ -190,6 +190,25 @@ def test_no_edge_at_price_rejects():
     assert pick["verdict"] == REJECTED
 
 
+@pytest.mark.parametrize("odds,stored", [(10000, 0.99), (9900, 1.0)])
+def test_longshot_percent_implied_devigs_below_one_percent(odds, stored):
+    """+9900/+10000 store 1.0/0.99 percent. Reading those as fractions validates -110."""
+    from outlier_nfl.games import american_to_implied_probability
+
+    assert american_to_implied_probability(odds) == stored
+    over = _prop(odds=-110, implied=american_to_implied_probability(-110))
+    under = _prop("UNDER", odds=odds, implied=stored)
+    pick = _pick(build_best_bets(_inputs(props=[over, under])))
+    evidence = pick["pillars"]["price"]["evidence"]
+    assert evidence["devig"] == "two_sided"
+    assert evidence["opposite_implied"] == pytest.approx(stored / 100.0)
+    assert pick["pillars"]["price"]["status"] == CONTRADICTS
+    assert "no edge at the best available price" in pick["pillars"]["price"]["notes"]
+    assert pick["verdict"] == REJECTED
+    assert pick["stake_fraction"] == 0.0
+    assert pick["edge"] < 0
+
+
 def _by_line(*rows):
     return {prop_key(row) + (_f(row.get("line")),): row for row in rows}
 
