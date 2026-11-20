@@ -168,3 +168,19 @@ def test_cli_only_if_due_captures_and_records_the_attempt(tmp_path, monkeypatch)
     )
     assert cli.main(["capture", "--db", str(db), "--only-if-due"]) == 0
     assert ran and read_last_attempt(db) == NOW
+
+
+def test_raising_capture_leaves_an_empty_ledger_due(tmp_path, monkeypatch):
+    db = tmp_path / "empty.sqlite3"
+    sqlite3.connect(db).close()
+    monkeypatch.setattr("outlier_scrapers.api.OutlierApiClient", lambda: "client")
+    monkeypatch.setattr(cli, "_utc_now", lambda: NOW)
+
+    def _raise(client, **kwargs):
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(cli, "run_capture", _raise)
+    with pytest.raises(RuntimeError, match="capture failed"):
+        cli.main(["capture", "--db", str(db), "--only-if-due"])
+    later = NOW + timedelta(minutes=15)
+    assert capture_due(db, later, last_attempt=read_last_attempt(db)).due

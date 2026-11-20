@@ -19,6 +19,9 @@ from outlier_nfl.best_bets import (
     VALIDATED,
     VERIFIED,
     TraceInputs,
+    _best_book,
+    _f,
+    _price,
     american_to_decimal,
     build_best_bets,
     merge_payloads,
@@ -29,6 +32,7 @@ from outlier_nfl.snapshots import (
     append_snapshot,
     load_snapshots,
     movement_index,
+    prop_key,
     snapshot_path,
     week_start,
 )
@@ -184,6 +188,64 @@ def test_no_edge_at_price_rejects():
     pick = _pick(build_best_bets(_inputs(props=props)))
     assert pick["pillars"]["price"]["status"] == CONTRADICTS
     assert pick["verdict"] == REJECTED
+
+
+def _by_line(*rows):
+    return {prop_key(row) + (_f(row.get("line")),): row for row in rows}
+
+
+def test_mixed_board_prices_stakes_and_grades_at_the_regulated_book():
+    """PrizePicks -137 must not outrank DraftKings -250. Model 0.62, under -110."""
+    over = _prop(
+        odds=-137,
+        implied=57.806,
+        books=[
+            {"book": "PrizePicks", "odds": -137, "odds_raw": "-137"},
+            {"book": "DraftKings", "odds": -250, "odds_raw": "-250"},
+        ],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    evidence = pillar.evidence
+    assert evidence["best_odds"] == -250
+    assert evidence["decimal"] == 1.4
+    assert evidence["implied"] == 0.7143
+    assert evidence["devig"] == "two_sided"
+    assert evidence["fair_p"] == 0.5769
+    assert evidence["edge"] == 0.0431
+    assert evidence["ev_per_unit"] == -0.132
+    assert evidence["stake_if_validated"] == 0.0
+    assert pillar.status == CONTRADICTS
+    assert "no positive expected return at the quoted price" in pillar.notes
+    assert _best_book(over) == "DraftKings"
+
+    pick = _pick(build_best_bets(_inputs(props=[over, under])))
+    assert pick["best_odds"] == -250
+    assert pick["best_book"] == "DraftKings"
+    assert pick["pillars"]["price"]["status"] == CONTRADICTS
+    assert pick["pillars"]["price"]["evidence"]["stake_if_validated"] == 0.0
+    assert pick["edge"] == pick["pillars"]["price"]["evidence"]["edge"]
+    assert pick["ev_per_unit"] == pick["pillars"]["price"]["evidence"]["ev_per_unit"]
+    assert pick["verdict"] == REJECTED
+    assert pick["stake_fraction"] == 0.0
+
+
+def test_prizepicks_only_board_stays_estimated_under_the_dfs_cap():
+    """No regulated quote: keep the PrizePicks price and the pick'em cap."""
+    over = _prop(
+        odds=-137,
+        implied=57.806,
+        books=[{"book": "PrizePicks", "odds": -137, "odds_raw": "-137"}],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["devig"] == "two_sided"
+    assert pillar.evidence["best_odds"] == -137
+    assert pillar.evidence["edge"] == 0.0954
+    assert pillar.evidence["stake_if_validated"] == 0.02
+    assert pillar.status == ESTIMATED
+    assert any("DFS pick'em" in note for note in pillar.notes)
+    assert _best_book(over) == "PrizePicks"
 
 
 def test_one_sided_price_is_estimated_not_verified():
@@ -430,7 +492,7 @@ def test_run_week_forwards_reports_dir_to_each_slate_run(tmp_path, monkeypatch):
 
 def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeypatch):
     import outlier_nfl.pipeline as pipeline_mod
-    from outlier_nfl.weekly import run_week
+    from outlier_nfl.weekly import RequiredStageError, run_week
 
     normalized = tmp_path / "NFL" / "normalized"
     normalized.mkdir(parents=True)
@@ -464,7 +526,7 @@ def test_trace_failure_removes_stale_card_and_weekly_run_fails(tmp_path, monkeyp
     assert "trace exploded" in summary["best_bets_error"]
     assert not stale_latest.exists()
     events = json.loads((FIXTURES_DIR / "schedule.json").read_text(encoding="utf-8"))["events"]
-    with pytest.raises(RuntimeError, match="trace exploded"):
+    with pytest.raises(RequiredStageError, match="best_bets=FAILED"):
         run_week(pipeline, date(2026, 9, 13), events=events, offline_fixtures_dir=FIXTURES_DIR,
                  reports_dir=tmp_path / "reports")
 

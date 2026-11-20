@@ -96,6 +96,30 @@ def test_unique_name_still_resolves_by_name_only() -> None:
     assert resolve_player_stats(ev, "Travis Kelce", "KC")[0] == {"RECEIVING:YDS": 70.0}
 
 
+def _event(players: dict[str, dict[str, float]]) -> NflBoxScoreEvent:
+    return NflBoxScoreEvent(provider_event_id="g", event_date=date(2026, 9, 13), away="PHI",
+                            home="DAL", away_score=20, home_score=17, players=players)
+
+
+def test_substring_of_another_player_is_not_a_match() -> None:
+    ev = _event({"AJBROWNING": {"RUSHING:YDS": 88.0}})
+    assert resolve_player_stats(ev, "A.J. Brown") == (None, "player_not_in_boxscore")
+
+
+def test_two_equally_normalized_names_are_ambiguous() -> None:
+    ev = _event({
+        "AJBROWN": {"RECEIVING:YDS": 70.0},
+        "A.J. Brown": {"RUSHING:YDS": 88.0},
+    })
+    assert resolve_player_stats(ev, "A.J. Brown") == (None, "ambiguous_player_match")
+
+
+def test_exact_normalized_name_still_resolves() -> None:
+    stats, reason = resolve_player_stats(_event({"AJBROWN": {"RECEIVING:YDS": 70.0}}), "A.J. Brown")
+    assert reason is None
+    assert stats == {"RECEIVING:YDS": 70.0}
+
+
 def test_projection_rows_belong_to_one_player_id(tmp_path: Path) -> None:
     path = _csv(tmp_path / "w.csv", [
         _stat("Josh Allen", "00-A1", "BUF", "80"), _stat("Josh Allen", "00-A2", "KC", "30"),
