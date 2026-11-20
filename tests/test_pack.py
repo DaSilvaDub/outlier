@@ -37,6 +37,7 @@ from outlier_scrapers.pack import (
     select_date,
     write_pack,
 )
+from outlier_scrapers.pack_selection import _resolve_candidate_identity
 from outlier_scrapers.sizing import compute_historical_edge
 from outlier_scrapers.schema import ValidationError
 
@@ -1516,9 +1517,9 @@ def test_implausible_line_withholds_units():
     card = ev_card(
         line=350.5,
         market_type="PLAYER_PROP",
-        market="HITS",
-        proposition="HITS",
-        market_raw="Hits",
+        market="SO",
+        proposition="STRIKEOUTS",
+        market_raw="Strikeouts",
         player_id="p1",
     )
     ev = [
@@ -2427,6 +2428,79 @@ def test_mlb_team_total_uses_market_alias_when_proposition_is_missing():
 
     assert row["market_type"] == "TEAM_PROP"
     assert row["selection"] == "LAD Team Total OVER 4.5"
+
+
+def test_wnba_first_half_player_prop_rejected_by_candidate_gate():
+    # normalize_player_props keeps a WNBA period prop as market=None,
+    # scope=first_half. The candidate gate must drop it.
+    card = {
+        "headline_side": "OVER",
+        "card_id": "aja-pts-1h",
+        "player": "Aja Wilson",
+        "player_id": "aja-wilson",
+        "market": None,
+        "market_type": "PLAYER_PROP",
+        "market_label": "Aja Wilson - Points 1st Half",
+        "proposition": "POINTS",
+        "scope": "first_half",
+        "team": "LVA",
+        "matchup": "LVA @ NYL",
+        "sides": {"OVER": {"outcome_id": "o-aja-1h", "line": 9.5, "best_odds": -115}},
+    }
+    assert (
+        _resolve_candidate_identity(card, ev_records=[], by_outcome={}, sport="WNBA") is None
+    )
+
+
+def test_mlb_hits_player_prop_rejected_by_candidate_gate():
+    # ALLOWED_MLB_PLAYER_PROPS is SO only. A canonical hits card must not
+    # receive a candidate identity.
+    card = {
+        "headline_side": "OVER",
+        "card_id": "judge-h",
+        "player": "Aaron Judge",
+        "player_id": "aaron-judge",
+        "market": "H",
+        "market_type": "PLAYER_PROP",
+        "market_label": "Aaron Judge - Hits",
+        "proposition": "HITS",
+        "scope": "full_game",
+        "team": "NYY",
+        "matchup": "NYY @ BOS",
+        "sides": {"OVER": {"outcome_id": "o-judge-h", "line": 1.5, "best_odds": -120}},
+    }
+    assert _resolve_candidate_identity(card, ev_records=[], by_outcome={}, sport="MLB") is None
+
+
+def test_full_game_allowed_player_props_still_resolve():
+    wnba = {
+        "headline_side": "OVER",
+        "card_id": "aja-pts",
+        "player": "Aja Wilson",
+        "player_id": "aja-wilson",
+        "market": "PTS",
+        "market_type": "PLAYER_PROP",
+        "proposition": "POINTS",
+        "scope": "full_game",
+        "team": "LVA",
+        "matchup": "LVA @ NYL",
+        "sides": {"OVER": {"outcome_id": "o-aja", "line": 18.5, "best_odds": -115}},
+    }
+    mlb = {
+        "headline_side": "OVER",
+        "card_id": "cole-so",
+        "player": "Gerrit Cole",
+        "player_id": "gerrit-cole",
+        "market": "SO",
+        "market_type": "PLAYER_PROP",
+        "proposition": "STRIKEOUTS",
+        "scope": "full_game",
+        "team": "NYY",
+        "matchup": "NYY @ BOS",
+        "sides": {"OVER": {"outcome_id": "o-cole-so", "line": 6.5, "best_odds": -115}},
+    }
+    assert _resolve_candidate_identity(wnba, ev_records=[], by_outcome={}, sport="WNBA") is not None
+    assert _resolve_candidate_identity(mlb, ev_records=[], by_outcome={}, sport="MLB") is not None
 
 
 def test_period_scoped_team_total_excluded_from_general_candidate_pool():
@@ -3414,8 +3488,8 @@ def test_reconcile_team_total_identity_includes_team():
 
 
 def test_market_label_disambiguates_terse_code():
-    # 'PT' reads as basketball points but is Pitches Thrown; market_label spells it out.
-    card = _ctx_card(
+    # Pitches thrown is outside ALLOWED_MLB_PLAYER_PROPS, so it never reaches the label.
+    pitched = _ctx_card(
         "ATL",
         "STL",
         "ATL @ STL",
@@ -3423,8 +3497,17 @@ def test_market_label_disambiguates_terse_code():
         market_raw="Pitches Thrown",
         market_label="Test Pitcher - Pitches Thrown",
     )
+    assert make_row(pitched, [], sport="MLB") is None
+    card = _ctx_card(
+        "ATL",
+        "STL",
+        "ATL @ STL",
+        market="SO",
+        market_raw="Strikeouts",
+        market_label="Test Pitcher - Strikeouts",
+    )
     row = make_row(card, [], sport="MLB")
-    assert "Pitches Thrown" in row["market_label"]
+    assert "Strikeouts" in row["market_label"]
     assert row["home_away"] == "AWAY"  # ATL is the away token in 'ATL @ STL'
 
 
@@ -3482,7 +3565,7 @@ def test_negative_spread_line_keeps_explicit_sign():
 def test_non_spread_line_is_not_signed():
     # A positive TOTAL/prop line must never gain a '+' — only spread/run-line/
     # puck-line markets carry a signed margin.
-    card = _ctx_card("ATL", "STL", "ATL @ STL", market="TOTAL", market_raw="Total")
+    card = _ctx_card("ATL", "STL", "ATL @ STL", market="SO", market_raw="Strikeouts")
     row = make_row(card, [], sport="MLB")
     assert row["line"] == 6.5  # unchanged float, no sign added
     assert "+" not in row["selection"]
@@ -3617,13 +3700,13 @@ def test_cross_sport_market_flagged_not_dropped():
 
 
 def test_valid_market_not_falsely_flagged():
-    # A real, high-but-plausible MLB line (134.5 pitches thrown) must NOT flag.
-    row = make_row(_dq_card("PITCHES_THROWN", 134.5, market_raw="Pitches Thrown"), [])
+    # A line under the player-prop ceiling must not be flagged implausible.
+    row = make_row(_dq_card("STRIKEOUTS", 134.5, market_raw="Strikeouts"), [])
     assert row["data_quality_flags"] == ""
 
 
 def test_implausible_player_prop_line_flagged():
-    row = make_row(_dq_card("HITS", 999, market_raw="Hits"), [])
+    row = make_row(_dq_card("STRIKEOUTS", 999, market_raw="Strikeouts"), [])
     assert "implausible_line" in row["data_quality_flags"]
 
 
