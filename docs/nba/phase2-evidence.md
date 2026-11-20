@@ -127,3 +127,14 @@ checkout. Swapping the copy into place is a separate, manual decision. Check the
 Run on the local ledger on 2026-11-10: 13,533 model rows, all `no_bundle` (the daily script writes bundles to
 `%TEMP%
 ba_runs`, which no longer exists), so nothing could be keyed and every gate verdict is unchanged.
+
+### Durable run bundles
+
+Run bundles used to be written to `%TEMP%\nba_runs`, which gets wiped, leaving 13,533 model rows that can never be
+keyed. They now default to `<data dir>\bundles\team` (model runs) and `<data dir>\bundles\capture`, where the data
+directory is `~/outlier_nba_data` (next to the ledger) unless `OUTLIER_NBA_DATA_DIR` is set. `OUTLIER_NBA_BUNDLES_DIR`
+moves only the bundles. One helper, `outlier_nba/data_dirs.py`, resolves all of it and refuses a location inside the
+repo checkout or the temp directory. `cli run`, `cli capture` (when `--nba-dir` is omitted), `nba_shadow_daily.ps1` and
+`backfill-model-probs` (when `--bundles` is omitted) all use it. The sealed-manifest/sha256 behaviour is unchanged.
+Nothing existing was moved or deleted. `scripts/run_nba_shadow.ps1` (the scheduled capture/settle task) already keeps
+its capture bundles under `%LOCALAPPDATA%\Outlier\NBA` and is unchanged.

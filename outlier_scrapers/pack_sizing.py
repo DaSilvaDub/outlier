@@ -179,3 +179,51 @@ def _apply_learned_stake_before_caps(
         if active
         else legacy_units
     )
+    if active and _has_negative_expected_value(
+        result.conservative_probability, projected.get("decimal_price"), projected.get("push_prob")
+    ):
+        projected["pre_cap_units"] = 0.0
+        # Portfolio shadow mode publishes the legacy stake; only the allocator
+        # sees the learned ceiling. write_pack copies every projected key except
+        # units/actionable/board back onto the published row, so flagging even
+        # the projected row would leak a disqualifying flag onto a staked bet.
+        if not policy.shadow_mode:
+            for row in (projected, original):
+                _withhold_negative_learned_edge(row)
+
+
+NEGATIVE_LEARNED_EDGE_FLAG = "negative_learned_edge"
+
+
+def _has_negative_expected_value(win_prob: Any, decimal_price: Any, push_prob: Any) -> bool:
+    """True when a unit stake at ``decimal_price`` loses money at ``win_prob``."""
+
+    p = _to_float(win_prob)
+    price = _to_float(decimal_price)
+    if p is None or price is None or price <= 1.0:
+        return False
+    push = _to_float(push_prob) or 0.0
+    return p * (price - 1.0) - (1.0 - p - push) < 0.0
+
+
+def _withhold_negative_learned_edge(row: dict[str, Any]) -> None:
+    """Disqualify a row whose conservative learned probability is below break-even.
+
+    Mirrors the build-time disqualifying gates (flag, blank stake, LOW tier) and
+    the enforce-mode demotion so the actionable invariant holds on the written row.
+    """
+
+    from outlier_scrapers.probability_blend import data_quality_tier
+
+    flags = [f for f in str(row.get("data_quality_flags") or "").split(";") if f]
+    row["data_quality_flags"] = ";".join(dict.fromkeys([*flags, NEGATIVE_LEARNED_EDGE_FLAG]))
+    row["data_quality_tier"] = data_quality_tier(
+        row["data_quality_flags"], row.get("projection_quality_flags"), disqualifying=True
+    )
+    row["recommended_units_pre_news"] = ""
+    if str(row.get("actionable") or "").lower() == "true":
+        row["actionable"] = "false"
+        if str(row.get("board") or "").upper() == "A":
+            row["board"] = "A_FLAGGED"
+        if row.get("_board") == "board_a":
+            row["_board"] = "flagged"
