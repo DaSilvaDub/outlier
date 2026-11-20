@@ -230,6 +230,42 @@ def test_mixed_board_prices_stakes_and_grades_at_the_regulated_book():
     assert pick["stake_fraction"] == 0.0
 
 
+def test_two_sided_devig_reads_both_sides_at_the_regulated_book():
+    """Our side off DraftKings and the other side off PrizePicks is not a devig.
+
+    PrizePicks tops both sides of this board. Taking the sportsbook price on the
+    priced side and the pick'em price on the other leaves the two implieds
+    summing to 1.000 -- a zero-vig two-way market, which no book quotes -- and
+    hands back our own implied as the fair price.
+    """
+    over = _prop(
+        odds=-110,
+        implied=52.381,
+        books=[
+            {"book": "PrizePicks", "odds": -110, "odds_raw": "-110"},
+            {"book": "DraftKings", "odds": -120, "odds_raw": "-120"},
+        ],
+    )
+    under = _prop(
+        "UNDER",
+        odds=120,
+        implied=45.4545,
+        books=[
+            {"book": "PrizePicks", "odds": 120, "odds_raw": "120"},
+            {"book": "DraftKings", "odds": 100, "odds_raw": "100"},
+        ],
+    )
+    pillar = _price(over, 0.62, _by_line(over, under))
+    evidence = pillar.evidence
+    assert evidence["best_odds"] == -120  # DraftKings, not the PrizePicks -110
+    assert evidence["implied"] == 0.5455
+    # DraftKings +100 on the other side, not the PrizePicks +120 (0.4545).
+    assert evidence["opposite_implied"] == 0.5
+    assert evidence["devig"] == "two_sided"
+    assert evidence["fair_p"] == 0.5217
+    assert evidence["edge"] == 0.0983
+
+
 def test_prizepicks_only_board_stays_estimated_under_the_dfs_cap():
     """No regulated quote: keep the PrizePicks price and the pick'em cap."""
     over = _prop(
