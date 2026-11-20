@@ -111,3 +111,36 @@ def test_main_exit_codes(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", argv + ["--registry", str(tmp_path / "missing.json")])
     assert flt.main() == 2
     assert "roster registry not found" in capsys.readouterr().err
+
+
+def test_a_truncated_pack_row_is_filtered_not_a_crash(tmp_path):
+    """A short row leaves None in the player cell; it must not abort the whole filter."""
+    pack, reg = tmp_path / "pack.csv", tmp_path / "reg.json"
+    _write_registry(reg)
+    pack.write_text(
+        "rank,player,market,line\n1,Out Player,PTS,20.5\n2,Healthy Player,PTS,18.5\n3\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.csv"
+
+    before, after, removed = flt.filter_csv(pack, out, None, reg)
+    assert (before, after, removed) == (3, 2, ["Out Player"])
+    with open(out, newline="", encoding="utf-8") as f:
+        kept = list(csv.DictReader(f))
+    assert [r["player"] for r in kept] == ["Healthy Player", ""]  # the short row is kept, blank
+    assert [r["rank"] for r in kept] == ["1", "2"]
+
+
+def test_a_pack_row_with_extra_cells_is_written_not_rejected(tmp_path):
+    """Cells past the header land under DictReader's restkey; DictWriter must not reject them."""
+    pack, reg = tmp_path / "pack.csv", tmp_path / "reg.json"
+    _write_registry(reg)
+    pack.write_text(
+        "rank,player,market,line\n1,Healthy Player,PTS,20.5,STRAY\n", encoding="utf-8"
+    )
+    out = tmp_path / "out.csv"
+
+    assert flt.filter_csv(pack, out, None, reg) == (1, 1, [])
+    with open(out, newline="", encoding="utf-8") as f:
+        kept = list(csv.DictReader(f))
+    assert [r["player"] for r in kept] == ["Healthy Player"]
