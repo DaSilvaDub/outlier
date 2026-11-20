@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from outlier_nba.identity import name_key
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = REPO_ROOT / "resources" / "nba_roster_registry.json"
 
@@ -46,7 +48,7 @@ def get_ruled_out_set(registry_path: Path | None = None) -> set[str]:
             status = str(pl.get("status", "")).upper()
             injuries = pl.get("injuries", [])
             if status in {"OUT", "INACTIVE", "SUSPENDED", "IR"} or injuries:
-                name = pl.get("name", "").strip().lower()
+                name = name_key(pl.get("name", ""))
                 if name:
                     ruled_out.add(name)
     return ruled_out
@@ -72,7 +74,7 @@ def filter_csv(
     removed_players: list[str] = []
 
     for r in rows:
-        player_name = r.get("player", "").strip().lower()
+        player_name = name_key(r.get("player", ""))
         if player_name and player_name in ruled_out_set:
             removed_players.append(r.get("player", ""))
         else:
