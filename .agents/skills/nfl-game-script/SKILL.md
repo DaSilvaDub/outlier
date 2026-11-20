@@ -2,8 +2,8 @@
 name: nfl-game-script
 description: >-
   Extract, model, and calibrate NFL game scripts and player propositions using the outlier_nfl
-  pipeline and scripts/nfl_game_script.py. Covers consensus line selection, 3-scenario game script
-  modeling, and post-game reconciliation against actual box scores.
+  pipeline. Reports are rendered by outlier_nfl.matchup.render_matchup_markdown. Covers consensus
+  line selection, 3-scenario game script modeling, and post-game reconciliation against actual box scores.
 ---
 
 # NFL Game Script & Calibration Runbook
@@ -46,10 +46,14 @@ python -m outlier_nfl.pipeline --date YYYY-MM-DD --window snf --generate-game-sc
 - `--generate-game-script` writes **one markdown file per matchup** under `reports/NFL/YYYY-MM-DD_<AWAY>_<HOME>_Game_Script.md`.
 
 ## 2. Game Script & Consensus Prop Generation
-Run the game script engine:
-```powershell
-python scripts/nfl_game_script.py --date YYYY-MM-DD --out reports/NFL/YYYY-MM-DD_<AWAY>_<HOME>_Game_Script.md
+`outlier_nfl.matchup.render_matchup_markdown` renders each matchup. `--generate-game-script` (section 1) is the entry point: the pipeline builds one `MatchupScript` per game, passes the quoted environment from `NflGameScriptGenerator.extract_game_environment`, and writes `reports/NFL/YYYY-MM-DD_<AWAY>_<HOME>_Game_Script.md`. There is no standalone game-script CLI.
+
+```python
+from outlier_nfl.matchup import render_matchup_markdown
+
+report_md = render_matchup_markdown(script, env=env, props=event_props, date="YYYY-MM-DD")
 ```
+
 Each matchup file includes:
 1. **Highest-probability script** from prior-week tape mismatches (rush vs leaky run D, pass rush vs weak QB, slot/TE vs leaky secondary) stacked on consensus lines.
 2. **Matchup-tagged player props** with volume adjustments (`MATCHUP_RUSH_MISMATCH`, `MATCHUP_PASS_SUPPRESS`, `MATCHUP_COVERAGE_LEAK`, `MATCHUP_FADE`). Deficit-risk and deep-threat haircuts are not reversed.
