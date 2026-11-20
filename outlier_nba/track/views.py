@@ -16,7 +16,7 @@ from outlier_nba.track.model_ledger import ensure_model_schema
 
 EVAL_VIEW_NAME = "nba_outcome_eval"
 EVAL_VIEW_SQL = """
-CREATE VIEW IF NOT EXISTS nba_outcome_eval AS
+CREATE VIEW nba_outcome_eval AS
 SELECT * FROM (
     SELECT s.snapshot_id, s.event_id, s.outcome_id, s.market_id, s.market_type, s.selection,
            s.line, s.price, s.book, s.market_consensus_prob, s.push_prob, s.captured_at,
@@ -39,6 +39,7 @@ SELECT * FROM (
 def ensure_nba_schema(conn: sqlite3.Connection) -> None:
     for statement in (*CLV_SCHEMA_SQL, METHOD_TABLE_SQL):
         conn.execute(statement)
+    conn.execute("DROP VIEW IF EXISTS nba_outcome_eval")  # a changed definition must apply
     conn.execute(EVAL_VIEW_SQL)
     conn.commit()
     ensure_model_schema(conn)  # the model-probability table and its join view

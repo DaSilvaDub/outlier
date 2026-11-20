@@ -25,6 +25,7 @@ from outlier_nba.ratings.ridge import RatingFit, RatingPrior, fit_ratings
 
 MIN_BIAS_N = 200  # games of residual history before the level correction is applied
 MIN_NOISE_N = 300  # games of out-of-sample history before the simulator may be used
+RHO_LIMIT = 0.999  # simulate rejects |rho| >= 1; a perfect residual hits that bound
 
 
 @dataclass(frozen=True)
@@ -86,12 +87,16 @@ class NoiseTracker:
 
     @property
     def sigma_e(self) -> float:
+        if self.n <= 0:
+            return 0.0
         return math.sqrt((self.s_eh2 + self.s_ea2) / (2 * self.n))
 
     @property
     def rho(self) -> float:
         denom = math.sqrt(self.s_eh2 * self.s_ea2)
-        return self.s_eha / denom if denom > 0 else 0.0
+        if denom <= 0:
+            return 0.0
+        return min(RHO_LIMIT, max(-RHO_LIMIT, self.s_eha / denom))
 
     @property
     def sigma_p(self) -> float:

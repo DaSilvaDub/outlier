@@ -282,13 +282,20 @@ def test_the_text_report_lists_each_family_with_its_verdict(tmp_path) -> None:
     assert "insufficient evidence" in text and "n_settled" in text
 
 
-def test_thresholds_come_from_a_valid_config_else_the_defaults(tmp_path) -> None:
+def test_thresholds_come_from_a_valid_config(tmp_path) -> None:
     cfg = tmp_path / "promo.json"
     promotion.initialize(cfg)
     assert gate_report.load_thresholds(cfg) == promotion.THRESHOLDS
-    assert gate_report.load_thresholds(tmp_path / "missing.json") == promotion.THRESHOLDS
-    cfg.write_text("{}", encoding="utf-8")  # fails its hash: defaults, never the edited file
-    assert gate_report.load_thresholds(cfg) == promotion.THRESHOLDS
+
+
+def test_a_tampered_or_missing_promotion_file_raises(tmp_path) -> None:
+    cfg = tmp_path / "promo.json"
+    promotion.initialize(cfg)
+    cfg.write_text("{}", encoding="utf-8")
+    with pytest.raises(promotion.PromotionTamperedError):
+        gate_report.load_thresholds(cfg)
+    with pytest.raises(promotion.PromotionTamperedError):
+        gate_report.load_thresholds(tmp_path / "missing.json")
 
 
 def test_failed_keys_matches_what_the_evaluator_would_decide(tmp_path) -> None:

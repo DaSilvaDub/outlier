@@ -51,6 +51,21 @@ def test_fallback_possessions_use_only_earlier_games() -> None:
     assert np.isnan(ds.poss[by_id["c"]])  # nothing earlier to learn the adjustment from
 
 
+def test_missing_away_turnovers_are_not_an_exact_possession() -> None:
+    lone = P.build_dataset([_game(away_tov=None)])
+    assert not lone.exact[0]
+    assert np.isnan(lone.poss[0])
+
+    earlier = _game(game_id="a")
+    later = _game(game_id="b", start_utc=START + timedelta(days=1), away_tov=None)
+    ds = P.build_dataset([earlier, later])
+    by_id = {g.game_id: i for i, g in enumerate(ds.games)}
+    assert ds.exact[by_id["a"]] and not ds.exact[by_id["b"]]
+    base = 0.5 * ((90 + P.FTA_WEIGHT * 20) + (88 + P.FTA_WEIGHT * 22))
+    adj = 0.5 * ((12 - 10) + (14 - 9))
+    assert ds.poss[by_id["b"]] == pytest.approx(base + adj)
+
+
 def test_overtime_possessions_normalise_to_48() -> None:
     ds = P.build_dataset([_game(ot_periods=1, periods=5)])
     assert ds.poss48[0] == pytest.approx(ds.poss[0] * 48 / 53)
