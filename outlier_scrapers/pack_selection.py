@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from outlier_scrapers import feed_health, probability_blend, slate_quality
 from outlier_scrapers.game_totals import is_full_game_total
+from outlier_scrapers.normalizer import ALLOWED_MLB_PLAYER_PROPS
 from outlier_scrapers.pack_market import (
     _align_gameline_team,
     _coalesce,
@@ -46,7 +47,7 @@ from outlier_scrapers.pack_projections import (
     apply_learned_probability_blend,
     apply_shadow_projection,
 )
-from outlier_scrapers.registry import get_sport_config, team_display_name
+from outlier_scrapers.registry import get_sport_config, normalize_market, team_display_name
 from outlier_scrapers.schema import ValidationError
 from outlier_scrapers.sizing import compute_historical_edge, compute_sizing
 from outlier_scrapers.team_totals import is_team_total_proposition
@@ -383,6 +384,46 @@ def _freeze_t30_originals(
     context_path.write_text(json.dumps(context, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _mlb_player_prop_off_whitelist(
+    sport: str,
+    market_token: Any,
+    market_type: Any,
+    proposition: Any,
+    has_player: bool,
+) -> bool:
+    """True when an MLB player prop is outside ``ALLOWED_MLB_PLAYER_PROPS``."""
+    if sport != "MLB":
+        return False
+    market_type_upper = str(market_type or "").upper()
+    if market_type_upper in slate_quality.GAMELINE_TYPES or market_type_upper in {
+        "TEAM_PROP",
+        "GAME_PROP",
+    }:
+        return False
+    token = str(market_token or "").upper()
+    hints = slate_quality.PLAYER_PROP_HINTS
+    if not (
+        has_player
+        or market_type_upper == "PLAYER_PROP"
+        or token in hints
+        or market_type_upper in hints
+    ):
+        return False
+    config = get_sport_config("MLB")
+    canonical_codes = frozenset(config.market_aliases.values())
+    resolved: str | None = None
+    for value in (market_token, market_type, proposition):
+        mapped = normalize_market(config, value)
+        if mapped:
+            resolved = mapped
+            break
+        code = str(value or "").strip().upper()
+        if code in canonical_codes:
+            resolved = code
+            break
+    return resolved is not None and resolved not in ALLOWED_MLB_PLAYER_PROPS
+
+
 def _resolve_candidate_identity(
     card: dict[str, Any],
     ev_records: list[dict[str, Any]],
@@ -442,6 +483,14 @@ def _resolve_candidate_identity(
     if tok_check in {"DD", "TD", "DOUBLEDOUBLE", "TRIPLEDOUBLE"} and headline_side == "UNDER":
         return None
     market_type_upper = str(market_type or "").upper()
+    scope = card.get("scope") or ref.get("scope")
+    # period_identity prefers period_label over scope — games_norm historically
+    # stamps inning markets as scope=full_game while period_label is 8I/4I.
+    scope_rec = {
+        "scope": scope,
+        "period_label": card.get("period_label") or ref.get("period_label"),
+        "periods": card.get("periods") or ref.get("periods"),
+    }
     if sport == "MLB" and market_type_upper == "GAME_PROP":
         if not slate_quality.is_mlb_nrfi_yrfi_candidate(
             proposition=proposition,
@@ -450,26 +499,11 @@ def _resolve_candidate_identity(
             period_label=card.get("period_label") or ref.get("period_label"),
         ):
             return None
-    scope = card.get("scope") or ref.get("scope")
-    is_total_proposition = (
-        market_type_upper == "TEAM_PROP" and is_team_total_proposition(proposition, sport=sport)
-    ) or (market_type_upper == "GAMELINE" and str(proposition or "").upper() == "TOTAL")
-    # period_identity prefers period_label over scope — games_norm historically
-    # stamps inning markets as scope=full_game while period_label is 8I/4I.
-    scope_rec = {
-        "scope": scope,
-        "period_label": card.get("period_label") or ref.get("period_label"),
-        "periods": card.get("periods") or ref.get("periods"),
-    }
-    if (is_total_proposition or market_type_upper == "GAMELINE") and not is_full_game_total(
-        scope_rec
+    elif not is_full_game_total(scope_rec):
+        return None
+    if _mlb_player_prop_off_whitelist(
+        sport, market_token, market_type, proposition, has_player
     ):
-        # Period/partial-game totals, spreads, and moneylines (quarters,
-        # first-5-innings, 8I run lines, etc.) must not enter candidates.csv.
-        # Totals already had this gate; unlabeled innings spreads leaked into
-        # Top signal as duplicate full-game-looking +0.5 rows (2026-09-06
-        # STL @ COL 8I vs 4I). Dedicated totals/alt-spread pipelines own
-        # period markets.
         return None
     return {
         "headline_side": headline_side,
