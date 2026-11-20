@@ -46,7 +46,7 @@ from statistics import mean, median, pstdev
 from typing import Any, Iterable, Mapping
 
 from outlier_nfl.calibration import compute_shrunk_empirical_model_p, select_empirical_hit_rate
-from outlier_nfl.games import is_excluded_from_sportsbook_best, sportsbook_best_american
+from outlier_nfl.games import book_name_compact
 from outlier_nfl.matchup import PropSignal, _names_match, resolve_signal_conflicts
 from outlier_nfl.snapshots import prop_key
 from outlier_nfl.tape_nflverse import _name_key
@@ -757,11 +757,43 @@ def price_gate(final_p: float, decimal: float, line: Any, edge: float) -> tuple[
 
 
 def _quoted_books(prop: Mapping[str, Any]) -> set[str]:
+    """Compact book keys quoted on this prop.
+
+    Compared after ``book_name_compact()``, like
+    ``games.is_excluded_from_sportsbook_best`` and the NBA consensus, so a feed
+    display name (``"Prize Picks"``) still matches ``_DFS_BOOKS``. A raw
+    ``.lower()`` missed it and let a pick'em board skip the DFS cap.
+    """
     return {
-        str(b.get("book") or "").strip().lower()
+        book_name_compact(b.get("book"))
         for b in (prop.get("books") or [])
-        if isinstance(b, Mapping) and str(b.get("book") or "").strip()
+        if isinstance(b, Mapping) and book_name_compact(b.get("book"))
     }
+
+
+def _regulated_best_american(prop: Mapping[str, Any]) -> int | None:
+    """Best price among the non-pick'em books quoted on this prop.
+
+    ``games.sportsbook_best_american`` excludes PrizePicks only, so an Underdog
+    or Sleeper multiplier could still become the quote that edge, EV and stake
+    follow. Pricing leaves every book in ``_DFS_BOOKS`` out instead.
+    """
+    best: int | None = None
+    for entry in prop.get("books") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        if book_name_compact(entry.get("book")) in _DFS_BOOKS:
+            continue
+        raw = entry.get("odds") if entry.get("odds") is not None else entry.get("odds_raw")
+        if raw is None:
+            continue
+        try:
+            odds = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if best is None or odds > best:
+            best = odds
+    return best
 
 
 def _priced_american(prop: Mapping[str, Any]) -> int | None:
@@ -769,12 +801,26 @@ def _priced_american(prop: Mapping[str, Any]) -> int | None:
     raw = prop.get("best_odds")
     quoted = _quoted_books(prop)
     if quoted and not quoted.issubset(_DFS_BOOKS):
-        sportsbook = sportsbook_best_american(prop.get("books"))
+        sportsbook = _regulated_best_american(prop)
         if sportsbook is not None:
             return int(sportsbook)
     if raw is None:
         return None
     return int(raw)
+
+
+def _priced_quote_is_dfs(prop: Mapping[str, Any]) -> bool:
+    """True when the quote driving edge, EV and stake is a pick'em multiplier.
+
+    A board can quote a regulated book and still be priced off a pick'em
+    multiplier (no parseable regulated price). The cap follows the quote that
+    was actually used, not whether the board happens to be pick'em-only.
+    """
+    priced = _priced_american(prop)
+    if priced is None:
+        return False
+    regulated = _regulated_best_american(prop)
+    return regulated is None or priced != regulated
 
 
 def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
@@ -806,8 +852,7 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
     edge = final_p - fair
     ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
     market = str(prop.get("market") or "").upper()
-    books_quoted = _quoted_books(prop)
-    if books_quoted and books_quoted.issubset(_DFS_BOOKS):
+    if _quoted_books(prop) and _priced_quote_is_dfs(prop):
         if cap != CONTRADICTS:
             cap = ESTIMATED
         gate_notes.append(
@@ -968,7 +1013,7 @@ def _best_book(prop: Mapping[str, Any]) -> str | None:
         book = entry.get("book")
         if book is None:
             continue
-        if regulated and is_excluded_from_sportsbook_best(str(book)):
+        if regulated and book_name_compact(book) in _DFS_BOOKS:
             continue
         return str(book)
     return None

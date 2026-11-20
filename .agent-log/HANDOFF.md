@@ -1,3 +1,51 @@
+
+# Session Handoff: Daily Debug Review (2026-11-20, agent `claude`)
+
+1. **Work**: Automated daily debug review. Full suite, mypy and ruff run;
+   recent merges (#358-#361, #367, #341-#348) reviewed. Fixed two defects in
+   the NFL best-bets price pillar (`outlier_nfl/best_bets.py`) that let a DFS
+   pick'em multiplier drive edge/EV/stake:
+   - `_quoted_books()` compared book keys with a raw `.lower()` while the rest
+     of the codebase compacts to alphanumerics, so a `"Prize Picks"` board
+     escaped `_DFS_BOOKS` and published a VERIFIED price pillar (eligible for
+     VALIDATED + a stake) on a synthetic price.
+   - `_priced_american()` used `games.sportsbook_best_american()`, which
+     excludes PrizePicks only, so an Underdog/Sleeper/Dabble multiplier could
+     become the "regulated" quote and the card book. Pricing now uses
+     `_regulated_best_american()` and the cap follows the quote actually used
+     (`_priced_quote_is_dfs`).
+   Three regression tests added; all three fail without the fix.
+2. **Branch**: `claude/inspiring-fermat-2xis7d` (commit `9143312`, PR opened to
+   `master`).
+3. **Verification**: `pytest -q` 3575 passed / 4 skipped; `mypy
+   outlier_scrapers outlier_nfl` clean; ruff findings on the touched files
+   identical before and after (all pre-existing).
+4. **Next Steps / open items** (not changed by this session):
+   - `EXCLUDED_FROM_SPORTSBOOK_BEST` in `outlier_nfl/games.py` is still
+     `{"prizepicks"}`, so `sportsbook_implied_probability` -- the Beta market
+     prior that shrinks `model_p` -- can still be an Underdog or Sleeper
+     multiplier. Widening it touches priors, close grading, settle and the
+     rebuild-compare parity harness, so it needs a human call.
+   - `_price()` devigs asymmetrically: the own side's implied is recomputed
+     from the regulated quote, the opposite side's comes from
+     `implied_probability` (max over all books, DFS included). Bias is
+     conservative (fair overstated, edge understated by ~1-3 pts in
+     reproductions), and `sportsbook_implied_probability` is already on the
+     record if someone wants to make it consistent -- but that change raises
+     edges and stakes, so it was left alone.
+   - `calibration/blend_weights.json` (generated 2026-10-07) predates #361 and
+     still grants model weight to segments whose holdout reported
+     `improved: false` (e.g. league MLB 0.221, market_type SO 0.123) and to a
+     global fit with no holdout at all. `config/blend_promotion.json` is
+     `mode: shadow`, so none of it drives sizing; the next
+     `refit_blend_weights` run publishes the corrected 1.0 weights.
+   - `SHARP_BOOKS` in `outlier_nfl/best_bets.py` carries both `"circasports"`
+     and `"circa sports"` to work around the same normalization gap, and is
+     compared against raw lowercase keys in `_market()`. Same class of bug,
+     different code path -- not touched here.
+   - No `.gitattributes` issue remains; `.worktrees/` is no longer tracked.
+
+---
 # Session Handoff: NBA durable run bundles (2026-11-10, agent `claude`)
 
 1. **Work**: Branch `claude/nba-durable-bundles` (from master `7006983`). `nba_shadow_daily.ps1` wrote run bundles to

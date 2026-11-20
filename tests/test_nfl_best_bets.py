@@ -248,6 +248,71 @@ def test_prizepicks_only_board_stays_estimated_under_the_dfs_cap():
     assert _best_book(over) == "PrizePicks"
 
 
+def test_spaced_pickem_book_name_still_hits_the_dfs_cap():
+    """``"Prize Picks"`` is the same book as ``"PrizePicks"``.
+
+    Book keys are compared after ``book_name_compact()``; a raw ``.lower()``
+    left the display name out of ``_DFS_BOOKS``, so the board skipped the cap
+    and published a VERIFIED price pillar on a synthetic multiplier.
+    """
+    over = _prop(
+        odds=-137,
+        implied=57.806,
+        books=[{"book": "Prize Picks", "odds": -137, "odds_raw": "-137"}],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -137
+    assert pillar.status == ESTIMATED
+    assert any("DFS pick'em" in note for note in pillar.notes)
+    assert _best_book(over) == "Prize Picks"
+
+
+def test_underdog_multiplier_never_becomes_the_priced_quote():
+    """``sportsbook_best_american`` excludes PrizePicks only.
+
+    A board quoting DraftKings, Underdog and PrizePicks must still be priced
+    and staked at the DraftKings quote; the Underdog multiplier is the highest
+    American number on it but is not a regulated price.
+    """
+    over = _prop(
+        odds=105,
+        implied=48.78,
+        books=[
+            {"book": "DraftKings", "odds": -115, "odds_raw": "-115"},
+            {"book": "Underdog", "odds": 105, "odds_raw": "+105"},
+            {"book": "PrizePicks", "odds": -100, "odds_raw": "-100"},
+        ],
+    )
+    under = _prop("UNDER", odds=-115, implied=53.488)
+    pillar = _price(over, 0.60, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -115
+    assert _best_book(over) == "DraftKings"
+    # Priced off a regulated quote, so the pick'em cap does not apply.
+    assert not any("DFS pick'em" in note for note in pillar.notes)
+
+
+def test_pickem_price_is_capped_even_when_a_regulated_book_is_quoted():
+    """The cap follows the quote that was used, not the board's book mix.
+
+    A regulated book with no parseable price leaves the pick'em multiplier
+    driving edge, EV and stake; that still has to carry the cap.
+    """
+    over = _prop(
+        odds=-100,
+        implied=50.0,
+        books=[
+            {"book": "DraftKings", "odds": None, "odds_raw": None},
+            {"book": "PrizePicks", "odds": -100, "odds_raw": "-100"},
+        ],
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.62, _by_line(over, under))
+    assert pillar.evidence["best_odds"] == -100
+    assert pillar.status == ESTIMATED
+    assert any("DFS pick'em" in note for note in pillar.notes)
+
+
 def test_one_sided_price_is_estimated_not_verified():
     pick = _pick(build_best_bets(_inputs(props=[_prop()])))
     assert pick["pillars"]["price"]["status"] == ESTIMATED
