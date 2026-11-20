@@ -188,12 +188,15 @@ def export_nba_pack(
         elif not allow_latest_fallback:
             use_rows = []
         elif raw_rows:
-            # Publishing another slate's rows under today's date is as damaging as
-            # publishing an empty pack, so say so on stderr instead of silently
-            # substituting them.
+            other_dates = sorted({str(r.get("slate_date") or "").strip() for r in raw_rows} - {""})
+            found = str(other_dates) if other_dates else "rows carrying no slate_date"
+            # Phrasing satisfies tests from #333, #336 and #344: master's
+            # "No rows match slate_date", #336's "no row for slate_date", and the
+            # requested plus present dates in the message.
             print(
-                f"[PIPELINE WARNING] No rows match slate_date '{slate_date}'; falling back to "
-                f"all {len(raw_rows)} row(s) in {src_path}, which may belong to another slate. "
+                f"[PIPELINE WARNING] No rows match slate_date '{slate_date}'; "
+                f"source={src_path} has no row for slate_date '{slate_date}'; "
+                f"falling back to all {len(raw_rows)} row(s) from {found}, which may belong to another slate. "
                 "Pass --no-allow-latest-fallback to publish an empty pack instead.",
                 file=sys.stderr,
             )
