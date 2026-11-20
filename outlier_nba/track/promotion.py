@@ -14,7 +14,8 @@ the config, and the fail-closed default. Do not treat it as authentication.
 A family is promoted only when *every* key passes on supplied evidence, and a key whose
 evidence is unknown (``None``) counts as a failure. In particular, with no closing-line
 comparison ``oos_logloss_beats_market`` is unknown, so nothing can be promoted on model
-skill alone. A later evaluation that fails demotes the family back to shadow.
+skill alone. Every evaluation re-decides every team family. A family with no settled
+rows (missing from the evidence, or ``n_settled`` 0) returns to shadow at weight 0.
 """
 
 from __future__ import annotations
@@ -170,9 +171,14 @@ def failed_keys(ev: Evidence, thresholds: Mapping[str, Any] | None = None) -> li
 
 
 def _decide(cfg: dict[str, Any], evidence: Mapping[str, Evidence]) -> dict[str, dict[str, Any]]:
+    """Re-decide every team family. Evidence that omits a family means it has no settled rows."""
+    for family in evidence:
+        if family not in TEAM_FAMILIES:
+            _family(cfg, family)  # unknown family: KeyError, and nothing is written
     cap = float(cfg["max_model_weight"])
     decisions: dict[str, dict[str, Any]] = {}
-    for family, ev in evidence.items():
+    for family in TEAM_FAMILIES:
+        ev = evidence.get(family, Evidence(n_settled=0))
         fam = _family(cfg, family)
         failed = _failures(ev, cfg["thresholds"])
         promoted = not failed
@@ -197,7 +203,7 @@ def preview(
 def evaluate(
     evidence: Mapping[str, Evidence], path: Path = DEFAULT_PATH
 ) -> dict[str, dict[str, Any]]:
-    """Re-decide each family named in ``evidence``; returns the new decision per family."""
+    """Re-decide every team family; a family absent from ``evidence`` returns to shadow."""
     cfg = _load(Path(path))
     decisions = _decide(cfg, evidence)
     for family, decision in decisions.items():

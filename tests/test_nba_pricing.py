@@ -206,6 +206,33 @@ def test_a_failed_reevaluation_demotes(tmp_path: Path) -> None:
     assert promotion.status("team.ML", path) == "shadow"
 
 
+def test_evaluate_redecides_every_family_and_drops_one_with_no_settled_rows(
+    tmp_path: Path,
+) -> None:
+    """A later evaluation names only team.SPREAD. team.ML was promoted and is absent
+    from this evidence (no settled rows), so it must return to shadow at weight 0.
+    """
+    path = tmp_path / "p.json"
+    promotion.initialize(path)
+    promotion.evaluate({"team.ML": _passing(fitted_weight=0.2)}, path)
+    assert promotion.status("team.ML", path) == "promoted"
+    assert promotion.model_weight("team.ML", path) == 0.2
+
+    decisions = promotion.evaluate({"team.SPREAD": _passing()}, path)
+    assert set(decisions) == set(promotion.TEAM_FAMILIES)
+    assert decisions["team.ML"]["status"] == "shadow"
+    assert decisions["team.ML"]["model_weight"] == 0.0
+    assert "n_settled" in decisions["team.ML"]["failed_keys"]
+    assert promotion.status("team.ML", path) == "shadow"
+    assert promotion.model_weight("team.ML", path) == 0.0
+    assert promotion.status("team.SPREAD", path) == "promoted"
+    for family in promotion.TEAM_FAMILIES:
+        if family == "team.SPREAD":
+            continue
+        assert promotion.status(family, path) == "shadow"
+        assert promotion.model_weight(family, path) == 0.0
+
+
 def test_unknown_family_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "p.json"
     promotion.initialize(path)
