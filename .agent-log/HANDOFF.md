@@ -1,3 +1,113 @@
+# Session Handoff: Daily Debug Review (2026-11-21, agent `claude`)
+
+1. **Work**: Automated daily debug / code-health review on branch
+   `claude/inspiring-fermat-qg7t2z` (started from `2292a17` = `origin/master`).
+   Cloud STEP 0 equivalent ran clean: all 5 upgrade markers present, HEAD ==
+   `origin/master`. Reviewed everything merged since the last clean audit
+   baseline `f93a6d0` (2026-11-16): PRs #358-#375 plus #334, i.e. the NFL
+   box-score exact-match fix, the NFL verified-book-close CLV fix, the NBA
+   "settle every unsettled tip" windowing, the one-row-per-outcome work across
+   `feedback_db` / `calibration` / `feedback_reporting` / `so_eval`, the blend
+   OOS market-only floor, and the `nfl_snapshot_diff` path scrubbing.
+   **No code changed: no credible defect found in the reviewed diff.**
+2. **Last Commit SHA**: this handoff commit only.
+3. **Files Touched**: `.agent-log/HANDOFF.md`.
+4. **PR Link**: see the PR opened from `claude/inspiring-fermat-qg7t2z`.
+5. **Verification** (all green; **the suite ran for real this time**, unlike the
+   2026-11-08 session which could not execute a single test):
+   - `pytest -q`: **3594 passed, 4 skipped** in 306s. The sandbox needed the
+     declared runtime deps installed by hand (`structlog`, `SQLAlchemy`,
+     `psycopg2-binary`, `tzdata`, `google-genai`, `openai`, `anthropic`); PyPI
+     was reachable this run. Note pytest lives on this image's Python **3.13**
+     (`/usr/local/bin/python3.13`), not the `python` on PATH (3.11.18) -- that
+     interpreter mismatch, not a missing package, is what made the previous
+     session's 2086 `ModuleNotFoundError`s look unfixable.
+   - `mypy outlier_scrapers outlier_nfl`: **no issues in 136 files**
+     (needs `--python-version 3.13` on this image: the repo pins
+     `python_version = "3.11"`, and current numpy stubs use `type` statements
+     that mypy rejects under 3.11, which aborts the run before any repo file is
+     checked. Not a repo defect -- CI resolves an older numpy on 3.11.)
+   - `pyright --pythonpath /usr/local/bin/python3.13 outlier_scrapers outlier_nfl`:
+     **0 errors, 1 warning** (optional `playwright` import inside a function).
+     Without `--pythonpath` pyright picks the dep-less 3.11 and reports 100
+     phantom import-cascade errors.
+   - `python -m compileall outlier_scrapers outlier_nfl outlier_nba scripts`: clean.
+   - `ruff check`: 944 findings, all pre-existing style noise; on default rules
+     only (E4,E7,E9,F) 46, all E402/F401/one F841 -- no F821, no E9. High-signal
+     rules (F,E9,B,ARG,RUF,PERF,SIM,DTZ,PLE,PLW) over the 11 changed source
+     files surfaced nothing new; the one `ARG001 floor` in `probability_blend`
+     is the parameter `_apply_floor` documents as kept for compatibility.
+   - **Regression tests verified to actually pin their defects**: replayed the
+     six new/changed test modules against the pre-fix tree (`f93a6d0`) in a
+     throwaway worktree -- **15 failed, 64 passed**, covering every behaviour
+     change (`test_substring_of_another_player_is_not_a_match`,
+     `test_mean_clv_uses_only_verified_book_closes`,
+     `test_settle_grades_unsettled_nba_tips_older_than_the_lookback`,
+     `test_apply_floor_uses_market_only_without_improvement`, and the five
+     learned-multiplier outcome-row tests, one of which fails `360 == 120`,
+     confirming the republication triple-count was real and reproducible).
+   - **`_result_windows` coverage proved by brute force** (the riskiest new
+     algorithm: a gap there silently fails to settle bets). Swept ~2000 backlog
+     ages x 4 lookbacks: every emitted window is a legal collector call
+     (1..30 days) and the only coverage gaps are **exactly 1 microsecond** wide
+     -- the deliberate `- timedelta(microseconds=1)` boundary offset. At
+     microsecond resolution no representable `event_starts_at` is ever skipped,
+     so the chunking is correct. Call counts are sane: 2d backlog -> 1 call,
+     45d -> 2, 365d -> 13.
+   - House-rule invariants re-checked and intact: `ALLOWED_MLB_PLAYER_PROPS ==
+     {"SO"}`, `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`, `EXCLUDED_MARKETS`
+     still hard-bans HR and the walks-allowed tokens.
+   - No reasoning / desk models invoked; no provider keys present in the env.
+6. **Observations recorded, no code changed** (neither rises to a defect):
+   - `outlier_nfl/settle.py` CLV accounting: `_verified_book_close` (edf0780)
+     now drops unverified closes from `clv_vals` with **no exclusion counter**,
+     while `clv["status"]` is still set to `"ok"` purely from `has_close`. A
+     slate whose closes are all `pregame_snapshot_best_odds` therefore reports
+     `CLV: ok - n=0 mean_implied_pts=None sources=None` with every
+     `excluded_*` counter at 0, so an operator cannot see where the rows went.
+     Observability only -- the `note` field and the now-accurate
+     `close_sources` list still let a reader infer it, the per-row
+     `clv_implied_pts` is unchanged, and `close_sources` is only ever read via
+     `.get()`. An additive `n_excluded_unverified_close` would close it, but
+     that changes the NFL shadow report's schema and is the owner's call.
+   - `feedback_reporting.generate_report` deliberately splits decision-level
+     (`rows`) from outcome-level (`outcome_rows`) inputs. `_model_performance`
+     and `_grouped(rows, "book")` stay on raw rows, so a bet republished by
+     several pack runs still contributes several times to each desk verdict's
+     `n` and `would_have_flat_pnl`. This is consistent with the author's own
+     stated rule in the new comment ("decision-level rows answer how did our
+     calls do"), so it is a design split, not a bug -- flagging only so the
+     split is a conscious one.
+7. **Next Steps / open items**:
+   - **Still open, unchanged since the 2026-11-08 and 2026-11-16 audits, needs
+     a human: `uv.lock` and `requirements.lock` are frozen at the 2026-10-08
+     dependency set** (last touched in `37c8e46`) and carry only 4 of the 10
+     runtime dependencies `pyproject.toml` declares. Missing from both:
+     `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary`, `numpy`.
+     **New this run -- the blast radius is now measured, and it is smaller than
+     it looks**: all three CI jobs recover the missing five, because
+     `pytest.yml` runs `pip install -e .` and `typecheck.yml` installs
+     `requirements.txt`, whose first line is `-e .`. So CI is **not** broken;
+     what is wrong is that a step labelled "Install frozen dependencies" lets
+     five runtime deps float to whatever is newest on PyPI that day, which is
+     how an upstream release breaks master with no diff in the repo. Evidence
+     it is currently benign: this run installed all five at their latest
+     releases (structlog 26.1.0, SQLAlchemy 2.1.9, psycopg2-binary 2.9.13,
+     tzdata 2026.6, numpy current) and the full suite still passed 3594/3594 --
+     though on 3.13, where CI uses 3.11. Fix is one command the owner should
+     run and review, not an agent:
+     `uv export --frozen --no-hashes --all-extras -o requirements.lock` after a
+     `uv lock` that picks up the current `pyproject.toml`. Deliberately not done
+     here: regenerating lockfiles is a dependency change, outside a debug
+     review's remit.
+   - Lower priority, quality-of-life for every future cloud/sandbox agent:
+     record in `docs/CLOUD-SANDBOX-LIMITATIONS.md` that on these images the
+     dependency-carrying interpreter is `/usr/local/bin/python3.13` while
+     `python` is 3.11, and that `mypy` needs `--python-version 3.13` and
+     `pyright` needs `--pythonpath /usr/local/bin/python3.13`. Two sessions
+     have now spent time rediscovering this; the 2026-11-08 session concluded
+     the environment was unrepairable because of it.
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
