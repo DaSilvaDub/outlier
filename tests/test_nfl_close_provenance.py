@@ -196,3 +196,36 @@ def test_mean_clv_uses_only_verified_book_closes():
 
     # An untimed book_close is trusted at its label and still enters the mean.
     assert _settle(_snap(65.5, 65.5, 55.56)).clv["n"] == 1
+
+
+def test_closes_dropped_for_unverified_provenance_are_counted():
+    """n=0 must carry its reason: the other exclusion branches each count too.
+
+    Without this counter a slate whose closes are all
+    ``pregame_snapshot_best_odds`` reports ``n=0`` beside
+    ``excluded_line_mismatch=0 excluded_close_line_unknown=0``, which reads as
+    "no closes were supplied" when five same-threshold closes were.
+    """
+    import dataclasses
+
+    from outlier_nfl.settle import render_markdown
+
+    verified = dataclasses.replace(_snap(65.5, 65.5, 55.56), close_status="verified")
+    snapshot_best = [
+        dataclasses.replace(
+            verified, close_source="pregame_snapshot_best_odds", close_status=None
+        )
+        for _ in range(4)
+    ]
+    early_quote = dataclasses.replace(verified, close_status="early_quote")
+
+    report = _settle(*snapshot_best, early_quote)
+    assert report.clv["n"] == 0
+    assert report.clv["n_excluded_unverified_close"] == 5
+    assert report.clv["n_excluded_line_mismatch"] == 0
+    assert report.clv["n_excluded_close_line_unknown"] == 0
+    assert "excluded_unverified_close=5" in render_markdown(report)
+
+    # A verified book close is counted in the mean, never as an exclusion.
+    kept = _settle(verified)
+    assert kept.clv["n"] == 1 and kept.clv["n_excluded_unverified_close"] == 0
