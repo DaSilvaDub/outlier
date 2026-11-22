@@ -385,6 +385,9 @@ def settle_predictions(
             "mean_clv_implied_pts": None,
             "n_excluded_line_mismatch": 0,
             "n_excluded_close_line_unknown": 0,
+            # Same-threshold closes dropped from the mean because the close is not a
+            # verified book close; without this, n=0 reads as "no closes supplied".
+            "n_excluded_unverified_close": 0,
             "n_line_moved": 0,
             "mean_line_move": None,
             # book_close rows carrying no timing at all: trusted at their label.
@@ -543,6 +546,8 @@ def settle_predictions(
                     clv_vals.append(clv_pts)
                     if snap.close_source:
                         clv_sources.append(snap.close_source)
+                else:
+                    report.clv["n_excluded_unverified_close"] += 1
 
         row = SettleRow(
             prediction=snap,
@@ -674,6 +679,7 @@ def render_markdown(report: SettleReport, *, title: str = "NFL shadow settle") -
             f"sources={report.clv.get('close_sources')} "
             f"excluded_line_mismatch={report.clv.get('n_excluded_line_mismatch')} "
             f"excluded_close_line_unknown={report.clv.get('n_excluded_close_line_unknown')} "
+            f"excluded_unverified_close={report.clv.get('n_excluded_unverified_close')} "
             f"line_moved={report.clv.get('n_line_moved')} "
             f"untimed_supplied_close={report.clv.get('n_untimed_supplied_close')}"
         )

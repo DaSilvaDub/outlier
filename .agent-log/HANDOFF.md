@@ -1,3 +1,86 @@
+# Session Handoff: Daily automated debug / code-health review (2026-11-22, agent `claude`)
+
+1. **Base**: branch `claude/inspiring-fermat-g1ek53`, HEAD == `origin/master` == `2292a17`.
+   Cloud STEP 0 equivalent run (AGENTS.md "Cloud / Sandbox Agents"): `git fetch` + all 5
+   upgrade markers present in `pack.py` / `daily_job.py`. No PowerShell in this sandbox, so
+   `report-sync.ps1` was not run. No reasoning/desk model invoked; provider test files were
+   excluded from the run exactly as `.github/workflows/pytest.yml`'s core job excludes them.
+2. **Reviewed**: every commit merged since the 2026-11-16 audit baseline `f93a6d0`
+   (`b25bea8..2292a17`): `03d5aee`/`c0dfb29` outcome-level dedup (`one_row_per_outcome`),
+   `c27c7f4` blend OOS gate, `7f74d6c` so_eval per-outcome scoring, `d541921` NBA settle
+   windows, `f0b0801` NFL box-score exact match, `edf0780` NFL verified-book-close CLV,
+   `de9f634`/`5056839` test determinism, `b25bea8` NBA export fallback flag.
+3. **Fixed (1 defect)**: `edf0780` started dropping unverified closes from
+   `mean_clv_implied_pts` but added no exclusion counter, so a slate whose closes are all
+   `pregame_snapshot_best_odds` (or `book_close` + `early_quote`) reported
+   `CLV: ok — n=0 ... excluded_line_mismatch=0 excluded_close_line_unknown=0`: no reason for
+   the zero, while every row still carried `clv_implied_pts`. Reproduced with 5 same-threshold
+   closes, all 5 silently dropped. Added `clv["n_excluded_unverified_close"]`, incremented it
+   in the one branch that drops a close, and printed it in `render_markdown` — the convention
+   the other two exclusion branches already follow. No change to the mean, to any row, or to
+   `status`. New test fails on `HEAD:outlier_nfl/settle.py` with
+   `KeyError: 'n_excluded_unverified_close'` and passes after.
+4. **Files touched**: `outlier_nfl/settle.py` (+6), `tests/test_nfl_close_provenance.py` (+33).
+5. **Verification**: offline core suite (CI's `--ignore` set) **3535 passed, 4 skipped**
+   before and after; `mypy outlier_scrapers outlier_nfl` clean (136 files), `mypy outlier_nba`
+   clean (46); `pyright outlier_scrapers outlier_nfl` 0 errors (1 pre-existing optional
+   `playwright` import warning); `ruff` on the two touched files: 9 findings before, the same 9
+   after (no new lint); `compileall` over the tree clean. House-rule invariants re-verified in
+   code: `ALLOWED_MLB_PLAYER_PROPS == {"SO"}`, `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`,
+   HR/Walks-Allowed in `EXCLUDED_MARKETS`, `verdicts/` absent from `DERIVED_PACK_OUTPUTS`.
+   `_result_windows` (NBA settle) property-checked over 4000 randomized
+   (oldest, lookback) pairs: every window is a legal <=30-day collector call and the union
+   always covers `[oldest, now]` with no gap.
+6. **Needs a ruling (reported, not changed): drawdown counts a re-captured bet once per
+   capture.** `03d5aee` moved the fitters and the outcome-level report metrics to
+   `_outcome_rows` and states "Drawdown stays on `_joined_rows`" without a reason.
+   `calibration.compute_drawdown_from_db` therefore builds its equity curve from every
+   settled row. Reproduced: one 1-unit losing bet captured 3 times (T-30 recapture + second
+   book, the exact shape `tests/test_feedback_outcome_rows.py::_seed` builds and the "797
+   such groups in the live ledger" the same commit cites) yields `equity = -3.0`,
+   `drawdown_pct = 1.0`, tier `stand_down` instead of `-1.0`. Repro:
+   3 snapshots -> 3 decisions (`PLAY`, 1.0 unit) -> 3 settlements for one outcome.
+   The choice is arguably defensible — drawdown models money placed, and a genuine
+   second-book bet *is* a second position — but the ledger records nothing that separates a
+   real second placement from a T-30 re-capture (`compute_drawdown_from_db` stamps every
+   `units > 0` row `execution_status="SETTLED"`). Someone has to decide which it is; the
+   answer changes a live stake throttle, so an agent should not pick. Whether it bites today
+   depends on how many of those 797 groups carry `units > 0` on more than one decision —
+   unanswerable here (the ledger is not in this clone and the calibration lock bars touching
+   it).
+7. **Still open from previous runs — all four re-verified as still present**:
+   - **`uv.lock` / `requirements.lock` stale (3rd run in a row, highest priority).** Last
+     exported `37c8e46` (2026-10-08). `uv lock --check` fails. 5 of the 10 declared runtime
+     deps are absent from `requirements.lock`: `tzdata`, `structlog`, `SQLAlchemy`,
+     `psycopg2-binary`, `numpy`; the `pip install -e .` / `-r requirements.txt` that follows
+     resolves them unpinned at job time in both `pytest.yml` and `typecheck.yml`, so a
+     breaking `numpy`/`SQLAlchemy` major lands in CI unannounced. **New this run: `uv` is
+     installed and PyPI is reachable from the cloud sandbox**, so `uv lock` then
+     `uv export --frozen --no-hashes --all-extras -o requirements.lock` is now runnable here —
+     it was not in the 2026-11-08 run. Left undone because it bumps the whole resolved tree
+     and that review is the owner's. Do not hand-edit the lockfiles.
+   - `scripts/filter_nba_ruled_out.py:22` `REGISTRY_PATH = <repo>/resources/nba_roster_registry.json`
+     still points at a path with no `resources/` directory in the checkout, nothing creating
+     it, and no `.gitignore` entry.
+   - `.pytest_pr1_tmp/` is still 334 tracked files. Recommend
+     `git rm -r --cached .pytest_pr1_tmp` + a `.gitignore` entry (user's call: 334 deletions).
+   - `scripts/refresh_nba_pack.ps1:256` dead guard `if (-not $ScratchOut -and ...)` is still
+     unreachable, so a `-ScratchOut -ForceDrive` run leaves `data\NBA\exports\nba_only.csv`
+     unfiltered while publishing the filtered pack.
+8. **Checked and clean** (no action needed): `one_row_per_outcome`'s key never merges distinct
+   lines, sides, events or sports and never merges rows missing identity; `_parse_utc` always
+   returns aware UTC so the rank tuples cannot raise; NBA tips are normalized to UTC
+   (`run_context.parse_utc`) so `_oldest_unsettled_start`'s text `MIN(event_starts_at)` and
+   `s.sport = 'NBA'` are both safe for the NBA rows it filters; `_apply_floor`'s now-dead
+   `floor` parameter is documented as kept for compatibility; the `ISC004`/`PLR0124` ruff hits
+   in the touched files are the file's existing report-string and NaN-guard conventions.
+9. **Low, not worth a change**: `outlier_nba settle --lookback-days 45` silently clamps to
+   <=30-day windows when an older unsettled tip exists but raises
+   `ResultsError("lookback_days must be between 1 and 30")` when none does — same flag value,
+   two outcomes depending on ledger state. The scheduled task passes the default 3.
+
+---
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
