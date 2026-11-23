@@ -40,12 +40,19 @@ Pure functions over plain dicts; no network access and no reasoning models.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any, Iterable, Mapping
 
-from outlier_nfl.calibration import compute_shrunk_empirical_model_p, select_empirical_hit_rate
+from outlier_nfl.calibration import (
+    compute_shrunk_empirical_model_p,
+    effective_trials,
+    select_empirical_hit_rate,
+    shrink_hit_rate,
+)
 from outlier_nfl.games import is_excluded_from_sportsbook_best, sportsbook_best_american
 from outlier_nfl.matchup import PropSignal, _names_match, resolve_signal_conflicts
 from outlier_nfl.snapshots import prop_key
@@ -68,18 +75,35 @@ PILLARS = ("historical", "opportunity", "matchup", "injury_weather", "market", "
 PILLAR_CAP = 0.03  # max |probability change| one pillar may contribute
 TOTAL_CAP = 0.08  # max |sum of pillar changes| on the base probability
 SIGNAL_P_PER_VOLUME = 0.25  # a +10% volume signal moves P(hit) by 2.5 pts
-EPA_P_PER_Z = 0.01  # one league SD of EPA allowed moves P(hit) by 1 pt
+# Books already price opponent EPA into consensus lines; keep delta conservative
+# so EPA never over-boosts inflated lines or falsely rejects contrarian value.
+EPA_P_PER_Z = 0.003  # one league SD of EPA allowed moves P(hit) by 0.3 pt
 EPA_SHRINK_WEEKS = 2.0  # EPA z shrunk by n / (n + 2) weeks of defense data
 CONTRADICT_DELTA = -0.015  # a pillar pulling at least this hard against the side
 SEPARATION_P_PER_Z = 0.005  # one SD of receiver separation moves P(hit) by 0.5 pt
 SEPARATION_SHRINK_WEEKS = 2.0
-ROLE_COLLAPSE = 0.5  # last week's volume under half the player's average
+ROLE_COLLAPSE = 0.5  # last week's volume under half the player's average (blocks OVER)
+ROLE_SURGE = 1.5  # last week's volume >= 1.5x the player's average (blocks UNDER)
+MIN_OPPORTUNITY_GAMES = 3  # min games of NGS/usage history for VERIFIED opportunity
+
+# Multi-window hit-rate convergence floors and market-prior Beta shrinkage (Upgrade B).
+MARKET_PRIOR_KAPPA_STANDARD = 12.0
+MARKET_PRIOR_KAPPA_EVENT = 16.0
+MULTI_WINDOW_L5_MIN = 0.60
+MULTI_WINDOW_L10_MIN = 0.70
+MULTI_WINDOW_SEASON_MIN = 0.70
+MIN_VALIDATED_ODDS = -155
+MAX_VALIDATED_ODDS = 135
 
 MOVE_LINE_STEP = 0.5
 MOVE_IMPLIED_PTS = 1.5
 MOVE_DELTA = 0.01
 SHARP_BOOKS = frozenset({"pinnacle", "circa", "circasports", "circa sports", "bookmaker", "betcris"})
 SHARP_GAP_PTS = 2.0
+EXCHANGE_BOOKS = frozenset({
+    "novig", "prophetx", "polymarket", "polymarket_us", "polymarket_international", "kalshi", "fliff"
+})
+MAX_EXCHANGE_RETAIL_GAP_PTS = 4.5  # Filter H: max exchange-vs-retail implied gap (pts)
 
 ASSUMED_OVERROUND = 1.0476  # -110 / -110 two-way market, used only when one side is quoted
 QUARTER_KELLY = 0.25
@@ -98,6 +122,24 @@ REC_MARKETS = frozenset(
 )
 SCRIMMAGE_MARKETS = frozenset({"RUSH_REC_YDS"})
 TD_MARKETS = frozenset({"ANYTIME_TD", "FIRST_TD", "LAST_TD", "RUSH_TD", "REC_TD"})
+# Continuous yardage markets have right-skewed truncation risk on OVERs (Upgrade B).
+CONTINUOUS_YARDAGE_MARKETS = frozenset({"REC_YDS", "PASS_YDS", "RUSH_YDS", "RUSH_REC_YDS", "PASS_RUSH_YDS"})
+# Negative-EPA pass events: higher opp pass_epa_per_play allowed means FEWER ints/sacks.
+INVERTED_PASS_EPA_MARKETS = frozenset({"INT", "INTERCEPTIONS_THROWN", "PASSING_TIMES_SACKED"})
+
+DEFAULT_AUDIT_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "nfl_audit_rules.json"
+
+
+def load_nfl_audit_rules(path: Path | str | None = None) -> dict[str, Any]:
+    """Load hardwired NFL audit rules JSON when present; fail-safe empty dict if absent."""
+    target = Path(path) if path is not None else DEFAULT_AUDIT_RULES_PATH
+    try:
+        if not target.is_file():
+            return {}
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 # NGS volume stat that measures a player's opportunity for each market family.
 NGS_VOLUME: dict[str, str] = dict(
@@ -215,6 +257,7 @@ class TraceInputs:
     # missing ``before_week`` drops them all rather than admitting every week.
     as_of_utc: str | None = None
     before_week: int | None = None
+    audit_rules: dict[str, Any] | None = None
 
 
 WEEK_BOUND_SOURCES = ("ngs", "pbp")
@@ -400,57 +443,108 @@ def _fair_prior(
     return implied / ASSUMED_OVERROUND
 
 
+def _norm_rate(value: Any) -> float | None:
+    v = _f(value)
+    if v is None or v < 0:
+        return None
+    if v <= 1.0:
+        return v
+    if v <= 100.0:
+        return v / 100.0
+    return None
+
+
 def _historical(
     prop: Mapping[str, Any],
     by_line: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
+    *,
+    games_played: int | None = None,
 ) -> tuple[Pillar, float | None]:
     pillar = Pillar()
     rates = {k: prop.get(f"{k}_hit_rate") for k in ("l5", "l10", "l20", "season")}
     pillar.evidence = {f"{k}_hit_rate": v for k, v in rates.items()}
     market = str(prop.get("market") or "").upper()
     fair_p = _fair_prior(prop, by_line)
-    use_market_prior = (
-        fair_p is not None
-        and (market in TD_MARKETS or market_family(market) is None or abs(fair_p - 0.50) > 0.12)
-    )
-    if use_market_prior and fair_p is not None:
-        shrunk = compute_shrunk_empirical_model_p(
-            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
-            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
-            method="market_prior", market_prior=fair_p,
-            kappa=16.0 if (market in TD_MARKETS or market_family(market) is None) else 8.0,
-        )
-    else:
-        shrunk = compute_shrunk_empirical_model_p(
-            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
-            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
-        )
-    if shrunk is None:
-        pillar.notes.append("no usable hit rate")
-        return pillar, None
+
+    norm_rates: dict[str, float] = {}
+    for k, raw in rates.items():
+        val = _norm_rate(raw)
+        if val is not None:
+            norm_rates[k] = val
+
     selected = select_empirical_hit_rate(
         l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
         l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
     )
-    base = shrunk[0]
-    pillar.evidence["base_window"] = selected[2] if selected else None
+    if selected is None:
+        pillar.notes.append("no usable hit rate")
+        return pillar, None
+
+    # Blend L5 / L10 / Season windows so recent form and full-season baseline both
+    # inform base_p (falls back to selected window if only L20 is present).
+    blend_pairs = [
+        (w, norm_rates[k])
+        for k, w in (("l5", 0.35), ("l10", 0.35), ("season", 0.30))
+        if k in norm_rates
+    ]
+    if blend_pairs:
+        total_w = sum(w for w, _ in blend_pairs)
+        emp_p = sum(w * v for w, v in blend_pairs) / total_w
+    else:
+        emp_p = selected[0]
+
+    n_eff = effective_trials(selected[1], games_played)
+    is_event_market = market in TD_MARKETS or market_family(market) is None
+    kappa = MARKET_PRIOR_KAPPA_EVENT if is_event_market else MARKET_PRIOR_KAPPA_STANDARD
+
+    if fair_p is not None:
+        a = fair_p * kappa
+        b = (1.0 - fair_p) * kappa
+        base = round(shrink_hit_rate(emp_p, n_eff, alpha=a, beta=b), 6)
+        pillar.evidence["shrink_method"] = "market_prior"
+        pillar.evidence["shrink_kappa"] = kappa
+    else:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
+            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+            games_played=games_played,
+        )
+        if shrunk is None:
+            pillar.notes.append("no usable hit rate")
+            return pillar, None
+        base = shrunk[0]
+        pillar.evidence["shrink_method"] = "laplace"
+
+    pillar.evidence["base_window"] = selected[2]
     pillar.evidence["base_p"] = base
-    present = [k for k, v in rates.items() if _f(v) is not None]
+    pillar.evidence["games_played_effective"] = n_eff
+
+    present = list(norm_rates.keys())
     pillar.status = VERIFIED if len(present) >= 2 else ESTIMATED
     if len(present) < 2:
         pillar.notes.append("single hit-rate window; cannot cross-check")
-    norm_rates: dict[str, float] = {}
-    for k in present:
-        val = _f(rates[k])
-        if val is not None:
-            norm_rates[k] = val / 100.0 if val > 1.0 else val
-    l5, l10 = norm_rates.get("l5"), norm_rates.get("l10")
+
+    l5 = norm_rates.get("l5")
+    l10 = norm_rates.get("l10")
+    season = norm_rates.get("season")
     if l5 is not None and l10 is not None and l5 < 0.5 and l10 < 0.5:
         pillar.status = CONTRADICTS
         pillar.notes.append("L5 and L10 both below 50% for this side")
     elif norm_rates and all(v < 0.5 for v in norm_rates.values()):
         pillar.status = CONTRADICTS
         pillar.notes.append("all available hit-rate windows below 50% for this side")
+    elif pillar.status == VERIFIED:
+        # Upgrade B multi-window convergence gate: block cooling-off and weak-season traps.
+        convergence_gaps: list[str] = []
+        if l5 is not None and l5 < MULTI_WINDOW_L5_MIN:
+            convergence_gaps.append(f"L5 {l5:.0%} < {MULTI_WINDOW_L5_MIN:.0%} floor")
+        if l10 is not None and l10 < MULTI_WINDOW_L10_MIN:
+            convergence_gaps.append(f"L10 {l10:.0%} < {MULTI_WINDOW_L10_MIN:.0%} floor")
+        if season is not None and season < MULTI_WINDOW_SEASON_MIN:
+            convergence_gaps.append(f"season {season:.0%} < {MULTI_WINDOW_SEASON_MIN:.0%} floor")
+        if convergence_gaps:
+            pillar.status = ESTIMATED
+            pillar.notes.append("multi-window convergence failed: " + "; ".join(convergence_gaps))
     return pillar, base
 
 
@@ -488,8 +582,11 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
         pillar.evidence["ngs_volume_weeks"] = len(weeks)
         pillar.evidence["ngs_volume_avg"] = round(avg, 2)
         pillar.evidence["ngs_volume_last"] = round(weekly[weeks[-1]], 2)
-        if len(weeks) >= 2 and avg > 0 and weekly[weeks[-1]] < ROLE_COLLAPSE * avg:
-            pillar.evidence["role_collapse"] = True
+        if len(weeks) >= 2 and avg > 0:
+            if weekly[weeks[-1]] < ROLE_COLLAPSE * avg:
+                pillar.evidence["role_collapse"] = True
+            elif weekly[weeks[-1]] >= ROLE_SURGE * avg:
+                pillar.evidence["role_surge"] = True
 
     profile = src.usage_profile(player, team)
     if profile:
@@ -509,10 +606,20 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
             f"market {market} requires red-zone/event opportunity metrics; generic usage is estimated"
         )
     else:
-        pillar.status = VERIFIED
+        sample_games = max(len(weekly), int(_f(profile.get("games")) or 0) if profile else 0)
+        if sample_games < MIN_OPPORTUNITY_GAMES:
+            pillar.status = ESTIMATED
+            pillar.notes.append(
+                f"opportunity history thin ({sample_games} < {MIN_OPPORTUNITY_GAMES} games)"
+            )
+        else:
+            pillar.status = VERIFIED
     if pillar.evidence.get("role_collapse") and position == "OVER":
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume under half of the player's average")
+    elif pillar.evidence.get("role_surge") and position == "UNDER":
+        pillar.status = CONTRADICTS
+        pillar.notes.append("last week's volume surged >=1.5x player average (contradicts UNDER)")
     return pillar
 
 
@@ -529,12 +636,15 @@ def _matchup(
         z = defense[f"{key}_z"]
         weeks = int(defense.get("weeks") or 0)
         shrunk = z * weeks / (weeks + EPA_SHRINK_WEEKS)
-        delta = shrunk * EPA_P_PER_Z * _side_sign(position)
+        epa_sign = -_side_sign(position) if market in INVERTED_PASS_EPA_MARKETS else _side_sign(position)
+        delta = shrunk * EPA_P_PER_Z * epa_sign
         pillar.delta += delta
         pillar.evidence.update(
             {"opponent": opponent, f"opp_{key}_allowed": defense.get(key), "opp_epa_z": z,
              "opp_defense_weeks": weeks, "epa_delta": round(delta, 4)}
         )
+        if market in INVERTED_PASS_EPA_MARKETS:
+            pillar.evidence["epa_sign_inverted"] = True
         src.used["pbp"].add(opponent)
         pillar.status = VERIFIED
     elif key:
@@ -699,8 +809,10 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
         {k: move.get(k) for k in ("snapshots", "open_taken_at", "open_line", "open_odds",
                                   "last_taken_at", "last_line", "last_odds")}
     )
+    line_moved = False
     direction = 0
     if open_line is not None and last_line is not None and abs(last_line - open_line) >= MOVE_LINE_STEP:
+        line_moved = True
         direction = (1 if last_line > open_line else -1) * _side_sign(position)
         pillar.evidence["line_move"] = round(last_line - open_line, 2)
     elif open_imp is not None and last_imp is not None:
@@ -708,10 +820,17 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
         pillar.evidence["implied_move_pts"] = round(pts, 2)
         if abs(pts) >= MOVE_IMPLIED_PTS:
             direction = 1 if pts > 0 else -1
-    if direction > 0:
+    if line_moved and direction > 0:
+        # Upgrade B (Line-Move Chase Guard): when the line itself already moved >=0.5
+        # toward this side, the better number is gone; do not boost or validate.
+        pillar.delta = 0.0
+        pillar.status = ESTIMATED
+        pillar.evidence["line_move_chase"] = True
+        pillar.notes.append("line already moved toward this side (>=0.5); capped at PROVISIONAL")
+    elif direction > 0:
         pillar.delta = MOVE_DELTA
         pillar.status = VERIFIED
-        pillar.notes.append("market moved toward this side")
+        pillar.notes.append("price moved toward this side on stable line")
     elif direction < 0:
         pillar.delta = -MOVE_DELTA
         pillar.status = CONTRADICTS
@@ -806,6 +925,7 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
     edge = final_p - fair
     ev, cap, gate_notes = price_gate(final_p, dec, prop.get("line"), edge)
     market = str(prop.get("market") or "").upper()
+    position = str(prop.get("position") or "").upper()
     books_quoted = _quoted_books(prop)
     if books_quoted and books_quoted.issubset(_DFS_BOOKS):
         if cap != CONTRADICTS:
@@ -818,6 +938,37 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
         gate_notes.append(
             "longshot event/TD prop (> +250) requires dedicated Poisson red-zone pricing model"
         )
+    # Upgrade B: cap odds outside validated band [-155, +135] at PROVISIONAL.
+    if cap != CONTRADICTS and (int(odds) > MAX_VALIDATED_ODDS or int(odds) < MIN_VALIDATED_ODDS):
+        cap = ESTIMATED
+        gate_notes.append(
+            f"quoted odds ({int(odds):+d}) outside validated band [{MIN_VALIDATED_ODDS}, +{MAX_VALIDATED_ODDS}]"
+        )
+    # Upgrade B: cap continuous yardage OVER props at PROVISIONAL (right-skew / blowout truncation).
+    if cap != CONTRADICTS and position == "OVER" and market in CONTINUOUS_YARDAGE_MARKETS:
+        cap = ESTIMATED
+        gate_notes.append(
+            f"continuous yardage OVER ({market}) capped at PROVISIONAL (Upgrade B)"
+        )
+    # Filter H: when best quote is an exchange, check divergence against retail median.
+    best_bk = (_best_book(prop) or "").strip().lower()
+    if best_bk in EXCHANGE_BOOKS:
+        retail_implieds = [
+            1.0 / american_to_decimal(int(b["odds"]))
+            for b in (prop.get("books") or [])
+            if isinstance(b, Mapping)
+            and isinstance(b.get("odds"), (int, float))
+            and str(b.get("book") or "").strip().lower() not in (EXCHANGE_BOOKS | _DFS_BOOKS)
+        ]
+        if retail_implieds:
+            retail_med_p = median(retail_implieds)
+            gap_pts = round((retail_med_p - implied) * 100.0, 2)
+            pillar.evidence["exchange_retail_gap_pts"] = gap_pts
+            if cap != CONTRADICTS and gap_pts > MAX_EXCHANGE_RETAIL_GAP_PTS:
+                cap = ESTIMATED
+                gate_notes.append(
+                    f"exchange price diverges +{gap_pts:.1f} pts vs retail median (> {MAX_EXCHANGE_RETAIL_GAP_PTS:.1f} pts Filter H)"
+                )
     b = dec - 1.0
     kelly = (b * final_p - (1.0 - final_p)) / b if b > 0 else 0.0
     stake = max(0.0, min(MAX_STAKE, kelly * QUARTER_KELLY))
@@ -873,7 +1024,20 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         src.matched_signals[signal_pillar(sig.tag)].append(sig)
         src.used["signals"].add((sig.event_id, sig.player_name, sig.market, sig.tag))
 
-    historical, base = _historical(prop, by_line)
+    opportunity = _opportunity(prop, src, team)
+    for sig in src.matched_signals.get("opportunity", []):
+        _apply_signal(opportunity, sig, position)
+    _finish_signal_pillar(opportunity, "vacated-volume signal leans against this side")
+
+    games_played: int | None = None
+    opp_games = opportunity.evidence.get("usage_games")
+    ngs_wks = opportunity.evidence.get("ngs_volume_weeks")
+    if isinstance(opp_games, (int, float)) and opp_games > 0:
+        games_played = int(opp_games)
+    elif isinstance(ngs_wks, (int, float)) and ngs_wks > 0:
+        games_played = int(ngs_wks)
+
+    historical, base = _historical(prop, by_line, games_played=games_played)
     if base is None:
         return None
     for sig in src.matched_signals.get("historical", []):
@@ -881,11 +1045,6 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
     _finish_signal_pillar(historical, "regression signal leans against this side")
     if overridden:
         historical.evidence["overridden_signals"] = overridden
-
-    opportunity = _opportunity(prop, src, team)
-    for sig in src.matched_signals.get("opportunity", []):
-        _apply_signal(opportunity, sig, position)
-    _finish_signal_pillar(opportunity, "vacated-volume signal leans against this side")
 
     matchup = _matchup(prop, src, team, opponent)
     injury, disqualified = _injury_weather(prop, src, team, opponent, event_date)
@@ -907,7 +1066,8 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         verdict = PROVISIONAL
 
     trace = [
-        {"step": "base", "pillar": "historical", "source": "outlier hit rates (Laplace a=2)",
+        {"step": "base", "pillar": "historical",
+         "source": f"multi-window empirical ({historical.evidence.get('shrink_method', 'market_prior')})",
          "value": base, "delta": 0.0}
     ]
     for name, p in pillars.items():
@@ -982,8 +1142,19 @@ def trace_settings() -> dict[str, Any]:
         "pillar_cap": PILLAR_CAP, "total_cap": TOTAL_CAP,
         "signal_p_per_volume": SIGNAL_P_PER_VOLUME, "epa_p_per_z": EPA_P_PER_Z,
         "separation_p_per_z": SEPARATION_P_PER_Z,
+        "market_prior_kappa_standard": MARKET_PRIOR_KAPPA_STANDARD,
+        "market_prior_kappa_event": MARKET_PRIOR_KAPPA_EVENT,
+        "multi_window_l5_min": MULTI_WINDOW_L5_MIN,
+        "multi_window_l10_min": MULTI_WINDOW_L10_MIN,
+        "multi_window_season_min": MULTI_WINDOW_SEASON_MIN,
+        "min_validated_odds": MIN_VALIDATED_ODDS,
+        "max_validated_odds": MAX_VALIDATED_ODDS,
+        "role_surge": ROLE_SURGE,
+        "min_opportunity_games": MIN_OPPORTUNITY_GAMES,
+        "max_exchange_retail_gap_pts": MAX_EXCHANGE_RETAIL_GAP_PTS,
+        "continuous_yardage_over_capped": True,
         "quarter_kelly": QUARTER_KELLY, "max_stake": MAX_STAKE,
-        "note": "deltas are uncalibrated; tune against nfl_signal_scorecard results",
+        "note": "Upgrade B calibration: market-prior shrinkage, no line-move chase, multi-window floors, yardage OVER cap",
     }
 
 
@@ -1058,6 +1229,7 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
     no_ngs = sorted(src.ngs_misses)
     events = {str(p.get("event_id")) for p in picks}
     opponents = {opp for p in picks if (opp := p.get("opponent"))}
+    audit_rules = inputs.audit_rules if inputs.audit_rules is not None else load_nfl_audit_rules()
     return {
         "external_sources": {
             source: {"loaded": src.loaded.get(source, 0), "consumed_keys": len(src.used.get(source, ()))}
@@ -1075,6 +1247,12 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
             "as_of_utc": inputs.as_of_utc,
             "before_week": inputs.before_week,
             "external_dropped_after_cutoff": src.dropped_after_cutoff,
+        },
+        "audit_rules": {
+            "loaded": bool(audit_rules),
+            "audit_date": audit_rules.get("audit_date") if isinstance(audit_rules, Mapping) else None,
+            "active_rules_count": len(audit_rules.get("section_12_betting_rules") or [])
+            if isinstance(audit_rules, Mapping) else 0,
         },
         "injury_report_loaded": inputs.inactive_by_team is not None,
         "candidates_without_ngs": no_ngs,
