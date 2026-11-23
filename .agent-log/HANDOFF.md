@@ -1,3 +1,40 @@
+# Session Handoff: NFL Upgrade B live trial tooling (2026-11-23, agent `claude`)
+
+1. **Work**: Reviewed and merged PR #382 (Upgrade B, merge `0fe5323`). Then, at the
+   user's request, built the tooling to treat Upgrade B as unproven until it earns
+   trust live. Branch `claude/trusting-bohr-6yanx3`. Plan, pre-registered stop
+   criteria and decision log: `docs/plans/2026-11-23-nfl-upgrade-b-live-trial.md`.
+   - **`GateConfig`** (`best_bets.py`): every Upgrade B gate is switchable and its
+     thresholds are tunable. `GateConfig()` equals PR #382 and `GateConfig.legacy()`
+     equals the pre-#382 code, each checked identical on 400 randomized slates.
+   - **Per-pick audit**: each pick records `upgrade_b.gates_fired` and
+     `blocked_only_by`.
+   - **`StakePolicy`**: kelly, flat or paper. The trial config
+     `config/nfl_upgrade_b_trial.json` sets flat 0.5% per VALIDATED pick for Weeks
+     12-15. Kelly is kept as `kelly_stake_fraction`. The trial never auto-ends, and
+     a malformed config fails the card instead of falling back to Kelly.
+   - **Inputs capture**: the pipeline saves `nfl_best_bets_inputs.json.gz` in every
+     run bundle (deterministic gzip, sealed in the manifest) for exact replays.
+   - **`outlier_nfl/trial_scorecard.py`**: settles card picks with the shadow-settle
+     and verified-close CLV code, reports arms (VALIDATED and
+     `blocked_only_by:<gate>`), evaluates the stop criteria and prints `base_p`
+     reliability tables.
+   - **`outlier_nfl/gate_backtest.py`**: one-gate ablation and walk-forward over the
+     captured slates.
+   - **Audit rules removed**: PR #382's `nfl_audit_rules.json` loader is gone
+     (nothing defined or applied those rules). `audit.upgrade_b` replaces it.
+2. **Verification**: full `pytest` 3656 passed, 4 skipped. `mypy outlier_scrapers
+   outlier_nfl` clean. Pyright clean on the touched modules. Ruff clean on the new
+   files; the touched files keep only master's pre-existing findings.
+3. **Not done / next**:
+   - `report-sync.ps1` was not run: the cloud session cannot reach the Windows
+     machine. The user must run it on BirdGang.
+   - Weeks 5-11 cannot be replayed: captures exist only from this change on.
+     PR #382's backtest harness was never committed, so its Weeks 9-11 holdout
+     cannot be confirmed walk-forward.
+   - The user should run the weekly scorecard from Week 12 and record each
+     decision in the plan's decision log.
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
