@@ -40,10 +40,8 @@ Pure functions over plain dicts; no network access and no reasoning models.
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import asdict, dataclass, field, replace
 from statistics import mean, median, pstdev
 from typing import Any, Iterable, Mapping
 
@@ -127,19 +125,116 @@ CONTINUOUS_YARDAGE_MARKETS = frozenset({"REC_YDS", "PASS_YDS", "RUSH_YDS", "RUSH
 # Negative-EPA pass events: higher opp pass_epa_per_play allowed means FEWER ints/sacks.
 INVERTED_PASS_EPA_MARKETS = frozenset({"INT", "INTERCEPTIONS_THROWN", "PASSING_TIMES_SACKED"})
 
-DEFAULT_AUDIT_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "nfl_audit_rules.json"
+LEGACY_EPA_P_PER_Z = 0.01  # pre-Upgrade-B EPA scale, used by GateConfig.legacy()
+
+# Every Upgrade B change that can be switched off, one name per mechanism. A gate is
+# a cap (it can only downgrade a pillar) except ``market_prior_shrinkage``, which
+# picks how base_p is shrunk, and ``inverted_pass_epa``, a sign fix for INT/sacks.
+UPGRADE_B_GATES: tuple[str, ...] = (
+    "line_move_chase",
+    "multi_window_floor",
+    "odds_band",
+    "yardage_over_cap",
+    "exchange_gap",
+    "role_surge",
+    "min_opportunity_games",
+    "inverted_pass_epa",
+    "market_prior_shrinkage",
+)
 
 
-def load_nfl_audit_rules(path: Path | str | None = None) -> dict[str, Any]:
-    """Load hardwired NFL audit rules JSON when present; fail-safe empty dict if absent."""
-    target = Path(path) if path is not None else DEFAULT_AUDIT_RULES_PATH
-    try:
-        if not target.is_file():
-            return {}
-        data = json.loads(target.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+@dataclass(frozen=True)
+class GateConfig:
+    """Which Upgrade B gates are on, and their thresholds. Default = Upgrade B as merged.
+
+    ``GateConfig.legacy()`` reproduces the pre-Upgrade-B ranking, so a backtest can
+    measure each gate alone (``legacy().with_gates({...})``) or drop one from the full set.
+    """
+
+    disabled: frozenset[str] = frozenset()
+    l5_min: float = MULTI_WINDOW_L5_MIN
+    l10_min: float = MULTI_WINDOW_L10_MIN
+    season_min: float = MULTI_WINDOW_SEASON_MIN
+    min_odds: int = MIN_VALIDATED_ODDS
+    max_odds: int = MAX_VALIDATED_ODDS
+    kappa_standard: float = MARKET_PRIOR_KAPPA_STANDARD
+    kappa_event: float = MARKET_PRIOR_KAPPA_EVENT
+    epa_p_per_z: float = EPA_P_PER_Z
+    max_exchange_gap_pts: float = MAX_EXCHANGE_RETAIL_GAP_PTS
+    role_surge: float = ROLE_SURGE
+    min_opportunity_games: int = MIN_OPPORTUNITY_GAMES
+
+    def __post_init__(self) -> None:
+        unknown = set(self.disabled) - set(UPGRADE_B_GATES)
+        if unknown:
+            raise ValueError(f"unknown Upgrade B gate(s): {sorted(unknown)}")
+
+    def on(self, gate: str) -> bool:
+        return gate not in self.disabled
+
+    @classmethod
+    def legacy(cls) -> GateConfig:
+        """Every Upgrade B gate off and the old EPA scale: the pre-Upgrade-B baseline."""
+        return cls(disabled=frozenset(UPGRADE_B_GATES), epa_p_per_z=LEGACY_EPA_P_PER_Z)
+
+    def with_gates(self, enabled: Iterable[str]) -> GateConfig:
+        """Copy with exactly ``enabled`` gates on (others off); thresholds unchanged."""
+        on = set(enabled)
+        unknown = on - set(UPGRADE_B_GATES)
+        if unknown:
+            raise ValueError(f"unknown Upgrade B gate(s): {sorted(unknown)}")
+        return replace(self, disabled=frozenset(set(UPGRADE_B_GATES) - on))
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> GateConfig:
+        """Build from a config mapping; unknown keys are refused so a typo cannot pass silently."""
+        raw = dict(raw or {})
+        known = {f for f in cls.__dataclass_fields__}
+        extra = set(raw) - known
+        if extra:
+            raise ValueError(f"unknown gate config key(s): {sorted(extra)}")
+        if "disabled" in raw:
+            raw["disabled"] = frozenset(str(g) for g in raw["disabled"] or ())
+        return cls(**raw)
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["disabled"] = sorted(self.disabled)
+        out["enabled"] = [g for g in UPGRADE_B_GATES if self.on(g)]
+        return out
+
+
+STAKE_MODES = ("kelly", "flat", "paper")
+
+
+@dataclass(frozen=True)
+class StakePolicy:
+    """How a VALIDATED pick is staked. ``kelly`` is the default quarter-Kelly sizing.
+
+    ``flat`` stakes every VALIDATED pick ``flat_fraction`` of bankroll; ``paper`` stakes
+    nothing. Both keep the Kelly size on the pick as ``kelly_stake_fraction`` so a trial
+    can be compared with what Kelly would have done.
+    """
+
+    mode: str = "kelly"
+    flat_fraction: float = 0.0
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in STAKE_MODES:
+            raise ValueError(f"stake mode must be one of {STAKE_MODES}, got {self.mode!r}")
+        if self.mode == "flat" and not 0.0 < self.flat_fraction <= MAX_STAKE:
+            raise ValueError(f"flat_fraction must be in (0, {MAX_STAKE}], got {self.flat_fraction}")
+
+    def stake(self, kelly_stake: float) -> float:
+        if self.mode == "paper":
+            return 0.0
+        if self.mode == "flat":
+            return self.flat_fraction
+        return kelly_stake
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 # NGS volume stat that measures a player's opportunity for each market family.
 NGS_VOLUME: dict[str, str] = dict(
@@ -257,7 +352,8 @@ class TraceInputs:
     # missing ``before_week`` drops them all rather than admitting every week.
     as_of_utc: str | None = None
     before_week: int | None = None
-    audit_rules: dict[str, Any] | None = None
+    gate_config: GateConfig = field(default_factory=GateConfig)
+    stake_policy: StakePolicy = field(default_factory=StakePolicy)
 
 
 WEEK_BOUND_SOURCES = ("ngs", "pbp")
@@ -454,12 +550,42 @@ def _norm_rate(value: Any) -> float | None:
     return None
 
 
+def _fire_gate(pillar: Pillar, gate: str) -> None:
+    """Record that an Upgrade B gate changed this pillar, with the status it overrode."""
+    pillar.evidence.setdefault("gates_fired", []).append({"gate": gate, "status_before": pillar.status})
+
+
+def _legacy_shrunk_base(
+    rates: Mapping[str, Any], market: str, fair_p: float | None
+) -> tuple[float, str] | None:
+    """Pre-Upgrade-B base_p: market prior only for event / off-even lines, else Laplace(a=2)."""
+    is_event_market = market in TD_MARKETS or market_family(market) is None
+    use_market_prior = fair_p is not None and (is_event_market or abs(fair_p - 0.50) > 0.12)
+    if use_market_prior and fair_p is not None:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
+            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+            method="market_prior", market_prior=fair_p,
+            kappa=16.0 if is_event_market else 8.0,
+        )
+        method = "legacy_market_prior"
+    else:
+        shrunk = compute_shrunk_empirical_model_p(
+            l5_hit_rate=rates["l5"], l10_hit_rate=rates["l10"],
+            l20_hit_rate=rates["l20"], season_hit_rate=rates["season"],
+        )
+        method = "legacy_laplace"
+    return None if shrunk is None else (shrunk[0], method)
+
+
 def _historical(
     prop: Mapping[str, Any],
     by_line: Mapping[tuple[Any, ...], Mapping[str, Any]] | None = None,
     *,
     games_played: int | None = None,
+    cfg: GateConfig | None = None,
 ) -> tuple[Pillar, float | None]:
+    cfg = cfg or GateConfig()
     pillar = Pillar()
     rates = {k: prop.get(f"{k}_hit_rate") for k in ("l5", "l10", "l20", "season")}
     pillar.evidence = {f"{k}_hit_rate": v for k, v in rates.items()}
@@ -492,12 +618,20 @@ def _historical(
         emp_p = sum(w * v for w, v in blend_pairs) / total_w
     else:
         emp_p = selected[0]
+    pillar.evidence["empirical_blend_p"] = round(emp_p, 6)
 
     n_eff = effective_trials(selected[1], games_played)
     is_event_market = market in TD_MARKETS or market_family(market) is None
-    kappa = MARKET_PRIOR_KAPPA_EVENT if is_event_market else MARKET_PRIOR_KAPPA_STANDARD
+    kappa = cfg.kappa_event if is_event_market else cfg.kappa_standard
 
-    if fair_p is not None:
+    if not cfg.on("market_prior_shrinkage"):
+        legacy = _legacy_shrunk_base(rates, market, fair_p)
+        if legacy is None:
+            pillar.notes.append("no usable hit rate")
+            return pillar, None
+        base, method = legacy
+        pillar.evidence["shrink_method"] = method
+    elif fair_p is not None:
         a = fair_p * kappa
         b = (1.0 - fair_p) * kappa
         base = round(shrink_hit_rate(emp_p, n_eff, alpha=a, beta=b), 6)
@@ -533,16 +667,17 @@ def _historical(
     elif norm_rates and all(v < 0.5 for v in norm_rates.values()):
         pillar.status = CONTRADICTS
         pillar.notes.append("all available hit-rate windows below 50% for this side")
-    elif pillar.status == VERIFIED:
+    elif pillar.status == VERIFIED and cfg.on("multi_window_floor"):
         # Upgrade B multi-window convergence gate: block cooling-off and weak-season traps.
         convergence_gaps: list[str] = []
-        if l5 is not None and l5 < MULTI_WINDOW_L5_MIN:
-            convergence_gaps.append(f"L5 {l5:.0%} < {MULTI_WINDOW_L5_MIN:.0%} floor")
-        if l10 is not None and l10 < MULTI_WINDOW_L10_MIN:
-            convergence_gaps.append(f"L10 {l10:.0%} < {MULTI_WINDOW_L10_MIN:.0%} floor")
-        if season is not None and season < MULTI_WINDOW_SEASON_MIN:
-            convergence_gaps.append(f"season {season:.0%} < {MULTI_WINDOW_SEASON_MIN:.0%} floor")
+        if l5 is not None and l5 < cfg.l5_min:
+            convergence_gaps.append(f"L5 {l5:.0%} < {cfg.l5_min:.0%} floor")
+        if l10 is not None and l10 < cfg.l10_min:
+            convergence_gaps.append(f"L10 {l10:.0%} < {cfg.l10_min:.0%} floor")
+        if season is not None and season < cfg.season_min:
+            convergence_gaps.append(f"season {season:.0%} < {cfg.season_min:.0%} floor")
         if convergence_gaps:
+            _fire_gate(pillar, "multi_window_floor")
             pillar.status = ESTIMATED
             pillar.notes.append("multi-window convergence failed: " + "; ".join(convergence_gaps))
     return pillar, base
@@ -562,6 +697,7 @@ def _ngs_kinds(market: str) -> tuple[str, ...]:
 
 
 def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pillar:
+    cfg = src.inputs.gate_config
     pillar = Pillar()
     player = str(prop.get("player_name") or "")
     market = str(prop.get("market") or "").upper()
@@ -585,7 +721,7 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
         if len(weeks) >= 2 and avg > 0:
             if weekly[weeks[-1]] < ROLE_COLLAPSE * avg:
                 pillar.evidence["role_collapse"] = True
-            elif weekly[weeks[-1]] >= ROLE_SURGE * avg:
+            elif weekly[weeks[-1]] >= cfg.role_surge * avg:
                 pillar.evidence["role_surge"] = True
 
     profile = src.usage_profile(player, team)
@@ -607,17 +743,18 @@ def _opportunity(prop: Mapping[str, Any], src: _Sources, team: str | None) -> Pi
         )
     else:
         sample_games = max(len(weekly), int(_f(profile.get("games")) or 0) if profile else 0)
-        if sample_games < MIN_OPPORTUNITY_GAMES:
+        pillar.status = VERIFIED
+        if cfg.on("min_opportunity_games") and sample_games < cfg.min_opportunity_games:
+            _fire_gate(pillar, "min_opportunity_games")
             pillar.status = ESTIMATED
             pillar.notes.append(
-                f"opportunity history thin ({sample_games} < {MIN_OPPORTUNITY_GAMES} games)"
+                f"opportunity history thin ({sample_games} < {cfg.min_opportunity_games} games)"
             )
-        else:
-            pillar.status = VERIFIED
     if pillar.evidence.get("role_collapse") and position == "OVER":
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume under half of the player's average")
-    elif pillar.evidence.get("role_surge") and position == "UNDER":
+    elif pillar.evidence.get("role_surge") and position == "UNDER" and cfg.on("role_surge"):
+        _fire_gate(pillar, "role_surge")
         pillar.status = CONTRADICTS
         pillar.notes.append("last week's volume surged >=1.5x player average (contradicts UNDER)")
     return pillar
@@ -636,14 +773,16 @@ def _matchup(
         z = defense[f"{key}_z"]
         weeks = int(defense.get("weeks") or 0)
         shrunk = z * weeks / (weeks + EPA_SHRINK_WEEKS)
-        epa_sign = -_side_sign(position) if market in INVERTED_PASS_EPA_MARKETS else _side_sign(position)
-        delta = shrunk * EPA_P_PER_Z * epa_sign
+        cfg = src.inputs.gate_config
+        inverted = market in INVERTED_PASS_EPA_MARKETS and cfg.on("inverted_pass_epa")
+        epa_sign = -_side_sign(position) if inverted else _side_sign(position)
+        delta = shrunk * cfg.epa_p_per_z * epa_sign
         pillar.delta += delta
         pillar.evidence.update(
             {"opponent": opponent, f"opp_{key}_allowed": defense.get(key), "opp_epa_z": z,
              "opp_defense_weeks": weeks, "epa_delta": round(delta, 4)}
         )
-        if market in INVERTED_PASS_EPA_MARKETS:
+        if inverted:
             pillar.evidence["epa_sign_inverted"] = True
         src.used["pbp"].add(opponent)
         pillar.status = VERIFIED
@@ -820,9 +959,11 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
         pillar.evidence["implied_move_pts"] = round(pts, 2)
         if abs(pts) >= MOVE_IMPLIED_PTS:
             direction = 1 if pts > 0 else -1
-    if line_moved and direction > 0:
+    if line_moved and direction > 0 and src.inputs.gate_config.on("line_move_chase"):
         # Upgrade B (Line-Move Chase Guard): when the line itself already moved >=0.5
         # toward this side, the better number is gone; do not boost or validate.
+        pillar.status = VERIFIED  # what this move earned before Upgrade B
+        _fire_gate(pillar, "line_move_chase")
         pillar.delta = 0.0
         pillar.status = ESTIMATED
         pillar.evidence["line_move_chase"] = True
@@ -896,7 +1037,14 @@ def _priced_american(prop: Mapping[str, Any]) -> int | None:
     return int(raw)
 
 
-def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, ...], Mapping[str, Any]]) -> Pillar:
+def _price(
+    prop: Mapping[str, Any],
+    final_p: float,
+    by_line: Mapping[tuple[Any, ...], Mapping[str, Any]],
+    *,
+    cfg: GateConfig | None = None,
+) -> Pillar:
+    cfg = cfg or GateConfig()
     pillar = Pillar()
     odds = _priced_american(prop)
     implied = _pct(prop.get("implied_probability"))
@@ -938,14 +1086,29 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
         gate_notes.append(
             "longshot event/TD prop (> +250) requires dedicated Poisson red-zone pricing model"
         )
-    # Upgrade B: cap odds outside validated band [-155, +135] at PROVISIONAL.
-    if cap != CONTRADICTS and (int(odds) > MAX_VALIDATED_ODDS or int(odds) < MIN_VALIDATED_ODDS):
+    def _fire(gate: str) -> None:
+        before = status if cap is None or cap == VERIFIED else cap
+        pillar.evidence.setdefault("gates_fired", []).append({"gate": gate, "status_before": before})
+
+    # Upgrade B: cap odds outside the validated band (default [-155, +135]) at PROVISIONAL.
+    if (
+        cfg.on("odds_band")
+        and cap != CONTRADICTS
+        and (int(odds) > cfg.max_odds or int(odds) < cfg.min_odds)
+    ):
+        _fire("odds_band")
         cap = ESTIMATED
         gate_notes.append(
-            f"quoted odds ({int(odds):+d}) outside validated band [{MIN_VALIDATED_ODDS}, +{MAX_VALIDATED_ODDS}]"
+            f"quoted odds ({int(odds):+d}) outside validated band [{cfg.min_odds}, +{cfg.max_odds}]"
         )
     # Upgrade B: cap continuous yardage OVER props at PROVISIONAL (right-skew / blowout truncation).
-    if cap != CONTRADICTS and position == "OVER" and market in CONTINUOUS_YARDAGE_MARKETS:
+    if (
+        cfg.on("yardage_over_cap")
+        and cap != CONTRADICTS
+        and position == "OVER"
+        and market in CONTINUOUS_YARDAGE_MARKETS
+    ):
+        _fire("yardage_over_cap")
         cap = ESTIMATED
         gate_notes.append(
             f"continuous yardage OVER ({market}) capped at PROVISIONAL (Upgrade B)"
@@ -964,10 +1127,16 @@ def _price(prop: Mapping[str, Any], final_p: float, by_line: Mapping[tuple[Any, 
             retail_med_p = median(retail_implieds)
             gap_pts = round((retail_med_p - implied) * 100.0, 2)
             pillar.evidence["exchange_retail_gap_pts"] = gap_pts
-            if cap != CONTRADICTS and gap_pts > MAX_EXCHANGE_RETAIL_GAP_PTS:
+            if (
+                cfg.on("exchange_gap")
+                and cap != CONTRADICTS
+                and gap_pts > cfg.max_exchange_gap_pts
+            ):
+                _fire("exchange_gap")
                 cap = ESTIMATED
                 gate_notes.append(
-                    f"exchange price diverges +{gap_pts:.1f} pts vs retail median (> {MAX_EXCHANGE_RETAIL_GAP_PTS:.1f} pts Filter H)"
+                    f"exchange price diverges +{gap_pts:.1f} pts vs retail median "
+                    f"(> {cfg.max_exchange_gap_pts:.1f} pts Filter H)"
                 )
     b = dec - 1.0
     kelly = (b * final_p - (1.0 - final_p)) / b if b > 0 else 0.0
@@ -1037,7 +1206,8 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
     elif isinstance(ngs_wks, (int, float)) and ngs_wks > 0:
         games_played = int(ngs_wks)
 
-    historical, base = _historical(prop, by_line, games_played=games_played)
+    cfg = src.inputs.gate_config
+    historical, base = _historical(prop, by_line, games_played=games_played, cfg=cfg)
     if base is None:
         return None
     for sig in src.matched_signals.get("historical", []):
@@ -1054,7 +1224,7 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
                "injury_weather": injury, "market": market}
     total = _clamp(sum(p.delta for p in pillars.values()), TOTAL_CAP)
     final_p = max(0.01, min(0.99, base + total))
-    pillars["price"] = _price(prop, final_p, by_line)
+    pillars["price"] = _price(prop, final_p, by_line, cfg=cfg)
 
     statuses = {name: p.status for name, p in pillars.items()}
     gaps = [f"{name}:{status}" for name, status in statuses.items() if status != VERIFIED]
@@ -1078,6 +1248,7 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
     trace.append({"step": "final_p", "value": round(final_p, 4)})
 
     price = pillars["price"].evidence
+    kelly_stake = float(price.get("stake_if_validated") or 0.0)
     return {
         "verdict": verdict,
         "gaps": gaps,
@@ -1099,10 +1270,39 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         "fair_p": price.get("fair_p"),
         "edge": price.get("edge"),
         "ev_per_unit": price.get("ev_per_unit"),
-        "stake_fraction": price.get("stake_if_validated") if verdict == VALIDATED else 0.0,
+        "stake_fraction": src.inputs.stake_policy.stake(kelly_stake) if verdict == VALIDATED else 0.0,
+        "kelly_stake_fraction": kelly_stake if verdict == VALIDATED else 0.0,
+        "upgrade_b": _upgrade_b_summary(pillars, verdict, disqualified),
         "pillars": {name: p.to_dict() for name, p in pillars.items()},
         "trace": trace,
     }
+
+
+def _upgrade_b_summary(pillars: Mapping[str, Pillar], verdict: str, disqualified: bool) -> dict[str, Any]:
+    """Which Upgrade B gates fired on this pick, and whether one gate alone held it back.
+
+    ``blocked_only_by`` names a gate when the pick is PROVISIONAL, exactly one gate
+    fired, and every pillar would be VERIFIED without it. It is the live "all gates but
+    this one" arm. It is approximate for ``line_move_chase``: without that gate the
+    market pillar also adds +0.01 to final_p, which can move the price pillar. The
+    exact counterfactual comes from replaying saved inputs (``outlier_nfl.gate_backtest``).
+    """
+    fired: list[str] = []
+    before_by_pillar: dict[str, str] = {}
+    for name, p in pillars.items():
+        for entry in p.evidence.get("gates_fired") or []:
+            fired.append(str(entry.get("gate")))
+            before_by_pillar.setdefault(name, str(entry.get("status_before")))
+    gates = sorted(set(fired))
+    blocked_only_by: str | None = None
+    if (
+        verdict == PROVISIONAL
+        and not disqualified
+        and len(gates) == 1
+        and all(before_by_pillar.get(name, p.status) == VERIFIED for name, p in pillars.items())
+    ):
+        blocked_only_by = gates[0]
+    return {"gates_fired": gates, "blocked_only_by": blocked_only_by}
 
 
 def _finish_signal_pillar(pillar: Pillar, note: str) -> None:
@@ -1137,24 +1337,34 @@ def _best_book(prop: Mapping[str, Any]) -> str | None:
 VERDICT_ORDER = {VALIDATED: 0, PROVISIONAL: 1, REJECTED: 2}
 
 
-def trace_settings() -> dict[str, Any]:
+def trace_settings(
+    cfg: GateConfig | None = None, stake_policy: StakePolicy | None = None
+) -> dict[str, Any]:
+    """The constants and the gate / stake configuration a card was built with."""
+    cfg = cfg or GateConfig()
+    stake_policy = stake_policy or StakePolicy()
     return {
         "pillar_cap": PILLAR_CAP, "total_cap": TOTAL_CAP,
-        "signal_p_per_volume": SIGNAL_P_PER_VOLUME, "epa_p_per_z": EPA_P_PER_Z,
+        "signal_p_per_volume": SIGNAL_P_PER_VOLUME, "epa_p_per_z": cfg.epa_p_per_z,
         "separation_p_per_z": SEPARATION_P_PER_Z,
-        "market_prior_kappa_standard": MARKET_PRIOR_KAPPA_STANDARD,
-        "market_prior_kappa_event": MARKET_PRIOR_KAPPA_EVENT,
-        "multi_window_l5_min": MULTI_WINDOW_L5_MIN,
-        "multi_window_l10_min": MULTI_WINDOW_L10_MIN,
-        "multi_window_season_min": MULTI_WINDOW_SEASON_MIN,
-        "min_validated_odds": MIN_VALIDATED_ODDS,
-        "max_validated_odds": MAX_VALIDATED_ODDS,
-        "role_surge": ROLE_SURGE,
-        "min_opportunity_games": MIN_OPPORTUNITY_GAMES,
-        "max_exchange_retail_gap_pts": MAX_EXCHANGE_RETAIL_GAP_PTS,
-        "continuous_yardage_over_capped": True,
+        "market_prior_kappa_standard": cfg.kappa_standard,
+        "market_prior_kappa_event": cfg.kappa_event,
+        "multi_window_l5_min": cfg.l5_min,
+        "multi_window_l10_min": cfg.l10_min,
+        "multi_window_season_min": cfg.season_min,
+        "min_validated_odds": cfg.min_odds,
+        "max_validated_odds": cfg.max_odds,
+        "role_surge": cfg.role_surge,
+        "min_opportunity_games": cfg.min_opportunity_games,
+        "max_exchange_retail_gap_pts": cfg.max_exchange_gap_pts,
+        "continuous_yardage_over_capped": cfg.on("yardage_over_cap"),
+        "gates": cfg.to_dict(),
+        "stake_policy": stake_policy.to_dict(),
         "quarter_kelly": QUARTER_KELLY, "max_stake": MAX_STAKE,
-        "note": "Upgrade B calibration: market-prior shrinkage, no line-move chase, multi-window floors, yardage OVER cap",
+        "note": (
+            "Upgrade B gates are individually switchable (settings.gates); stake_fraction "
+            "follows settings.stake_policy, kelly_stake_fraction is always quarter-Kelly"
+        ),
     }
 
 
@@ -1196,7 +1406,7 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         "run_date": inputs.run_date,
         "candidates": len(picks),
         "counts": counts,
-        "settings": trace_settings(),
+        "settings": trace_settings(inputs.gate_config, inputs.stake_policy),
         "picks": picks,
         "audit": _audit(inputs, src, picks),
     }
@@ -1229,7 +1439,14 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
     no_ngs = sorted(src.ngs_misses)
     events = {str(p.get("event_id")) for p in picks}
     opponents = {opp for p in picks if (opp := p.get("opponent"))}
-    audit_rules = inputs.audit_rules if inputs.audit_rules is not None else load_nfl_audit_rules()
+    gates_fired: dict[str, int] = defaultdict(int)
+    blocked_only_by: dict[str, int] = defaultdict(int)
+    for p in picks:
+        summary = p.get("upgrade_b") or {}
+        for gate in summary.get("gates_fired") or ():
+            gates_fired[gate] += 1
+        if summary.get("blocked_only_by"):
+            blocked_only_by[summary["blocked_only_by"]] += 1
     return {
         "external_sources": {
             source: {"loaded": src.loaded.get(source, 0), "consumed_keys": len(src.used.get(source, ()))}
@@ -1248,11 +1465,12 @@ def _audit(inputs: TraceInputs, src: _Sources, picks: list[dict[str, Any]]) -> d
             "before_week": inputs.before_week,
             "external_dropped_after_cutoff": src.dropped_after_cutoff,
         },
-        "audit_rules": {
-            "loaded": bool(audit_rules),
-            "audit_date": audit_rules.get("audit_date") if isinstance(audit_rules, Mapping) else None,
-            "active_rules_count": len(audit_rules.get("section_12_betting_rules") or [])
-            if isinstance(audit_rules, Mapping) else 0,
+        "upgrade_b": {
+            "enabled_gates": [g for g in UPGRADE_B_GATES if inputs.gate_config.on(g)],
+            "stake_mode": inputs.stake_policy.mode,
+            "stake_label": inputs.stake_policy.label,
+            "gates_fired": dict(sorted(gates_fired.items())),
+            "blocked_only_by": dict(sorted(blocked_only_by.items())),
         },
         "injury_report_loaded": inputs.inactive_by_team is not None,
         "candidates_without_ngs": no_ngs,
@@ -1285,6 +1503,23 @@ def render_best_bets_markdown(payload: Mapping[str, Any], *, title: str, limit: 
         "VALIDATED = all six pillars verified on the game-day refresh with a positive edge. "
         "PROVISIONAL picks list their gaps and carry no stake.",
         "",
+    ]
+    stake_policy = (payload.get("settings") or {}).get("stake_policy") or {}
+    mode = stake_policy.get("mode") or "kelly"
+    if mode != "kelly":
+        detail = (
+            f"flat {float(stake_policy.get('flat_fraction') or 0) * 100:.2f}% of bankroll per VALIDATED pick"
+            if mode == "flat" else "paper trade, no money staked"
+        )
+        label = f" ({stake_policy['label']})" if stake_policy.get("label") else ""
+        lines += [
+            (
+                f"**Stake mode: {mode.upper()}{label}** - {detail}. "
+                "Quarter-Kelly sizes are kept in the JSON as kelly_stake_fraction."
+            ),
+            "",
+        ]
+    lines += [
         "| # | Verdict | Pick | Odds | Base P | Final P | Fair P | Edge | EV/u | Stake | Gaps |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]

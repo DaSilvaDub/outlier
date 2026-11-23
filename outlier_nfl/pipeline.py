@@ -77,6 +77,8 @@ from outlier_nfl.stage_receipts import (
     validation_receipt,
 )
 from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
+from outlier_nfl.trace_capture import CAPTURE_NAME, save_trace_inputs
+from outlier_nfl.upgrade_b_trial import load_trial_config
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.calibration import (
     DEFAULT_MARKET_PRIOR_KAPPA,
@@ -1064,22 +1066,28 @@ class NflPipeline:
             movement = movement_index(
                 load_snapshots(snapshot_path(self.nfl_dir, target_date), as_of_utc=as_of_utc)
             )
-            payload = build_best_bets(
-                TraceInputs(
-                    props=props_dict,
-                    run_date=to_eastern_date(now_utc) or target_date,
-                    scripts=scripts_records,
-                    external_metrics=external_metrics,
-                    usage_players=usage_players,
-                    weather=weather_records,
-                    inactive_by_team=tape.injury_report(),
-                    questionable_by_team=tape.team_lists("questionable"),
-                    tapes=tape.teams,
-                    movement=movement,
-                    as_of_utc=as_of_utc.isoformat(),
-                    before_week=before_week,
-                )
+            # Upgrade B live trial: gate thresholds and flat/paper staking come from
+            # config/nfl_upgrade_b_trial.json. A malformed file raises here and fails
+            # the card rather than silently staking quarter-Kelly.
+            trial = load_trial_config()
+            trace_inputs = TraceInputs(
+                props=props_dict,
+                run_date=to_eastern_date(now_utc) or target_date,
+                scripts=scripts_records,
+                external_metrics=external_metrics,
+                usage_players=usage_players,
+                weather=weather_records,
+                inactive_by_team=tape.injury_report(),
+                questionable_by_team=tape.team_lists("questionable"),
+                tapes=tape.teams,
+                movement=movement,
+                as_of_utc=as_of_utc.isoformat(),
+                before_week=before_week,
+                gate_config=trial.gate_config,
+                stake_policy=trial.stake_policy,
             )
+            payload = build_best_bets(trace_inputs)
+            payload["trial"] = trial.to_dict()
         except Exception as exc:  # the slate's data outputs above are already written
             logger.error("Best-bets trace failed: %s", exc)
             # Never leave an older card behind for a reader to mistake for this run's.
@@ -1095,6 +1103,17 @@ class NflPipeline:
                 (self.normalized_dir / stale).unlink(missing_ok=True)
             return {"error": f"best-bets trace failed: {exc}"}
         payload.update({"date": target_date, "window": window, "updated_at": now_utc})
+        try:  # replay input for gate backtests; never blocks the card
+            save_trace_inputs(
+                writer.staged_path(CAPTURE_NAME),
+                trace_inputs,
+                # No run_id: the bundle folder names the run, and an embedded id
+                # would make two rebuilds of one slate differ byte for byte.
+                meta={"date": target_date, "window": window, "suffix": suffix,
+                      "updated_at": now_utc},
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not capture best-bets trace inputs: %s", exc)
         card_dests = [self.normalized_dir / f"nfl_best_bets_{suffix}.json"] if publish else []
         if publish_latest:
             card_dests.append(self.normalized_dir / "nfl_best_bets_latest.json")

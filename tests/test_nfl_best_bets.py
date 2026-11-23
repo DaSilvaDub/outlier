@@ -16,6 +16,7 @@ from outlier_nfl.best_bets import (
     PROVISIONAL,
     REJECTED,
     STALE,
+    UPGRADE_B_GATES,
     VALIDATED,
     VERIFIED,
     TraceInputs,
@@ -841,12 +842,9 @@ def test_exchange_vs_retail_gap_filter_h_caps_outlier_exchange():
     assert any("Filter H" in n for n in pillar.notes)
 
 
-def test_audit_rules_config_recorded_in_audit_payload():
-    sample_rules = {"audit_date": "2026-11-22", "section_12_betting_rules": [{"code": "NFL-RULE-106"}]}
-    payload = build_best_bets(_inputs(audit_rules=sample_rules))
-    assert payload["audit"]["audit_rules"] == {
-        "loaded": True,
-        "audit_date": "2026-11-22",
-        "active_rules_count": 1,
-    }
-
+def test_audit_records_upgrade_b_gates_and_stake_mode():
+    payload = build_best_bets(_inputs())
+    audit = payload["audit"]["upgrade_b"]
+    assert audit["enabled_gates"] == list(UPGRADE_B_GATES)
+    assert audit["stake_mode"] == "kelly"
+    assert "audit_rules" not in payload["audit"]
