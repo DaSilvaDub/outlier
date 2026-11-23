@@ -1193,6 +1193,15 @@ def trace_prop(prop: Mapping[str, Any], src: _Sources, by_line: Mapping[tuple[An
         src.matched_signals[signal_pillar(sig.tag)].append(sig)
         src.used["signals"].add((sig.event_id, sig.player_name, sig.market, sig.tag))
 
+    # Without a usable hit-rate window _historical yields no base and this prop is
+    # dropped. Decided before _opportunity so a dropped prop cannot consume NGS/usage
+    # rows or appear in audit.candidates_without_ngs: it reaches no pick.
+    if select_empirical_hit_rate(
+        l5_hit_rate=prop.get("l5_hit_rate"), l10_hit_rate=prop.get("l10_hit_rate"),
+        l20_hit_rate=prop.get("l20_hit_rate"), season_hit_rate=prop.get("season_hit_rate"),
+    ) is None:
+        return None
+
     opportunity = _opportunity(prop, src, team)
     for sig in src.matched_signals.get("opportunity", []):
         _apply_signal(opportunity, sig, position)
@@ -1393,6 +1402,9 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         if pkey in seen_validated_players:
             pick["verdict"] = PROVISIONAL
             pick["stake_fraction"] = 0.0
+            # The Kelly shadow size follows the verdict too: a demoted pick was not
+            # sized, so leaving it would report a Kelly stake for a bet never placed.
+            pick["kelly_stake_fraction"] = 0.0
             pick["gaps"].append("correlation:CORRELATED_SAME_PLAYER")
         else:
             seen_validated_players.add(pkey)

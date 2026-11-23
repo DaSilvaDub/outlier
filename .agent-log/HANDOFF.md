@@ -1,3 +1,68 @@
+# Session Handoff: Daily Debug Review (2026-11-23, agent `claude`)
+
+1. **Base**: branch `claude/inspiring-fermat-0s4oqo` at master `2e7e0d9`, HEAD == `origin/master`.
+   Cloud STEP 0 equivalent (AGENTS.md "Cloud / Sandbox Agents"): `git fetch` + all 5 upgrade
+   markers present. No PowerShell in this sandbox, so `report-sync.ps1` was not run -- the user
+   must run it on BirdGang.
+2. **Scope**: everything merged since the 2026-11-21 baseline `2292a17`, i.e. PR #382
+   (Upgrade B 6-pillar gates) and PR #383 (Upgrade B live trial: `GateConfig`, `StakePolicy`,
+   `trace_capture`, `trial_scorecard`, `gate_backtest`).
+3. **Two defects found and fixed** (`outlier_nfl/best_bets.py`):
+   - **The correlation gate left a Kelly stake on a pick it demoted.** `build_best_bets`'s
+     CORRELATION_CHECKED loop zeroes `stake_fraction` when it demotes a second VALIDATED pick for
+     the same (event, player) to PROVISIONAL, but PR #383's new `kelly_stake_fraction` was not
+     zeroed with it. The demoted pick therefore carried `kelly_stake_fraction = 0.02` with
+     `verdict = PROVISIONAL` and `stake_fraction = 0.0`. Every other non-VALIDATED pick carries
+     0.0, so `trial_scorecard.arm_metrics` reported a non-zero `kelly_bankroll_change` for the
+     PROVISIONAL arm from a bet the card explicitly refused to size. `trace_prop` and
+     `scripts/nfl_rebuild_card.py` (changed in the same PR) both enforce
+     "verdict != VALIDATED => kelly_stake_fraction == 0"; only this path did not. Real staking
+     was unaffected -- `stake_fraction` was already 0.
+   - **`_opportunity` ran for props that are then dropped.** PR #383 moved `_opportunity` above
+     `_historical` in `trace_prop` (it needs `games_played`), so a candidate prop with no usable
+     hit-rate window now consumed NGS/usage rows and landed in `audit.candidates_without_ngs`
+     before `base is None` dropped it. The audit then listed players with zero picks on the card
+     (`candidate_players: 0`, `candidates_without_ngs: ['Zz Nohistory']`), defeating the audit's
+     "silent joins become visible" purpose. Fixed by deciding the drop with
+     `select_empirical_hit_rate` before `_opportunity`; that predicate is exactly equivalent to
+     `base is None` (every other `_historical` return path is guarded by the same call).
+4. **Regression tests** (`tests/test_nfl_best_bets.py`): the existing correlation-guard test now
+   asserts both stake fields, plus a new
+   `test_prop_without_any_hit_rate_consumes_no_opportunity_sources`. Both fail on the pre-fix tree
+   and pass after.
+5. **Verification**: full `pytest` **3657 passed, 4 skipped**, 0 failures. `mypy outlier_scrapers
+   outlier_nfl outlier_nba` clean (186 files). `pyright outlier_scrapers outlier_nfl` clean.
+   `compileall` clean. `ruff` on the touched files: 7 findings before and after, i.e. the change
+   adds none. House-rule invariants re-checked in code: `ALLOWED_MLB_PLAYER_PROPS == {"SO"}`,
+   `ALLOWED_MLB_TEAM_PROPS == {"R","TOTAL"}`, HR in `EXCLUDED_MARKETS`, `verdicts/` not in
+   `DERIVED_PACK_OUTPUTS`. No reasoning / desk runs; no provider keys exist in this sandbox.
+6. **Reported, not fixed (owner's call)**:
+   - `config/nfl_upgrade_b_trial.json` is committed and `load_trial_config()` is unconditional, so
+     **flat 0.5% staking is live now on every NFL card**. Its `weeks: [12,13,14,15]` is recorded
+     only, never enforced -- by design per the file's own note ("the trial does not end on its
+     own"), but worth knowing it will not revert after Week 15 without an edit.
+   - Nothing in the suite pins `GateConfig.legacy()` to the pre-#382 ranking. That equivalence is
+     the baseline the whole `gate_backtest` ablation rests on, and it was checked only in the
+     authoring session (harness not committed). Recommend a golden-snapshot test over the existing
+     NFL fixtures so later edits to `_historical` / `_price` cannot drift it unnoticed.
+   - `role_surge` sets the opportunity pillar to CONTRADICTS, so it REJECTS rather than caps.
+     `_upgrade_b_summary.blocked_only_by` only fires on PROVISIONAL picks, so that gate can never
+     get a live `blocked_only_by:` arm -- its evidence has to come from `gate_backtest`.
+   - Still open from 2026-11-16 / 2026-11-21: `uv.lock` / `requirements.lock` are frozen at the
+     2026-10-09 set and carry none of `tzdata`, `structlog`, `SQLAlchemy`, `psycopg2-binary`,
+     `numpy`. CI stays green because `pip install -e .` resolves them, but 5 runtime deps float
+     unpinned. Confirmed again today: this sandbox could not collect a single test until those
+     were installed by hand.
+7. **Sandbox notes for the next cloud agent**: `/usr/local/bin/pytest` is Python 3.13 and the
+   container ships none of the project's deps. Install `structlog SQLAlchemy python-dateutil
+   tzdata` (and the three provider SDKs, for the fake-client `test_pass_*` modules) or 74 modules
+   fail to collect and 10 tests fail on `ModuleNotFoundError`. Under 3.13 pip installs numpy
+   2.5.3, whose stubs use `type` statements that mypy rejects at the configured
+   `python_version = "3.11"`, aborting the whole run; pass `--python-version 3.12` or pin numpy.
+   CI is unaffected (Python 3.11 resolves an older numpy).
+
+---
+
 # Session Handoff: NFL Upgrade B live trial tooling (2026-11-23, agent `claude`)
 
 1. **Work**: Reviewed and merged PR #382 (Upgrade B, merge `0fe5323`). Then, at the
