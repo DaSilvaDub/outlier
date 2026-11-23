@@ -681,6 +681,24 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     ]
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
+    # The demoted pick was never sized, so neither stake survives the demotion.
+    assert provisional_same[0]["stake_fraction"] == 0.0
+    assert provisional_same[0]["kelly_stake_fraction"] == 0.0
+    assert validated[0]["kelly_stake_fraction"] > 0.0
+
+
+def test_prop_without_any_hit_rate_consumes_no_opportunity_sources():
+    """A prop dropped for want of a hit rate must not appear in the audit as a candidate."""
+    orphan = _prop(
+        player_name="Zz Nohistory", player_id="p9",
+        l5_hit_rate=None, l10_hit_rate=None, l20_hit_rate=None, season_hit_rate=None,
+    )
+    payload = build_best_bets(_inputs(props=[orphan]))
+    audit = payload["audit"]
+    assert payload["picks"] == []
+    assert audit["candidate_players"] == 0
+    assert audit["candidates_without_ngs"] == []
+    assert audit["external_sources"]["ngs"]["consumed_keys"] == 0
 
 
 # --- Upgrade B win-rate gates & bug fixes -----------------------------------
