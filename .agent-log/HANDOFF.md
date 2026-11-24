@@ -1,3 +1,42 @@
+# Session Handoff: daily automated debug review (2026-11-24, agent `claude`)
+
+1. **Work**: Scheduled daily code-health review. Cloud STEP 0 done (all 5 upgrade markers
+   present; `report-sync.ps1` not run — no PowerShell in the container). One fix applied.
+   - **`requirements.lock` re-exported** (PR #390, branch `claude/inspiring-fermat-0ag346`).
+     The lock was last exported 2026-10-10 (`2480245`) from an already-stale `uv.lock`, so it
+     omitted five `pyproject.toml` dependencies: numpy, psycopg2-binary, SQLAlchemy, structlog,
+     tzdata. PR #389 refreshed `uv.lock` but did not re-run the export. Every CI job installs
+     the lock as "frozen dependencies" and then `pip install -e .` / `-r requirements.txt`,
+     which pulled those five in unpinned. Regenerated with the command in the file header.
+2. **Verification**: full `pytest` 3659 passed, 4 skipped (provider SDKs installed in the
+   container so the whole suite collects). `mypy outlier_scrapers outlier_nfl` clean on 140
+   files. `pyright` 0 errors (1 pre-existing `playwright` import warning in `login.py`).
+   Import-smoke of all modules in the three packages: 0 errors. `pip install --dry-run -r
+   requirements.lock` resolves.
+3. **Open, needs a human decision** (reported, deliberately not fixed):
+   - **`make typecheck` is broken on Python 3.12+.** numpy 2.5's `__init__.pyi` uses PEP 695
+     `type` statements, which mypy rejects under `[tool.mypy] python_version = "3.11"`; it
+     aborts before checking any project code. numpy is reached from CI's scope via
+     `outlier_scrapers/daily_job.py:62` -> `outlier_nba.cli`. CI stays green only because
+     numpy 2.5 needs py>=3.12 and CI runs 3.11 (gets 2.4.6). Options, each with a cost: a
+     numpy `follow_imports = "skip"` mypy override (drops mypy coverage of `outlier_nba`
+     numerics; pyright still covers it), or capping numpy in `pyproject.toml` (a runtime
+     dependency change).
+   - **Reasoning-guard false positive.** `.claude/hooks/block-reasoning.py` PATTERN
+     `pytest\b[^;|]*test_(reasoning|...)` also matches commands that *exclude* those tests, so
+     the repo's own `core` CI command from `.github/workflows/pytest.yml`
+     (`pytest -q --ignore=tests/test_reasoning.py ...`) is denied, and the denial text tells the
+     agent to re-run with `DESK_OK`. That trains agents to append the bypass token to harmless
+     commands. Suggested fix: strip `--ignore=`/`--ignore-glob=`/`--deselect` arguments from the
+     command before matching, in both `block-reasoning.py` and `block-reasoning.ps1` (AGENTS.md
+     requires the two patterns stay identical). Not applied here: narrowing a safety guard is a
+     human call, and the `.ps1` twin cannot be executed in this container.
+   - Repo-wide `ruff check` reports 948 findings, but they are pre-existing and the `Makefile`
+     scopes linting to changed files. Spot-checked the two rules that usually mean a real bug:
+     all 15 `PLR0124` hits are the intentional `x == x` NaN idiom and all 11 `B023` hits are
+     closures called inside the same loop iteration. No action needed.
+
+---
 # Session Handoff: Claude Code setup audit and guard fixes (2026-11-24, agent `claude`)
 
 1. **Work**: Ran the setup-audit skill on this repo (project scope, quick depth) and applied
