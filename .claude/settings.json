@@ -25,7 +25,7 @@
               ".claude/hooks/block-reasoning.py"
             ],
             "timeout": 15,
-            "statusMessage": "Checking reasoning house rule (python)..."
+            "statusMessage": "Checking reasoning house rule (Linux)..."
           }
         ]
       }
@@ -59,7 +59,9 @@
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(~/.ssh/**)",
-      "Read(~/.aws/**)"
+      "Read(~/.aws/**)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
     ]
   }
 }

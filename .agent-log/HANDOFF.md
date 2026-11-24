@@ -8468,3 +8468,10 @@ this sandbox cannot import.
    - To disable the 8:00 AM `Outlier Daily Pipeline` task in Task Scheduler completely, run `Disable-ScheduledTask -TaskName "Outlier Daily Pipeline"` from an Administrator PowerShell prompt (it requires elevation due to its security descriptor; however, even if left scheduled, `run_daily_pipeline.ps1` in both canonical and `outlier-scheduled` will instantly detect off-season and exit cleanly in milliseconds).
    - In Spring (April), run `powershell -File scripts/manage_mlb_wnba_tasks.ps1 -Enable` to re-enable the daily pipeline tasks when the new MLB/WNBA seasons begin.
 
+
+## 2026-11-24 — claude (setup-audit, NFL pipeline)
+- Added Linux hook `.claude/hooks/block-reasoning.py` (skips when pwsh present; keeps DESK_OK bypass), registered in `.claude/settings.json`.
+- Added project `deny`: Read .env/.env.*, git push --force/-f. Reasoning commands stay hook-gated (deny rules would break the DESK_OK escape hatch).
+- `.env.example`: declared 5 NFL vars. Copied `nfl-game-script` skill into `.claude/skills/`.
+- Skipped: skill-listing trimming (user-level), doc dedup of CLAUDE/AGENTS (item 6).
+- Note: `tests/test_environment.py` errors pre-existing in this sandbox (structlog not installed).

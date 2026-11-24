@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""PreToolUse guard (cross-platform twin of block-reasoning.ps1).
+"""PreToolUse guard (Linux/cloud twin of block-reasoning.ps1).
 
 Blocks paid AI Research Desk / reasoning commands unless the command carries
 the literal token DESK_OK (only when the user explicitly asked this turn).
-Fails open on any unexpected condition, like the .ps1 version.
-Keep the patterns in sync with block-reasoning.ps1.
+Skips itself when pwsh exists, because block-reasoning.ps1 already runs then.
+Fails open on any unparseable payload.
 """
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -21,7 +22,7 @@ BYPASS = "DESK_OK"
 LOG = os.path.join(os.path.expanduser("~"), ".claude", "reasoning-guard.log")
 
 
-def audit(verdict, command):
+def audit(verdict: str, command: str) -> None:
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
         flat = re.sub(r"\r?\n", " <NL> ", command)
@@ -31,32 +32,32 @@ def audit(verdict, command):
         pass
 
 
-def main():
-    try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            return 0
-        command = (json.loads(raw).get("tool_input") or {}).get("command") or ""
-        if not command.strip() or not PATTERN.search(command):
-            return 0
-        if BYPASS in command:
-            audit(f"BYPASS({BYPASS})", command)
-            return 0
-        audit("BLOCKED", command)
-        reason = (
-            "BLOCKED by the outlier house rule: reasoning / AI Research Desk is OFF by default.\n"
-            "This command invokes a paid provider path or a reasoning test. Only proceed if the "
-            f"user explicitly asked THIS TURN; then re-run with the token {BYPASS} appended. "
-            "Bypasses are logged in ~/.claude/reasoning-guard.log.\n"
-            'Canonical rule: AGENTS.md -> "Never run reasoning models unless explicitly asked".'
-        )
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason}}))
+def main() -> int:
+    if shutil.which("pwsh"):
         return 0
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        command = (payload.get("tool_input") or {}).get("command") or ""
     except Exception:
         return 0
+    if not command.strip() or not PATTERN.search(command):
+        return 0
+    if BYPASS in command:
+        audit(f"BYPASS({BYPASS})", command)
+        return 0
+    audit("BLOCKED", command)
+    reason = (
+        "BLOCKED by the outlier house rule: reasoning / AI Research Desk is OFF by default. "
+        "Only proceed if the user explicitly asked THIS TURN; then re-run with the token "
+        f"{BYPASS} appended to the command. Canonical rule: AGENTS.md -> "
+        "'Never run reasoning models unless explicitly asked'."
+    )
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}))
+    return 0
 
 
 if __name__ == "__main__":
