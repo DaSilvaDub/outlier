@@ -36,6 +36,7 @@ param(
     [string]$ScratchOut = "",
     [switch]$ForceDrive,
     [switch]$SkipInjuryFilter,
+    [switch]$UseRotoGrinders,
     [double]$MinDiskSpaceGB = 5.0
 )
 
@@ -158,11 +159,17 @@ if ($needsPipelineRun) {
                 Invoke-CheckedPython -Arguments @($watcherScript, "--once")
             }
 
-            # 3. Generate updated prop edges and playbook grades
+            # 3. Generate updated prop edges and playbook grades (RG-free by default while RG is paused)
             $edgesScript = Join-Path $nbaPipelineRepo "pipeline\generate_prop_edges.py"
             if (Test-Path -LiteralPath $edgesScript) {
-                Write-Output "Generating prop edges..."
-                Invoke-CheckedPython -Arguments @($edgesScript, "--allow-stale-hardrock")
+                $edgeArgs = @($edgesScript, "--allow-stale-hardrock")
+                if (-not $UseRotoGrinders) {
+                    $edgeArgs += "--no-rg"
+                    Write-Output "Generating prop edges (RG-free mode: --no-rg)..."
+                } else {
+                    Write-Output "Generating prop edges (RotoGrinders enabled via -UseRotoGrinders)..."
+                }
+                Invoke-CheckedPython -Arguments $edgeArgs
             }
 
             $gradesScript = Join-Path $nbaPipelineRepo "pipeline\generate_playbook_grades.py"

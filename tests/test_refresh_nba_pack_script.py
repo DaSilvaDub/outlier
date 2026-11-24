@@ -22,6 +22,13 @@ def test_refresh_nba_pack_publishes_matchup_focus_and_drops_legacy_sas_okc():
     assert ".Length -gt 0" in script
 
 
+def test_refresh_nba_pack_defaults_to_rg_free_mode():
+    script = (REPO_ROOT / "scripts" / "refresh_nba_pack.ps1").read_text(encoding="utf-8")
+    assert "[switch]$UseRotoGrinders" in script
+    assert "if (-not $UseRotoGrinders)" in script
+    assert '"--no-rg"' in script
+
+
 def test_sync_all_sports_summary_lists_matchup_focus():
     script = (REPO_ROOT / "scripts" / "sync_all_sports_to_drive.ps1").read_text(encoding="utf-8")
     assert "MATCHUP_FOCUS.txt" in script
