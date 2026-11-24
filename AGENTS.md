@@ -41,12 +41,9 @@ that **denies** the commands listed above instead of merely warning. It supersed
 advisory only, nothing actually stopped a paid command — and which also lacked `PowerShell`
 and `run_desk2` coverage.
 
-(That rule *is* distributed, contrary to what an earlier version of this section claimed:
-`.gitignore:43` `.claude/*.local.md` matches it, but the file was already tracked when
-`b070caa` added that rule, and `.gitignore` never untracks. So it reaches every ent and every
-fresh clone — it just never blocked anything. It is now redundant with the deny hook; if you
-want `b070caa`'s intent to actually take effect, it needs `git rm --cached`, as was done for
-the sqlite file in #55.)
+The old hookify file was removed once the deny hooks superseded it. Because `pwsh` is absent in cloud/Linux sandboxes, the same
+guard also exists as [`.claude/hooks/block-reasoning.py`](.claude/hooks/block-reasoning.py), registered as a second `PreToolUse` hook.
+Keep the deny patterns in the `.ps1` and `.py` files identical.
 
 **When the user HAS explicitly asked this turn, append the token `DESK_OK` to the command:**
 
@@ -125,8 +122,7 @@ echo "All 5 upgrade markers present."
 ```
 
 The house rule (never run reasoning unless explicitly asked) still applies by
-policy even though the `block-reasoning.ps1` hook is unavailable in non-PowerShell
-environments.
+policy; in non-PowerShell environments the `block-reasoning.py` twin hook enforces it (the `.ps1` hook is unavailable).
 
 See `docs/CLOUD-SANDBOX-LIMITATIONS.md` for the full list of sandbox constraints.
 
