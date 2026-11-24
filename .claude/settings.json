@@ -52,8 +52,14 @@
   },
   "permissions": {
     "deny": [
+      "Edit(./calibration/**)",
+      "Write(./calibration/**)",
+      "Edit(./data/**)",
+      "Write(./data/**)",
       "Read(./.env)",
       "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
       "Bash(git push --force *)",
       "Bash(git push -f *)"
     ]
