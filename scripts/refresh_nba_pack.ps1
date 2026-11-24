@@ -170,6 +170,12 @@ if ($needsPipelineRun) {
                 Write-Output "Generating playbook grades..."
                 Invoke-CheckedPython -Arguments @($gradesScript)
             }
+
+            $matchupFocusScript = Join-Path $nbaPipelineRepo "analysis\matchup_focus.py"
+            if (Test-Path -LiteralPath $matchupFocusScript) {
+                Write-Output "Generating daily matchup focus summary..."
+                Invoke-CheckedPython -Arguments @($matchupFocusScript, "--date", $Date)
+            }
         }
         finally {
             Pop-Location
@@ -291,16 +297,36 @@ if ($shouldPublish -and $driveRoot) {
         }
     }
 
+    $matchupFocusScript = Join-Path $nbaPipelineRepo "analysis\matchup_focus.py"
+    $matchupFocusTxt = Join-Path $nbaPipelineRepo "MATCHUP_FOCUS.txt"
+    if ((Test-Path -LiteralPath $matchupFocusScript) -and (-not (Test-Path -LiteralPath $matchupFocusTxt) -or (Get-Item -LiteralPath $matchupFocusTxt).Length -eq 0)) {
+        Write-Output "Generating daily matchup focus summary..."
+        Invoke-CheckedPython -Arguments @($matchupFocusScript, "--date", $Date)
+    }
+
+    $legacyTxtFiles = @(
+        "SAS_OKC_GAME_TOTALS.txt",
+        "SAS_OKC_INJURY_ANALYSIS.txt",
+        "SAS_OKC_TOP_PROPS.txt"
+    )
+    foreach ($legacyName in $legacyTxtFiles) {
+        foreach ($dir in @($driveToday, $driveNba)) {
+            $stalePath = Join-Path $dir $legacyName
+            if (Test-Path -LiteralPath $stalePath) {
+                Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
+                Write-Output "Removed legacy stale file: $stalePath"
+            }
+        }
+    }
+
     $txtFiles = @(
         "$nbaPipelineRepo\ALL_TOP_PROPS.txt",
         "$nbaPipelineRepo\GAME_TOTALS_PROJECTION.txt",
-        "$nbaPipelineRepo\SAS_OKC_GAME_TOTALS.txt",
-        "$nbaPipelineRepo\SAS_OKC_INJURY_ANALYSIS.txt",
-        "$nbaPipelineRepo\SAS_OKC_TOP_PROPS.txt"
+        "$nbaPipelineRepo\MATCHUP_FOCUS.txt"
     )
 
     foreach ($tf in $txtFiles) {
-        if (Test-Path -LiteralPath $tf) {
+        if ((Test-Path -LiteralPath $tf) -and ((Get-Item -LiteralPath $tf).Length -gt 0)) {
             $name = Split-Path -Leaf $tf
             Copy-Item -LiteralPath $tf -Destination (Join-Path $driveToday $name) -Force
             Copy-Item -LiteralPath $tf -Destination (Join-Path $driveNba $name) -Force
