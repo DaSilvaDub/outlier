@@ -23,7 +23,7 @@ markers) are still shown, but you should not have to hunt for an absent one.
 
 For any branch/worktree/commit search questions: re-run the report-sync and paste full (never ad-hoc git commands).
 
-Cloud/sandbox agents (Linux, no PowerShell): see AGENTS.md "Cloud / Sandbox Agents" for the equivalent procedure.
+Cloud/sandbox agents (Linux, no PowerShell): see AGENTS.md "Cloud / Sandbox Agents" for the equivalent procedure. No `pwsh`? Run only the 5 marker greps from that section (non-destructive); use its `git reset --hard` step only in a fresh clone, never in a checkout with uncommitted work.
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
