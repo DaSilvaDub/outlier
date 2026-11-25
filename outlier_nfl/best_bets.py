@@ -1393,6 +1393,9 @@ def build_best_bets(inputs: TraceInputs) -> dict[str, Any]:
         if pkey in seen_validated_players:
             pick["verdict"] = PROVISIONAL
             pick["stake_fraction"] = 0.0
+            # The correlation gate is not an Upgrade B gate: quarter-Kelly would have
+            # held this pick back too, so the Kelly comparison arm must not count it.
+            pick["kelly_stake_fraction"] = 0.0
             pick["gaps"].append("correlation:CORRELATED_SAME_PLAYER")
         else:
             seen_validated_players.add(pkey)

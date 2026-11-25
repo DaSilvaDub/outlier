@@ -681,6 +681,12 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     ]
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
+    # A correlation downgrade must clear BOTH stake fields. kelly_stake_fraction is
+    # the "what quarter-Kelly would have done" arm in outlier_nfl.trial_scorecard, and
+    # Kelly would have been held back by this same gate, so leaving it set would make
+    # the Kelly comparison count a pick nobody could bet.
+    assert provisional_same[0]["stake_fraction"] == 0.0
+    assert provisional_same[0]["kelly_stake_fraction"] == 0.0
 
 
 # --- Upgrade B win-rate gates & bug fixes -----------------------------------
