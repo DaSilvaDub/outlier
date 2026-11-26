@@ -275,7 +275,15 @@ def discover_session_credentials(
 
     Returns (bearer_token, cookie_header).
     """
-    # 1. Environment variables
+    token, cookie, _ = _discover_session_source(session_path)
+    return token, cookie
+
+
+def _discover_session_source(
+    session_path: Path | str | None,
+) -> tuple[str | None, str | None, Path | None]:
+    # 1. Environment variables. Never substitute another account's refresh token
+    # for an explicit environment credential.
     env_token = (
         os.environ.get("OUTLIER_BEARER_TOKEN")
         or os.environ.get("OUTLIER_API_TOKEN")
@@ -284,7 +292,7 @@ def discover_session_credentials(
     if env_token:
         norm = _normalize_bearer_token(env_token)
         if norm:
-            return norm, None
+            return norm, None, None
 
     # 2. File discovery paths
     candidate_paths: list[Path] = []
@@ -309,7 +317,7 @@ def discover_session_credentials(
                 text = path.read_text(encoding="utf-8").strip()
                 tok = _normalize_bearer_token(text)
                 if tok:
-                    return tok, None
+                    return tok, None, None
             else:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f, strict=False)
@@ -317,12 +325,12 @@ def discover_session_credentials(
                     tok = extract_token_from_storage_state(data)
                     cookie_hdr = build_cookie_header_from_storage_state(data)
                     if tok or cookie_hdr:
-                        return tok, cookie_hdr
+                        return tok, cookie_hdr, path
         except Exception as exc:
             logger.debug("Failed reading session candidate %s: %s", path, exc)
             continue
 
-    return None, None
+    return None, None, None
 
 
 def _record_identity(r: Any) -> str:
@@ -384,6 +392,7 @@ class OutlierNflApiClient:
         self.storage_state: dict[str, Any] | None = storage_state
         self.bearer_token: str | None = None
         self.cookie_header: str | None = None
+        self._session_path: Path | None = None
 
         if bearer_token:
             self.bearer_token = _normalize_bearer_token(bearer_token)
@@ -391,9 +400,10 @@ class OutlierNflApiClient:
             self.bearer_token = extract_token_from_storage_state(storage_state)
             self.cookie_header = build_cookie_header_from_storage_state(storage_state)
         else:
-            tok, cookie = discover_session_credentials(session_path)
+            tok, cookie, source = _discover_session_source(session_path)
             self.bearer_token = tok
             self.cookie_header = cookie
+            self._session_path = source
 
     def build_headers(self) -> dict[str, str]:
         """Build request headers with auth tokens and browser emulation."""
@@ -425,6 +435,22 @@ class OutlierNflApiClient:
 
     def fetch_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Perform HTTP GET request with retries, gzip decompression, and strict=False JSON."""
+        from outlier_nfl.session import SessionRefreshError, refresh_saved_session, token_needs_refresh
+
+        if self.bearer_token and token_needs_refresh(self.bearer_token):
+            if self._session_path is None:
+                raise AuthRequiredError("Outlier token is expired or expiring; refresh the explicit credential or sign in again.")
+            try:
+                token, state = refresh_saved_session(
+                    self._session_path, self.bearer_token, opener=self.opener,
+                    timeout=self.retry_policy.timeout_seconds,
+                )
+            except SessionRefreshError:
+                raise AuthRequiredError("Saved Outlier session expired and could not be renewed; sign in again.") from None
+            self.bearer_token = token
+            self.storage_state = state
+            self.cookie_header = build_cookie_header_from_storage_state(state)
+            logger.info("Renewed saved Outlier session before authenticated request.")
         url = self.url_for(path, params=params)
         policy = self.retry_policy
         last_error: Exception | None = None
