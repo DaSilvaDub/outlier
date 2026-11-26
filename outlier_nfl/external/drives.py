@@ -11,10 +11,10 @@ MIN_GAMES = 4
 
 def aggregate_drives(rows, season, before_week, completed):
     """Group by possession and measure scoreboard changes including conversions."""
-    drives = defaultdict(dict)
+    drives: dict[tuple[str, int], dict[int, tuple[str, str, int, int]]] = defaultdict(dict)
     for row in rows:
         game = row.get("game_id")
-        if game not in completed or row.get("season_type") != "REG":
+        if not game or game not in completed or row.get("season_type") != "REG":
             continue
         try:
             if int(row["season"]) != season or not 1 <= int(row["week"]) < before_week:
@@ -36,7 +36,7 @@ def aggregate_drives(rows, season, before_week, completed):
             offense, defense, scores[1] - scores[0], scores[3] - scores[2],
         )
 
-    games = defaultdict(dict)
+    games: dict[str, dict[tuple[str, str], Counter[tuple[int, int]]]] = defaultdict(dict)
     for (game, _), plays in drives.items():
         offense, defense, _, _ = plays[min(plays)]
         # A defensive TD and the ensuing PAT can share a fixed drive ID
@@ -64,10 +64,10 @@ def matchup_receipts(events, games, schedule, as_of, team_codes):
         cutoff = min(kickoff, as_of) if kickoff else None
         result: dict[str, Any] = {"event_id": event_id, "status": "NOT_EXECUTED"}
         records.append(result)
-        attack = defaultdict(Counter)
-        defense = defaultdict(Counter)
+        attack: dict[str, Counter[tuple[int, int]]] = defaultdict(Counter)
+        defense: dict[str, Counter[tuple[int, int]]] = defaultdict(Counter)
         samples = defaultdict(set)
-        pace = Counter()
+        pace: Counter[int] = Counter()
         for game, teams in games.items():
             row = by_id.get(game)
             if not cutoff or not row or row.get("home_score") is None or row.get("away_score") is None:
