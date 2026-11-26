@@ -1,3 +1,12 @@
+# NBA integration and controlled refresh — November 26, 2026 (Codex)
+
+- Last product commit SHA: `82c5d8521a76ede75edbd02acc9e13bf5d5b3c2d` (Outlier PR #385 merged). NBA pipeline PR #8 merged as `0ec68c5f83122d02d64d45223320748933d2fb62`.
+- Files touched this turn: `.agent-log/HANDOFF.md` conflict resolved preserving both histories; integration source code unchanged. Both local production checkouts fast-forwarded; unrelated edits preserved.
+- Verification: 101 targeted Outlier tests, three variance tests, Ruff/diff passed. Updated PR CI core/provider/typecheck all passed; NBA validate passed.
+- Controlled November 26 data-only refresh: all 269 preferred-source rows were November 24 and rejected; published awaiting_odds / zero actionable props, edges, grades, totals. Fifteen live CSV destinations verified (Desktop/Drive Fresh_Data packs, dated/rolling extra packs, Today and BETTING REPORTS companions); four filter summaries hash/count/date matched; six narratives disclose zero action or research-only totals.
+- Previous 13 live files retained in `C:\Users\dasil\Documents\Codex\2026-11-23\fi\work\nba-control-2026-11-26\before-publication` with manifest. User report: `C:\Users\dasil\Documents\Codex\2026-11-23\fi\outputs\2026-11-26_nba_refresh_verification.md` and JSON.
+- Next steps: upstream must supply current-slate aware game times, quote timestamps and sourced player/game availability. Existing feed lacks these; do not weaken gates. No live upstream collection/RotoGrinders/paid reasoning/ledger/calibration writes ran. Local Drive mounted files verified; remote upload completion unobserved. Canonical and quarantine publication holds were inactive and rechecked before Drive writes.
+
 # NBA publication audit repair — November 23, 2026 (Codex)
 
 - Last product commit SHA: `0656acd0fa6a30f440aa55b90aed27e61788cb42`; branch `fix/nba-publication-date-guard`.
