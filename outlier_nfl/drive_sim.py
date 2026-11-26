@@ -58,13 +58,17 @@ def main() -> None:
     receipt_inputs = {
         key: inputs[key] for key in ("event_id", "as_of", "source", "home", "away", "drives")
     }
-    scores = simulate(inputs["home"], inputs["away"], inputs["drives"], args.seed)
+    print(json.dumps(simulation_receipt(receipt_inputs, args.seed)))
+
+
+def simulation_receipt(inputs: dict, seed: int) -> dict:
+    scores = simulate(inputs["home"], inputs["away"], inputs["drives"], seed)
     home_mean = sum(h * n for (h, _), n in scores.items()) / TRIALS
     away_mean = sum(a * n for (_, a), n in scores.items()) / TRIALS
-    print(json.dumps({
+    return {
         "model": "regulation_drive_monte_carlo",
-        "inputs": receipt_inputs,
-        "seed": args.seed,
+        "inputs": inputs,
+        "seed": seed,
         "trials": TRIALS,
         "home_mean": home_mean,
         "away_mean": away_mean,
@@ -74,7 +78,7 @@ def main() -> None:
         "away_lead_probability": sum(n for (h, a), n in scores.items() if h < a) / TRIALS,
         "tie_probability": sum(n for (h, a), n in scores.items() if h == a) / TRIALS,
         "joint_regulation_scores": [[h, a, n] for (h, a), n in sorted(scores.items())],
-    }))
+    }
 
 
 if __name__ == "__main__":
