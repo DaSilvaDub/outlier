@@ -8526,3 +8526,12 @@ this sandbox cannot import.
 - `.env.example`: declared 5 NFL vars. Copied `nfl-game-script` skill into `.claude/skills/`.
 - Skipped: skill-listing trimming (user-level), doc dedup of CLAUDE/AGENTS (item 6).
 - Note: `tests/test_environment.py` errors pre-existing in this sandbox (structlog not installed).
+
+
+## Codex — NFL saved-session renewal, November 26, 2026
+
+- Last product commit SHA: 042bdb9675ed0b084793495e506c2d01b7c9a117. Branch: codex/fix-nfl-session-refresh. PR: https://github.com/DaSilvaDub/outlier/pull/393.
+- Files touched: outlier_nfl/api.py, outlier_nfl/session.py, tests/test_nfl_session_refresh.py, and this handoff. Canonical config/.outlier_session/storage_state.json and the matching bearer sidecar were renewed locally; credentials are ignored and never committed.
+- Result: expired saved Cognito session renewed without login/OTP; authenticated NFL schedule returned 42 events at 2026-11-26T05:24:40Z. New expiry: 2026-11-27T05:24:40Z. Sanitized evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-26_session_repair/verification.json.
+- Verification: 41 offline tests passed (refresh/API/token extraction), Ruff passed on all changed Python files, Pyright 0 errors on production modules, compilation and git diff --check passed; independent review passed. No data/calibration writes or paid reasoning calls.
+- Next steps: review/merge PR #393 so canonical scheduled NFL runs gain automatic renewal. Current canonical credentials are already repaired. A revoked/expired refresh token still requires a new login. Existing .txt or explicit/environment bearer sources retain precedence and are not silently replaced from another account.
