@@ -160,3 +160,12 @@ def test_a_missing_store_names_the_flag_for_the_other_commands_store(
     assert cli.main(_args(tmp_path)) == 3
     out = capsys.readouterr().out
     assert "--store" in out and "backfill" in out and "ratings" in out
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "999"])
+def test_a_nonsensical_draw_count_is_refused_before_any_work(tmp_path, capsys, bad) -> None:
+    args = _args(tmp_path)
+    args[args.index("--draws") + 1] = bad
+    assert cli.main(args) == 2
+    assert "--draws" in capsys.readouterr().out
+    assert not (tmp_path / "out").exists()  # nothing created, nothing fetched

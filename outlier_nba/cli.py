@@ -259,11 +259,57 @@ def run_ratings(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+MIN_SLATE_DRAWS = 1_000  # below this the per-game probabilities are mostly sampling noise
+
+
+def _slate_team_state(args: argparse.Namespace, day: str):
+    """Team state for the slate, or an exit code (3) with a hint when it is unavailable."""
+    from outlier_nba import team_run
+
+    params, source = team_run.load_params()
+    try:
+        return team_run.compute_team_state(
+            team_run.load_store_games(args.store),
+            day,
+            params,
+            source,
+            feed_receipt=team_run.load_feed_receipt(args.cache_dir),
+        )
+    except team_run.TeamStateError as exc:
+        print(f"team_state_unavailable: {exc}")
+        print(
+            f"hint: slate reads --store {args.store} and --cache-dir {args.cache_dir}; "
+            "`backfill` and `ratings` default to different locations, so pass the same "
+            "--store/--cache-dir to all three"
+        )
+        return 3
+
+
+def _slate_summary(result, report: Path, data: Path) -> str:
+    plays = [c for c in result.candidates if c.units > 0]
+    return json.dumps(
+        {
+            "day": result.day,
+            "games": len(result.projections),
+            "candidates": len(result.candidates),
+            "bets": len(plays),
+            "units": sum(c.units for c in plays),
+            "report": str(report),
+            "json": str(data),
+            "not_simulated": list(result.skipped),
+        },
+        sort_keys=True,
+    )
+
+
 def run_slate_cmd(args: argparse.Namespace) -> int:
     """Today's slate from the team model against single-book ESPN lines. No Outlier, no desk."""
-    from outlier_nba import slate_report, team_run
+    from outlier_nba import slate_report
     from outlier_nba.ingest import espn, espn_slate
 
+    if args.draws < MIN_SLATE_DRAWS:
+        print(f"refused: --draws must be at least {MIN_SLATE_DRAWS} (got {args.draws})")
+        return 2
     day = args.date or _today_et()
     out_dir = _bundle_root(args.out_dir, data_dirs.reports_dir)
     if out_dir is None:
@@ -281,28 +327,13 @@ def run_slate_cmd(args: argparse.Namespace) -> int:
     if not games:
         print(json.dumps({"no_games": day, "skipped": skipped}))
         return EXIT_OK
-    notes = espn_slate.parse_injuries(injuries_raw, espn_slate.team_names(board))
-    params, source = team_run.load_params()
-    try:
-        state = team_run.compute_team_state(
-            team_run.load_store_games(args.store),
-            day,
-            params,
-            source,
-            feed_receipt=team_run.load_feed_receipt(args.cache_dir),
-        )
-    except team_run.TeamStateError as exc:
-        print(f"team_state_unavailable: {exc}")
-        print(
-            f"hint: slate reads --store {args.store} and --cache-dir {args.cache_dir}; "
-            "`backfill` and `ratings` default to different locations, so pass the same "
-            "--store/--cache-dir to all three"
-        )
-        return 3
+    state = _slate_team_state(args, day)
+    if isinstance(state, int):
+        return state
     result = slate_report.run_slate(
         state,
         games,
-        notes,
+        espn_slate.parse_injuries(injuries_raw, espn_slate.team_names(board)),
         now=_utc_now(),
         day=day,
         cfg=slate_report.SlateConfig(n_draws=args.draws),
@@ -313,22 +344,7 @@ def run_slate_cmd(args: argparse.Namespace) -> int:
     for name, payload in (("scoreboard", board), ("injuries", injuries_raw)):
         raw = out_dir / f"espn_{name}_{day}_{slate_report.run_stamp(result)}.json"
         raw.write_text(json.dumps(payload), encoding="utf-8")
-    plays = [c for c in result.candidates if c.units > 0]
-    print(
-        json.dumps(
-            {
-                "day": day,
-                "games": len(result.projections),
-                "candidates": len(result.candidates),
-                "bets": len(plays),
-                "units": sum(c.units for c in plays),
-                "report": str(report),
-                "json": str(data),
-                "not_simulated": list(result.skipped),
-            },
-            sort_keys=True,
-        )
-    )
+    print(_slate_summary(result, report, data))
     return EXIT_OK
 
 
