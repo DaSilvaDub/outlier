@@ -6,6 +6,7 @@ import json
 import math
 import random
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 TRIALS = 50_000
@@ -48,12 +49,21 @@ def main() -> None:
     for key in ("event_id", "as_of", "source"):
         if not isinstance(inputs.get(key), str) or not inputs[key].strip():
             parser.error(f"Missing input provenance: {key}")
+    try:
+        as_of = datetime.fromisoformat(inputs["as_of"])
+    except ValueError:
+        parser.error("as_of must be an ISO timestamp with a UTC offset.")
+    if as_of.utcoffset() is None:
+        parser.error("as_of must be an ISO timestamp with a UTC offset.")
+    receipt_inputs = {
+        key: inputs[key] for key in ("event_id", "as_of", "source", "home", "away", "drives")
+    }
     scores = simulate(inputs["home"], inputs["away"], inputs["drives"], args.seed)
     home_mean = sum(h * n for (h, _), n in scores.items()) / TRIALS
     away_mean = sum(a * n for (_, a), n in scores.items()) / TRIALS
     print(json.dumps({
         "model": "regulation_drive_monte_carlo",
-        "inputs": inputs,
+        "inputs": receipt_inputs,
         "seed": args.seed,
         "trials": TRIALS,
         "home_mean": home_mean,
