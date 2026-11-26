@@ -36,7 +36,7 @@ param(
     [string]$ScratchOut = "",
     [string]$PropSource = "",
     [string]$Registry = "",
-    [string]$NbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline",
+    [string]$NbaPipelineRepo = $(if ($env:NBA_PIPELINE_REPO) { $env:NBA_PIPELINE_REPO } else { "C:\Users\dasil\Dev\GitHub\nba-props-pipeline" }),
     [string]$NbaDataRoot = "",
     [string]$AvailabilityReport = "",
     [string]$AvailabilityReportUrl = "",
