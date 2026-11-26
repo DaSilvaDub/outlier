@@ -1,3 +1,10 @@
+# NBA `slate` command and hardening — November 26, 2026 (Claude)
+
+- Merged: PR #394 (`6c34600`) added `python -m outlier_nba.cli slate`: 50k-draw team-model simulation per game, single-book ESPN/DraftKings lines, twelve gates (F1-F12, this command's own, thresholds in `SlateConfig`), quarter-Kelly under 1.0/1.5/3.0u caps, nine-section report + JSON under `~/outlier_nba_data/reports`. Follow-up PR (branch `claude/slate-cli-hardening`): `--draws` must be >= 1000 (exit 2), `run_slate_cmd` split into `_slate_team_state` / `_slate_summary`.
+- Docs: `docs/nba/slate-report.md`. Model is SHADOW/UNPROMOTED; it lost to the closing market in the repo backtest, so "pass" is a normal verdict. No Outlier call, no reasoning model, no calibration/data writes.
+- Verification: 592 NBA tests passed at merge; ruff + mypy clean on changed files; live ESPN smoke run worked (9 games, 0 bets because games had tipped). Pre-existing, untouched: 18 ruff errors elsewhere, 2 pyright errors in `capture --only-if-due`.
+- Next steps: `slate` defaults to `~/outlier_nba_data/{store,cache}` while `backfill`/`ratings` default elsewhere, so pass the same `--store`/`--cache-dir` to share. Outlier odds/props need a fresh login (OTP, user-only). No player-level model exists.
+
 # NBA integration and controlled refresh — November 26, 2026 (Codex)
 
 - Last product commit SHA: `82c5d8521a76ede75edbd02acc9e13bf5d5b3c2d` (Outlier PR #385 merged). NBA pipeline PR #8 merged as `0ec68c5f83122d02d64d45223320748933d2fb62`.
