@@ -5,6 +5,7 @@
     python -m outlier_nba.cli backfill --stage scoreboard|summary|build [--seasons A:B]
     python -m outlier_nba.cli ratings [--date D] [--no-refresh]   # refresh results, fit as of D
     python -m outlier_nba.cli run     [--date D] [--nba-dir DIR]  # price the slate, SHADOW only
+    python -m outlier_nba.cli slate   [--date D] [--draws N]      # 9-part report vs ESPN/DK lines
     python -m outlier_nba.cli backtest [--seasons A:B] [--tune-season S]
 
 Exit codes: 0 OK, 1 auth/IO failure, 3 a required stage did not pass (publication
@@ -190,39 +191,48 @@ def _today_et() -> str:
     return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
 
 
-def run_ratings(args: argparse.Namespace) -> int:
-    """Refresh recent results, rebuild the store, fit the team model as of ``--date``."""
+def _refresh_store(args: argparse.Namespace, day: str) -> int | None:
+    """Refresh recent ESPN results and install the rebuilt store; an exit code means stop."""
     from datetime import date
 
-    from outlier_nba import team_run
     from outlier_nba.ingest import espn
+
+    cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
+    try:
+        refreshed = espn.refresh_recent(cache, date.fromisoformat(day))
+    except espn.BlockedError as exc:
+        print(f"blocked: {exc} (stopped; the existing store is used as is)")
+        refreshed = {}
+    with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
+        built = Path(tmp) / "nba_games.sqlite3"
+        espn.build_store(cache, built)
+        if built.exists() and not args.store.exists():
+            held = espn.store_counts(built)["games"]
+            if held < espn.MIN_BOOTSTRAP_GAMES:
+                # a few refreshed days are not a history; installing them would mask the gap
+                print(
+                    f"history_missing: the cache holds {held} games and there is no "
+                    f"installed store (need {espn.MIN_BOOTSTRAP_GAMES}); {espn.BOOTSTRAP_HINT}"
+                )
+                return 3
+        try:
+            espn.install_store(built, args.store)
+        except espn.StoreRegressionError as exc:
+            # a cleared or partial cache must never shrink the installed history
+            print(f"store_not_replaced: {exc}")
+    logger.info("nba_ratings_refreshed", **refreshed)
+    return None
+
+
+def run_ratings(args: argparse.Namespace) -> int:
+    """Refresh recent results, rebuild the store, fit the team model as of ``--date``."""
+    from outlier_nba import team_run
 
     day = args.date or _today_et()
     if not args.no_refresh:
-        cache = espn.EspnCache(args.cache_dir or espn.default_cache_dir())
-        try:
-            refreshed = espn.refresh_recent(cache, date.fromisoformat(day))
-        except espn.BlockedError as exc:
-            print(f"blocked: {exc} (stopped; the existing store is used as is)")
-            refreshed = {}
-        with tempfile.TemporaryDirectory(prefix="nba-store-") as tmp:
-            built = Path(tmp) / "nba_games.sqlite3"
-            espn.build_store(cache, built)
-            if built.exists() and not args.store.exists():
-                held = espn.store_counts(built)["games"]
-                if held < espn.MIN_BOOTSTRAP_GAMES:
-                    # a few refreshed days are not a history; installing them would mask the gap
-                    print(
-                        f"history_missing: the cache holds {held} games and there is no "
-                        f"installed store (need {espn.MIN_BOOTSTRAP_GAMES}); {espn.BOOTSTRAP_HINT}"
-                    )
-                    return 3
-            try:
-                espn.install_store(built, args.store)
-            except espn.StoreRegressionError as exc:
-                # a cleared or partial cache must never shrink the installed history
-                print(f"store_not_replaced: {exc}")
-        logger.info("nba_ratings_refreshed", **refreshed)
+        stop = _refresh_store(args, day)
+        if stop is not None:
+            return stop
     params, source = team_run.load_params()
     try:
         state = team_run.compute_team_state(
@@ -246,6 +256,79 @@ def run_ratings(args: argparse.Namespace) -> int:
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
     )
     print(json.dumps(summary, sort_keys=True))
+    return EXIT_OK
+
+
+def run_slate_cmd(args: argparse.Namespace) -> int:
+    """Today's slate from the team model against single-book ESPN lines. No Outlier, no desk."""
+    from outlier_nba import slate_report, team_run
+    from outlier_nba.ingest import espn, espn_slate
+
+    day = args.date or _today_et()
+    out_dir = _bundle_root(args.out_dir, data_dirs.reports_dir)
+    if out_dir is None:
+        return 2
+    if not args.no_refresh:
+        stop = _refresh_store(args, day)
+        if stop is not None:
+            return stop
+    try:
+        board, injuries_raw = espn_slate.fetch_feeds(day)
+    except espn.EspnError as exc:  # BlockedError (403/429) is one: stop rather than retry
+        print(f"blocked: slate feed unavailable ({exc}); nothing written")
+        return 4
+    games, skipped = espn_slate.parse_slate(board)
+    if not games:
+        print(json.dumps({"no_games": day, "skipped": skipped}))
+        return EXIT_OK
+    notes = espn_slate.parse_injuries(injuries_raw, espn_slate.team_names(board))
+    params, source = team_run.load_params()
+    try:
+        state = team_run.compute_team_state(
+            team_run.load_store_games(args.store),
+            day,
+            params,
+            source,
+            feed_receipt=team_run.load_feed_receipt(args.cache_dir),
+        )
+    except team_run.TeamStateError as exc:
+        print(f"team_state_unavailable: {exc}")
+        print(
+            f"hint: slate reads --store {args.store} and --cache-dir {args.cache_dir}; "
+            "`backfill` and `ratings` default to different locations, so pass the same "
+            "--store/--cache-dir to all three"
+        )
+        return 3
+    result = slate_report.run_slate(
+        state,
+        games,
+        notes,
+        now=_utc_now(),
+        day=day,
+        cfg=slate_report.SlateConfig(n_draws=args.draws),
+        skipped=tuple(f"event {e}: unresolved team" for e in skipped),
+        injuries_verified=espn_slate.injury_feed_usable(injuries_raw),
+    )
+    report, data = slate_report.write_outputs(result, out_dir)
+    for name, payload in (("scoreboard", board), ("injuries", injuries_raw)):
+        raw = out_dir / f"espn_{name}_{day}_{slate_report.run_stamp(result)}.json"
+        raw.write_text(json.dumps(payload), encoding="utf-8")
+    plays = [c for c in result.candidates if c.units > 0]
+    print(
+        json.dumps(
+            {
+                "day": day,
+                "games": len(result.projections),
+                "candidates": len(result.candidates),
+                "bets": len(plays),
+                "units": sum(c.units for c in plays),
+                "report": str(report),
+                "json": str(data),
+                "not_simulated": list(result.skipped),
+            },
+            sort_keys=True,
+        )
+    )
     return EXIT_OK
 
 
@@ -580,6 +663,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     rn.add_argument(
         "--no-ledger", action="store_true", help="bundle only; do not record in the ledger"
     )
+    sl = sub.add_parser(
+        "slate", help="today's slate: simulate, price single-book ESPN lines, gate, write a report"
+    )
+    sl.add_argument("--date", default=None, help="slate date YYYY-MM-DD (default: today, ET)")
+    sl.add_argument("--draws", type=int, default=50_000, help="simulations per game")
+    sl.add_argument("--no-refresh", action="store_true", help="skip the ESPN results refresh")
+    sl.add_argument("--store", type=Path, default=None, help="default: <data dir>/store")
+    sl.add_argument("--cache-dir", type=Path, default=None, help="default: <data dir>/cache")
+    sl.add_argument("--out-dir", type=Path, default=None, help="default: <data dir>/reports")
     pm = sub.add_parser("promote", help="build promotion evidence from settled shadow outcomes")
     pm.add_argument("--db", type=Path, default=paths.FEEDBACK_DB_PATH)
     pm.add_argument("--apply", action="store_true", help="let the evaluator write the decision")
@@ -637,6 +729,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_ctg_sync(args)
     if args.command == "ratings":
         return run_ratings(args)
+    if args.command == "slate":
+        try:
+            args.store = args.store or data_dirs.store_path()
+            args.cache_dir = args.cache_dir or data_dirs.espn_cache_dir()
+        except data_dirs.NonDurableLocationError as exc:
+            print(f"refused: {exc}")
+            return 2
+        return run_slate_cmd(args)
     if args.command == "run":
         if args.fixture and not args.no_ledger and args.db == paths.FEEDBACK_DB_PATH:
             print("--fixture requires an explicit non-default --db (or --no-ledger)")
