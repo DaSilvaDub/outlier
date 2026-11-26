@@ -54,6 +54,9 @@ def refresh(
     report_url: str | None = None,
     runner=None,
 ) -> int:
+    pipeline_repo = pipeline_repo.resolve()
+    output = output.resolve()
+    report_pdf = report_pdf.resolve() if report_pdf else None
     date.fromisoformat(slate_date)
     output.mkdir(parents=True, exist_ok=True)
     runner = runner or subprocess.run
