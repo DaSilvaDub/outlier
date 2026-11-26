@@ -36,6 +36,10 @@ param(
     [string]$ScratchOut = "",
     [string]$PropSource = "",
     [string]$Registry = "",
+    [string]$NbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline",
+    [string]$NbaDataRoot = "",
+    [string]$AvailabilityReport = "",
+    [string]$AvailabilityReportUrl = "",
     [switch]$ForceDrive,
     [switch]$SkipInjuryFilter,
     [switch]$UseRotoGrinders,
@@ -46,7 +50,6 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "publication_guards.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$nbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline"
 $python = "C:\Users\dasil\AppData\Local\Programs\Python\Python313\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
     $python = "python"
@@ -122,69 +125,24 @@ $propEdgeSources = @(
     "$nbaPipelineRepo\output\PROP EDGES"
 )
 
-$needsPipelineRun = -not $SkipPipeline
-
-if ($needsPipelineRun) {
-    if (Test-Path -LiteralPath $nbaPipelineRepo) {
-        Write-Output "Running NBA props pipeline updates in $nbaPipelineRepo..."
-        Push-Location $nbaPipelineRepo
-        try {
-            # 1. Update lineups and injury reports
-            $lineupsScript = Join-Path $nbaPipelineRepo "scripts\refresh_lineups_injuries.ps1"
-            if (Test-Path -LiteralPath $lineupsScript) {
-                Write-Output "Refreshing NBA lineups and injuries..."
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $lineupsScript -Date $Date -Wait
-                if ($LASTEXITCODE -ne 0) { throw "refresh_lineups_injuries.ps1 failed with exit code $LASTEXITCODE" }
-            }
-
-            # 2. Run data watcher check cycle
-            $watcherScript = Join-Path $nbaPipelineRepo "pipeline\nba_data_watcher.py"
-            if (Test-Path -LiteralPath $watcherScript) {
-                Write-Output "Running nba_data_watcher --once..."
-                Invoke-CheckedPython -Arguments @($watcherScript, "--once")
-            }
-
-            # 3. Generate updated prop edges and playbook grades (RG-free by default while RG is paused)
-            $edgesScript = Join-Path $nbaPipelineRepo "pipeline\generate_prop_edges.py"
-            if (Test-Path -LiteralPath $edgesScript) {
-                $edgeArgs = @($edgesScript)
-                if (-not $UseRotoGrinders) {
-                    $edgeArgs += "--no-rg"
-                    Write-Output "Generating prop edges (RG-free mode: --no-rg)..."
-                } else {
-                    Write-Output "Generating prop edges (RotoGrinders enabled via -UseRotoGrinders)..."
-                }
-                Invoke-CheckedPython -Arguments $edgeArgs
-            }
-
-            $gradesScript = Join-Path $nbaPipelineRepo "pipeline\generate_playbook_grades.py"
-            if (Test-Path -LiteralPath $gradesScript) {
-                Write-Output "Generating playbook grades..."
-                Invoke-CheckedPython -Arguments @($gradesScript)
-            }
-
-            $matchupFocusScript = Join-Path $nbaPipelineRepo "analysis\matchup_focus.py"
-            if (Test-Path -LiteralPath $matchupFocusScript) {
-                Write-Output "Generating daily matchup focus summary..."
-                Invoke-CheckedPython -Arguments @($matchupFocusScript, "--date", $Date)
-            }
-        }
-        catch {
-            Write-Warning "NBA upstream refresh failed; publication will still enforce current quotes: $_"
-        }
-        finally {
-            Pop-Location
-        }
-    }
-    else {
-        Write-Warning "NBA pipeline repo not found at $nbaPipelineRepo; skipping live pipeline run."
-    }
-}
-
 $exportCsv = if ($ScratchOut) { $ScratchOut } else { Join-Path $repoRoot "data\NBA\exports\nba_only.csv" }
 $exportDir = Split-Path -Parent $exportCsv
-if (-not (Test-Path -LiteralPath $exportDir)) {
-    New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+$upstreamDir = Join-Path $exportDir "upstream_$Date"
+if (-not $SkipPipeline) {
+    if (-not $NbaDataRoot) {
+        $NbaDataRoot = if ($env:NBA_ROOT) { $env:NBA_ROOT } elseif ($driveRoot) { Join-Path $driveRoot "Sports_Analytics\01_Active\NBA_Active" } else { Join-Path $nbaPipelineRepo "output" }
+    }
+    $upstreamArgs = @( (Join-Path $repoRoot "scripts\refresh_nba_upstream.py"), "--pipeline-repo", $nbaPipelineRepo, "--date", $Date, "--output-dir", $upstreamDir, "--data-root", $NbaDataRoot )
+    if ($UseRotoGrinders) { $upstreamArgs += "--use-rg" }
+    if ($AvailabilityReport) { $upstreamArgs += @("--report-pdf", $AvailabilityReport) }
+    if ($AvailabilityReportUrl) { $upstreamArgs += @("--report-url", $AvailabilityReportUrl) }
+    try { Invoke-CheckedPython -Arguments $upstreamArgs }
+    catch { Write-Warning "Upstream evidence refresh failed. The publication gates will check the collected inputs." }
+    # An attempted current refresh always selects its own output, never a retained Drive feed.
+    $PropSource = Join-Path $upstreamDir "prop_edges_latest.csv"
+    if (-not $Registry) { $Registry = Join-Path $upstreamDir "nba_availability_registry.json" }
+    $propEdgeSources = @($upstreamDir)
 }
 
 $exportScript = Join-Path $repoRoot "scripts\export_nba_extra_pack.py"
@@ -254,6 +212,7 @@ if (-not $ScratchOut) {
 
 if ($shouldPublish -and $driveRoot) {
     Assert-PublicationHold $repoRoot
+    Assert-PublicationHold "C:\Users\dasil\Dev\GitHub\outlier"
     $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
     $driveNba = Join-Path $driveRoot "BETTING REPORTS\NBA"
@@ -279,13 +238,6 @@ if ($shouldPublish -and $driveRoot) {
         Copy-VerifiedNbaCsv $csv (Join-Path $driveNba "${name}_${Date}.csv")
     }
     Copy-VerifiedNbaCsv (Join-Path $exportDir "nba_prop_edges.csv") (Join-Path $driveNba "nba_prop_edges_latest.csv")
-
-    $matchupFocusScript = Join-Path $nbaPipelineRepo "analysis\matchup_focus.py"
-    $matchupFocusTxt = Join-Path $nbaPipelineRepo "MATCHUP_FOCUS.txt"
-    if ((Test-Path -LiteralPath $matchupFocusScript) -and (-not (Test-Path -LiteralPath $matchupFocusTxt) -or (Get-Item -LiteralPath $matchupFocusTxt).Length -eq 0)) {
-        Write-Output "Generating daily matchup focus summary..."
-        Invoke-CheckedPython -Arguments @($matchupFocusScript, "--date", $Date)
-    }
 
     $legacyTxtFiles = @(
         "SAS_OKC_GAME_TOTALS.txt",

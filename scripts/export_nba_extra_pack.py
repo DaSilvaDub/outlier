@@ -67,6 +67,12 @@ FIELDNAMES = [
     "odds_timestamp",
     "odds_as_of",
     "quote_as_of",
+    "provider_event_id",
+    "provider",
+    "source_name",
+    "bookmaker",
+    "captured_at_utc",
+    "quote_timestamp_basis",
 ]
 
 CANDIDATE_SOURCES = [
@@ -221,6 +227,8 @@ def publication_rejection(
     for key in ("stale", "odds_stale", "quote_stale", "is_stale"):
         if str(row.get(key, "")).strip().lower() in {"true", "1", "yes"}:
             return "stale_odds"
+    if str(row.get("provider", "")).strip().casefold() == "bettingpros":
+        return "consensus_price"
     verified_quote_time = False
     for key in ("quote_timestamp", "odds_timestamp", "odds_as_of", "quote_as_of"):
         if row.get(key):
