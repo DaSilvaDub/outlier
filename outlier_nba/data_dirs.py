@@ -60,3 +60,22 @@ def team_bundle_root() -> Path:
 def capture_bundle_root() -> Path:
     """``--nba-dir`` for ``capture``; kept apart from the model runs."""
     return bundles_dir() / "capture"
+
+
+def reports_dir() -> Path:
+    """Where ``slate`` writes its report and raw feeds (durable, outside the repo and temp)."""
+    return _checked(data_dir() / "reports")
+
+
+def store_path() -> Path:
+    """The games store ``slate`` reads by default.
+
+    ``backfill`` and ``ratings`` default elsewhere (the repo's ``data/NBA/store``), so pass
+    the same ``--store`` to every command that should share one store.
+    """
+    return _checked(data_dir() / "store" / "nba_games.sqlite3")
+
+
+def espn_cache_dir() -> Path:
+    """The ESPN response cache ``slate`` uses by default (pass ``--cache-dir`` to share one)."""
+    return _checked(data_dir() / "cache" / "espn_cache")
