@@ -112,6 +112,29 @@ def test_under_uses_exact_under_quote():
     assert exp.publication_eligible(row, DATE, NOW)
 
 
+def test_bettingpros_requires_individual_book_and_selected_offer():
+    row = _row(
+        provider="bettingpros",
+        source_name="FanDuel",
+        provider_book="FanDuel",
+        provider_event_id="123",
+        provider_quote_id="456",
+        over_odds="-115",
+        recommended_side="OVER",
+        recommended_odds="-115",
+    )
+    assert exp.publication_eligible(row, DATE, NOW)
+    for field in (
+        "provider_event_id",
+        "provider_quote_id",
+        "provider_book",
+        "over_odds",
+        "quote_timestamp",
+    ):
+        assert not exp.publication_eligible({**row, field: ""}, DATE, NOW)
+    assert not exp.publication_eligible({**row, "source_name": "BettingPros Consensus"}, DATE, NOW)
+
+
 def test_empty_overwrites_old_pack_and_status_before_fail_on_empty(tmp_path):
     src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
     out.write_text("yesterdays stale rows")
