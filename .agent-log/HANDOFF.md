@@ -8507,3 +8507,12 @@ this sandbox cannot import.
 - `.env.example`: declared 5 NFL vars. Copied `nfl-game-script` skill into `.claude/skills/`.
 - Skipped: skill-listing trimming (user-level), doc dedup of CLAUDE/AGENTS (item 6).
 - Note: `tests/test_environment.py` errors pre-existing in this sandbox (structlog not installed).
+
+
+## Codex — Packers at Rams research, November 25, 2026
+
+- Last report commit SHA: fab968b (source: 87608a22be77cefb420c08549df7aaa7dbf508ed; sync nonce 791ba5df534d4022).
+- Files touched: reports/NFL/2026-11-25_GB_at_LAR_Research.md and this handoff. No product code changes.
+- Execution: live isolated NFL run failed after five schedule HTTP403 attempts; saved session token expired 2026-11-25T15:07:45Z. Separate nflverse tape and usage refresh succeeded. Raw ranking diagnostics are research only; broad-inactive outputs quarantined.
+- Evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-25_GB_at_LAR, including execution.log, usage.json, refreshed tape, screened research, report, verification.json. Roster text check [], independent review passed, git diff --check passed. No paid reasoning, Monte Carlo, validated wagers, or stakes.
+- Next steps: refresh Outlier session, then rerun the isolated pipeline with actual execution time and normal after-kickoff publication restrictions. Separately repair ranking inactive-count boosts, team-QB baseline, assumed reception/target metrics, and overstated verification/tier labels on a feature branch before treating them as calibrated.
