@@ -4,9 +4,18 @@
   across all supported sports: NFL, NBA, and NCAA (CFB).
 
 .PARAMETER Force
-  Re-register / overwrite existing scheduled tasks.
+  Re-register / overwrite existing scheduled tasks. Run once with -Force to move
+  tasks created by an older version of this script onto the settings below.
+
+.PARAMETER WakeToRun
+  Also let each task wake the PC from sleep at its scheduled time. Off by default.
 
 .NOTES
+  Missed runs: every task starts as soon as possible after a missed start (PC asleep,
+  off or logged out at the scheduled time) and runs on battery power. Tasks created with
+  plain `schtasks /Create` have neither setting, so a PC that was asleep or unplugged at
+  12:30 and 17:30 silently skipped that day's NBA refresh (no prop edges for the slate).
+
   Tasks registered:
     - Sports_NFL_Pack_Refresh_1130  (Daily 11:30 AM ET) -> run_nfl_pack_refresh.ps1
     - Sports_NFL_Pack_Refresh_1630  (Daily 04:30 PM ET) -> run_nfl_pack_refresh.ps1
@@ -17,7 +26,8 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    [switch]$WakeToRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,17 +82,31 @@ foreach ($t in $tasks) {
         continue
     }
 
-    $actionCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-    if ($Force) {
-        & schtasks /Create /TN $t.Name /SC DAILY /ST $t.Time /RL LIMITED /TR $actionCmd /F 2>&1 | Out-Null
-    } else {
-        & schtasks /Create /TN $t.Name /SC DAILY /ST $t.Time /RL LIMITED /TR $actionCmd 2>&1 | Out-Null
+    $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+    if ($existing -and -not $Force) {
+        $missed = $existing.Settings.StartWhenAvailable
+        $battery = -not $existing.Settings.DisallowStartIfOnBatteries
+        Write-Output " [EXISTS] $($t.Name) (catch up after missed run: $missed; runs on battery: $battery; pass -Force to update)"
+        continue
     }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Output " [OK] Registered: $($t.Name) at $($t.Time) Daily"
-    } else {
-        Write-Output " [EXISTS/STATUS] $($t.Name) (exit code $LASTEXITCODE; pass -Force to overwrite)"
+
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" `
+        -WorkingDirectory $repoRoot
+    $trigger = New-ScheduledTaskTrigger -Daily -At $t.Time
+    $settingsArgs = @{
+        StartWhenAvailable         = $true
+        AllowStartIfOnBatteries    = $true
+        DontStopIfGoingOnBatteries = $true
+        MultipleInstances          = "IgnoreNew"
+        ExecutionTimeLimit         = (New-TimeSpan -Hours 2)
     }
+    if ($WakeToRun) { $settingsArgs.WakeToRun = $true }
+    $settings = New-ScheduledTaskSettingsSet @settingsArgs
+
+    Register-ScheduledTask -TaskName $t.Name -Action $action -Trigger $trigger `
+        -Settings $settings -Description $t.Comment -RunLevel Limited -Force | Out-Null
+    Write-Output " [OK] Registered: $($t.Name) at $($t.Time) Daily (catches up after a missed run)"
 }
 
 Write-Output "All daily pack refresh automations verified."
