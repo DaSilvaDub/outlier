@@ -8535,3 +8535,10 @@ this sandbox cannot import.
 - Result: expired saved Cognito session renewed without login/OTP; authenticated NFL schedule returned 42 events at 2026-11-26T05:24:40Z. New expiry: 2026-11-27T05:24:40Z. Sanitized evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-26_session_repair/verification.json.
 - Verification: 41 offline tests passed (refresh/API/token extraction), Ruff passed on all changed Python files, Pyright 0 errors on production modules, compilation and git diff --check passed; independent review passed. No data/calibration writes or paid reasoning calls.
 - Next steps: review/merge PR #393 so canonical scheduled NFL runs gain automatic renewal. Current canonical credentials are already repaired. A revoked/expired refresh token still requires a new login. Existing .txt or explicit/environment bearer sources retain precedence and are not silently replaced from another account.
+
+
+## NFL pipeline run standard
+
+- Base: 6c34600714e725475f3eaa56e8d9905f3eb38566. Sync nonce: 52dceb66de354dc1.
+- Files: shared NFL pipeline skill, AGENTS.md, CLAUDE.md, GEMINI.md, GROK.md.
+- Next steps: review the reporting and Desktop bundle standard. A reusable V2 drive simulator was unavailable in the synced branch.
