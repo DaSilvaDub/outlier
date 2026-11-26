@@ -8554,3 +8554,9 @@ this sandbox cannot import.
 - Base d28094816a1ac585ff441900e1bd16683a9f25d9, sync OK nonce 37b3ce9d67d247c7.
 - Files: NFL PBP adapter, drive simulator, pipeline, offline integration test, runbook.
 - Next: check a live nflverse run and backtest before publication. Artifact is research-only regulation.
+
+## NFL Master Pipeline V2 standard
+
+- Last implementation commit: ac5c42c1e8e8f81db95c5b82c64e6d5ba6f9af3b
+- Files: shared NFL master pipeline skill and the four agent entry-point documents.
+- Next: review the PR. The historical drive simulator remains research-only regulation. Verify the V2 execution gaps in the next run.

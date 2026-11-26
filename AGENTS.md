@@ -191,4 +191,4 @@ HOUSE RULE — MLB PROP EXTRACTION & DRIVE SYNC INVARIANTS:
 
 ## NFL pipeline requests
 
-When asked to run the NFL pipeline, follow the shared [NFL pipeline runbook](.agents/skills/nfl-master-betting-pipeline/SKILL.md) for execution, the six-section report, and the verified Desktop bundle. This applies to full slates, named matchups, kickoff windows, and pre-lock refreshes.
+When asked to run the NFL pipeline, follow the shared [NFL pipeline runbook](.agents/skills/nfl-master-betting-pipeline/SKILL.md) for V2.0 execution, the nine-section Section 14 report, and the verified Desktop bundle. The default covers the remaining Eastern Tuesday-through-Monday betting week. Respect explicit slate, matchup, kickoff window, and pre-lock scope.
