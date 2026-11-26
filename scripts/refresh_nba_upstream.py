@@ -139,20 +139,31 @@ def refresh(
                 edges = json.loads((output / "prop_edges_latest.json").read_text(encoding="utf-8"))
                 if edges.get("slate_date") != slate_date or not isinstance(edges.get("rows"), list):
                     raise RuntimeError("edges: requested slate mismatch or invalid rows")
+                status["source_lines"] = edges.get("hardrock_total_lines", 0)
+                status["matched_rows"] = len(edges["rows"])
         edges = json.loads((output / "prop_edges_latest.json").read_text(encoding="utf-8"))
-        status["status"] = "inputs_collected" if edges.get("rows") else "awaiting_odds"
+        status["status"] = (
+            "inputs_collected"
+            if edges.get("rows")
+            else "no_matched_edges"
+            if status.get("source_lines")
+            else "awaiting_odds"
+        )
         code = 0
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         # Fixed diagnostic only: avoid persisting exceptions containing request URLs.
         error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
-        if name == "availability" and edges.get("rows"):
+        if name == "availability" and (edges.get("rows") or status.get("source_lines")):
             # Valid current quotes can remain research inputs; the availability
             # filter will stand them down using the explicit unknown registry.
             (output / "nba_availability_registry.json").write_text(
                 json.dumps({"slate_date": slate_date, "teams": {}, "error": error}),
                 encoding="utf-8",
             )
-            status.update(status="awaiting_availability", error=error)
+            status.update(
+                status="awaiting_availability" if edges.get("rows") else "no_matched_edges",
+                error=error,
+            )
         else:
             empty_inputs(output, slate_date, error)
             status.update(status="awaiting_odds", error=error)
