@@ -385,6 +385,7 @@ class NflPipeline:
 
         # Load external advanced metrics for the season
         # Offline fixture replays never touch the network.
+        drive_history: dict = {}
         external_metrics: list[dict[str, Any]] = []
         phase_records: list[dict[str, Any]] = []
         # First week whose data is not admissible at ctx.as_of_utc (None: no verified cutoff).
@@ -411,6 +412,7 @@ class NflPipeline:
                                 else ExternalClient(cache_dir=self.nfl_dir / "cache" / "external")),
                     )
                     external_metrics = loaded.records
+                    drive_history = loaded.drives
                     phase_records = loaded.phase_records
                     before_week = loaded.before_week
                     sources.extend(loaded.sources)
@@ -456,6 +458,16 @@ class NflPipeline:
                 dests.append(norm / f"{stem}_latest.json")
             writer.stage_json(f"{stem}.json", payload, publish=dests)
 
+        from outlier_nfl.external.drives import matchup_receipts
+
+        writer.stage_json("nfl_drive_simulations.json", {
+            "run_id": run_id,
+            "records": matchup_receipts(
+                slate_events, drive_history,
+                [row for row in external_metrics if row.get("source") == "schedule"],
+                ctx.as_of_utc, _event_team_codes,
+            ),
+        })
         writer.stage_json("raw/schedule.json", schedule_raw)
         writer.stage_json("raw/event_markets.json", raw_markets)
         writer.stage_json("raw/player_props.json", raw_props)
@@ -811,7 +823,7 @@ class NflPipeline:
             errors.append(f"alt floors failed: {exc}")
 
         # =====================================================================
-        # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
+        # 8 & 9. REQUIRED â€” Calculate Matchup Advantage Rankings & Generate Reports
         # =====================================================================
         matchup_rankings_summary: dict[str, Any] = {}
         try:
@@ -925,7 +937,7 @@ class NflPipeline:
         }
 
         report_root = Path(reports_dir) if reports_dir is not None else Path("reports/NFL")
-        # Optional Game Script Generation — one markdown file per matchup
+        # Optional Game Script Generation â€” one markdown file per matchup
         if generate_game_script and all_game_lines:
             try:
                 from scripts.nfl_game_script import NflGameScriptGenerator

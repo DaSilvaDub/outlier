@@ -8549,3 +8549,8 @@ this sandbox cannot import.
 - Base: 6c34600714e725475f3eaa56e8d9905f3eb38566. Sync nonce: 52dceb66de354dc1.
 - Files: shared NFL pipeline skill, AGENTS.md, CLAUDE.md, GEMINI.md, GROK.md.
 - Next steps: review the reporting and Desktop bundle standard. A reusable V2 drive simulator was unavailable in the synced branch.
+
+## NFL automatic drive stage
+- Base d28094816a1ac585ff441900e1bd16683a9f25d9, sync OK nonce 37b3ce9d67d247c7.
+- Files: NFL PBP adapter, drive simulator, pipeline, offline integration test, runbook.
+- Next: check a live nflverse run and backtest before publication. Artifact is research-only regulation.
