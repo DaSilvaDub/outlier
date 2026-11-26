@@ -145,7 +145,7 @@ def refresh(
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         # Fixed diagnostic only: avoid persisting exceptions containing request URLs.
         error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
-        if name == "availability":
+        if name == "availability" and edges.get("rows"):
             # Valid current quotes can remain research inputs; the availability
             # filter will stand them down using the explicit unknown registry.
             (output / "nba_availability_registry.json").write_text(
