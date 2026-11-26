@@ -8516,3 +8516,12 @@ this sandbox cannot import.
 - Result: expired saved Cognito session renewed without login/OTP; authenticated NFL schedule returned 42 events at 2026-11-26T05:24:40Z. New expiry: 2026-11-27T05:24:40Z. Sanitized evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-26_session_repair/verification.json.
 - Verification: 41 offline tests passed (refresh/API/token extraction), Ruff passed on all changed Python files, Pyright 0 errors on production modules, compilation and git diff --check passed; independent review passed. No data/calibration writes or paid reasoning calls.
 - Next steps: review/merge PR #393 so canonical scheduled NFL runs gain automatic renewal. Current canonical credentials are already repaired. A revoked/expired refresh token still requires a new login. Existing .txt or explicit/environment bearer sources retain precedence and are not silently replaced from another account.
+
+
+## Codex — PR #393 review and merge, November 26, 2026
+
+- Last reviewed commit SHA: 7b011f9edbd3395e8328645a8ea5087ac5d1c59a. Merged PR: https://github.com/DaSilvaDub/outlier/pull/393. Merge SHA: 323bd0da5c89459fa027b2a952cd2dba85331a6b.
+- Files touched this turn: this handoff only; reviewed outlier_nfl/api.py, outlier_nfl/session.py, tests/test_nfl_session_refresh.py. No product changes required.
+- Verification: independent review found no blocking issues; 41 focused offline tests, Ruff, and Pyright passed. GitHub core/provider/typecheck all SUCCESS. Canonical sync REPORT STATUS OK nonce f9fc3b5179994962. Canonical merged client authenticated successfully and returned 42 schedule events. Evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-26_session_repair/merge-verification.json.
+- Canonical update initially stopped on unrelated local HANDOFF edits. Original file backed up under merge-handoff-backup and retained byte-for-byte; upstream handoff addition carried forward. Temporary stash removed after verified restoration. Other local edits preserved.
+- Next steps: none for PR #393. Automatic renewal is installed in canonical. A revoked refresh token still requires login; no sports pipeline, data/calibration regeneration, or paid reasoning ran.
