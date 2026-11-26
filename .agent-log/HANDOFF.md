@@ -1,3 +1,13 @@
+# NBA publication audit repair — November 23, 2026 (Codex)
+
+- Last product commit SHA: `0656acd0fa6a30f440aa55b90aed27e61788cb42`; branch `fix/nba-publication-date-guard`.
+- Beads: `dasil-zxg`.
+- Files: NBA exporter, game-scoped availability filter, Desktop organizer, refresh driver, new companion publication verifier, regression tests, `docs/NBA_PUBLICATION_CONTRACT.md`.
+- Behavior: requested Eastern slate + future aware tip + timestamped executable odds required; missing/unknown availability stands down; companions match final selections; empty CSVs replace stale files; hashes/counts/summaries verified at destinations; raw prop text retired; totals labeled research-only.
+- Verification: 101 targeted offline tests passed including PowerShell scratch refresh; Ruff and diff checks passed. Independent native review addressed timestamp, narrative and summary-link findings.
+- Related external variance fix: https://github.com/DaSilvaDub/nba-props-pipeline/pull/8 (236 passed, 11 skipped).
+- Next: review/merge both PRs, then run a controlled refresh. No live pipeline, paid reasoning, production data/calibration writes, or live destination cleanup performed. Upstream must supply quote timestamps and sourced game-specific availability; legacy roster-only evidence safely yields awaiting_availability.
+
 # Session Handoff: Claude Code setup audit and guard fixes (2026-11-24, agent `claude`)
 
 1. **Work**: Ran the setup-audit skill on this repo (project scope, quick depth) and applied

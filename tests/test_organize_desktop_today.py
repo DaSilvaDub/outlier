@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import csv
+import datetime
+import hashlib
+import json
 import shutil
 import sys
 from collections import namedtuple
@@ -178,6 +182,17 @@ def _touch(path: Path, text: str = "a,b\n1,2\n") -> Path:
     return path
 
 
+def _seal_nba(path: Path, date: str, text: str = "slate_date,player,game_time,recommended_side,recommended_odds,line\n") -> Path:
+    _touch(path, text)
+    count = len(list(csv.DictReader(text.splitlines())))
+    _touch(path.with_suffix(".status.json"), json.dumps({
+        "slate_date": date, "row_count": count, "actionable_rows": count,
+        "status": "ready" if count else "awaiting_odds",
+        "csv_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }))
+    return path
+
+
 def test_is_current_artifact_keeps_undated_and_active_dates_only():
     dates = ["2026-11-10"]
     assert org.is_current_artifact("nba_only.csv", dates)
@@ -187,14 +202,14 @@ def test_is_current_artifact_keeps_undated_and_active_dates_only():
 
 def test_nba_sources_come_only_from_repo_exports(tmp_path):
     exports = tmp_path / "data" / "NBA" / "exports"
-    _touch(exports / "nba_only.csv")
+    _seal_nba(exports / "nba_only.csv", "2026-11-10")
     _touch(exports / "NBA_100_hit_rate.csv")
-    _touch(exports / "nba_only_2026-11-10.csv")
+    _seal_nba(exports / "nba_only_2026-11-10.csv", "2026-11-10")
     _touch(exports / "nba_only_2026-11-03.csv")
 
     names = sorted(src.name for src, sub in org.nba_sources(tmp_path, "2026-11-10"))
 
-    assert names == ["NBA_100_hit_rate.csv", "nba_only.csv", "nba_only_2026-11-10.csv"]
+    assert names == ["nba_only.csv", "nba_only.status.json", "nba_only_2026-11-10.csv", "nba_only_2026-11-10.status.json"]
 
 
 def test_organizer_has_no_out_of_repo_generator_path():
@@ -250,14 +265,14 @@ def test_ncaa_lookahead_corrupt_sim_raises(tmp_path):
 
 def test_populate_copies_into_every_root(tmp_path):
     repo = tmp_path / "repo"
-    _touch(repo / "data" / "NBA" / "exports" / "nba_only.csv")
+    _seal_nba(repo / "data" / "NBA" / "exports" / "nba_only.csv", "2026-11-10")
     local, drive = tmp_path / "local", tmp_path / "drive"
 
     copied = org.populate_sport_deliverables(
         "NBA", "2026-11-10", [local, drive], repo_root=repo, cfb_root=tmp_path / "nocfb"
     )
 
-    assert copied == 2
+    assert copied == 4
     for root in (local, drive):
         assert (root / "Fresh_Data" / "NBA" / "01_Packs" / "nba_only.csv").is_file()
 
@@ -326,4 +341,92 @@ def test_csv_with_stale_slate_date_column_is_not_staged(tmp_path):
     assert org.nba_sources(tmp_path, "2026-11-10") == []
 
     _touch(exports / "NBA_100_hit_rate.csv", "slate_date,player\n2026-11-10,A\n")
-    assert [s.name for s, _ in org.nba_sources(tmp_path, "2026-11-10")] == ["NBA_100_hit_rate.csv"]
+    assert org.nba_sources(tmp_path, "2026-11-10") == []  # date alone does not establish readiness
+
+
+def test_all_csv_rows_must_match_active_dates(tmp_path):
+    path = _touch(tmp_path / "mixed.csv", "slate_date,player\n2026-11-10,A\n2026-11-09,B\n")
+    assert not org.is_stageable_csv(path, ["2026-11-10"])
+
+
+def test_empty_current_nba_bundle_replaces_old_csv_and_summary(tmp_path):
+    repo = tmp_path / "repo"
+    exports = repo / "data" / "NBA" / "exports"
+    current = _seal_nba(exports / "nba_only.csv", "2026-11-23")
+    _touch(exports / "nba_only_filter_summary_2026-11-23.json", '{"slate_date":"2026-11-23","after_rows":0}')
+    for destination in (tmp_path / "desktop", tmp_path / "drive"):
+        pack_dir = destination / "Fresh_Data" / "NBA" / "01_Packs"
+        _touch(pack_dir / "nba_only.csv", "slate_date,player\n2026-11-22,A\n")
+        org.populate_sport_deliverables("NBA", "2026-11-23", [destination], repo_root=repo)
+        assert (pack_dir / "nba_only.csv").read_bytes() == current.read_bytes()
+        assert json.loads((pack_dir / "nba_only_filter_summary_2026-11-23.json").read_text())["after_rows"] == 0
+
+
+@pytest.mark.parametrize("defect", ["hash", "count", "summary", "mixed_date", "started", "unpriced"])
+def test_nba_bundle_rejects_inconsistency_before_copy(tmp_path, defect):
+    repo = tmp_path / "repo"
+    exports = repo / "data" / "NBA" / "exports"
+    quote_time = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=1)).isoformat()
+    row = f"2099-11-23,A,2099-11-23T23:00:00Z,OVER,-110,20.5,{quote_time}\n"
+    if defect == "mixed_date":
+        row += f"2099-11-22,B,2099-11-22T23:00:00Z,OVER,-110,20.5,{quote_time}\n"
+    if defect == "started":
+        row = row.replace("2099-11-23T23:00:00Z", "2026-11-22T23:00:00Z")
+    if defect == "unpriced":
+        row = row.replace("-110", "")
+    pack = _seal_nba(exports / "nba_only.csv", "2099-11-23", "slate_date,player,game_time,recommended_side,recommended_odds,line,quote_timestamp\n" + row)
+    if defect in {"hash", "count"}:
+        status = json.loads(pack.with_suffix(".status.json").read_text())
+        status["csv_sha256" if defect == "hash" else "row_count"] = "bad" if defect == "hash" else 99
+        pack.with_suffix(".status.json").write_text(json.dumps(status))
+    if defect == "summary":
+        _touch(exports / "nba_only_filter_summary_2099-11-23.json", '{"after_rows":99}')
+    destination = tmp_path / "desktop"
+    with pytest.raises(org.OrganizerError):
+        org.populate_sport_deliverables("NBA", "2099-11-23", [destination], repo_root=repo)
+    assert not (destination / "Fresh_Data" / "NBA" / "01_Packs").exists()
+
+
+def test_nba_destination_corruption_is_reported(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _seal_nba(repo / "data" / "NBA" / "exports" / "nba_only.csv", "2026-11-23")
+    real_copy = org.safe_copy
+
+    def corrupt(src, dst):
+        real_copy(src, dst)
+        if dst.suffix == ".csv":
+            dst.write_text("slate_date,player\n2026-11-22,A\n", encoding="utf-8")
+
+    monkeypatch.setattr(org, "safe_copy", corrupt)
+    with pytest.raises(org.OrganizerError, match="differs from source"):
+        org.populate_sport_deliverables("NBA", "2026-11-23", [tmp_path / "desktop"], repo_root=repo)
+
+
+@pytest.mark.parametrize("defect", ["wrong_date", "missing_date", "wrong_hash"])
+def test_nba_summary_matching_count_does_not_prove_current_bundle(tmp_path, defect):
+    repo = tmp_path / "repo"
+    exports = repo / "data" / "NBA" / "exports"
+    pack = _seal_nba(exports / "nba_only.csv", "2026-11-23")
+    summary = {"after_rows": 0, "slate_date": "2026-11-23", "csv_sha256": hashlib.sha256(pack.read_bytes()).hexdigest()}
+    if defect == "wrong_date":
+        summary["slate_date"] = "2026-11-22"
+    elif defect == "missing_date":
+        del summary["slate_date"]
+    else:
+        summary["csv_sha256"] = "wrong"
+    _touch(exports / "nba_only_filter_summary_2026-11-23.json", json.dumps(summary))
+    with pytest.raises(org.OrganizerError, match="summary disagrees"):
+        org.populate_sport_deliverables("NBA", "2026-11-23", [tmp_path / "desktop"], repo_root=repo)
+
+
+def test_ready_nba_bundle_with_fresh_quote_is_staged(tmp_path):
+    repo = tmp_path / "repo"
+    quote_time = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=1)).isoformat()
+    pack = _seal_nba(
+        repo / "data" / "NBA" / "exports" / "nba_only.csv", "2099-11-23",
+        "slate_date,player,game_time,recommended_side,recommended_odds,line,quote_timestamp\n"
+        f"2099-11-23,A,2099-11-23T23:00:00Z,OVER,-110,20.5,{quote_time}\n",
+    )
+    destination = tmp_path / "desktop"
+    assert org.populate_sport_deliverables("NBA", "2099-11-23", [destination], repo_root=repo) == 2
+    assert (destination / "Fresh_Data" / "NBA" / "01_Packs" / "nba_only.csv").read_bytes() == pack.read_bytes()
