@@ -8,6 +8,38 @@
 - Related external variance fix: https://github.com/DaSilvaDub/nba-props-pipeline/pull/8 (236 passed, 11 skipped).
 - Next: review/merge both PRs, then run a controlled refresh. No live pipeline, paid reasoning, production data/calibration writes, or live destination cleanup performed. Upstream must supply quote timestamps and sourced game-specific availability; legacy roster-only evidence safely yields awaiting_availability.
 
+# Session Handoff: Claude Code setup audit and guard fixes (2026-11-24, agent `claude`)
+
+1. **Work**: Ran the setup-audit skill on this repo (project scope, quick depth) and applied
+   findings 1, 2, 4 and 5. Merged as PR #386 (squash `62fc7df`). Branch `claude/jolly-allen-onytls`.
+   - **Reasoning guard on Linux**: `.claude/hooks/block-reasoning.py` is registered as a second
+     PreToolUse hook beside the `.ps1`. Master already had an equivalent from `89e5430`; the merge
+     kept master's version, which skips itself when `pwsh` exists. Keep the deny patterns in the
+     `.ps1` and `.py` identical.
+   - **Deny rules** in `.claude/settings.json`: Edit/Write on `calibration/**` and `data/**`, reads
+     of `.env`, `.env.*`, `~/.ssh/**`, `~/.aws/**`, and `git push --force/-f` (the last from master).
+   - **CLAUDE.md STEP 0**: added a non-destructive no-`pwsh` path (5 marker greps; `reset --hard`
+     only in a fresh clone).
+   - **AGENTS.md**: the stale hookify paragraph now describes the `.py` twin. The tracked
+     `.claude/hookify.no-reasoning-unless-asked.local.md` is removed.
+   - **Finding 3 withdrawn**: `AGENTS.md` (sync protocol, house rules) and `.agents/AGENTS.md`
+     (codebase quirks) are complementary, not duplicates. Do not merge them; `AGENTS.md:146`
+     links to the second file.
+2. **Verification**: the Python guard was piped should-block, bypass (`DESK_OK`), allow, garbage
+   and empty payloads and gave the expected results. `settings.json` validates. CI (`core`,
+   `provider`, `typecheck`) was green on the merged head. The full local `pytest` was not run:
+   `structlog` is missing in the cloud container (collection error, same without these changes).
+3. **Not done / next**:
+   - `report-sync.ps1` was not run (no PowerShell in the cloud container; the audit was read-only).
+   - Unconfirmed reviewer checks: (a) no pipeline step needs agent writes to `data/` or
+     `calibration/` that the new deny rules would block (they do not cover shell writes);
+     (b) Windows setups without `python3` are fine with the second hook (it errors non-blockingly,
+     the `.ps1` guard still fires).
+   - Audit report (private, local to the cloud container): `~/.claude/audits/2026-11-24-audit.*`;
+     it may not outlive the session.
+
+---
+
 # Session Handoff: NFL Upgrade B live trial tooling (2026-11-23, agent `claude`)
 
 1. **Work**: Reviewed and merged PR #382 (Upgrade B, merge `0fe5323`). Then, at the
@@ -8478,3 +8510,10 @@ this sandbox cannot import.
    - To disable the 8:00 AM `Outlier Daily Pipeline` task in Task Scheduler completely, run `Disable-ScheduledTask -TaskName "Outlier Daily Pipeline"` from an Administrator PowerShell prompt (it requires elevation due to its security descriptor; however, even if left scheduled, `run_daily_pipeline.ps1` in both canonical and `outlier-scheduled` will instantly detect off-season and exit cleanly in milliseconds).
    - In Spring (April), run `powershell -File scripts/manage_mlb_wnba_tasks.ps1 -Enable` to re-enable the daily pipeline tasks when the new MLB/WNBA seasons begin.
 
+
+## 2026-11-24 — claude (setup-audit, NFL pipeline)
+- Added Linux hook `.claude/hooks/block-reasoning.py` (skips when pwsh present; keeps DESK_OK bypass), registered in `.claude/settings.json`.
+- Added project `deny`: Read .env/.env.*, git push --force/-f. Reasoning commands stay hook-gated (deny rules would break the DESK_OK escape hatch).
+- `.env.example`: declared 5 NFL vars. Copied `nfl-game-script` skill into `.claude/skills/`.
+- Skipped: skill-listing trimming (user-level), doc dedup of CLAUDE/AGENTS (item 6).
+- Note: `tests/test_environment.py` errors pre-existing in this sandbox (structlog not installed).
