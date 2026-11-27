@@ -61,7 +61,7 @@ def verified_close(
         """
         SELECT snapshot_id, line, price, market_consensus_prob, captured_at, book
         FROM market_snapshots
-        WHERE sport = 'NBA' AND event_id = ? AND outcome_id = ? AND snapshot_id != ?
+        WHERE UPPER(sport) = 'NBA' AND event_id = ? AND outcome_id = ? AND snapshot_id != ?
         """,
         (row["event_id"], row["outcome_id"], row["snapshot_id"]),
     ).fetchall()

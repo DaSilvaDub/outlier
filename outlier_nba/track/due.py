@@ -56,7 +56,7 @@ def _latest_capture(db_path: Path) -> tuple[datetime | None, list[datetime]]:
     with closing(sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)) as conn:
         try:
             (last_raw,) = conn.execute(
-                "SELECT MAX(captured_at) FROM market_snapshots WHERE sport = 'NBA'"
+                "SELECT MAX(captured_at) FROM market_snapshots WHERE UPPER(sport) = 'NBA'"
             ).fetchone()
         except sqlite3.OperationalError as exc:
             if "no such table" in str(exc):
@@ -66,7 +66,7 @@ def _latest_capture(db_path: Path) -> tuple[datetime | None, list[datetime]]:
             return None, []
         tips = conn.execute(
             "SELECT DISTINCT event_starts_at FROM market_snapshots "
-            "WHERE sport = 'NBA' AND captured_at = ?",
+            "WHERE UPPER(sport) = 'NBA' AND captured_at = ?",
             (last_raw,),
         ).fetchall()
     parsed = (try_parse_utc(raw) for (raw,) in tips)

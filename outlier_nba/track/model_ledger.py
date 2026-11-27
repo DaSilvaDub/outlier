@@ -71,7 +71,7 @@ aligned AS (
            ) AS srn
     FROM first_model m
     JOIN market_snapshots s
-      ON s.sport = 'NBA' AND s.event_id = m.event_id AND s.outcome_id = m.outcome_id
+      ON UPPER(s.sport) = 'NBA' AND s.event_id = m.event_id AND s.outcome_id = m.outcome_id
      AND s.captured_at <= m.as_of AND m.as_of < s.event_starts_at
 )
 SELECT a.*, d.units AS units, x.win_loss_push, x.actual_result, x.closing_price, x.clv_price,
