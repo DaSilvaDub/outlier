@@ -30,8 +30,9 @@ from outlier_nba.market.consensus import (
     book_key,
     consensus_two_way,
 )
-from outlier_nba.market.devig import DEFAULT_METHOD, METHODS, american_to_prob
+from outlier_nba.market.devig import DEFAULT_METHOD, METHODS, american_to_decimal
 from outlier_nba.market.ladders import push_win_loss
+from outlier_nba.pricing.team_markets import Priced
 
 logger = structlog.get_logger("outlier_nba.capture")
 
@@ -243,9 +244,20 @@ def _row(
         push = 0.0
     best = _best_price(rec, cons)
     edge = None
-    if p_side is not None and best is not None:
-        implied = american_to_prob(best[1])
-        edge = None if implied is None else round(p_side - implied, 6)
+    decimal = american_to_decimal(best[1]) if best is not None else None
+    if p_side is not None and decimal is not None:
+        p_push = 0.0 if push is None else push
+        no_push = 1.0 - p_push
+        edge = round(
+            Priced(
+                p_win=p_side * no_push,
+                p_push=p_push,
+                p_loss=(1.0 - p_side) * no_push,
+                se=0.0,
+                n_draws=0,
+            ).ev(decimal),
+            6,
+        )
     return {
         "sport": "NBA",
         "event_id": rec.event_id,
