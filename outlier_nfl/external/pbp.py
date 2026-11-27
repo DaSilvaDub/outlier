@@ -13,6 +13,8 @@ from typing import Any
 
 from outlier_nfl.config import normalize_team
 
+from .drives import aggregate_drives
+
 from .common import NFLVERSE_RELEASES, Client, num
 
 PBP_URL = NFLVERSE_RELEASES + "/pbp/play_by_play_{season}.csv.gz"
@@ -89,7 +91,8 @@ def aggregate(rows: list[dict[str, str]], season: int, before_week: int) -> list
     return records
 
 
-def fetch(client: Client, season: int, before_week: int) -> dict[str, Any]:
+def fetch(client: Client, season: int, before_week: int, completed=None) -> dict[str, Any]:
     """Team-week offense and defense EPA records for ``season``, weeks < ``before_week``."""
     rows = client.fetch_csv(PBP_URL.format(season=season))
-    return {"records": aggregate(rows, season, before_week)}
+    return {"records": aggregate(rows, season, before_week),
+            "drives": aggregate_drives(rows, season, before_week, completed or {})}

@@ -23,7 +23,7 @@ TIP = "2026-10-22T02:00:00+00:00"
 COLS = (
     "family, event_id, market_id, line, selection, event_starts_at, model_prob, "
     "model_market_prob, win_loss_push, close_status, clv_prob, model_market_id, model_line, "
-    "clv_minutes_before_tip"
+    "clv_minutes_before_tip, model_side"
 )
 
 
@@ -39,6 +39,7 @@ def _row(**kw):
         "selection": "over", "event_starts_at": TIP, "model_prob": 0.6, "model_market_prob": 0.55,
         "win_loss_push": "W", "close_status": "verified", "clv_prob": 0.02,
         "model_market_id": "m1", "model_line": "221.5", "clv_minutes_before_tip": 20.0,
+        "model_side": "OVER",
     }  # fmt: skip
     base.update(kw)
     return tuple(base[c.strip()] for c in COLS.split(","))
@@ -96,6 +97,70 @@ def test_a_row_recorded_before_keys_were_stored_cannot_be_verified_so_is_exclude
     rep = _report(db)
     assert rep.evidence.n_settled == 1
     assert rep.exclusions.counts["key_unverifiable"] == 1
+
+
+# -------------------------------------------------------------- one line, one observation
+
+
+def test_both_sides_of_one_quoted_spread_are_one_observation(tmp_path) -> None:
+    """A spread quotes ``-h`` to HOME and ``+h`` to AWAY. Grouping on the stored line read
+    that one quote as two settled observations, so a family reached the sample-size gate on
+    half the evidence it is meant to need."""
+    db = tmp_path / "l.sqlite3"
+    _insert(
+        _stub(db),
+        [
+            _row(family="team.SPREAD", market_id="s1", model_market_id="s1", model_side="HOME",
+                 line="-5.5", model_line="-5.5", model_prob=0.60, model_market_prob=0.55,
+                 win_loss_push="W"),
+            _row(family="team.SPREAD", market_id="s1", model_market_id="s1", model_side="AWAY",
+                 line="5.5", model_line="5.5", model_prob=0.40, model_market_prob=0.45,
+                 win_loss_push="L"),
+        ],
+    )  # fmt: skip
+    rep = _report(db, "team.SPREAD")
+    assert rep.evidence.n_settled == 1
+    assert rep.evidence.clv_n == 1 and rep.evidence.clv_coverage == 1.0
+
+
+def test_the_mirror_rung_of_a_spread_ladder_stays_its_own_observation(tmp_path) -> None:
+    """``-5.5`` and ``+5.5`` are different rungs of one market, not two sides of one quote."""
+    db = tmp_path / "l.sqlite3"
+    _insert(
+        _stub(db),
+        [
+            _row(family="team.ALT_SPREAD", event_id="e1", market_id="a1", model_market_id="a1",
+                 model_side=side, line=line, model_line=line, model_prob=prob,
+                 model_market_prob=market, win_loss_push=wlp)
+            for side, line, prob, market, wlp in (
+                ("HOME", "-5.5", 0.60, 0.55, "W"), ("AWAY", "5.5", 0.40, 0.45, "L"),
+                ("HOME", "5.5", 0.70, 0.65, "W"), ("AWAY", "-5.5", 0.30, 0.35, "L"),
+            )
+        ],
+    )  # fmt: skip
+    assert _report(db, "team.ALT_SPREAD").evidence.n_settled == 2
+
+
+def test_both_sides_of_a_total_and_a_moneyline_stay_one_observation(tmp_path) -> None:
+    db = tmp_path / "l.sqlite3"
+    _insert(
+        _stub(db),
+        [
+            _row(family="team.TOTAL", market_id="t1", model_market_id="t1", model_side="OVER",
+                 model_prob=0.60, model_market_prob=0.55, win_loss_push="W"),
+            _row(family="team.TOTAL", market_id="t1", model_market_id="t1", model_side="UNDER",
+                 model_prob=0.40, model_market_prob=0.45, win_loss_push="L"),
+            # a moneyline carries no line: the snapshot stores the "0" placeholder on both sides
+            _row(family="team.ML", market_id="n1", model_market_id="n1", model_side="HOME",
+                 line="0", model_line="", model_prob=0.60, model_market_prob=0.55,
+                 win_loss_push="W"),
+            _row(family="team.ML", market_id="n1", model_market_id="n1", model_side="AWAY",
+                 line="0", model_line="", model_prob=0.40, model_market_prob=0.45,
+                 win_loss_push="L"),
+        ],
+    )  # fmt: skip
+    assert _report(db, "team.TOTAL").evidence.n_settled == 1
+    assert _report(db, "team.ML").evidence.n_settled == 1
 
 
 # ---------------------------------------------------------- fail-closed exclusions
