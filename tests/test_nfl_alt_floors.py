@@ -184,7 +184,7 @@ def test_ranking_top3_and_master_top9():
             cushion_pct=((cons - line) / cons) * 100,
             target_book="HARDROCK",
             target_odds=-400,
-            implied_probability=0.80,
+            implied_probability=80.0,
             l5_hit_rate=0.80,
             l10_hit_rate=0.80,
             season_hit_rate=0.80,
@@ -264,7 +264,7 @@ def test_export_alt_floors():
             cushion_pct=35.2,
             target_book="HARDROCK",
             target_odds=-525,
-            implied_probability=0.84,
+            implied_probability=84.0,
             l5_hit_rate=1.0,
             l10_hit_rate=0.8,
             season_hit_rate=0.8,
@@ -451,7 +451,7 @@ def test_windowed_run_does_not_clobber_the_undated_csv():
             cushion_pct=18.2,
             target_book="HARDROCK",
             target_odds=-400,
-            implied_probability=0.8,
+            implied_probability=80.0,
             l5_hit_rate=0.8,
             l10_hit_rate=0.8,
             season_hit_rate=0.8,
@@ -783,3 +783,87 @@ def test_inactive_join_ignores_name_suffixes_and_punctuation(listed, quoted):
         row, book="HARDROCK", odds=-300, target_book="HARDROCK",
         inactive_by_team={"SEA": [listed]})
     assert reason == "inactive_player"
+
+
+# KC rush 40.5 vs consensus 70.5, Hard Rock -140, kickoff still ahead of as_of.
+_KC_AS_OF = "2026-09-13T15:00:00+00:00"
+_KC_RATES = {"l5_hit_rate": 1.0, "l10_hit_rate": 1.0, "season_hit_rate": 1.0}
+
+
+def _kc_rush(line: float, *, consensus: bool = False, rates: dict | None = None) -> dict:
+    row = {
+        "player_name": "Kenneth Walker III",
+        "team": "KC",
+        "opponent": "LV",
+        "matchup": "LV @ KC",
+        "event_id": "evt-kc-lv",
+        "event_starts_at": "2026-09-13T20:00:00Z",
+        "market": "RUSH_YDS",
+        "position": "OVER",
+        "line": line,
+        "is_consensus_line": consensus,
+        "scope": "full_game",
+        "books": [{"book": "HARDROCK", "odds": -110 if consensus else -140}],
+    }
+    if rates:
+        row.update(rates)
+    return row
+
+
+def _kc_rush_scan(rates: dict | None):
+    props = [_kc_rush(70.5, consensus=True), _kc_rush(40.5, rates=rates)]
+    found = discover_alt_floor_candidates(props, as_of_utc=_KC_AS_OF)["RUSH_YDS"][0]
+    top3, master, inventory = rank_alt_floors(
+        discover_alt_floor_candidates(props, as_of_utc=_KC_AS_OF)
+    )
+    return found, top3, master, inventory
+
+
+def test_omitted_hit_rates_stay_unknown_and_unranked():
+    """A missing L5/L10/season rate is unknown, not a 0.0 that still ranks."""
+    found, top3, master, inventory = _kc_rush_scan(None)
+    assert found.actionable is False
+    assert found.inventory_reason == "unknown_hit_rate"
+    assert (found.l5_hit_rate, found.l10_hit_rate, found.season_hit_rate) == (None, None, None)
+    assert found.confidence_score == 0.1009
+    assert master == [] and all(not rows for rows in top3.values())
+    assert [(i.player_name, i.actionable) for i in inventory] == [("Kenneth Walker III", False)]
+
+
+@pytest.mark.parametrize("missing", ["l5_hit_rate", "l10_hit_rate", "season_hit_rate"])
+def test_one_missing_hit_rate_keeps_the_floor_out_of_the_pool(missing):
+    rates = dict(_KC_RATES)
+    del rates[missing]
+    found, top3, master, _inventory = _kc_rush_scan(rates)
+    assert found.actionable is False
+    assert found.inventory_reason == "unknown_hit_rate"
+    assert getattr(found, missing) is None
+    assert master == [] and all(not rows for rows in top3.values())
+
+
+def test_explicit_zero_hit_rate_stays_ranked():
+    """A real 0.0 hit rate is known. It is not the same as an omitted rate."""
+    found, _top3, master, inventory = _kc_rush_scan(
+        {"l5_hit_rate": 0.0, "l10_hit_rate": 0.0, "season_hit_rate": 0.0}
+    )
+    assert found.actionable is True
+    assert found.inventory_reason is None
+    assert (found.l5_hit_rate, found.l10_hit_rate, found.season_hit_rate) == (0.0, 0.0, 0.0)
+    assert found.confidence_score == 0.1009
+    assert [p.player_name for p in master] == ["Kenneth Walker III"]
+    assert inventory == []
+
+
+def test_alt_floor_implied_probability_is_stored_as_percent():
+    """Game and prop rows store american_to_implied_probability percent, not a 0-1 fraction."""
+    from outlier_nfl.games import american_to_implied_probability
+
+    found, top3, master, inventory = _kc_rush_scan(_KC_RATES)
+    stored = american_to_implied_probability(-140)
+    assert stored == 58.333
+    assert found.implied_probability == stored
+    assert inventory == []
+    md = render_alt_floors_markdown(top3, master, date_str="2026-09-13")
+    assert f"Implied: {stored:.1f}%" in md
+    expected = round(0.35 + 0.30 + 0.15 + (30 / 70.5) * 0.10 + (stored / 100.0) * 0.10, 4)
+    assert found.confidence_score == expected
