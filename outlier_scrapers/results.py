@@ -463,6 +463,39 @@ def _side_result(actual: float, line: float, side: str) -> str:
     return "W" if won else "L"
 
 
+def _cover_result(selected_score: float, other_score: float, line: float) -> tuple[float, str]:
+    """Grade a spread from the selected side's margin. An exact cover pushes."""
+    margin = selected_score - other_score
+    adjusted = margin + line
+    if adjusted == 0:
+        return margin, "PUSH"
+    return margin, "W" if adjusted > 0 else "L"
+
+
+# Alt-spread boards store "{team} {signed_line}" (see alt_spreads.build_alt_spread_rows).
+# That string has no matchup and no HOME/AWAY token, so the gameline parser skips it.
+_COMPACT_ALT_SPREAD = re.compile(r"([A-Za-z0-9]+)\s+([+-]?\d+(?:\.\d+)?)")
+
+
+def _compact_alt_spread(selection: str) -> tuple[str, float] | None:
+    """Team token and signed line from "WAS +4", or None when it is not that form."""
+    match = _COMPACT_ALT_SPREAD.fullmatch(selection.strip())
+    if not match:
+        return None
+    number = _number(match.group(2))
+    if number is None:
+        return None
+    return _team_token(match.group(1)), number
+
+
+def _compact_alt_spread_event_match(event: FinalEvent, selection: str) -> bool:
+    parsed = _compact_alt_spread(selection)
+    if parsed is None:
+        return False
+    team, _selection_line = parsed
+    return team in {_team_token(event.away), _team_token(event.home)}
+
+
 def _player_actual(market: str, stats: dict[str, float], sport: str) -> float | None:
     token = _token(market)
     if sport in BASKETBALL_SPORTS:
@@ -651,6 +684,22 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
         if actual is not None:
             return (actual, _side_result(actual, line, matchup_team_total.group(2).upper()))
 
+    # Compact alt spread: "WAS +4". Side comes from the team token, cover from
+    # the row line. Skip when the selection's signed line disagrees with that
+    # line, or the team is not in this final — never guess a side.
+    compact = _compact_alt_spread(selection)
+    if compact is not None:
+        if market_type != "GAMELINE":
+            return None
+        team, selection_line = compact
+        if selection_line != line:
+            return None
+        if team == _team_token(event.home):
+            return _cover_result(event.home_score, event.away_score, line)
+        if team == _team_token(event.away):
+            return _cover_result(event.away_score, event.home_score, line)
+        return None
+
     if market_type != "GAMELINE" or not _event_match(event, selection):
         return None
     # Parse only a full-game market label immediately after the matchup.  A
@@ -677,10 +726,7 @@ def _grade_row(row: sqlite3.Row, event: FinalEvent) -> tuple[float, str] | None:
             if spread.group(1).upper() == "HOME"
             else (event.away_score, event.home_score)
         )
-        margin = selected_score - other_score
-        adjusted = margin + line
-        result = "PUSH" if adjusted == 0 else "W" if adjusted > 0 else "L"
-        return margin, result
+        return _cover_result(selected_score, other_score, line)
     moneyline = re.fullmatch(
         r"[A-Za-z0-9]+\s+@\s+[A-Za-z0-9]+\s+(?:Money\s*Line(?:\s+(?:Three|3)[-\s]Way)?|ML(?:_3WAY)?)\s+(HOME|AWAY)(?:\s+-?\d+(?:\.\d+)?)?",
         selection,
@@ -829,7 +875,13 @@ def collect_settlement_rows(
         for row in rows:
             selection = str(row["selection"] or "")
             row_start = _parse_aware(row["event_starts_at"])
-            if " Team Total " in selection:
+            if _compact_alt_spread(selection) is not None:
+                candidates = [
+                    event
+                    for event in events
+                    if _compact_alt_spread_event_match(event, selection)
+                ]
+            elif " Team Total " in selection:
                 candidates = [
                     event for event in events if _team_total_event_match(event, selection)
                 ]
