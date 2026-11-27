@@ -480,6 +480,20 @@ def test_a_neutral_site_game_is_simulated_without_home_court_advantage(state) ->
     assert by_id["h"].p_home > by_id["n"].p_home + 0.03
 
 
+def test_a_missing_neutral_flag_is_simulated_without_home_court(state) -> None:
+    home = SlateGame("h", "BOS", "NYK", TIP, "STATUS_SCHEDULED", _lines(), False)
+    neutral = replace(home, event_id="n", neutral=True)
+    unknown = replace(home, event_id="u", neutral=None)
+    res = sr.run_slate(state, [home, neutral, unknown], {}, now=NOW, day="2026-10-21", cfg=CFG)
+    by_id = {p.event_id: p for p in res.projections}
+    assert by_id["h"].margin_mean - by_id["n"].margin_mean > 1.0
+    assert by_id["u"].margin_mean == pytest.approx(by_id["n"].margin_mean, abs=0.75)
+    unknown_bets = [c for c in res.candidates if c.event_id == "u"]
+    assert unknown_bets and all(
+        c.units == 0.0 and any(f.startswith("F3") for f in c.fails) for c in unknown_bets
+    )
+
+
 def test_an_unverified_injury_feed_rejects_everything_via_F10(draws) -> None:
     cands = sr.evaluate_game(draws, _game(), (), (), now=NOW, cfg=CFG, injuries_verified=False)
     assert all(any(f.startswith("F10") and "feed" in f for f in c.fails) for c in cands)
