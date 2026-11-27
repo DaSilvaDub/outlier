@@ -818,17 +818,18 @@ def test_games_main_failure_replaces_old_ok_status(tmp_path, monkeypatch):
 
 
 def test_games_export_advances_to_tomorrow_when_today_slate_is_complete(tmp_path, monkeypatch):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
 
     from outlier_scrapers import paths as paths_mod
     from outlier_scrapers.games import export_games_for_league
 
     monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
-    today = datetime.now().astimezone().date()
+    eastern = ZoneInfo("America/New_York")
+    now = datetime.now(timezone.utc).astimezone(eastern)
+    today = now.date()
     tomorrow = today + timedelta(days=1)
-    today_start = datetime.now().astimezone().replace(
-        hour=13, minute=0, second=0, microsecond=0
-    )
+    today_start = now.replace(hour=13, minute=0, second=0, microsecond=0)
     tomorrow_start = today_start + timedelta(days=1)
 
     class NextSlateClient(FakeGamesClient):
@@ -858,18 +859,18 @@ def test_games_export_advances_to_tomorrow_when_today_slate_is_complete(tmp_path
 def test_games_export_does_not_advance_when_today_is_missing_from_schedule(
     tmp_path, monkeypatch
 ):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
 
     from outlier_scrapers import paths as paths_mod
     from outlier_scrapers.games import export_games_for_league, write_json
     from outlier_scrapers.paths import league_paths
 
     monkeypatch.setattr(paths_mod, "DATA_DIR", tmp_path / "data")
-    today = datetime.now().astimezone().date()
+    now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+    today = now.date()
     tomorrow = today + timedelta(days=1)
-    tomorrow_start = datetime.now().astimezone().replace(
-        hour=18, minute=0, second=0, microsecond=0
-    ) + timedelta(days=1)
+    tomorrow_start = now.replace(hour=18, minute=0, second=0, microsecond=0) + timedelta(days=1)
     latest = league_paths("MLB").normalized / "mlb_games_latest.json"
     write_json(
         latest,

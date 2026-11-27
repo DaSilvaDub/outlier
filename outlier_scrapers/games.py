@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from .api import OutlierApiClient, AuthRequiredError
 from .normalizer import normalize_games
 from .paths import league_paths
 from .registry import get_sport_config, supported_leagues, GAME_MARKET_TYPES
-from .utils import safe_write_json
+from .utils import _local_date, safe_write_json
 
 write_json = safe_write_json
 
@@ -38,7 +38,7 @@ def _should_preserve_previous_latest(latest_path: Path, normalized: dict[str, An
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Outlier games data")
     parser.add_argument("--league", choices=supported_leagues(), required=True)
-    parser.add_argument("--date", help="Target date in YYYY-MM-DD format (default: today local)")
+    parser.add_argument("--date", help="Target date in YYYY-MM-DD format (default: today Eastern)")
     parser.add_argument(
         "--days", type=int, default=1, help="Number of days to process from date (default: 1)"
     )
@@ -58,7 +58,7 @@ def _event_local_date(event: dict[str, Any]) -> date | None:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone().date()
+    return date.fromisoformat(_local_date(parsed))
 
 
 def _is_event_in_window(
@@ -94,7 +94,7 @@ def export_games_for_league(
 
     auto_advance = target_date is None and days == 1 and not include_final
     if target_date is None:
-        target_date = datetime.now().astimezone().date()
+        target_date = date.fromisoformat(_local_date(datetime.now(timezone.utc)))
 
     schedule = client.fetch_schedule(config.league_id)
     events = schedule.get("events")

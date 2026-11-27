@@ -339,7 +339,7 @@ def process_stream(
 def select_date(
     rows: list[dict[str, Any]], requested: str | None
 ) -> tuple[list[dict[str, Any]], str]:
-    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    today = _local_date(datetime.now(timezone.utc))
     dated: set[str] = {d for r in rows if (d := _local_date(r.get("_event_starts_at"))) is not None}
     if not dated:
         return rows, (requested or today)
@@ -358,7 +358,7 @@ def select_date(
 def _expected_pack_slate_date(leagues: Sequence[str], requested: str | None) -> str:
     """Select the pack date from feed event timestamps before projection joins."""
 
-    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    today = _local_date(datetime.now(timezone.utc))
     target_day = requested or today
     # Empty-slate producers preserve their last non-empty cards, which may be
     # dated for a future slate. Those cards must not move today's expected pack

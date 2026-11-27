@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -34,8 +34,10 @@ def _stamp(value: datetime = NOW) -> str:
 
 
 def _local_day(value: datetime = NOW) -> str:
-    """The local calendar day of ``value``, as games.py writes ``target_date``."""
-    return value.astimezone().date().isoformat()
+    """Eastern slate day, matching the ``target_date`` games.py records."""
+    from outlier_scrapers.utils import _local_date
+
+    return _local_date(value)
 
 
 def _seed_healthy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LeaguePaths:
@@ -779,7 +781,7 @@ def test_league_has_confirmed_empty_slate_rejects_another_day_s_zero_event_run(
     """
     paths = _paths(tmp_path)
     monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
-    yesterday = (NOW.astimezone().date() - timedelta(days=1)).isoformat()
+    yesterday = (date.fromisoformat(_local_day()) - timedelta(days=1)).isoformat()
     _write(
         paths.reports / "games_status_latest.json",
         {
@@ -802,7 +804,7 @@ def test_league_has_confirmed_empty_slate_rejects_a_future_dated_zero_event_run(
     """An explicit `--date <future>` run finds no games yet; today is unaffected."""
     paths = _paths(tmp_path)
     monkeypatch.setattr(feed_health, "league_paths", lambda _league: paths)
-    tomorrow = (NOW.astimezone().date() + timedelta(days=1)).isoformat()
+    tomorrow = (date.fromisoformat(_local_day()) + timedelta(days=1)).isoformat()
     _write(
         paths.reports / "games_status_latest.json",
         {
