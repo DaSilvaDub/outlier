@@ -424,8 +424,10 @@ def run_slate(
     unsimulated = list(skipped)
     for game in games:
         try:
+            # None is unknown, not a home court. F3 already zeros the stake.
+            neutral = game.neutral is not False
             draws = team_run.event_draws(
-                state, game.home, game.away, day, cfg.n_draws, rng, neutral=bool(game.neutral)
+                state, game.home, game.away, day, cfg.n_draws, rng, neutral=neutral
             )
         except (KeyError, ValueError) as exc:  # SimInputError is a ValueError
             unsimulated.append(f"{game.event_id}: {exc}")
