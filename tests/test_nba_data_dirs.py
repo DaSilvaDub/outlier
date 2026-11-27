@@ -126,3 +126,18 @@ def test_the_daily_script_no_longer_writes_bundles_to_temp() -> None:
 def test_no_script_still_points_bundles_at_the_old_temp_folders() -> None:
     for script in (ROOT / "scripts").glob("*.ps1"):
         assert "nba_runs" not in script.read_text(encoding="utf-8", errors="ignore"), script.name
+
+
+def test_reports_store_and_espn_cache_live_under_the_data_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(data_dirs.DATA_DIR_ENV, str(tmp_path / "d"))
+    assert data_dirs.reports_dir() == tmp_path / "d" / "reports"
+    assert data_dirs.store_path() == tmp_path / "d" / "store" / "nba_games.sqlite3"
+    assert data_dirs.espn_cache_dir() == tmp_path / "d" / "cache" / "espn_cache"
+
+
+def test_report_store_and_cache_locations_inside_the_repo_are_refused(monkeypatch) -> None:
+    monkeypatch.undo()  # drop the autouse relaxation: use the real forbidden roots
+    monkeypatch.setenv(data_dirs.DATA_DIR_ENV, str(paths.PROJECT_ROOT / "data" / "x"))
+    for fn in (data_dirs.reports_dir, data_dirs.store_path, data_dirs.espn_cache_dir):
+        with pytest.raises(data_dirs.NonDurableLocationError):
+            fn()

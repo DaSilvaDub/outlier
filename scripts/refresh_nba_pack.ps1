@@ -20,7 +20,7 @@
   Publish to Drive even when -ScratchOut is set.
 
 .PARAMETER SkipInjuryFilter
-  Export only; do not filter ruled-out / inactive players.
+  Deprecated: rejected because publication requires game availability verification.
 
 .PARAMETER MinDiskSpaceGB
   Minimum required free GB on C:\ drive (default: 5.0 GB, optimal >= 10.0 GB).
@@ -34,16 +34,22 @@ param(
     [switch]$SkipPipeline,
     [switch]$SkipDrive,
     [string]$ScratchOut = "",
+    [string]$PropSource = "",
+    [string]$Registry = "",
+    [string]$NbaPipelineRepo = $(if ($env:NBA_PIPELINE_REPO) { $env:NBA_PIPELINE_REPO } else { "C:\Users\dasil\Dev\GitHub\nba-props-pipeline" }),
+    [string]$NbaDataRoot = "",
+    [string]$AvailabilityReport = "",
+    [string]$AvailabilityReportUrl = "",
     [switch]$ForceDrive,
     [switch]$SkipInjuryFilter,
+    [switch]$UseRotoGrinders,
     [double]$MinDiskSpaceGB = 5.0
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "publication_guards.ps1")
 
-$repoRoot = "C:\Users\dasil\Dev\GitHub\outlier"
-$nbaPipelineRepo = "C:\Users\dasil\Dev\GitHub\nba-props-pipeline"
+$repoRoot = Split-Path -Parent $PSScriptRoot
 $python = "C:\Users\dasil\AppData\Local\Programs\Python\Python313\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
     $python = "python"
@@ -119,75 +125,29 @@ $propEdgeSources = @(
     "$nbaPipelineRepo\output\PROP EDGES"
 )
 
-$needsPipelineRun = -not $SkipPipeline
-if ($SkipPipeline) {
-    $foundFresh = $false
-    foreach ($peDir in $propEdgeSources) {
-        $cand = Join-Path $peDir "prop_edges_latest.csv"
-        if (Test-Path -LiteralPath $cand) {
-            $ageHours = ((Get-Date) - (Get-Item $cand).LastWriteTime).TotalHours
-            if ($ageHours -le 12.0) {
-                $foundFresh = $true
-                break
-            }
-        }
-    }
-    if (-not $foundFresh) {
-        Write-Warning "[NBA-PROP-010] Candidate prop edges are older than 12 hours. Overriding SkipPipeline to force live refresh."
-        $needsPipelineRun = $true
-    }
-}
-
-if ($needsPipelineRun) {
-    if (Test-Path -LiteralPath $nbaPipelineRepo) {
-        Write-Output "Running NBA props pipeline updates in $nbaPipelineRepo..."
-        Push-Location $nbaPipelineRepo
-        try {
-            # 1. Update lineups and injury reports
-            $lineupsScript = Join-Path $nbaPipelineRepo "scripts\refresh_lineups_injuries.ps1"
-            if (Test-Path -LiteralPath $lineupsScript) {
-                Write-Output "Refreshing NBA lineups and injuries..."
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $lineupsScript -Date $Date -Wait
-                if ($LASTEXITCODE -ne 0) { throw "refresh_lineups_injuries.ps1 failed with exit code $LASTEXITCODE" }
-            }
-
-            # 2. Run data watcher check cycle
-            $watcherScript = Join-Path $nbaPipelineRepo "pipeline\nba_data_watcher.py"
-            if (Test-Path -LiteralPath $watcherScript) {
-                Write-Output "Running nba_data_watcher --once..."
-                Invoke-CheckedPython -Arguments @($watcherScript, "--once")
-            }
-
-            # 3. Generate updated prop edges and playbook grades
-            $edgesScript = Join-Path $nbaPipelineRepo "pipeline\generate_prop_edges.py"
-            if (Test-Path -LiteralPath $edgesScript) {
-                Write-Output "Generating prop edges..."
-                Invoke-CheckedPython -Arguments @($edgesScript, "--allow-stale-hardrock")
-            }
-
-            $gradesScript = Join-Path $nbaPipelineRepo "pipeline\generate_playbook_grades.py"
-            if (Test-Path -LiteralPath $gradesScript) {
-                Write-Output "Generating playbook grades..."
-                Invoke-CheckedPython -Arguments @($gradesScript)
-            }
-        }
-        finally {
-            Pop-Location
-        }
-    }
-    else {
-        Write-Warning "NBA pipeline repo not found at $nbaPipelineRepo; skipping live pipeline run."
-    }
-}
-
-$exportCsv = Join-Path $repoRoot "data\NBA\exports\nba_only.csv"
+$exportCsv = if ($ScratchOut) { $ScratchOut } else { Join-Path $repoRoot "data\NBA\exports\nba_only.csv" }
 $exportDir = Split-Path -Parent $exportCsv
-if (-not (Test-Path -LiteralPath $exportDir)) {
-    New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+New-Item -ItemType Directory -Path $exportDir -Force | Out-Null
+$upstreamDir = Join-Path $exportDir "upstream_$Date"
+if (-not $SkipPipeline) {
+    if (-not $NbaDataRoot) {
+        $NbaDataRoot = if ($env:NBA_ROOT) { $env:NBA_ROOT } elseif ($driveRoot) { Join-Path $driveRoot "Sports_Analytics\01_Active\NBA_Active" } else { Join-Path $nbaPipelineRepo "output" }
+    }
+    $upstreamArgs = @( (Join-Path $repoRoot "scripts\refresh_nba_upstream.py"), "--pipeline-repo", $nbaPipelineRepo, "--date", $Date, "--output-dir", $upstreamDir, "--data-root", $NbaDataRoot )
+    if ($UseRotoGrinders) { $upstreamArgs += "--use-rg" }
+    if ($AvailabilityReport) { $upstreamArgs += @("--report-pdf", $AvailabilityReport) }
+    if ($AvailabilityReportUrl) { $upstreamArgs += @("--report-url", $AvailabilityReportUrl) }
+    try { Invoke-CheckedPython -Arguments $upstreamArgs }
+    catch { Write-Warning "Upstream evidence refresh failed. The publication gates will check the collected inputs." }
+    # An attempted current refresh always selects its own output, never a retained Drive feed.
+    $PropSource = Join-Path $upstreamDir "prop_edges_latest.csv"
+    if (-not $Registry) { $Registry = Join-Path $upstreamDir "nba_availability_registry.json" }
+    $propEdgeSources = @($upstreamDir)
 }
 
 $exportScript = Join-Path $repoRoot "scripts\export_nba_extra_pack.py"
-$exportArgs = @($exportScript, "--date", $Date, "--out", $exportCsv)
+$exportArgs = @($exportScript, "--date", $Date, "--out", $exportCsv, "--no-allow-latest-fallback", "--no-auto-refresh")
+if ($PropSource) { $exportArgs += @("--src", $PropSource) }
 Write-Output "Exporting nba_only.csv ..."
 Invoke-CheckedPython $exportArgs
 
@@ -195,33 +155,21 @@ $beforeRows = Get-CsvDataRowCount -Path $exportCsv
 Write-Output "Export rows before injury filter: $beforeRows"
 
 $filteredCsv = $exportCsv
-$summaryJson = Join-Path $repoRoot "data\NBA\exports\nba_only_filter_summary_$Date.json"
+$summaryJson = Join-Path $exportDir "nba_only_filter_summary_$Date.json"
 
-if ($ScratchOut) {
-    $scratchDir = Split-Path -Parent $ScratchOut
-    if ($scratchDir -and -not (Test-Path -LiteralPath $scratchDir)) {
-        New-Item -ItemType Directory -Path $scratchDir -Force | Out-Null
-    }
-    Copy-Item -LiteralPath $exportCsv -Destination $ScratchOut -Force
-    $filteredCsv = $ScratchOut
-}
 
 $filterScript = Join-Path $repoRoot "scripts\filter_nba_ruled_out.py"
 if ($SkipInjuryFilter) {
-    Write-Warning "Skipping injury filter (-SkipInjuryFilter set): pack is NOT filtered for ruled-out players."
+    throw "Skipping injury verification cannot authorize NBA publication."
 }
 elseif (-not (Test-Path -LiteralPath $filterScript)) {
-    # Fail closed: never publish an unfiltered pack unless the caller asked for it.
-    throw "Injury filter not found at $filterScript. Pass -SkipInjuryFilter to publish an unfiltered pack."
+    throw "Required injury verification missing: $filterScript"
 }
 else {
     Write-Output "Filtering ruled-out players..."
-    Invoke-CheckedPython @(
-        $filterScript,
-        "--csv", $filteredCsv,
-        "--out", $filteredCsv,
-        "--summary-json", $summaryJson
-    )
+    $filterArgs = @($filterScript, "--csv", $filteredCsv, "--date", $Date, "--out", $filteredCsv, "--summary-json", $summaryJson)
+    if ($Registry) { $filterArgs += @("--registry", $Registry) }
+    Invoke-CheckedPython -Arguments $filterArgs
 }
 
 $afterRows = Get-CsvDataRowCount -Path $filteredCsv
@@ -237,15 +185,34 @@ if ($ScratchOut -and -not $ForceDrive) {
     Write-Output "ScratchOut set without -ForceDrive; skipping Drive publish."
 }
 
-# Local Desktop staging runs before the Drive publish so an active publication
-# hold (which throws below) never blocks local staging.
-$organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
-if (-not (Test-Path -LiteralPath $organizerScript -PathType Leaf)) { throw "Required file missing: $organizerScript" }
-Write-Output "Organizing Desktop Today folders for NBA (local only)..."
-Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date, "--skip-drive")
+# Build companions exclusively from the final authorized selections.
+$bundleScript = Join-Path $repoRoot "scripts\nba_publication_bundle.py"
+$bundleArgs = @($bundleScript, "--date", $Date, "--csv", $filteredCsv, "--summary", $summaryJson, "--out-dir", $exportDir)
+foreach ($kind in @(@("prop_edges_latest.csv", "--edge-source"), @("nba_graded_plays_latest.csv", "--grade-source"))) {
+    foreach ($peDir in $propEdgeSources) {
+        $candidate = Join-Path $peDir $kind[0]
+        if (Test-Path -LiteralPath $candidate) { $bundleArgs += @($kind[1], $candidate); break }
+    }
+}
+Invoke-CheckedPython -Arguments $bundleArgs
+
+function Copy-VerifiedNbaCsv {
+    param([string]$Source, [string]$Destination, [string]$Summary = "")
+    $copyArgs = @($bundleScript, "--date", $Date, "--csv", $Source, "--destination", $Destination)
+    if ($Summary) { $copyArgs += @("--summary", $Summary) }
+    Invoke-CheckedPython -Arguments $copyArgs
+}
+
+# Scratch runs never write the live Desktop tree.
+if (-not $ScratchOut) {
+    $organizerScript = Join-Path $repoRoot "scripts\organize_desktop_today.py"
+    Write-Output "Organizing verified NBA bundle on Desktop..."
+    Invoke-CheckedPython -Arguments @($organizerScript, "--sport", "NBA", "--date", $Date, "--skip-drive")
+}
 
 if ($shouldPublish -and $driveRoot) {
     Assert-PublicationHold $repoRoot
+    Assert-PublicationHold "C:\Users\dasil\Dev\GitHub\outlier"
     $datedDir = Join-Path $driveToday "extra_packs_${Date}_latest"
     $rollingDir = Join-Path $driveToday "extra_packs"
     $driveNba = Join-Path $driveRoot "BETTING REPORTS\NBA"
@@ -259,52 +226,55 @@ if ($shouldPublish -and $driveRoot) {
 
     $dstDated = Join-Path $datedDir "nba_only.csv"
     $dstRolling = Join-Path $rollingDir "nba_only.csv"
-    Copy-Item -LiteralPath $publishSrc -Destination $dstDated -Force
-    Copy-Item -LiteralPath $publishSrc -Destination $dstRolling -Force
+    Copy-VerifiedNbaCsv $publishSrc $dstDated $summaryJson
+    Copy-VerifiedNbaCsv $publishSrc $dstRolling $summaryJson
     Write-Output "Published nba_only.csv -> $dstDated"
     Write-Output "Published nba_only.csv -> $dstRolling"
 
-    # Sync companions from nba-props-pipeline or drive
-    foreach ($peDir in $propEdgeSources) {
-        if (Test-Path -LiteralPath $peDir) {
-            $csv = Join-Path $peDir "prop_edges_latest.csv"
-            if (Test-Path -LiteralPath $csv) {
-                Copy-Item -LiteralPath $csv -Destination (Join-Path $driveToday "nba_prop_edges.csv") -Force
-                Copy-Item -LiteralPath $csv -Destination (Join-Path $driveNba "nba_prop_edges_latest.csv") -Force
-                Copy-Item -LiteralPath $csv -Destination (Join-Path $driveNba "nba_prop_edges_${Date}.csv") -Force
-                Write-Output "Published nba_prop_edges.csv"
-                break
-            }
-        }
+    foreach ($name in @("nba_prop_edges", "nba_graded_plays")) {
+        $csv = Join-Path $exportDir "$name.csv"
+        Copy-VerifiedNbaCsv $csv (Join-Path $driveToday "$name.csv")
+        Copy-VerifiedNbaCsv $csv (Join-Path $driveNba "$name.csv")
+        Copy-VerifiedNbaCsv $csv (Join-Path $driveNba "${name}_${Date}.csv")
     }
+    Copy-VerifiedNbaCsv (Join-Path $exportDir "nba_prop_edges.csv") (Join-Path $driveNba "nba_prop_edges_latest.csv")
 
-    foreach ($peDir in $propEdgeSources) {
-        if (Test-Path -LiteralPath $peDir) {
-            $graded = Join-Path $peDir "nba_graded_plays_latest.csv"
-            if (Test-Path -LiteralPath $graded) {
-                Copy-Item -LiteralPath $graded -Destination (Join-Path $driveToday "nba_graded_plays.csv") -Force
-                Copy-Item -LiteralPath $graded -Destination (Join-Path $driveNba "nba_graded_plays.csv") -Force
-                Copy-Item -LiteralPath $graded -Destination (Join-Path $driveNba "nba_graded_plays_${Date}.csv") -Force
-                Write-Output "Published nba_graded_plays.csv"
-                break
+    $legacyTxtFiles = @(
+        "SAS_OKC_GAME_TOTALS.txt",
+        "SAS_OKC_INJURY_ANALYSIS.txt",
+        "SAS_OKC_TOP_PROPS.txt"
+    )
+    foreach ($legacyName in $legacyTxtFiles) {
+        foreach ($dir in @($driveToday, $driveNba)) {
+            $stalePath = Join-Path $dir $legacyName
+            if (Test-Path -LiteralPath $stalePath) {
+                Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
+                Write-Output "Removed legacy stale file: $stalePath"
             }
         }
     }
 
     $txtFiles = @(
-        "$nbaPipelineRepo\ALL_TOP_PROPS.txt",
         "$nbaPipelineRepo\GAME_TOTALS_PROJECTION.txt",
-        "$nbaPipelineRepo\SAS_OKC_GAME_TOTALS.txt",
-        "$nbaPipelineRepo\SAS_OKC_INJURY_ANALYSIS.txt",
-        "$nbaPipelineRepo\SAS_OKC_TOP_PROPS.txt"
+        "$nbaPipelineRepo\MATCHUP_FOCUS.txt"
     )
 
+    # Prop narratives are rebuilt from the verified publication status.
+    $status = Get-Content -LiteralPath ([IO.Path]::ChangeExtension($filteredCsv, ".status.json")) -Raw | ConvertFrom-Json
+    $propNotice = "NBA $Date - status=$($status.status); actionable_rows=$afterRows. See verified nba_only.csv. Prior raw top-prop narratives are retired."
+    foreach ($dir in @($driveToday, $driveNba)) {
+        Set-Content -LiteralPath (Join-Path $dir "ALL_TOP_PROPS.txt") -Value $propNotice -Encoding UTF8
+    }
     foreach ($tf in $txtFiles) {
-        if (Test-Path -LiteralPath $tf) {
-            $name = Split-Path -Leaf $tf
-            Copy-Item -LiteralPath $tf -Destination (Join-Path $driveToday $name) -Force
-            Copy-Item -LiteralPath $tf -Destination (Join-Path $driveNba $name) -Force
-            Write-Output "Published $name"
+        $name = Split-Path -Leaf $tf
+        $notice = "NBA $Date - RESEARCH REFERENCE ONLY. Awaiting verified executable totals prices; zero actionable totals and no price-based EV. Projection gaps are not betting edges."
+        $body = ""
+        if ((Test-Path -LiteralPath $tf) -and ((Get-Item -LiteralPath $tf).Length -gt 0)) {
+            $candidateText = Get-Content -LiteralPath $tf -Raw
+            if ($candidateText.Contains($Date)) { $body = $candidateText }
+        }
+        foreach ($dir in @($driveToday, $driveNba)) {
+            Set-Content -LiteralPath (Join-Path $dir $name) -Value "$notice`n$body" -Encoding UTF8
         }
     }
 }

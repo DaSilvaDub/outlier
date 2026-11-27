@@ -17,6 +17,15 @@
             ],
             "timeout": 15,
             "statusMessage": "Checking reasoning house rule..."
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              ".claude/hooks/block-reasoning.py"
+            ],
+            "timeout": 15,
+            "statusMessage": "Checking reasoning house rule (Linux)..."
           }
         ]
       }
@@ -39,6 +48,20 @@
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Edit(./calibration/**)",
+      "Write(./calibration/**)",
+      "Edit(./data/**)",
+      "Write(./data/**)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
     ]
   }
 }

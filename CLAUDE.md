@@ -23,7 +23,7 @@ markers) are still shown, but you should not have to hunt for an absent one.
 
 For any branch/worktree/commit search questions: re-run the report-sync and paste full (never ad-hoc git commands).
 
-Cloud/sandbox agents (Linux, no PowerShell): see AGENTS.md "Cloud / Sandbox Agents" for the equivalent procedure.
+Cloud/sandbox agents (Linux, no PowerShell): see AGENTS.md "Cloud / Sandbox Agents" for the equivalent procedure. No `pwsh`? Run only the 5 marker greps from that section (non-destructive); use its `git reset --hard` step only in a fresh clone, never in a checkout with uncommitted work.
 
 Then read `AGENTS.md` (the Multi-Agent Sync Protocol section is mandatory and now duplicated here for force).
 
@@ -56,3 +56,7 @@ HOUSE RULE — MLB PROP EXTRACTION & DRIVE SYNC INVARIANTS:
 10. Structured desk verdicts (see docs/plans/2026-08-12-structured-ai-verdicts.md): PackIndex is the sole pack truth for the gate. Readers outside the publish path resolve `packs/<date>/verdicts/desk_snapshot.json`, never a pass-level `current.json`. `verdicts/` is never named in `DERIVED_PACK_OUTPUTS` and must not be `unlink()`ed on rebuild. No-E fallback requires A+D+B quorum; unanimous BET uses min stake and is labeled `synthesis_source: fallback_no_e`. `verdict_records` is keyed by `(decision_id, pass, publication_id, record_id)`. Legacy `C_verdict` is CONTRADICTS > CONFIRMS > NEUTRAL, else empty. Never invoke paid/live reasoning unless the user explicitly asks this turn.
 
 **House rule (calibration lock):** never write `calibration\` or `data\` from an agent session, and run pipeline work from a separate git worktree. See `AGENTS.md`.
+
+## NFL pipeline requests
+
+When asked to run the NFL pipeline, follow the shared [NFL pipeline runbook](.agents/skills/nfl-master-betting-pipeline/SKILL.md) for V2.0 execution, the nine-section Section 14 report, and the verified Desktop bundle. The default covers the remaining Eastern Tuesday-through-Monday betting week. Respect explicit slate, matchup, kickoff window, and pre-lock scope.

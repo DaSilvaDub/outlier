@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "upgrade_b_live_trial",
+  "started": "2026-11-23",
+  "weeks": [12, 13, 14, 15],
+  "review_after": "2026-12-22",
+  "note": "Pre-registered 2026-11-23, before any Week 12 result. Do not edit stop_criteria after results start coming in; record a decision in docs/plans/2026-11-23-nfl-upgrade-b-live-trial.md instead. The trial does not end on its own: stakes stay flat until this file is changed by a recorded review.",
+  "stake": {
+    "mode": "flat",
+    "flat_fraction": 0.005
+  },
+  "gates": {
+    "disabled": []
+  },
+  "stop_criteria": {
+    "win_rate_min_picks": 100,
+    "win_rate_floor": 0.53,
+    "clv_min_picks": 40,
+    "clv_mean_floor_pts": 0.0,
+    "max_drawdown_units": 15.0,
+    "success_min_picks": 200,
+    "breakeven_win_rate": 0.524
+  }
+}

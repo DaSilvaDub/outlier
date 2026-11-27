@@ -152,3 +152,10 @@ ever existed anywhere in `outlier_scrapers/` (`git log -S'_acquire_pack_lock' --
 outlier_scrapers/` is empty), so marker 5 of 5 reported MISSING on every session — a gate
 that always fires teaches agents to ignore it, which is the d05eb21 failure mode these
 markers exist to prevent.
+
+## Linux / cloud twin
+
+`block-reasoning.py` is a stdlib-only port of `block-reasoning.ps1` for environments without
+`pwsh` (cloud sandboxes). It is registered as a second PreToolUse hook in `.claude/settings.json`;
+on Windows without `python3` it errors non-blockingly while the `.ps1` guard still fires. **Keep the
+deny patterns in both files identical.**
