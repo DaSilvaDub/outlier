@@ -68,6 +68,13 @@ def _graded() -> tuple[dict[tuple[str, str, str], sc.GradedSignal], list[dict[st
     return {(g.tag, g.player, g.market): g for g in graded}, skipped
 
 
+def test_anytime_td_actual_includes_return_td() -> None:
+    assert sc._actual(
+        {"rushing_tds": "0", "receiving_tds": "0", "special_teams_tds": "1"},
+        "ANYTIME_TD",
+    ) == 1.0
+
+
 def test_grades_vs_average_and_consensus_line() -> None:
     g, _ = _graded()
     mismatch = g[("MATCHUP_RUSH_MISMATCH", "Kyren Williams", "RUSH_YDS")]
