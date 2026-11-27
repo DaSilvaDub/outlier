@@ -29,7 +29,7 @@ $repeat = New-ScheduledTaskTrigger -Once -At "10:00" `
 $capture.Repetition = $repeat.Repetition
 
 Register-NbaTask -Name "Outlier NBA Capture" -Mode "capture" -Trigger $capture `
-    -Description "NBA shadow capture; skips unless a tip within 60 min needs a verified close."
+    -Description "NBA shadow capture; skips unless a tip within 30 min needs a verified close."
 Register-NbaTask -Name "Outlier NBA Settle" -Mode "settle" `
     -Trigger (New-ScheduledTaskTrigger -Daily -At "06:00") `
     -Description "NBA settlement against box scores for every unsettled tip that has started."
