@@ -5,7 +5,9 @@ from datetime import datetime
 from outlier_scrapers.alt_player_props import (
     build_alt_player_props_board,
     build_alt_player_props_parlays,
+    format_alt_player_props_md,
 )
+from outlier_scrapers.ultimate_alt import _estimate_probability
 
 
 def _prop(
@@ -271,8 +273,24 @@ def test_missing_season_hit_rate_does_not_score_the_player_as_zero_percent():
     assert by_player["No Season"]["model_prob"] == by_player["Has Season"]["model_prob"]
     assert by_player["No Season"]["edge_pct"] > 0
     assert by_player["No Season"]["recommended_units"] == 0.5
-    # The CSV column keeps its 0.0 display default.
-    assert by_player["No Season"]["season_pct"] == 0.0
+    assert by_player["No Season"]["season_pct"] is None
+
+
+def test_missing_season_rate_is_not_a_zero_percent_season_downstream():
+    """ultimate_alt treats 0.0 as a real season rate. A blank feed must stay None."""
+    absent = _prop(player="No Season", odds=-150, line=2.5, l5=80.0, l10=80.0)
+    absent.pop("season_pct")
+    row = _board([absent])[0]
+    assert row["season_pct"] is None
+
+    blank = _estimate_probability(row, "PLAYER_PROP")
+    zero = _estimate_probability({**row, "season_pct": 0.0}, "PLAYER_PROP")
+    assert blank is not None and zero is not None
+    assert blank[0] > zero[0]
+
+    text = format_alt_player_props_md([row], [])
+    assert "SZN: 0%" not in text
+    assert "SZN: n/a" in text
 
 
 def test_a_real_zero_percent_season_rate_is_still_modelled_as_zero():
