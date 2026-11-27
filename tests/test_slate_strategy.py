@@ -11,6 +11,7 @@ from outlier_scrapers.slate_strategy import (
     build_event_strategy,
     export_slate_strategy_for_league,
     window_player_form,
+    window_team_form,
 )
 
 
@@ -32,6 +33,18 @@ def _event(
         home_score=home_score,
         players=players,
     )
+
+@pytest.mark.parametrize(
+    ("slate", "espn"),
+    [("NYL", "NY"), ("CON", "CONN"), ("PDX", "POR")],
+)
+def test_espn_codes_join_the_wnba_form_window(slate: str, espn: str):
+    recent = [_event("e1", espn, "SEA", 90, 80, {})]
+    form = window_team_form(recent, slate)
+    assert form["gp"] == 1
+    assert form["wins"] == 1
+    assert form["ppg"] == 90
+
 
 def test_window_player_form():
     recent = [

@@ -10,6 +10,8 @@ from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .registry import canon_team
+
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
 MLB_API_BASE_URL = "https://statsapi.mlb.com/api/v1"
 SPORT_PATHS = {
@@ -17,18 +19,6 @@ SPORT_PATHS = {
     "WNBA": "basketball/wnba",
 }
 USER_AGENT = "outlier-results-collector/1.0"
-TEAM_ALIASES = {
-    "ARI": "AZ",
-    "CHW": "CWS",
-    "GSV": "GS",
-    "KCR": "KC",
-    "LAS": "LA",
-    "LVA": "LV",
-    "SDP": "SD",
-    "SFG": "SF",
-    "TBR": "TB",
-    "WSH": "WAS",
-}
 
 
 class ResultsError(RuntimeError):
@@ -63,38 +53,6 @@ def _fetch_json(url: str, *, timeout: int = 30) -> dict[str, Any]:
 def _token(value: Any) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     return re.sub(r"[^A-Z0-9]", "", text.encode("ascii", "ignore").decode().upper())
-
-
-def _team_token(value: Any) -> str:
-    token = _token(value)
-    return TEAM_ALIASES.get(token, token)
-
-
-_ESPN_TO_ALIAS = {espn: outlier for outlier, espn in TEAM_ALIASES.items()}
-
-
-def canon_team(sport: str, value: Any) -> str:
-    """Map ESPN abbreviations and display names onto Outlier aliases when known."""
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    try:
-        from outlier_scrapers.registry import get_sport_config, normalize_team
-
-        config = get_sport_config(sport, allow_disabled=True)
-        canonical = normalize_team(config, raw)
-        if canonical:
-            return canonical
-        espn_token = _token(raw)
-        mapped = _ESPN_TO_ALIAS.get(espn_token)
-        if mapped:
-            back = normalize_team(config, mapped)
-            if back:
-                return back
-            return mapped
-    except ValueError:
-        pass
-    return _team_token(raw)
 
 
 def _mapping(value: Any) -> dict[str, Any]:

@@ -95,6 +95,51 @@ def test_canon_team_maps_espn_lv_to_outlier_lva() -> None:
     assert canon_team("WNBA", "Las Vegas Aces") == "LVA"
 
 
+@pytest.mark.parametrize(
+    ("slate", "espn"),
+    [("NYL", "NY"), ("CON", "CONN"), ("PDX", "POR")],
+)
+def test_iter_recent_finals_joins_espn_liberty_sun_and_fire(
+    monkeypatch, slate: str, espn: str
+) -> None:
+    as_of = date(2026, 8, 13)
+    day = as_of - timedelta(days=1)
+
+    def fake_fetch(url: str, *, timeout: int = 30) -> dict:
+        if "/summary" in url:
+            return {"boxscore": {"players": []}}
+        if f"dates={day.strftime('%Y%m%d')}" in url:
+            return {
+                "events": [
+                    {
+                        "id": f"espn-{espn}",
+                        "status": {"type": {"completed": True}},
+                        "competitions": [
+                            {
+                                "competitors": [
+                                    {
+                                        "homeAway": "away",
+                                        "score": "90",
+                                        "team": {"abbreviation": espn},
+                                    },
+                                    {
+                                        "homeAway": "home",
+                                        "score": "80",
+                                        "team": {"abbreviation": "SEA"},
+                                    },
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            }
+        return {"events": []}
+
+    monkeypatch.setattr("outlier_scrapers.form_source._fetch_json", fake_fetch)
+    events = iter_recent_finals("WNBA", {slate}, 5, as_of=as_of)
+    assert [event.provider_event_id for event in events] == [f"espn-{espn}"]
+
+
 def test_iter_recent_finals_matches_lva_against_espn_lv(monkeypatch) -> None:
     as_of = date(2026, 8, 13)
     day = as_of - timedelta(days=1)

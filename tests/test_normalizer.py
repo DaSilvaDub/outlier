@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from outlier_scrapers.normalizer import detect_scope, normalize_games, normalize_player_props
+from outlier_scrapers.normalizer import (
+    build_schedule_index,
+    build_team_index,
+    detect_scope,
+    normalize_games,
+    normalize_player_props,
+)
 from outlier_scrapers.registry import get_sport_config
 
 
@@ -185,6 +191,38 @@ def test_unknown_team_yields_none_team_but_preserves_team_raw():
     assert row["team_raw"] == "ZZZ"
     assert row["opponent"] is None
     assert row["opponent_raw"] == "QQQ"
+
+
+def test_schedule_index_resolves_alias_then_name():
+    """An unrecognized alias must not hide a display name that does resolve.
+
+    Outlier sends alias ``CHW`` with name ``Chicago White Sox``. Preferring the
+    alias string and normalizing only that string returned away=None.
+    """
+    config = get_sport_config("MLB")
+    schedule = {
+        "events": [
+            {
+                "eventId": "evt-chw",
+                "away": {"alias": "CHW", "name": "Chicago White Sox", "teamId": "sox"},
+                "home": {"alias": "BOS", "name": "Chicago White Sox", "teamId": "bos"},
+            },
+            {
+                "eventId": "evt-name",
+                "away": {"alias": "NOPE", "name": "Chicago White Sox", "teamId": "sox2"},
+                "home": {"alias": "NYY", "name": "Not A Real Club", "teamId": "nyy"},
+            },
+        ]
+    }
+    index = build_schedule_index(schedule, config)
+    assert index["evt-chw"]["away"] == "CWS"
+    assert index["evt-chw"]["home"] == "BOS"
+    assert index["evt-name"]["away"] == "CWS"
+    assert index["evt-name"]["home"] == "NYY"
+
+    teams = build_team_index(schedule, config)
+    assert teams["sox"]["team"] == "CWS"
+    assert teams["sox2"]["team"] == "CWS"
 
 
 def test_wnba_expansion_team_portland_resolves_team_and_opponent():

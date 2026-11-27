@@ -55,6 +55,35 @@ def test_phx_team_alias_resolves_for_wnba():
     assert normalize_team(get_sport_config("WNBA"), "PHX") == "PHX"
 
 
+def test_espn_wnba_abbreviations_canon_to_outlier_codes():
+    """ESPN scoreboard codes for Liberty, Sun, and Fire must join the form window."""
+    wnba = get_sport_config("WNBA")
+    assert normalize_team(wnba, "NY") == "NYL"
+    assert normalize_team(wnba, "CONN") == "CON"
+    assert normalize_team(wnba, "POR") == "PDX"
+    assert normalize_team(wnba, "LV") == "LVA"
+    assert normalize_team(wnba, "LA") == "LAS"
+    assert normalize_team(wnba, "GS") == "GSV"
+    assert normalize_team(wnba, "WSH") == "WAS"
+
+
+def test_mlb_feed_abbreviations_canon_to_outlier_codes():
+    mlb = get_sport_config("MLB")
+    expected = {
+        "CHW": "CWS",
+        "OAK": "ATH",
+        "WSN": "WSH",
+        "WAS": "WSH",
+        "SDP": "SD",
+        "SFG": "SF",
+        "KCR": "KC",
+        "TBR": "TB",
+    }
+    for raw, code in expected.items():
+        assert normalize_team(mlb, raw) == code
+        assert normalize_team(mlb, code) == code
+
+
 def test_all_mlb_teams_resolve_from_their_stats_api_full_name():
     """Every MLB team's full display name must normalize back to its own code.
 
