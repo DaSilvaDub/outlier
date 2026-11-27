@@ -473,3 +473,87 @@ def test_an_event_that_cannot_be_simulated_is_logged_and_degraded_not_raised(mon
     failed = [r for r in log.records if r[1] == "event_sim_failed"]
     assert {r[2]["event_id"] for r in failed} == set(teams)
     assert all("event" not in r[2] for r in failed)  # structlog's own keyword, never reused
+
+
+def _total(oid: str, side: str, line: float):
+    from outlier_nba.ingest.outlier import OutcomeRecord
+
+    return OutcomeRecord(
+        "GAME", "e1", "m-total", oid, "TOTAL", side, line, (), fx.TIP1, "NYK", "BOS"
+    )
+
+
+def test_one_main_rung_puts_both_sides_in_the_same_family(promo) -> None:
+    """One total ladder, one main rung: both sides share a family.
+
+    OVER 110.5 is a two-way quote at 0.62/0.38. UNDER 108.5 is 0.48 and its over
+    was not devigged. Picking the nearest rung per side crowns both of those,
+    so the two sides of 110.5 land in team.TOTAL and team.ALT_TOTAL.
+    """
+    from datetime import UTC, datetime
+
+    from outlier_nba.track.capture import ShadowCapture
+
+    records = [
+        _total("over-110.5", "OVER", 110.5),
+        _total("under-110.5", "UNDER", 110.5),
+        _total("over-108.5", "OVER", 108.5),
+        _total("under-108.5", "UNDER", 108.5),
+    ]
+    probs = {"over-110.5": 0.62, "under-110.5": 0.38, "under-108.5": 0.48}
+    capture = ShadowCapture(
+        rows=[
+            {
+                "outcome_id": oid,
+                "market_consensus_prob": f"{p:.6f}",
+                "price": "",
+                "selection": "",
+                "book": "",
+                "data_quality_flags": "",
+            }
+            for oid, p in probs.items()
+        ]
+    )
+    rows, _stats = team_run.price_slate(
+        None,  # TeamState is unused; the empty draw map leaves the model unpriced
+        records,
+        capture,
+        captured_at=datetime(2026, 11, 15, tzinfo=UTC),
+        draws_by_event={},
+        neutral_by_event={},
+        promotion_path=promo,
+    )
+    by_line: dict[float, list[dict[str, str]]] = {}
+    for row in rows:
+        by_line.setdefault(float(row["line"]), []).append(row)
+
+    for line in (108.5, 110.5):
+        pair = by_line[line]
+        assert {r["side"] for r in pair} == {"OVER", "UNDER"}
+        assert len({r["family"] for r in pair}) == 1
+        assert len({r["alt_line"] for r in pair}) == 1
+
+    # 108.5 is 0.02 from a coin flip; 110.5 is 0.12. Both of its sides are the main.
+    assert {r["family"] for r in by_line[108.5]} == {"team.TOTAL"}
+    assert {r["alt_line"] for r in by_line[108.5]} == {"false"}
+    assert {r["family"] for r in by_line[110.5]} == {"team.ALT_TOTAL"}
+    assert {r["alt_line"] for r in by_line[110.5]} == {"true"}
+    assert team_run._main_lines(records, probs) == {"over-108.5", "under-108.5"}
+
+
+def test_equal_distance_main_rung_is_the_lower_line() -> None:
+    """Two rungs the same distance from 50/50: the lower line wins, both sides."""
+    records = [
+        _total("over-110.5", "OVER", 110.5),
+        _total("under-110.5", "UNDER", 110.5),
+        _total("over-108.5", "OVER", 108.5),
+        _total("under-108.5", "UNDER", 108.5),
+    ]
+    # 0.625 and 0.375 are equally far from 1/2, and exactly representable.
+    probs = {
+        "over-110.5": 0.625,
+        "under-110.5": 0.375,
+        "over-108.5": 0.375,
+        "under-108.5": 0.625,
+    }
+    assert team_run._main_lines(records, probs) == {"over-108.5", "under-108.5"}

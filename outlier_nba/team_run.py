@@ -362,20 +362,60 @@ def _price_record(rec: ingest.OutcomeRecord, draws: SimDraws) -> team_markets.Pr
     return None
 
 
+@dataclass
+class _RungQuotes:
+    outcome_ids: list[str]
+    probs: dict[str, float]
+
+
+def _paired_gap(probs: Mapping[str, float]) -> float:
+    """Distance from 50/50 of one rung's paired devigged probability.
+
+    Consensus stores that probability on the over/home side and its complement
+    on the other, so either side is the same distance. A rung quoted on one
+    side uses the side that was quoted.
+    """
+    p = probs.get("OVER", probs.get("HOME"))
+    if p is None:
+        p = next(iter(probs.values()))
+    return abs(p - 0.5)
+
+
 def _main_lines(
     records: Sequence[ingest.OutcomeRecord], market_probs: Mapping[str, float]
 ) -> set[str]:
-    """Outcome ids on each market's main line: the rung whose consensus is nearest 50/50."""
-    best: dict[tuple[str, str, str | None, str], tuple[float, str]] = {}
+    """Outcome ids on the one main rung of each (event, market, team).
+
+    The rung whose paired devigged probability is nearest 50/50. Both sides of
+    that rung are main, and any other priced rung is an alt. Equal distances
+    take the lower line.
+    """
+    grouped: dict[tuple[str, str, str | None], dict[float, _RungQuotes]] = defaultdict(dict)
     for rec in records:
-        p = market_probs.get(rec.outcome_id)
-        if rec.market == "ML" or p is None or rec.line is None:
+        if rec.market == "ML" or rec.line is None:
             continue
-        key = (rec.event_id, rec.market, rec.team, rec.side)
-        gap = abs(p - 0.5)
-        if key not in best or gap < best[key][0]:
-            best[key] = (gap, rec.outcome_id)
-    return {oid for _gap, oid in best.values()}
+        lines = grouped[(rec.event_id, rec.market, rec.team)]
+        rung = lines.get(rec.line)
+        if rung is None:
+            rung = _RungQuotes([], {})
+            lines[rec.line] = rung
+        rung.outcome_ids.append(rec.outcome_id)
+        p = market_probs.get(rec.outcome_id)
+        if p is not None:
+            rung.probs.setdefault(rec.side, p)
+    chosen: set[str] = set()
+    for lines in grouped.values():
+        best: tuple[float, float] | None = None
+        best_ids: list[str] = []
+        for line, rung in lines.items():
+            if not rung.probs:
+                continue
+            rank = (_paired_gap(rung.probs), line)
+            if best is None or rank < best:
+                best = rank
+                best_ids = rung.outcome_ids
+        chosen.update(best_ids)
+    return chosen
 
 
 def price_slate(
