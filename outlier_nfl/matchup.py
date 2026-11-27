@@ -103,10 +103,12 @@ class MatchupScript:
     mismatches: tuple[str, ...]
     prop_signals: tuple[PropSignal, ...]
     notes: tuple[str, ...] = ()
-    # market = quoted line; default = synthetic 45.5 / 24 / 21 placeholder
+    # market = quoted line; default = synthetic 45.5 / 24 / 21 placeholder.
+    # A missing spread uses the same default flag. It is not a pick'em.
     total_source: str = "market"
     home_tt_source: str = "market"
     away_tt_source: str = "market"
+    spread_source: str = "market"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -428,15 +430,20 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
         [g for g in lines if g.market == "SPREAD"], away, home
     )
     if primary_away is not None:
-        home_spread = -primary_away
+        home_spread = -float(primary_away)
+        if home_spread == 0:
+            home_spread = 0.0
+        spread_source = "market"
     elif home_spreads:
         best_spread = max(
             home_spreads,
             key=lambda x: (len(x.books or ()), -abs(x.best_odds - (-110) if x.best_odds else 999)),
         )
         home_spread = float(best_spread.line or 0.0)
+        spread_source = "market"
     else:
         home_spread = 0.0
+        spread_source = "default"
 
     game_totals = [
         g for g in lines
@@ -505,6 +512,7 @@ def _market_context(game_lines: Iterable[NflGameLine], home: str, away: str) -> 
         "total_source": total_source,
         "home_tt_source": home_tt_source,
         "away_tt_source": away_tt_source,
+        "spread_source": spread_source,
     }
 
 
@@ -919,6 +927,10 @@ def build_matchup_script(
     total_source = str(ctx.get("total_source") or "market")
     home_tt_source = str(ctx.get("home_tt_source") or "market")
     away_tt_source = str(ctx.get("away_tt_source") or "market")
+    spread_source = str(ctx.get("spread_source") or "market")
+    if spread_source == "default":
+        spread_lean = ""
+        notes.append("PLACEHOLDER spread (no quoted spread).")
     if total_source == "default":
         notes.append("PLACEHOLDER total 45.5 (no quoted game total).")
     if home_tt_source == "default" or away_tt_source == "default":
@@ -945,6 +957,7 @@ def build_matchup_script(
         total_source=total_source,
         home_tt_source=home_tt_source,
         away_tt_source=away_tt_source,
+        spread_source=spread_source,
     )
 
 
@@ -1161,6 +1174,8 @@ def render_matchup_markdown(
     ]
     if script:
         src_bits = []
+        if script.spread_source == "default":
+            src_bits.append("spread=default")
         if script.total_source == "default":
             src_bits.append("total=default")
         if script.home_tt_source == "default" or script.away_tt_source == "default":
@@ -1172,11 +1187,15 @@ def render_matchup_markdown(
             f"{src_note}"
         )
         # Name the backed side with its own line: "AWAY (ATL -1.5)", not "AWAY (+1.5 NO)".
-        if script.spread_lean == "AWAY":
-            backed = f"{away} {-script.home_spread:+.1f}"
+        # A missing quote is a placeholder, not a pick'em lean at +0.0.
+        if script.spread_source == "default":
+            lines.append("- **Spread:** placeholder (no quoted spread)")
         else:
-            backed = f"{home} {script.home_spread:+.1f}"
-        lines.append(f"- **Spread lean:** {script.spread_lean} ({backed})")
+            if script.spread_lean == "AWAY":
+                backed = f"{away} {-script.home_spread:+.1f}"
+            else:
+                backed = f"{home} {script.home_spread:+.1f}"
+            lines.append(f"- **Spread lean:** {script.spread_lean} ({backed})")
         total_tag = " (placeholder)" if script.total_source == "default" else ""
         lines.append(
             f"- **Total lean:** {script.total_lean} {script.total:.1f}{total_tag}"
@@ -1189,9 +1208,9 @@ def render_matchup_markdown(
     total = env.get("primary_total_line")
     if spread is not None or total is not None:
         lines.extend(["", "## 2. Consensus market", ""])
-        if script is not None:
+        if script is not None and script.spread_source != "default":
             lines.append(f"- **Spread:** {home} {script.home_spread:+.1f}")
-        elif spread is not None:
+        elif script is None and spread is not None:
             lines.append(f"- **Spread:** {home} {float(spread):+.1f}")
         if total is not None:
             lines.append(f"- **Total:** {total}")
