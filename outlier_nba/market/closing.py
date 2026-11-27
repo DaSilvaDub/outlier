@@ -67,9 +67,16 @@ def _opt(value: str | None) -> float | None:
 
 
 def _price(value: str | None) -> int | None:
-    """An American price, or None where the cell is blank, absent or not a number."""
+    """An American price, or None where the cell is blank, absent, or not one.
+
+    Odds are integers. ``|odds| < 100`` is rejected by :func:`american_to_prob`.
+    A fractional cell is missing, same as a blank one.
+    """
     number = _opt(value)
-    return None if number is None else int(number)
+    if number is None or not number.is_integer():
+        return None
+    price = int(number)
+    return price if american_to_prob(price) is not None else None
 
 
 def _day(value: str | None) -> date | None:

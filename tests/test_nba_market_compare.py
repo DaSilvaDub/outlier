@@ -488,6 +488,45 @@ def test_an_unreadable_csv_row_is_dropped_not_raised_over(tmp_path: Path) -> Non
     assert closing.lines_from_csv(narrow) == {}
 
 
+def test_fractional_american_odds_are_missing_not_truncated(tmp_path: Path) -> None:
+    """American odds are integers with ``|odds| >= 100``.
+
+    ``int(-110.4)`` is ``-110``, so truncating would keep a price the file never
+    quoted. A fractional cell is missing, same as a blank or non-numeric one,
+    and that row is dropped without taking the rest of the file with it.
+    """
+    from outlier_nba.market import closing
+
+    assert closing._price("-110.4") is None
+    assert closing._price("+150.2") is None
+    assert closing._price(None) is None
+    assert closing._price("") is None
+    assert closing._price("n/a") is None
+    assert closing._price("-110") == -110
+    assert closing._price("-110.0") == -110  # a whole price written with a trailing .0
+    assert closing._price("+100") == 100
+    assert closing._price("-100") == -100
+    assert closing._price("99") is None
+    assert closing._price("-99") is None
+
+    header = (
+        "game_id,season,date,home,away,ml_home,ml_away,spread_home,total_close,total_open,"
+        "spread_open_home,neutral\n"
+    )
+    path = tmp_path / "fractional.csv"
+    path.write_text(
+        header
+        + "g1,2018-19,2018-10-16,BOS,PHI,-110.4,-110,-4.5,211.5,208.5,-5,\n"
+        + "g2,2018-19,2018-10-17,MIA,UTA,-140,120.5,,,,,\n"
+        + "g3,2018-19,2018-10-18,DEN,SAC,-110.0,+150,,,,,\n"
+        + "g4,2018-19,2018-10-19,GSW,OKC,99,-110,,,,,\n",
+        encoding="utf-8",
+    )
+    lines = closing.lines_from_csv(path)
+    assert set(lines) == {"g3"}
+    assert (lines["g3"].ml_home, lines["g3"].ml_away) == (-110, 150)
+
+
 def test_a_row_with_no_moneyline_is_dropped_not_a_crash(tmp_path: Path) -> None:
     """A blank cell is documented as "unknown"; a missing price makes the row unusable, and an
     unusable row is dropped. Parsing it as a number instead aborted the whole backtest."""
