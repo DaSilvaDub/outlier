@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from outlier_scrapers.alt_player_props import (
+    _floor_ladder_score,
     build_alt_player_props_board,
     build_alt_player_props_parlays,
 )
@@ -284,6 +285,94 @@ def test_a_real_zero_percent_season_rate_is_still_modelled_as_zero():
 
     by_player = {row["player"]: row for row in _board([zero, absent])}
     assert by_player["Cold"]["model_prob"] < by_player["Unknown"]["model_prob"]
+
+
+def test_already_percent_hit_rates_are_not_scaled_again():
+    """Normalized l5/l10/season are already percents. Values in [0, 1] must stay.
+
+    ``percent_number`` turns 1.0 into 100. Calling it again on the normalized
+    fields made a 1% WNBA season look like 100%, which priced PTS Over -150 at
+    model_prob 0.704, edge 10.4, and 0.5 units.
+    """
+    row = _prop(
+        league="WNBA",
+        player="One Pct Season",
+        market="PTS",
+        line=12.5,
+        odds=-150,
+        l5=80.0,
+        l10=80.0,
+    )
+    row["season_pct"] = 1.0
+    priced = _board([row], league="WNBA")[0]
+    assert priced["l5_pct"] == 80.0
+    assert priced["l10_pct"] == 80.0
+    assert priced["season_pct"] == 1.0
+    assert priced["model_prob"] == 0.5852
+    assert priced["edge_pct"] == -1.48
+    assert priced["recommended_units"] == ""
+
+    tiny = _prop(
+        league="WNBA",
+        player="Tiny Rates",
+        market="PTS",
+        odds=-150,
+        l5=1.0,
+        l10=0.5,
+        event_id="e2",
+    )
+    tiny["season_pct"] = 1.0
+    stored = _board([tiny], league="WNBA")[0]
+    assert stored["l5_pct"] == 1.0
+    assert stored["l10_pct"] == 0.5
+    assert stored["season_pct"] == 1.0
+
+
+def test_missing_season_is_omitted_from_floor_ladder_rank():
+    """A 95/95 player with no season must not be ranked as a 0% season.
+
+    Four 80/80/80 rows filled the top 4 while the missing-season row scored
+    ``season_pct or 0.0``. A feed that really reports 0% still counts as 0.
+    The 0.40/0.35/0.25 weights stay put: a missing season fills that 0.25
+    slot with the average of L10 and L5.
+    """
+    missing = _prop(league="WNBA", player="No Season", market="PTS", odds=-150, l5=95.0, l10=95.0)
+    missing.pop("season_pct")
+    zero = _prop(
+        league="WNBA",
+        player="Zero Season",
+        market="PTS",
+        odds=-150,
+        l5=95.0,
+        l10=95.0,
+    )
+    zero["season_pct"] = 0.0
+    solids = [
+        _prop(
+            league="WNBA",
+            player=f"Solid {name}",
+            market="PTS",
+            odds=-150,
+            l5=80.0,
+            l10=80.0,
+        )
+        for name in "ABCD"
+    ]
+    for solid in solids:
+        solid["season_pct"] = 80.0
+
+    selected = {row["player"] for row in _board([missing, zero, *solids], league="WNBA")}
+    assert "No Season" in selected
+    assert "Zero Season" not in selected
+    assert len(selected) == 4
+
+    present = {"l5_pct": 90.0, "l10_pct": 95.0, "season_pct": 80.0, "best_odds": -150, "market": "PTS"}
+    assert _floor_ladder_score(present) == (95.0 * 0.40 + 90.0 * 0.35 + 80.0 * 0.25) * 1.15 * 1.10
+    omitted = {**present, "season_pct": None}
+    assert _floor_ladder_score(omitted) == (
+        95.0 * 0.40 + 90.0 * 0.35 + ((95.0 + 90.0) / 2.0) * 0.25
+    ) * 1.15 * 1.10
+    assert _floor_ladder_score(omitted) > _floor_ladder_score({**present, "season_pct": 0.0})
 
 
 def test_unicode_minus_odds_are_parsed_like_ascii_minus():
