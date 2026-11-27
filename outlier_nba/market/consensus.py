@@ -108,7 +108,10 @@ def consensus_two_way(
         except DevigError:
             dropped.append(quote.book)
             continue
-        if not (PLACEHOLDER_LOW <= pa <= PLACEHOLDER_HIGH):
+        if not (
+            PLACEHOLDER_LOW <= pa <= PLACEHOLDER_HIGH
+            and PLACEHOLDER_LOW <= pb <= PLACEHOLDER_HIGH
+        ):
             dropped.append(quote.book)
             continue
         used.append(quote.book)
