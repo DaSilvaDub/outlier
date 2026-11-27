@@ -41,12 +41,9 @@ that **denies** the commands listed above instead of merely warning. It supersed
 advisory only, nothing actually stopped a paid command — and which also lacked `PowerShell`
 and `run_desk2` coverage.
 
-(That rule *is* distributed, contrary to what an earlier version of this section claimed:
-`.gitignore:43` `.claude/*.local.md` matches it, but the file was already tracked when
-`b070caa` added that rule, and `.gitignore` never untracks. So it reaches every ent and every
-fresh clone — it just never blocked anything. It is now redundant with the deny hook; if you
-want `b070caa`'s intent to actually take effect, it needs `git rm --cached`, as was done for
-the sqlite file in #55.)
+The old hookify file was removed once the deny hooks superseded it. Because `pwsh` is absent in cloud/Linux sandboxes, the same
+guard also exists as [`.claude/hooks/block-reasoning.py`](.claude/hooks/block-reasoning.py), registered as a second `PreToolUse` hook.
+Keep the deny patterns in the `.ps1` and `.py` files identical.
 
 **When the user HAS explicitly asked this turn, append the token `DESK_OK` to the command:**
 
@@ -125,8 +122,7 @@ echo "All 5 upgrade markers present."
 ```
 
 The house rule (never run reasoning unless explicitly asked) still applies by
-policy even though the `block-reasoning.ps1` hook is unavailable in non-PowerShell
-environments.
+policy; in non-PowerShell environments the `block-reasoning.py` twin hook enforces it (the `.ps1` hook is unavailable).
 
 See `docs/CLOUD-SANDBOX-LIMITATIONS.md` for the full list of sandbox constraints.
 
@@ -192,3 +188,7 @@ HOUSE RULE — MLB PROP EXTRACTION & DRIVE SYNC INVARIANTS:
 8. Daily Structural Integrity Audit: (a) Non-whitelisted MLB player/team props strictly excluded at generation (ALLOWED_MLB_PLAYER_PROPS / ALLOWED_MLB_TEAM_PROPS); pack also hard-excludes HR and Walks Allowed tokens; (b) Scheduled slate games in context.events never receive UNINDEXED_SLATE_GAME; (c) Non-actionable rows (actionable=false) clear recommended_units_pre_news to ""; (d) Briefing totals deduplicated against candidate market IDs; (e) Integer totals derived via +0.5/-0.5 ladder lines or flagged push_capable_no_prob.
 9. Whitelisted ≠ Recommendable (generation scope vs. desk-recommendation scope; ruled 2026-08-12, see docs/plans/2026-08-12-structured-ai-verdicts.md): ALLOWED_MLB_PLAYER_PROPS / ALLOWED_MLB_TEAM_PROPS govern what enters a pack at generation only — they do not by themselves make a market desk-recommendable. Pitcher SO, game totals, and team run totals are the only MLB prop families this pipeline is built to recommend. If a stale HR, HRR, or player BB row appears, the desk may never BET it.
 10. Structured desk verdicts (see docs/plans/2026-08-12-structured-ai-verdicts.md): PackIndex is the sole pack truth for the gate. Readers outside the publish path resolve `packs/<date>/verdicts/desk_snapshot.json`, never a pass-level `current.json`. `verdicts/` is never named in `DERIVED_PACK_OUTPUTS` and must not be `unlink()`ed on rebuild. No-E fallback requires A+D+B quorum; unanimous BET uses min stake and is labeled `synthesis_source: fallback_no_e`. `verdict_records` is keyed by `(decision_id, pass, publication_id, record_id)`. Legacy `C_verdict` is CONTRADICTS > CONFIRMS > NEUTRAL, else empty. Never invoke paid/live reasoning unless the user explicitly asks this turn.
+
+## NFL pipeline requests
+
+When asked to run the NFL pipeline, follow the shared [NFL pipeline runbook](.agents/skills/nfl-master-betting-pipeline/SKILL.md) for V2.0 execution, the nine-section Section 14 report, and the verified Desktop bundle. The default covers the remaining Eastern Tuesday-through-Monday betting week. Respect explicit slate, matchup, kickoff window, and pre-lock scope.

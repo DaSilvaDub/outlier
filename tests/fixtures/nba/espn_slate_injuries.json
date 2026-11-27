@@ -1,0 +1,94 @@
+{
+ "injuries": [
+  {
+   "id": "5",
+   "displayName": "Cleveland Cavaliers",
+   "injuries": [
+    {
+     "id": "539637",
+     "status": "Out",
+     "date": "2026-11-17T22:18Z",
+     "shortComment": "Tomlin (back) will remain on the inactive list for Wednesday's game against the Grizzlies.",
+     "athlete": {
+      "displayName": "Nae'Qwan Tomlin"
+     }
+    },
+    {
+     "id": "539448",
+     "status": "Out",
+     "date": "2026-11-16T22:06Z",
+     "shortComment": "Mobley will receive treatment and participate in rehab after the team confirmed a diagnosis of a right great toe sprain, and he'll be re-evaluated in the next 7-to-10 days.",
+     "athlete": {
+      "displayName": "Evan Mobley"
+     }
+    }
+   ]
+  },
+  {
+   "id": "18",
+   "displayName": "New York Knicks",
+   "injuries": [
+    {
+     "id": "540990",
+     "status": "Out",
+     "date": "2026-11-25T23:19Z",
+     "shortComment": "Anunoby (calf) participated in on-court work for the first time since sustaining the injury, Ian Begley of SportsNet New York reports.",
+     "athlete": {
+      "displayName": "OG Anunoby"
+     }
+    },
+    {
+     "id": "540956",
+     "status": "Out",
+     "date": "2026-11-25T17:57Z",
+     "shortComment": "McBride (adductor) has been ruled out for Wednesday's game against the Cavaliers.",
+     "athlete": {
+      "displayName": "Miles McBride"
+     }
+    },
+    {
+     "id": "540861",
+     "status": "Out",
+     "date": "2026-11-24T21:56Z",
+     "shortComment": "Clarkson (foot) is out for Wednesday's game against Cleveland.",
+     "athlete": {
+      "displayName": "Jordan Clarkson"
+     }
+    }
+   ]
+  },
+  {
+   "id": "20",
+   "displayName": "Philadelphia 76ers",
+   "injuries": [
+    {
+     "id": "540991",
+     "status": "Out",
+     "date": "2026-11-25T23:30Z",
+     "shortComment": "Brown (hamstring) won't return to Wednesday's game against Miami, Kyle Neubeck of AllPHLY.com reports. He finished with six points (2-8 FG, 0-1 3Pt, 2-2 FT), one rebound and one assist over 17 minutes.",
+     "athlete": {
+      "displayName": "Jaylen Brown"
+     }
+    },
+    {
+     "id": "540975",
+     "status": "Out",
+     "date": "2026-11-25T20:07Z",
+     "shortComment": "Embiid (illness) is out for Wednesday's game against Miami, Ira Winderman of the South Florida Sun Sentinel reports.",
+     "athlete": {
+      "displayName": "Joel Embiid"
+     }
+    },
+    {
+     "id": "533362",
+     "status": "Out",
+     "date": "2026-10-06T19:17Z",
+     "shortComment": "Hukporti has sustained a season-ending ruptured right Achilles tendon, per Shams Charania of ESPN.",
+     "athlete": {
+      "displayName": "Ariel Hukporti"
+     }
+    }
+   ]
+  }
+ ]
+}

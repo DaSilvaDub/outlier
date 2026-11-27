@@ -1,241 +1,190 @@
-"""Tests for scripts/export_nba_extra_pack.py (slate-date fallback + min-edge gate)."""
+"""Regression checks for current-slate, pre-tip NBA quote publication."""
 
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
+import export_nba_extra_pack as exp  # noqa: E402
 
-import export_nba_extra_pack as exp
-
-
-def _write_src(path: Path, rows: list[dict[str, str]]) -> None:
-    fields = ["slate_date", "player", "market", "line", "edge_pct", "recommended_side"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows)
+NOW = datetime(2026, 11, 23, 12, tzinfo=UTC)
+DATE = "2026-11-23"
 
 
-def _row(slate_date: str, player: str, edge_pct: str) -> dict[str, str]:
-    return {
-        "slate_date": slate_date,
-        "player": player,
+def _row(**changes):
+    row = {
+        "slate_date": DATE,
+        "player": "Current Player",
         "market": "PTS",
         "line": "20.5",
-        "edge_pct": edge_pct,
+        "edge_pct": "7.5",
         "recommended_side": "OVER",
+        "recommended_odds": "-115",
+        "over_odds": "-115",
+        "game_time": "2026-11-24T00:00:00Z",
+        "quote_timestamp": "2026-11-23T11:45:00Z",
     }
+    return row | changes
 
 
-def _read(path: Path) -> list[dict[str, str]]:
-    with open(path, encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+def _write(path, rows):
+    fields = list(dict.fromkeys(field for row in rows for field in row)) or exp.FIELDNAMES
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
-@pytest.fixture()
-def src(tmp_path: Path) -> Path:
-    p = tmp_path / "prop_edges_latest.csv"
-    _write_src(p, [_row("2026-11-06", "Stale Guy", "7.5"), _row("2026-11-06", "Stale Two", "-9.0")])
-    return p
+def _read(path):
+    with path.open(encoding="utf-8") as stream:
+        return list(csv.DictReader(stream))
 
 
-def test_requested_date_wins_when_it_has_rows(tmp_path: Path, src: Path) -> None:
-    _write_src(src, [_row("2026-11-06", "Yesterday", "7.5"), _row("2026-11-07", "Today", "6.0")])
-    out = tmp_path / "nba_only.csv"
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-07") == 1
-    assert [r["player"] for r in _read(out)] == ["Today"]
+@pytest.fixture(autouse=True)
+def no_host_disk_check(monkeypatch):
+    monkeypatch.setattr(exp, "check_disk_space", lambda **kwargs: None)
 
 
-def test_fallback_to_another_slate_is_reported_on_stderr(
-    tmp_path: Path, src: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The fallback substitutes another slate's rows; it must not do so silently."""
-    out = tmp_path / "nba_only.csv"
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-07") == 2
-    assert all(r["slate_date"] == "2026-11-06" for r in _read(out))
-    err = capsys.readouterr().err
-    assert "No rows match slate_date '2026-11-07'" in err
-    assert "may belong to another slate" in err
+def test_requested_date_wins_and_after_midnight_utc_tip_is_correct(tmp_path):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    _write(src, [_row(slate_date="2026-11-22", player="Yesterday"), _row()])
+    assert exp.export_nba_pack(src, out, DATE, now=NOW) == 1
+    assert [row["player"] for row in _read(out)] == ["Current Player"]
+    status = json.loads(out.with_suffix(".status.json").read_text())
+    assert status["status"] == "ready"
+    assert status["row_count"] == status["actionable_rows"] == 1
+    assert status["csv_sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
 
 
-def test_fallback_can_be_refused(tmp_path: Path, src: Path) -> None:
-    out = tmp_path / "nba_only.csv"
-
-    count = exp.export_nba_pack(src, out, slate_date="2026-11-07", allow_latest_fallback=False)
-
-    assert count == 0
+@pytest.mark.parametrize("fallback", [True, False])
+def test_stale_slate_never_falls_back_even_with_legacy_flag(tmp_path, fallback):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    _write(src, [_row(slate_date="2026-11-22")])
+    assert exp.export_nba_pack(src, out, DATE, allow_latest_fallback=fallback, now=NOW) == 0
     assert _read(out) == []
+    status = json.loads(out.with_suffix(".status.json").read_text())
+    assert status["status"] == "awaiting_odds"
+    assert status["slate_date"] == DATE
+    assert status["actionable_rows"] == 0
 
 
-def test_no_allow_latest_fallback_flag_exists(tmp_path: Path, src: Path, monkeypatch) -> None:
-    """Regression: action="store_true" with default=True made the off-switch unreachable."""
-    out = tmp_path / "nba_only.csv"
+@pytest.mark.parametrize(
+    "changes, reason",
+    [
+        ({"game_time": "2026-11-23T12:00:00Z"}, "game_started"),
+        ({"game_time": "2026-11-23T11:59:59Z"}, "game_started"),
+        ({"game_time": "2026-11-23T20:00:00"}, "unverified_game_time"),
+        ({"game_time": ""}, "unverified_game_time"),
+        ({"game_time": "bad"}, "unverified_game_time"),
+        ({"game_time": "2026-11-24T06:00:00Z"}, "wrong_game_date"),
+        ({"game_status": "FINAL"}, "game_unavailable"),
+        ({"recommended_odds": ""}, "awaiting_odds"),
+        ({"quote_timestamp": ""}, "awaiting_odds"),
+        ({"recommended_odds": "NaN"}, "awaiting_odds"),
+        ({"recommended_odds": "-99"}, "awaiting_odds"),
+        ({"recommended_odds": "-115.5"}, "awaiting_odds"),
+        ({"recommended_side": ""}, "awaiting_odds"),
+        ({"line": "inf"}, "awaiting_odds"),
+        ({"line": ""}, "awaiting_odds"),
+        ({"over_odds": "-120"}, "price_mismatch"),
+        ({"odds_stale": "true"}, "stale_odds"),
+        ({"quote_timestamp": "2026-11-22T23:59:59Z"}, "stale_odds"),
+        ({"quote_timestamp": "2026-11-23T12:01:00Z"}, "stale_odds"),
+        ({"quote_timestamp": "2026-11-23T11:00:00"}, "unverified_quote_time"),
+    ],
+)
+def test_publication_rejects_unverifiable_or_unavailable_quote(changes, reason):
+    row = _row(**changes)
+    assert exp.publication_rejection(row, DATE, NOW) == reason
+    assert not exp.publication_eligible(row, DATE, NOW)
+
+
+def test_under_uses_exact_under_quote():
+    row = _row(recommended_side="UNDER", recommended_odds="105", under_odds="105")
+    assert exp.publication_eligible(row, DATE, NOW)
+
+
+def test_bettingpros_requires_individual_book_and_selected_offer():
+    row = _row(
+        provider="bettingpros",
+        source_name="FanDuel",
+        provider_book="FanDuel",
+        provider_event_id="123",
+        provider_quote_id="456",
+        over_odds="-115",
+        recommended_side="OVER",
+        recommended_odds="-115",
+    )
+    assert exp.publication_eligible(row, DATE, NOW)
+    for field in (
+        "provider_event_id",
+        "provider_quote_id",
+        "provider_book",
+        "over_odds",
+        "quote_timestamp",
+    ):
+        assert not exp.publication_eligible({**row, field: ""}, DATE, NOW)
+    assert not exp.publication_eligible({**row, "source_name": "BettingPros Consensus"}, DATE, NOW)
+
+
+def test_empty_overwrites_old_pack_and_status_before_fail_on_empty(tmp_path):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    out.write_text("yesterdays stale rows")
+    _write(src, [_row(recommended_odds="")])
+    with pytest.raises(RuntimeError, match="0 candidate rows"):
+        exp.export_nba_pack(src, out, DATE, now=NOW, fail_on_empty=True)
+    assert _read(out) == []
+    assert json.loads(out.with_suffix(".status.json").read_text())["status"] == "awaiting_odds"
+
+
+@pytest.mark.parametrize("bad_edge", ["-9.0", "7.5%", "nan", "inf", ""])
+def test_min_edge_excludes_negative_nonfinite_and_unreadable_edges(tmp_path, bad_edge):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    _write(src, [_row(player="Bad", edge_pct=bad_edge), _row(player="Good")])
+    assert exp.export_nba_pack(src, out, DATE, min_edge_pct=5, now=NOW) == 1
+    assert [(row["rank"], row["player"]) for row in _read(out)] == [("1", "Good")]
+
+
+@pytest.mark.parametrize("flags", [[], ["--allow-latest-fallback"], ["--no-allow-latest-fallback"]])
+def test_cli_legacy_flags_cannot_publish_another_slate(tmp_path, monkeypatch, flags):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    _write(src, [_row(slate_date="2026-11-22")])
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "export_nba_extra_pack.py",
             "--date",
-            "2026-11-07",
+            DATE,
             "--src",
             str(src),
             "--out",
             str(out),
             "--no-auto-refresh",
-            "--no-allow-latest-fallback",
+            *flags,
         ],
     )
-
     assert exp.main() == 0
     assert _read(out) == []
 
 
-def test_min_edge_excludes_negative_edge(tmp_path: Path, src: Path) -> None:
-    """Regression: abs(edge) let a -9.0% edge clear --min-edge 5."""
+def test_missing_source_publishes_explicit_awaiting_odds(tmp_path):
     out = tmp_path / "nba_only.csv"
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-06", min_edge_pct=5.0) == 1
-    kept = _read(out)
-    assert [r["player"] for r in kept] == ["Stale Guy"]
-    assert kept[0]["edge_pct"] == "7.5"
+    assert exp.export_nba_pack(None, out, DATE, now=NOW) == 0
+    assert json.loads(out.with_suffix(".status.json").read_text())["actionable_rows"] == 0
 
 
-def test_min_edge_drops_unreadable_edge(tmp_path: Path) -> None:
-    """A non-numeric edge has not cleared the bar, so it is not passed through."""
-    src = tmp_path / "src.csv"
-    _write_src(src, [_row("2026-11-06", "Pct Guy", "7.5%"), _row("2026-11-06", "Good Guy", "8.0")])
-    out = tmp_path / "nba_only.csv"
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-06", min_edge_pct=5.0) == 1
-    assert [r["player"] for r in _read(out)] == ["Good Guy"]
-
-
-def test_kept_rows_are_reranked_from_one(tmp_path: Path) -> None:
-    src = tmp_path / "src.csv"
-    _write_src(
-        src,
-        [
-            _row("2026-11-06", "Low", "1.0"),
-            _row("2026-11-06", "High", "9.0"),
-            _row("2026-11-06", "Mid", "6.0"),
-        ],
-    )
-    out = tmp_path / "nba_only.csv"
-
-    exp.export_nba_pack(src, out, slate_date="2026-11-06", min_edge_pct=5.0)
-
-    assert [(r["rank"], r["player"]) for r in _read(out)] == [("1", "High"), ("2", "Mid")]
-
-
-def test_empty_pack_warns_and_can_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    src = tmp_path / "src.csv"
-    _write_src(src, [_row("2026-11-06", "Only Guy", "1.0")])
-    out = tmp_path / "nba_only.csv"
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-06", min_edge_pct=5.0) == 0
-    assert "0 candidate rows" in capsys.readouterr().err
-
-    with pytest.raises(RuntimeError, match="0 candidate rows"):
-        exp.export_nba_pack(src, out, slate_date="2026-11-06", min_edge_pct=5.0, fail_on_empty=True)
-
-
-def _no_host_disk_check(monkeypatch):
-    """NBA-SYS-001 checks C:\\, which does not exist off Windows."""
-    monkeypatch.setattr(exp, "check_disk_space", lambda min_gb=5.0: None)
-
-
-
-def _write_src_by_dates(path: Path, slate_dates: list[str]) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=exp.FIELDNAMES)
-        w.writeheader()
-        for i, d in enumerate(slate_dates, start=1):
-            row = dict.fromkeys(exp.FIELDNAMES, "")
-            row.update(slate_date=d, player=f"Player {i}", market="PTS", line="20.5")
-            w.writerow(row)
-
-
-
-def _out_rows(path: Path) -> list[dict[str, str]]:
-    with open(path, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
-
-
-
-def test_date_match_wins_over_fallback(tmp_path):
-    src, out = tmp_path / "src.csv", tmp_path / "out.csv"
-    _write_src_by_dates(src, ["2026-11-01", "2026-11-08"])
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-08") == 1
-    rows = _out_rows(out)
-    assert [r["slate_date"] for r in rows] == ["2026-11-08"]
-    assert [r["rank"] for r in rows] == ["1"]
-
-
-
-def test_fallback_on_exports_another_slate(tmp_path):
-    src, out = tmp_path / "src.csv", tmp_path / "out.csv"
-    _write_src_by_dates(src, ["2026-11-01"])
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-08", allow_latest_fallback=True) == 1
-    assert [r["slate_date"] for r in _out_rows(out)] == ["2026-11-01"]
-
-
-
-def test_fallback_off_exports_nothing_for_an_unmatched_date(tmp_path):
-    src, out = tmp_path / "src.csv", tmp_path / "out.csv"
-    _write_src_by_dates(src, ["2026-11-01"])
-
-    assert exp.export_nba_pack(src, out, slate_date="2026-11-08", allow_latest_fallback=False) == 0
-    assert _out_rows(out) == []
-
-
-
-def test_fallback_off_can_fail_closed(tmp_path):
-    src, out = tmp_path / "src.csv", tmp_path / "out.csv"
-    _write_src_by_dates(src, ["2026-11-01"])
-
-    with pytest.raises(RuntimeError, match="0 candidate rows"):
-        exp.export_nba_pack(
-            src, out, slate_date="2026-11-08", allow_latest_fallback=False, fail_on_empty=True
-        )
-
-
-@pytest.mark.parametrize(
-    ("argv", "expected_rows"),
-    [
-        ([], 1),
-        (["--allow-latest-fallback"], 1),
-        (["--no-allow-latest-fallback"], 0),
-    ],
-)
-
-def test_cli_exposes_both_sides_of_the_fallback_toggle(tmp_path, monkeypatch, argv, expected_rows):
-    """store_true + default=True left --no-... undefined, so the off switch was unreachable."""
-    src, out = tmp_path / "src.csv", tmp_path / "out.csv"
-    _write_src_by_dates(src, ["2026-11-01"])
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "export_nba_extra_pack.py",
-            "--src",
-            str(src),
-            "--out",
-            str(out),
-            "--date",
-            "2026-11-08",
-            *argv,
-        ],
-    )
-    assert exp.main() == 0
-    assert len(_out_rows(out)) == expected_rows
+def test_quote_timestamp_is_preserved_for_destination_revalidation(tmp_path):
+    src, out = tmp_path / "src.csv", tmp_path / "nba_only.csv"
+    _write(src, [_row()])
+    assert exp.export_nba_pack(src, out, DATE, now=NOW) == 1
+    assert _read(out)[0]["quote_timestamp"] == "2026-11-23T11:45:00Z"
+    assert exp.publication_eligible(_read(out)[0], DATE, NOW)
