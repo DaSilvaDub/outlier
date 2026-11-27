@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from outlier_nfl.injuries import (  # noqa: E402
+    InjurySourceUnavailable,
     filter_csv_file,
     filter_game_script_markdown,
     filter_matchup_scripts_payload,
@@ -90,14 +91,22 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    summary = filter_csv_file(
-        Path(args.csv),
-        out_path=Path(args.out) if args.out else None,
-        nfl_dir=Path(args.nfl_dir),
-        use_espn=not args.no_espn,
-        use_tape=not args.no_tape,
-        cache_path=Path(args.cache) if args.cache else None,
-    )
+    try:
+        summary = filter_csv_file(
+            Path(args.csv),
+            out_path=Path(args.out) if args.out else None,
+            nfl_dir=Path(args.nfl_dir),
+            use_espn=not args.no_espn,
+            use_tape=not args.no_tape,
+            cache_path=Path(args.cache) if args.cache else None,
+        )
+    except InjurySourceUnavailable as exc:
+        print(f"WARNING: ESPN fetch failed: {exc.meta.get('espn_error')}", file=sys.stderr)
+        print(
+            "injury filter failed closed: a requested source failed and no other source had rows",
+            file=sys.stderr,
+        )
+        return 1
 
     print(
         f"injury filter: {summary['before']} -> {summary['after']} "
