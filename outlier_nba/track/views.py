@@ -31,7 +31,7 @@ SELECT * FROM (
     LEFT JOIN decisions d ON d.snapshot_id = s.snapshot_id
     LEFT JOIN settlements x ON x.decision_id = d.decision_id
     LEFT JOIN nba_clv c ON c.decision_id = d.decision_id
-    WHERE s.sport = 'NBA' AND s.captured_at < s.event_starts_at
+    WHERE UPPER(s.sport) = 'NBA' AND s.captured_at < s.event_starts_at
 ) WHERE rn = 1
 """
 
