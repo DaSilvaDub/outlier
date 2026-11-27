@@ -120,6 +120,40 @@ def test_exact_normalized_name_still_resolves() -> None:
     assert stats == {"RECEIVING:YDS": 70.0}
 
 
+def test_same_name_join_canonicalizes_nflverse_la_to_lar(tmp_path: Path) -> None:
+    """Props say LAR; nflverse stores the Rams as LA. Both spellings must join."""
+    game = {"game_id": "2026_01_SF_LA", "season": "2026", "week": "1", "gameday": "2026-09-13",
+            "away_team": "SF", "home_team": "LA", "away_score": "17", "home_score": "24"}
+
+    def row(pid: str, team: str, yds: str, week: str) -> dict[str, str]:
+        return {"game_id": game["game_id"] if week == "1" else f"2026_0{week}_SF_LA",
+                "season": "2026", "week": week, "season_type": "REG", "player_id": pid,
+                "player_display_name": "Mike Williams", "team": team,
+                "receiving_yards": yds, "receptions": "4"}
+
+    stats = [row("00-MWLA", "LA", "80", "1"), row("00-MWSF", "SF", "40", "1"),
+             row("00-MWLA", "LA", "90", "2")]
+    ev = boxscore_nflverse.load_nflverse_events(
+        season=2026, week=1, cache_dir=tmp_path, games_csv=_csv(tmp_path / "g.csv", [game]),
+        stats_csv=_csv(tmp_path / "s.csv", stats))[0]
+    assert sorted(ev.players) == ["MIKEWILLIAMS#LAR#00MWLA", "MIKEWILLIAMS#SF#00MWSF"]
+    assert resolve_player_stats(ev, "Mike Williams") == (None, "ambiguous_player_match")
+    lar, reason = resolve_player_stats(ev, "Mike Williams", "LAR")
+    assert reason is None and lar is not None and lar["RECEIVING:YDS"] == 80.0
+    la, _ = resolve_player_stats(ev, "Mike Williams", "LA")
+    assert la is not None and la["RECEIVING:YDS"] == 80.0
+    sf, _ = resolve_player_stats(ev, "Mike Williams", "SF")
+    assert sf is not None and sf["RECEIVING:YDS"] == 40.0
+
+    idx = projection.load_week_stats_index(tmp_path / "s.csv", before_week=3)
+    assert [r["receiving_yards"] for r in projection.player_rows(idx, "Mike Williams", "LAR")] \
+        == ["80", "90"]
+    assert [r["receiving_yards"] for r in projection.player_rows(idx, "Mike Williams", "LA")] \
+        == ["80", "90"]
+    assert [r["receiving_yards"] for r in projection.player_rows(idx, "Mike Williams", "SF")] \
+        == ["40"]
+
+
 def test_projection_rows_belong_to_one_player_id(tmp_path: Path) -> None:
     path = _csv(tmp_path / "w.csv", [
         _stat("Josh Allen", "00-A1", "BUF", "80"), _stat("Josh Allen", "00-A2", "KC", "30"),

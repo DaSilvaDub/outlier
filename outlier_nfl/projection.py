@@ -27,6 +27,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 from outlier_nfl.boxscore import _token
 from outlier_nfl.calibration import DEFAULT_LAPLACE_ALPHA, shrink_hit_rate
+from outlier_nfl.config import normalize_team
 
 MODEL_P_SOURCE_PROJECTION_NFLVERSE_RATE = "projection_nflverse_rate"
 MODEL_P_SOURCE_PROJECTION_NFLVERSE_GAUSSIAN = "projection_nflverse_gaussian"
@@ -358,11 +359,16 @@ def player_rows(
         by_id[str(row.get("player_id") or "").strip()].append(row)
     if len(by_id) <= 1:
         return rows
-    team_code = str(team or "").strip().upper()
+
+    def _canon(value: Any) -> str:
+        raw = str(value or "").strip()
+        return normalize_team(raw) or raw.upper()
+
+    team_code = _canon(team)
 
     def latest_team(id_rows: Sequence[Mapping[str, Any]]) -> str:
         last = max(id_rows, key=lambda r: (str(r.get("season") or ""), _f(r, "week")))
-        return str(last.get("team") or last.get("recent_team") or "").strip().upper()
+        return _canon(last.get("team") or last.get("recent_team"))
 
     owned = [r for r in by_id.values() if team_code and latest_team(r) == team_code]
     return list(owned[0]) if len(owned) == 1 else []

@@ -650,6 +650,61 @@ def test_team_codes_normalize_la_to_lar():
     assert event.team_codes == frozenset({"NYG", "LAR"})
 
 
+@pytest.mark.parametrize(
+    ("alias", "canonical", "opponent"),
+    [
+        ("LA", "LAR", "SF"),
+        ("WSH", "WAS", "DAL"),
+        ("JAC", "JAX", "TEN"),
+        ("JETS", "NYJ", "BUF"),
+        ("RAMS", "LAR", "SEA"),
+        ("OAK", "LV", "KC"),
+    ],
+)
+def test_short_alias_team_code_settles_against_canonical_event(alias, canonical, opponent):
+    """LA/WSH/JAC/JETS/RAMS/OAK are aliases, not a second set of team codes."""
+    from outlier_nfl.settle import PredictionSnap
+
+    snap = PredictionSnap(
+        source="test",
+        event_id="e1",
+        event_starts_at=None,
+        slate_date="2026-09-20",
+        matchup=f"{alias} @ {opponent}",
+        team=alias,
+        opponent=opponent,
+        player_name="Test Back",
+        player_id=None,
+        market="RUSH_YDS",
+        position="OVER",
+        line=49.5,
+        implied_probability=52.0,
+        confidence_tier="TIER_1_ANCHOR",
+        calibration_tags=(),
+        best_odds=-110,
+    )
+    assert snap.team_codes == frozenset({canonical, opponent})
+    events = parse_simplified_events(
+        {
+            "events": [
+                {
+                    "provider_event_id": "g",
+                    "event_date": "2026-09-20",
+                    "away": canonical,
+                    "home": opponent,
+                    "away_score": 17,
+                    "home_score": 20,
+                    "players": {"Test Back": {"RUSHING:YDS": 80}},
+                }
+            ]
+        }
+    )
+    report = settle_predictions([snap], events)
+    assert report.skip_reasons.get("event_not_found", 0) == 0
+    assert report.n_settled == 1
+    assert report.rows[0]["result"] == "W"
+
+
 def test_model_p_bucket_predicted_excludes_pushes():
     """Push-only bucket must not invent a predicted_hit_rate via push denom."""
     from outlier_nfl.settle import PredictionSnap, parse_simplified_events, settle_predictions
