@@ -23,8 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from outlier_nfl.config import normalize_team
+from outlier_nfl.games import american_to_implied_probability
 from outlier_nfl.roster import get_team_depth_chart
 from outlier_nfl.tape_nflverse import _name_key
+from outlier_nfl.utils import coerce_float
 
 logger = logging.getLogger("outlier_nfl.alt_floors")
 
@@ -79,10 +81,10 @@ class AltFloorProp:
     cushion_pct: float
     target_book: str
     target_odds: int | float | None
-    implied_probability: float | None  # None when there is no usable quote (F23)
-    l5_hit_rate: float
-    l10_hit_rate: float
-    season_hit_rate: float
+    implied_probability: float | None  # percent 0-100; None when there is no usable quote (F23)
+    l5_hit_rate: float | None
+    l10_hit_rate: float | None
+    season_hit_rate: float | None
     confidence_score: float
     category_rank: int
     master_rank: int
@@ -148,6 +150,11 @@ RETAIL_PREFERRED = (
     "DRAFTKINGS", "FANDUEL", "BETMGM", "CAESARS", "FANATICS", "ESPNBET", "HARDROCK_R",
 )
 RETAIL_BOOKS = frozenset(compact_book(b) for b in RETAIL_PREFERRED)
+
+
+def _rate(value: float | None) -> float:
+    """0 only for arithmetic. Callers store None when the rate is unknown."""
+    return 0.0 if value is None else value
 
 
 def _finite_odds(odds: Any) -> float | None:
@@ -259,7 +266,8 @@ def discover_alt_floor_candidates(
     Groups props by event + player + market (full game only) and selects each
     player's optimal floor line based on hit rate stability, safety cushion,
     book pricing, and situational context. A row that fails
-    ``floor_inventory_reason`` stays as non-actionable inventory (F23).
+    ``floor_inventory_reason``, or is missing an L5, L10, or season hit rate,
+    stays as non-actionable inventory (F23).
     """
     thresholds = min_lines or DEFAULT_MIN_LINES
     # A supplied (even empty) starter set restricts PASS_YDS: no evidenced
@@ -340,11 +348,14 @@ def discover_alt_floor_candidates(
         cushion_pct = (cushion / cons_line * 100.0) if cons_line > 0 else 0.0
         cushion_ratio = cushion / cons_line if cons_line > 0 else 0.0
 
-        l5 = float(row.get("l5_hit_rate") or 0.0)
-        l10 = float(row.get("l10_hit_rate") or 0.0)
-        season = float(row.get("season_hit_rate") or 0.0)
+        l5 = coerce_float(row.get("l5_hit_rate"))
+        l10 = coerce_float(row.get("l10_hit_rate"))
+        season = coerce_float(row.get("season_hit_rate"))
+        if reason is None and (l5 is None or l10 is None or season is None):
+            reason = "unknown_hit_rate"
         # No quote is no price evidence: never an invented 0.50 (F23).
-        implied_p = american_to_implied(b_odds) if b_odds is not None else None
+        implied_pct = american_to_implied_probability(b_odds) if b_odds is not None else None
+        implied_p = None if implied_pct is None else implied_pct / 100.0
         play_type = (
             PLAY_TYPE_PARLAY
             if (b_odds is not None and b_odds < MAX_STRAIGHT_ODDS)
@@ -400,9 +411,9 @@ def discover_alt_floor_candidates(
         # Composite confidence formula:
         # 35% L10 stability + 30% L5 form + 15% Season + 10% Cushion ratio + 10% Implied + context
         base_score = (
-            (l10 * 0.35)
-            + (l5 * 0.30)
-            + (season * 0.15)
+            (_rate(l10) * 0.35)
+            + (_rate(l5) * 0.30)
+            + (_rate(season) * 0.15)
             + (cushion_ratio * 0.10)
             + ((implied_p or 0.0) * 0.10)
             + situational_adj
@@ -428,11 +439,11 @@ def discover_alt_floor_candidates(
                 "cushion_pct": round(cushion_pct, 1),
                 "target_book": b_name,
                 "target_odds": b_odds,
-                "implied_probability": None if implied_p is None else round(implied_p, 4),
+                "implied_probability": implied_pct,
                 "play_type": play_type,
-                "l5_hit_rate": round(l5, 2),
-                "l10_hit_rate": round(l10, 2),
-                "season_hit_rate": round(season, 2),
+                "l5_hit_rate": None if l5 is None else round(l5, 2),
+                "l10_hit_rate": None if l10 is None else round(l10, 2),
+                "season_hit_rate": None if season is None else round(season, 2),
                 "confidence_score": conf_score,
                 "is_target_book": is_target_book,
                 "event_id": event_id,
@@ -524,8 +535,8 @@ def rank_alt_floors(
             prop.rationale = (
                 f"{prop.player_name} ({prop.team}): OVER {prop.line} {prop.market_display} ({prop.target_book} {odds_str}){play_tag} "
                 f"provides a +{prop.cushion:.1f} yd ({prop.cushion_pct:.1f}%) cushion below consensus ({prop.consensus_line}). "
-                f"Historical convergence: L5 {int(prop.l5_hit_rate * 100)}% ({int(round(prop.l5_hit_rate * 5))}/5), "
-                f"L10 {int(prop.l10_hit_rate * 100)}% ({int(round(prop.l10_hit_rate * 10))}/10)."
+                f"Historical convergence: L5 {int(_rate(prop.l5_hit_rate) * 100)}% ({int(round(_rate(prop.l5_hit_rate) * 5))}/5), "
+                f"L10 {int(_rate(prop.l10_hit_rate) * 100)}% ({int(round(_rate(prop.l10_hit_rate) * 10))}/10)."
             )
             master_pool.append(prop)
 
@@ -569,7 +580,7 @@ def render_alt_floors_markdown(
         lines.append(
             f"| **#{p.master_rank}** | **{p.player_name}** | {p.team} | {p.market_display} | "
             f"**OVER {p.line}** | {p.consensus_line} | +{p.cushion} ({p.cushion_pct}%) | "
-            f"`{p.target_book} {odds_str}` | `{p.play_type}` | {int(p.l5_hit_rate * 100)}% | {int(p.l10_hit_rate * 100)}% | **{p.confidence_score:.3f}** |"
+            f"`{p.target_book} {odds_str}` | `{p.play_type}` | {int(_rate(p.l5_hit_rate) * 100)}% | {int(_rate(p.l10_hit_rate) * 100)}% | **{p.confidence_score:.3f}** |"
         )
 
     lines.extend([
@@ -594,15 +605,15 @@ def render_alt_floors_markdown(
                 f"- **#{p.category_rank} {p.player_name} ({p.team} vs {p.opponent}) — OVER {p.line} {p.market_display}**"
             )
             lines.append(
-                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {(p.implied_probability or 0.0) * 100:.1f}%) | **Play Type**: `{p.play_type}`"
+                f"  - **Sportsbook Quote**: `{p.target_book} {odds_str}` (Implied: {(p.implied_probability or 0.0):.1f}%) | **Play Type**: `{p.play_type}`"
             )
             lines.append(
                 f"  - **Safety Cushion**: +{p.cushion:.1f} yards below consensus line of {p.consensus_line} ({p.cushion_pct:.1f}% discount)"
             )
             lines.append(
-                f"  - **Hit Rates**: L5: {int(p.l5_hit_rate * 100)}% ({int(round(p.l5_hit_rate * 5))}/5) | "
-                f"L10: {int(p.l10_hit_rate * 100)}% ({int(round(p.l10_hit_rate * 10))}/10) | "
-                f"Season: {int(p.season_hit_rate * 100)}%"
+                f"  - **Hit Rates**: L5: {int(_rate(p.l5_hit_rate) * 100)}% ({int(round(_rate(p.l5_hit_rate) * 5))}/5) | "
+                f"L10: {int(_rate(p.l10_hit_rate) * 100)}% ({int(round(_rate(p.l10_hit_rate) * 10))}/10) | "
+                f"Season: {int(_rate(p.season_hit_rate) * 100)}%"
             )
             lines.append(f"  - **Confidence Score**: `{p.confidence_score:.3f}` (Master Rank: #{p.master_rank})")
             lines.append("")
@@ -612,8 +623,8 @@ def render_alt_floors_markdown(
         "",
         "## Non-actionable inventory",
         "",
-        "Floors listed for reference only: no executable quote, identity or injury "
-        "evidence. Never ranked or recommended.",
+        "Floors listed for reference only: no executable quote, identity, injury "
+        "evidence, or hit rate. Never ranked or recommended.",
         "",
     ])
     if inventory:
