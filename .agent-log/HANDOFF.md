@@ -11,6 +11,303 @@
 
 ---
 
+# Session Handoff: NBA one main line per team market (2026-11-15, agent `grok`)
+
+1. **Last Commit SHA**: `fd821b2bd2bcd5c0563b0500a6ec4d7432b3b48d` (plus this handoff commit on the same branch).
+2. **PR**: https://github.com/DaSilvaDub/outlier/pull/354 — do not merge. Title: "NBA: pick one main line per team market, not one per side".
+3. **Files Touched**: `outlier_nba/team_run.py` (`_main_lines` now picks one rung per event/market/team and marks both sides), `tests/test_nba_team_run.py` (110.5/108.5 regression plus lower-line tie-break).
+4. **Tests**: master failed the new tests (110.5 split across `team.TOTAL` and `team.ALT_TOTAL`). After the fix, `pytest tests/test_nba_*.py -q` is 500 passed (498 before the new tests). Offline full pytest, provider modules excluded: 3486 passed, 4 skipped.
+5. **Next Steps**: review #354. Out of scope and still open: placeholder quotes (#350), spread pairing in evidence.py (#340), export flag (#334/#336/#344), bundle location (#338), roster registry / injury filter (#349, draft #330). Do not change blend weights, sigmas, or `config/nba_promotion.json` in a follow-up to this bug.
+
+---
+
+# Session Handoff: Daily Debug Review (2026-11-13, agent `claude`)
+
+1. **Work**: Automated daily debug review on branch `claude/inspiring-fermat-moopnv`
+   (started at `8e578fb`, which is `origin/master`). Cloud STEP 0 done: tree clean,
+   `HEAD == origin/master`, all 5 upgrade markers present. Reviewed everything merged
+   since the 2026-11-06 review (`089372a..HEAD`): PR #335 (NBA Cleaning the Glass
+   ingest + capture versioning), PR #339 (multi-sport pack refresh hardening,
+   `publication_hold.py`, `export_multi_sport_hit_rates.py`, `organize_desktop_today.py`,
+   `filter_nba_ruled_out.py`), PR #342 (doubleheader probable pitchers), and the
+   NBA gate-evidence / backfill / gate-report stack. **No code changes made** — every
+   finding either needs a human decision or is already sitting in an open PR.
+
+2. **Findings** (all reproduced, none speculative):
+   - **HIGH — the NBA pack refresh cannot complete on `master`.**
+     `scripts/refresh_nba_pack.ps1:209-225` always runs
+     `scripts/filter_nba_ruled_out.py` with no `--registry`, so the script falls back to
+     `resources/nba_roster_registry.json`. That path does not exist, `resources/` is not in
+     the tree, nothing on `master` generates it, and it is not gitignored, so the filter
+     raises `RegistryError` and exits 2; `Invoke-CheckedPython` then throws and the run
+     dies before Desktop staging and the Drive publish. Reproduced:
+     `filter_nba_ruled_out: FAILED: roster registry not found: .../resources/nba_roster_registry.json` (exit 2).
+     Root cause: a half-landed change. The fail-closed filter is on `master`, but the
+     generator it needs (`scripts/nba_roster_registry.py`,
+     `scripts/refresh_nba_roster_registry.py`, `resources/.gitignore`,
+     `resources/README-nba-roster.md`) only exists in commit `edc9f24` on
+     `fix/remediation-plan` = **draft PR #330**. Fails closed, so nothing bad ships —
+     but the NBA refresh is dead unless `-SkipInjuryFilter` is passed, which publishes
+     an unfiltered pack.
+   - **MEDIUM — `filter_nba_ruled_out.py:47` over-filters: `or injuries` drops anyone
+     with any injury record, not just OUT players.** A player with
+     `status: "ACTIVE"` and a single `Probable` injury entry is removed from the pack
+     (reproduced: `before=1 after=0 removed=1`). This contradicts the script's own
+     docstring ("confirmed OUT or inactive") and the contract documented in
+     `resources/README-nba-roster.md` on PR #330 ("Only explicit OUT/INACTIVE/SUSPENDED/IR
+     statuses are excluded. A nonempty injury list alone is not OUT."). Unreachable today
+     because of the finding above — but whoever lands the registry generator must
+     reconcile this first, or every probable/questionable player silently leaves the pack.
+   - **MEDIUM — `scripts/organize_desktop_today.py:50` stages to
+     `C:\Users\dasil\Desktop\Today`, while `scripts/organize_today_run2.py:47` uses
+     `C:\Users\dasil\OneDrive\Desktop\today`.** Two organizers disagree about where the
+     Desktop is. With OneDrive Known Folder Move active the non-redirected path is not the
+     visible Desktop, and the organizer `mkdir(parents=True)`s it, so deliverables land in
+     a folder the user never sees. Already listed as a next step in the 2026-11-10 handoff;
+     still unaddressed. Needs a human call on how to resolve the known folder.
+   - **LOW (already fixed in open PR #344) — `filter_nba_ruled_out.py:75` crashes on a
+     short CSV row.** `r.get("player", "").strip()` hits `DictReader`'s `restval` (`None`)
+     and raises `AttributeError: 'NoneType' object has no attribute 'strip'` (reproduced).
+     PR #344 coerces with `str(... or "")` and adds `extrasaction="ignore"`.
+   - **LOW (already fixed in open PR #345) — doubleheader starter flags can never
+     resolve.** `game_totals.py:980` passes `identity.get("game_pk")`, but no normalized
+     record in `outlier_scrapers` ever carries `game_pk` (only the raw MLB API
+     `gamePk` in `form_source.py`/`results.py`/`probable_pitchers.py`). `61e4fd5` removed
+     the opponent+start-time matcher that used to work without it, so on a doubleheader
+     `resolve_starter` sees two entries for the team and returns `None`.
+     `_starter_flags_for_row` then `continue`s and the `STARTER_UNCONFIRMED:<TEAM>` token
+     is silently dropped — fail-open, but the field is documented as purely informational
+     and never affects `actionable`. `slate_quality.pitcher_identity_flags` stays
+     fail-closed (`PITCHER_IDENTITY_UNCONFIRMED`).
+   - **LOW — `scripts/export_multi_sport_hit_rates.py` documents a `--min-games` flag its
+     `main()` never defines.** `min_games` is a keyword-only argument on
+     `extract_hit_props_for_sport` with no CLI path, so the documented knob is unreachable.
+   - **Not bugs (checked and cleared)**: all 15 ruff `PLR0124` "name compared with itself"
+     hits are deliberate NaN checks (`x == x`); all `ISC004` implicit-concat hits are
+     multi-line SQL/markdown strings in list literals, not missing commas in a whitelist;
+     the `B023` loop-variable closures in `portfolio.py` are called inside the same
+     iteration; `model_ledger.py:108`'s f-string `ALTER TABLE` interpolates the module
+     constant `KEY_COLUMNS`, not input.
+
+3. **Verification**: `pytest -q` with the CI ignore list — **3466 passed, 4 skipped**.
+   `python -m mypy outlier_scrapers outlier_nfl` — clean (136 files); `mypy outlier_nba` —
+   clean (45 files). `pyright outlier_scrapers outlier_nfl` — **0 errors, 1 warning**
+   (unresolved optional `playwright`). `compileall` over `scripts/`, `outlier_scrapers/`,
+   `outlier_nba/`, `outlier_nfl/` — clean. Provider tests (`test_reasoning.py`,
+   `test_claude_*`, `test_gemini_research.py`, `test_c_research.py`) **not run** — house
+   rule, no reasoning/provider calls without an explicit ask this turn.
+   Note for cloud agents: `/usr/local/bin/pip` is python3.13's while
+   `/usr/local/bin/python3` is 3.11, and `/root/.local/bin/pytest` is a uv tool on 3.13 —
+   `pip install -r requirements.txt` therefore installs where pytest cannot see it. Build
+   a 3.11 venv (`uv venv --python 3.11`, then `uv pip install --python <venv> -r
+   requirements.lock -e . pytest mypy`) before running anything.
+
+4. **Next steps**: (a) decide PR #330 — either land the roster-registry generator or make
+   `refresh_nba_pack.ps1` stop depending on a file nothing produces; the NBA refresh is
+   broken until one of the two happens. (b) Reconcile the `or injuries` semantics before
+   that lands. (c) Resolve the Desktop known-folder path across both organizers.
+   (d) Merge the queue: ~20 open PRs now, several of them fixes from earlier daily reviews
+   (#319, #321, #322, #344, #345) that have been waiting for days — findings are being
+   re-found because the fixes never land. (e) Still open from earlier reviews:
+   `.pytest_pr1_tmp/` (334 tracked files, 2.2 MB of pytest scratch) is committed and not
+   gitignored; `scripts/organize_today_run2.py` flipped CRLF -> LF wholesale in
+   `089372a..HEAD` (825 lines, no logic change) — worth pinning in `.gitattributes`.
+
+---
+
+# Session Handoff: Daily Debug Review (2026-11-12, agent `claude`)
+
+1. **Work**: Automated daily debug review on branch `claude/inspiring-fermat-hm2v45`
+   (started from `8e578fb` = `origin/master`). Cloud STEP 0 done (fetch, HEAD ==
+   origin/master, all 5 upgrade markers present). Reviewed everything merged since the
+   2026-11-06 review: PR #335 (NBA Cleaning the Glass ingest + schema v2 versioning),
+   PR #337 (NBA gate evidence / backfill), PR #339 (multi-sport pack refresh hardening,
+   already reviewed last session) and PR #342 (doubleheader probable pitchers, Cursor
+   Agent -- not previously agent-reviewed).
+2. **Fixed** (`1634db5`): PR #342's doubleheader fix never took effect in production.
+   It matches a row to a starter by `game_pk`, but `outlier_scrapers.normalizer` emits
+   `event_id` and never the MLB Stats API `gamePk`, so `resolve_starter` always fell
+   through to "the team's only starter that day" and returned `None` for both halves of
+   a doubleheader. `mlb_so_projection_record` consequently dropped the starter-SO
+   projection for *every* doubleheader team -- worse than the old `by_team` dict, which
+   at least kept the last game's starter. Its new test only passed because the fixture
+   rows inject a `game_pk` the pipeline never produces. `resolve_starter` now accepts an
+   optional `pitcher` and uses the confirmed starter's name to pick the game when no
+   `game_pk` is given; a supplied `game_pk` stays authoritative. Regression tests use
+   rows shaped exactly as the normalizer emits them.
+3. **Reported, not fixed** (same root cause -- rows carry no game identity):
+   - `game_totals._starter_flags_for_row` never emits `STARTER_UNCONFIRMED` for a
+     doubleheader team (fail-open, but the field is documented as informational only
+     and never affects `actionable`).
+   - `t30_reprice._starter_changed` never detects a starter change for a doubleheader
+     team: `starter_for_row` returns `None` and the loop `continue`s. Name
+     disambiguation cannot help here -- the function exists to compare the names.
+   - A pack frozen before PR #342 has `probable_pitchers_by_league` in
+     `original_t30_context.json` as a dict-of-dicts; `resolve_starter` requires a list,
+     so starter-change repricing is silently off for that pack's remaining life
+     (one slate, fails open). Same for a stale `*_probable_pitchers_latest.json` with
+     `by_team` and no `starters`, until the scraper next runs.
+   Recommended next step: give normalized rows a real game identity (map `event_id` ->
+   `gamePk` via matchup + start time in the probable-pitchers export) and make
+   `resolve_starter` key on it; that fixes all three at once.
+4. **Verification**: `pytest` 3528 passed / 4 skipped / 0 failed; `mypy outlier_scrapers
+   outlier_nba outlier_nfl` clean; `ruff` on the changed files identical to the
+   pre-change baseline (6 pre-existing findings, none new); `compileall` clean.
+   No reasoning models run -- no provider API keys exist in this sandbox, so the
+   provider-SDK tests stayed on their mock paths.
+5. **Next steps**: the `game_pk` plumbing above; repo-wide `ruff` baseline is 914
+   findings (I001/UP017/BLE001 dominate) -- a separate cleanup PR if wanted, not a
+   debug-run change. The 15 `PLR0124` and 11 `B023` hits were each checked and are
+   false positives (NaN self-comparison; closures called inside their own iteration).
+
+---
+
+# Session Handoff: Daily Debug Review (2026-11-10, agent `claude`)
+
+1. **Work**: Automated daily debug review, branch `claude/inspiring-fermat-tv272a` (started from
+   `7006983` = `origin/master`). Reviewed the whole NBA gate-evidence stack merged in PR #337
+   (`track/evidence.py`, `track/gate_report.py`, `track/model_ledger.py`, `track/backfill.py`,
+   `promotion.failed_keys`, and the `gate-status` / `backfill-model-probs` CLI wiring). Fixed one
+   reproducible defect:
+   - **`evidence._load_report` counted one quoted spread as two observations.** It grouped the
+     two sides of a line on the stored `line` string. A total quotes the same number to both
+     sides, but `capture._fmt_line` stores the raw per-side line, so a spread is `-5.5` to HOME
+     and `+5.5` to AWAY and the sides never paired -- against the module's own convention that
+     "the two sides of one quoted line are one observation". `n_settled` was inflated ~2x for
+     `team.SPREAD` / `team.ALT_SPREAD`, so those families would cross `min_settled_outcomes`
+     (1500) on about half the required evidence, on a gate that governs a blend weight up to
+     0.25; the mirrored side also forced the reliability curve symmetric. Now grouped on the
+     threshold the two sides share, as `capture.orientation` defines it (HOME `h` -> `-h`,
+     AWAY `a` -> `a`), so a rung pairs while the mirror rung of a ladder keeps its own. Needed
+     `model_side` in the view SELECT (already exposed by `MODEL_VIEW_SQL`). Strictly stricter:
+     it removes observations, never adds them. Latent, not live -- all 7 families still report
+     `insufficient evidence` with 0 usable settled rows.
+2. **Last Commit SHA**: `eee04e7`.
+3. **Files Touched**: `outlier_nba/track/evidence.py`, `tests/test_nba_gate_evidence.py`,
+   `tests/test_nba_evidence.py`, `.agent-log/HANDOFF.md`.
+4. **PR Link**: https://github.com/DaSilvaDub/outlier/pull/340
+5. **Verification**: new spread regression test fails on the old grouping (`assert 2 == 1`) and
+   passes now, confirmed by reverting the one-line change; two guard tests added (ladder mirror
+   rung stays separate; totals + moneylines still pair). Full runnable suite **3322 -> 3325
+   passed**, byte-identical failure set (10, all missing `openai`/`anthropic`/`google-genai`;
+   5 modules excluded from collection for the same reason). `ruff check` on the three touched
+   files: 4 findings, identical to the same files on master (all pre-existing style, none in
+   changed lines). `mypy outlier_nba/track/evidence.py`: clean in `evidence.py`; the 12 errors
+   are all `metrics.py`, the known numpy-unavailable sandbox artifact. `cli gate-status`
+   smoke-tested end to end (7 families, exit 0, ledger unmodified).
+6. **Sandbox note**: `structlog`, `numpy`, `SQLAlchemy` and `python-dateutil` are declared in
+   `pyproject.toml` but were absent from the cloud sandbox, which blocked **53** test modules
+   from collecting. Installed into a throwaway venv (no dependency files changed) to get a real
+   baseline -- worth adding to the cloud bootstrap, since earlier runs reported a much smaller
+   suite without noticing the gap. Provider SDKs left uninstalled on purpose (house rule).
+7. **Next**: (a) reported but deliberately NOT changed -- `backfill._plan` treats
+   `market_id = ''` as unkeyed and counts such a row `matched`, but its `UPDATE ... WHERE
+   market_id IS NULL` would not write it, so `counts["matched"]` could overstate what was
+   applied. Unreachable today (`model_rows` normalises `''` -> `None`, and the `ALTER TABLE`
+   migration yields `NULL`), so left alone rather than touched speculatively. (b) `gate_report`
+   classes `clv_sample` as a sample-size key although it also fails on `clv_coverage`, a quality
+   measure, so a family with ample CLV but poor coverage reads `insufficient evidence` rather
+   than `FAIL` -- conservative, but a judgement call worth confirming. (c) Still let
+   `nba_shadow_daily.ps1` accumulate keyed rows; schedule `-CaptureOnly` for verified closes.
+
+
+---
+
+# NBA `slate` command and hardening — November 26, 2026 (Claude)
+
+- Merged: PR #394 (`6c34600`) added `python -m outlier_nba.cli slate`: 50k-draw team-model simulation per game, single-book ESPN/DraftKings lines, twelve gates (F1-F12, this command's own, thresholds in `SlateConfig`), quarter-Kelly under 1.0/1.5/3.0u caps, nine-section report + JSON under `~/outlier_nba_data/reports`. Follow-up PR (branch `claude/slate-cli-hardening`): `--draws` must be >= 1000 (exit 2), `run_slate_cmd` split into `_slate_team_state` / `_slate_summary`.
+- Docs: `docs/nba/slate-report.md`. Model is SHADOW/UNPROMOTED; it lost to the closing market in the repo backtest, so "pass" is a normal verdict. No Outlier call, no reasoning model, no calibration/data writes.
+- Verification: 592 NBA tests passed at merge; ruff + mypy clean on changed files; live ESPN smoke run worked (9 games, 0 bets because games had tipped). Pre-existing, untouched: 18 ruff errors elsewhere, 2 pyright errors in `capture --only-if-due`.
+- Next steps: `slate` defaults to `~/outlier_nba_data/{store,cache}` while `backfill`/`ratings` default elsewhere, so pass the same `--store`/`--cache-dir` to share. Outlier odds/props need a fresh login (OTP, user-only). No player-level model exists.
+
+# NBA integration and controlled refresh — November 26, 2026 (Codex)
+
+- Last product commit SHA: `82c5d8521a76ede75edbd02acc9e13bf5d5b3c2d` (Outlier PR #385 merged). NBA pipeline PR #8 merged as `0ec68c5f83122d02d64d45223320748933d2fb62`.
+- Files touched this turn: `.agent-log/HANDOFF.md` conflict resolved preserving both histories; integration source code unchanged. Both local production checkouts fast-forwarded; unrelated edits preserved.
+- Verification: 101 targeted Outlier tests, three variance tests, Ruff/diff passed. Updated PR CI core/provider/typecheck all passed; NBA validate passed.
+- Controlled November 26 data-only refresh: all 269 preferred-source rows were November 24 and rejected; published awaiting_odds / zero actionable props, edges, grades, totals. Fifteen live CSV destinations verified (Desktop/Drive Fresh_Data packs, dated/rolling extra packs, Today and BETTING REPORTS companions); four filter summaries hash/count/date matched; six narratives disclose zero action or research-only totals.
+- Previous 13 live files retained in `C:\Users\dasil\Documents\Codex\2026-11-23\fi\work\nba-control-2026-11-26\before-publication` with manifest. User report: `C:\Users\dasil\Documents\Codex\2026-11-23\fi\outputs\2026-11-26_nba_refresh_verification.md` and JSON.
+- Next steps: upstream must supply current-slate aware game times, quote timestamps and sourced player/game availability. Existing feed lacks these; do not weaken gates. No live upstream collection/RotoGrinders/paid reasoning/ledger/calibration writes ran. Local Drive mounted files verified; remote upload completion unobserved. Canonical and quarantine publication holds were inactive and rechecked before Drive writes.
+
+# NBA publication audit repair — November 23, 2026 (Codex)
+
+- Last product commit SHA: `0656acd0fa6a30f440aa55b90aed27e61788cb42`; branch `fix/nba-publication-date-guard`.
+- Beads: `dasil-zxg`.
+- Files: NBA exporter, game-scoped availability filter, Desktop organizer, refresh driver, new companion publication verifier, regression tests, `docs/NBA_PUBLICATION_CONTRACT.md`.
+- Behavior: requested Eastern slate + future aware tip + timestamped executable odds required; missing/unknown availability stands down; companions match final selections; empty CSVs replace stale files; hashes/counts/summaries verified at destinations; raw prop text retired; totals labeled research-only.
+- Verification: 101 targeted offline tests passed including PowerShell scratch refresh; Ruff and diff checks passed. Independent native review addressed timestamp, narrative and summary-link findings.
+- Related external variance fix: https://github.com/DaSilvaDub/nba-props-pipeline/pull/8 (236 passed, 11 skipped).
+- Next: review/merge both PRs, then run a controlled refresh. No live pipeline, paid reasoning, production data/calibration writes, or live destination cleanup performed. Upstream must supply quote timestamps and sourced game-specific availability; legacy roster-only evidence safely yields awaiting_availability.
+
+# Session Handoff: Claude Code setup audit and guard fixes (2026-11-24, agent `claude`)
+
+1. **Work**: Ran the setup-audit skill on this repo (project scope, quick depth) and applied
+   findings 1, 2, 4 and 5. Merged as PR #386 (squash `62fc7df`). Branch `claude/jolly-allen-onytls`.
+   - **Reasoning guard on Linux**: `.claude/hooks/block-reasoning.py` is registered as a second
+     PreToolUse hook beside the `.ps1`. Master already had an equivalent from `89e5430`; the merge
+     kept master's version, which skips itself when `pwsh` exists. Keep the deny patterns in the
+     `.ps1` and `.py` identical.
+   - **Deny rules** in `.claude/settings.json`: Edit/Write on `calibration/**` and `data/**`, reads
+     of `.env`, `.env.*`, `~/.ssh/**`, `~/.aws/**`, and `git push --force/-f` (the last from master).
+   - **CLAUDE.md STEP 0**: added a non-destructive no-`pwsh` path (5 marker greps; `reset --hard`
+     only in a fresh clone).
+   - **AGENTS.md**: the stale hookify paragraph now describes the `.py` twin. The tracked
+     `.claude/hookify.no-reasoning-unless-asked.local.md` is removed.
+   - **Finding 3 withdrawn**: `AGENTS.md` (sync protocol, house rules) and `.agents/AGENTS.md`
+     (codebase quirks) are complementary, not duplicates. Do not merge them; `AGENTS.md:146`
+     links to the second file.
+2. **Verification**: the Python guard was piped should-block, bypass (`DESK_OK`), allow, garbage
+   and empty payloads and gave the expected results. `settings.json` validates. CI (`core`,
+   `provider`, `typecheck`) was green on the merged head. The full local `pytest` was not run:
+   `structlog` is missing in the cloud container (collection error, same without these changes).
+3. **Not done / next**:
+   - `report-sync.ps1` was not run (no PowerShell in the cloud container; the audit was read-only).
+   - Unconfirmed reviewer checks: (a) no pipeline step needs agent writes to `data/` or
+     `calibration/` that the new deny rules would block (they do not cover shell writes);
+     (b) Windows setups without `python3` are fine with the second hook (it errors non-blockingly,
+     the `.ps1` guard still fires).
+   - Audit report (private, local to the cloud container): `~/.claude/audits/2026-11-24-audit.*`;
+     it may not outlive the session.
+
+---
+
+# Session Handoff: NFL Upgrade B live trial tooling (2026-11-23, agent `claude`)
+
+1. **Work**: Reviewed and merged PR #382 (Upgrade B, merge `0fe5323`). Then, at the
+   user's request, built the tooling to treat Upgrade B as unproven until it earns
+   trust live. Branch `claude/trusting-bohr-6yanx3`. Plan, pre-registered stop
+   criteria and decision log: `docs/plans/2026-11-23-nfl-upgrade-b-live-trial.md`.
+   - **`GateConfig`** (`best_bets.py`): every Upgrade B gate is switchable and its
+     thresholds are tunable. `GateConfig()` equals PR #382 and `GateConfig.legacy()`
+     equals the pre-#382 code, each checked identical on 400 randomized slates.
+   - **Per-pick audit**: each pick records `upgrade_b.gates_fired` and
+     `blocked_only_by`.
+   - **`StakePolicy`**: kelly, flat or paper. The trial config
+     `config/nfl_upgrade_b_trial.json` sets flat 0.5% per VALIDATED pick for Weeks
+     12-15. Kelly is kept as `kelly_stake_fraction`. The trial never auto-ends, and
+     a malformed config fails the card instead of falling back to Kelly.
+   - **Inputs capture**: the pipeline saves `nfl_best_bets_inputs.json.gz` in every
+     run bundle (deterministic gzip, sealed in the manifest) for exact replays.
+   - **`outlier_nfl/trial_scorecard.py`**: settles card picks with the shadow-settle
+     and verified-close CLV code, reports arms (VALIDATED and
+     `blocked_only_by:<gate>`), evaluates the stop criteria and prints `base_p`
+     reliability tables.
+   - **`outlier_nfl/gate_backtest.py`**: one-gate ablation and walk-forward over the
+     captured slates.
+   - **Audit rules removed**: PR #382's `nfl_audit_rules.json` loader is gone
+     (nothing defined or applied those rules). `audit.upgrade_b` replaces it.
+2. **Verification**: full `pytest` 3656 passed, 4 skipped. `mypy outlier_scrapers
+   outlier_nfl` clean. Pyright clean on the touched modules. Ruff clean on the new
+   files; the touched files keep only master's pre-existing findings.
+3. **Not done / next**:
+   - `report-sync.ps1` was not run: the cloud session cannot reach the Windows
+     machine. The user must run it on BirdGang.
+   - Weeks 5-11 cannot be replayed: captures exist only from this change on.
+     PR #382's backtest harness was never committed, so its Weeks 9-11 holdout
+     cannot be confirmed walk-forward.
+   - The user should run the weekly scorecard from Week 12 and record each
+     decision in the plan's decision log.
+
 # Session Handoff: Daily Debug Review (2026-11-08, agent `claude`)
 
 1. **Work**: Automated daily debug review. Branch `claude/inspiring-fermat-1i6csa`
@@ -8444,3 +8741,37 @@ this sandbox cannot import.
    - To disable the 8:00 AM `Outlier Daily Pipeline` task in Task Scheduler completely, run `Disable-ScheduledTask -TaskName "Outlier Daily Pipeline"` from an Administrator PowerShell prompt (it requires elevation due to its security descriptor; however, even if left scheduled, `run_daily_pipeline.ps1` in both canonical and `outlier-scheduled` will instantly detect off-season and exit cleanly in milliseconds).
    - In Spring (April), run `powershell -File scripts/manage_mlb_wnba_tasks.ps1 -Enable` to re-enable the daily pipeline tasks when the new MLB/WNBA seasons begin.
 
+
+## 2026-11-24 — claude (setup-audit, NFL pipeline)
+- Added Linux hook `.claude/hooks/block-reasoning.py` (skips when pwsh present; keeps DESK_OK bypass), registered in `.claude/settings.json`.
+- Added project `deny`: Read .env/.env.*, git push --force/-f. Reasoning commands stay hook-gated (deny rules would break the DESK_OK escape hatch).
+- `.env.example`: declared 5 NFL vars. Copied `nfl-game-script` skill into `.claude/skills/`.
+- Skipped: skill-listing trimming (user-level), doc dedup of CLAUDE/AGENTS (item 6).
+- Note: `tests/test_environment.py` errors pre-existing in this sandbox (structlog not installed).
+
+
+## Codex — NFL saved-session renewal, November 26, 2026
+
+- Last product commit SHA: 042bdb9675ed0b084793495e506c2d01b7c9a117. Branch: codex/fix-nfl-session-refresh. PR: https://github.com/DaSilvaDub/outlier/pull/393.
+- Files touched: outlier_nfl/api.py, outlier_nfl/session.py, tests/test_nfl_session_refresh.py, and this handoff. Canonical config/.outlier_session/storage_state.json and the matching bearer sidecar were renewed locally; credentials are ignored and never committed.
+- Result: expired saved Cognito session renewed without login/OTP; authenticated NFL schedule returned 42 events at 2026-11-26T05:24:40Z. New expiry: 2026-11-27T05:24:40Z. Sanitized evidence: C:/Users/dasil/Documents/NFL Runs/2026-11-26_session_repair/verification.json.
+- Verification: 41 offline tests passed (refresh/API/token extraction), Ruff passed on all changed Python files, Pyright 0 errors on production modules, compilation and git diff --check passed; independent review passed. No data/calibration writes or paid reasoning calls.
+- Next steps: review/merge PR #393 so canonical scheduled NFL runs gain automatic renewal. Current canonical credentials are already repaired. A revoked/expired refresh token still requires a new login. Existing .txt or explicit/environment bearer sources retain precedence and are not silently replaced from another account.
+
+
+## NFL pipeline run standard
+
+- Base: 6c34600714e725475f3eaa56e8d9905f3eb38566. Sync nonce: 52dceb66de354dc1.
+- Files: shared NFL pipeline skill, AGENTS.md, CLAUDE.md, GEMINI.md, GROK.md.
+- Next steps: review the reporting and Desktop bundle standard. A reusable V2 drive simulator was unavailable in the synced branch.
+
+## NFL automatic drive stage
+- Base d28094816a1ac585ff441900e1bd16683a9f25d9, sync OK nonce 37b3ce9d67d247c7.
+- Files: NFL PBP adapter, drive simulator, pipeline, offline integration test, runbook.
+- Next: check a live nflverse run and backtest before publication. Artifact is research-only regulation.
+
+## NFL Master Pipeline V2 standard
+
+- Last implementation commit: ac5c42c1e8e8f81db95c5b82c64e6d5ba6f9af3b
+- Files: shared NFL master pipeline skill and the four agent entry-point documents.
+- Next: review the PR. The historical drive simulator remains research-only regulation. Verify the V2 execution gaps in the next run.

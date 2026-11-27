@@ -1,0 +1,1324 @@
+{
+ "events": [
+  {
+   "id": "401909317",
+   "date": "2026-11-25T22:00Z",
+   "name": "Miami Heat at Philadelphia 76ers",
+   "shortName": "MIA @ PHI",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "id": "401909317",
+     "date": "2026-11-25T22:00Z",
+     "attendance": 0,
+     "type": {
+      "id": "1",
+      "abbreviation": "STD"
+     },
+     "timeValid": true,
+     "neutralSite": false,
+     "conferenceCompetition": false,
+     "playByPlayAvailable": true,
+     "recent": true,
+     "venue": {
+      "id": "1845",
+      "fullName": "Xfinity Mobile Arena",
+      "address": {
+       "city": "Philadelphia",
+       "state": "PA"
+      },
+      "indoor": true
+     },
+     "competitors": [
+      {
+       "id": "20",
+       "type": "team",
+       "order": 0,
+       "homeAway": "home",
+       "team": {
+        "id": "20",
+        "location": "Philadelphia",
+        "name": "76ers",
+        "abbreviation": "PHI",
+        "displayName": "Philadelphia 76ers",
+        "shortDisplayName": "76ers",
+        "color": "1d428a",
+        "alternateColor": "e01234",
+        "isActive": true,
+        "venue": {
+         "id": "1845"
+        },
+        "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/phi.png"
+       },
+       "score": "111",
+       "linescores": [
+        {
+         "value": 29.0,
+         "displayValue": "29",
+         "period": 1
+        },
+        {
+         "value": 33.0,
+         "displayValue": "33",
+         "period": 2
+        },
+        {
+         "value": 28.0,
+         "displayValue": "28",
+         "period": 3
+        },
+        {
+         "value": 21.0,
+         "displayValue": "21",
+         "period": 4
+        }
+       ],
+       "statistics": [
+        {
+         "name": "rebounds",
+         "abbreviation": "REB",
+         "displayValue": "43"
+        },
+        {
+         "name": "avgRebounds",
+         "abbreviation": "REB",
+         "displayValue": "43.0"
+        },
+        {
+         "name": "assists",
+         "abbreviation": "AST",
+         "displayValue": "29"
+        },
+        {
+         "name": "fieldGoalsAttempted",
+         "abbreviation": "FGA",
+         "displayValue": "88"
+        },
+        {
+         "name": "fieldGoalsMade",
+         "abbreviation": "FGM",
+         "displayValue": "42"
+        },
+        {
+         "name": "fieldGoalPct",
+         "abbreviation": "FG%",
+         "displayValue": "47.7"
+        },
+        {
+         "name": "freeThrowPct",
+         "abbreviation": "FT%",
+         "displayValue": "76.5"
+        },
+        {
+         "name": "freeThrowsAttempted",
+         "abbreviation": "FTA",
+         "displayValue": "17"
+        },
+        {
+         "name": "freeThrowsMade",
+         "abbreviation": "FTM",
+         "displayValue": "13"
+        },
+        {
+         "name": "points",
+         "abbreviation": "PTS",
+         "displayValue": "111"
+        },
+        {
+         "name": "threePointPct",
+         "abbreviation": "3P%",
+         "displayValue": "41.2"
+        },
+        {
+         "name": "threePointFieldGoalsAttempted",
+         "abbreviation": "3PA",
+         "displayValue": "34"
+        },
+        {
+         "name": "threePointFieldGoalsMade",
+         "abbreviation": "3PM",
+         "displayValue": "14"
+        },
+        {
+         "name": "avgPoints",
+         "abbreviation": "PTS",
+         "displayValue": "111.0"
+        },
+        {
+         "name": "avgAssists",
+         "abbreviation": "AST",
+         "displayValue": "29.0"
+        },
+        {
+         "name": "threePointFieldGoalPct",
+         "abbreviation": "3P%",
+         "displayValue": "41.2"
+        }
+       ],
+       "leaders": [
+        {
+         "name": "points",
+         "displayName": "Points",
+         "shortDisplayName": "Pts",
+         "abbreviation": "Pts",
+         "leaders": [
+          {
+           "displayValue": "30",
+           "value": 30.0,
+           "athlete": {
+            "id": "4431678",
+            "fullName": "Tyrese Maxey",
+            "displayName": "Tyrese Maxey",
+            "shortName": "T. Maxey",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4431678.png",
+            "jersey": "0",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "20"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "20"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rebounds",
+         "displayName": "Rebounds",
+         "shortDisplayName": "Reb",
+         "abbreviation": "Reb",
+         "leaders": [
+          {
+           "displayValue": "10",
+           "value": 10.0,
+           "athlete": {
+            "id": "1966",
+            "fullName": "LeBron James",
+            "displayName": "LeBron James",
+            "shortName": "L. James",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/1966.png",
+            "jersey": "23",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "20"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "20"
+           }
+          }
+         ]
+        },
+        {
+         "name": "assists",
+         "displayName": "Assists",
+         "shortDisplayName": "Ast",
+         "abbreviation": "Ast",
+         "leaders": [
+          {
+           "displayValue": "12",
+           "value": 12.0,
+           "athlete": {
+            "id": "1966",
+            "fullName": "LeBron James",
+            "displayName": "LeBron James",
+            "shortName": "L. James",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/1966.png",
+            "jersey": "23",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "20"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "20"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rating",
+         "displayName": "Rating",
+         "shortDisplayName": "RAT",
+         "abbreviation": "RAT",
+         "leaders": [
+          {
+           "displayValue": "25 PTS, 10 REB, 12 AST",
+           "value": 57.650001525878906,
+           "athlete": {
+            "id": "1966",
+            "fullName": "LeBron James",
+            "displayName": "LeBron James",
+            "shortName": "L. James",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/1966.png",
+            "jersey": "23",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "20"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "20"
+           }
+          }
+         ]
+        }
+       ],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "14-4"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "7-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "7-1"
+        }
+       ]
+      },
+      {
+       "id": "14",
+       "type": "team",
+       "order": 1,
+       "homeAway": "away",
+       "team": {
+        "id": "14",
+        "location": "Miami",
+        "name": "Heat",
+        "abbreviation": "MIA",
+        "displayName": "Miami Heat",
+        "shortDisplayName": "Heat",
+        "color": "98002e",
+        "alternateColor": "000000",
+        "isActive": true,
+        "venue": {
+         "id": "3438"
+        },
+        "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/mia.png"
+       },
+       "score": "102",
+       "linescores": [
+        {
+         "value": 32.0,
+         "displayValue": "32",
+         "period": 1
+        },
+        {
+         "value": 21.0,
+         "displayValue": "21",
+         "period": 2
+        },
+        {
+         "value": 28.0,
+         "displayValue": "28",
+         "period": 3
+        },
+        {
+         "value": 21.0,
+         "displayValue": "21",
+         "period": 4
+        }
+       ],
+       "statistics": [
+        {
+         "name": "rebounds",
+         "abbreviation": "REB",
+         "displayValue": "42"
+        },
+        {
+         "name": "avgRebounds",
+         "abbreviation": "REB",
+         "displayValue": "42.0"
+        },
+        {
+         "name": "assists",
+         "abbreviation": "AST",
+         "displayValue": "24"
+        },
+        {
+         "name": "fieldGoalsAttempted",
+         "abbreviation": "FGA",
+         "displayValue": "84"
+        },
+        {
+         "name": "fieldGoalsMade",
+         "abbreviation": "FGM",
+         "displayValue": "38"
+        },
+        {
+         "name": "fieldGoalPct",
+         "abbreviation": "FG%",
+         "displayValue": "45.2"
+        },
+        {
+         "name": "freeThrowPct",
+         "abbreviation": "FT%",
+         "displayValue": "69.2"
+        },
+        {
+         "name": "freeThrowsAttempted",
+         "abbreviation": "FTA",
+         "displayValue": "26"
+        },
+        {
+         "name": "freeThrowsMade",
+         "abbreviation": "FTM",
+         "displayValue": "18"
+        },
+        {
+         "name": "points",
+         "abbreviation": "PTS",
+         "displayValue": "102"
+        },
+        {
+         "name": "threePointPct",
+         "abbreviation": "3P%",
+         "displayValue": "26.7"
+        },
+        {
+         "name": "threePointFieldGoalsAttempted",
+         "abbreviation": "3PA",
+         "displayValue": "30"
+        },
+        {
+         "name": "threePointFieldGoalsMade",
+         "abbreviation": "3PM",
+         "displayValue": "8"
+        },
+        {
+         "name": "avgPoints",
+         "abbreviation": "PTS",
+         "displayValue": "102.0"
+        },
+        {
+         "name": "avgAssists",
+         "abbreviation": "AST",
+         "displayValue": "24.0"
+        },
+        {
+         "name": "threePointFieldGoalPct",
+         "abbreviation": "3P%",
+         "displayValue": "26.7"
+        }
+       ],
+       "leaders": [
+        {
+         "name": "points",
+         "displayName": "Points",
+         "shortDisplayName": "Pts",
+         "abbreviation": "Pts",
+         "leaders": [
+          {
+           "displayValue": "32",
+           "value": 32.0,
+           "athlete": {
+            "id": "3032977",
+            "fullName": "Giannis Antetokounmpo",
+            "displayName": "Giannis Antetokounmpo",
+            "shortName": "G. Antetokounmpo",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3032977.png",
+            "jersey": "7",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "14"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "14"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rebounds",
+         "displayName": "Rebounds",
+         "shortDisplayName": "Reb",
+         "abbreviation": "Reb",
+         "leaders": [
+          {
+           "displayValue": "13",
+           "value": 13.0,
+           "athlete": {
+            "id": "3032977",
+            "fullName": "Giannis Antetokounmpo",
+            "displayName": "Giannis Antetokounmpo",
+            "shortName": "G. Antetokounmpo",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3032977.png",
+            "jersey": "7",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "14"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "14"
+           }
+          }
+         ]
+        },
+        {
+         "name": "assists",
+         "displayName": "Assists",
+         "shortDisplayName": "Ast",
+         "abbreviation": "Ast",
+         "leaders": [
+          {
+           "displayValue": "10",
+           "value": 10.0,
+           "athlete": {
+            "id": "4278053",
+            "fullName": "Davion Mitchell",
+            "displayName": "Davion Mitchell",
+            "shortName": "D. Mitchell",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4278053.png",
+            "jersey": "2",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "14"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "14"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rating",
+         "displayName": "Rating",
+         "shortDisplayName": "RAT",
+         "abbreviation": "RAT",
+         "leaders": [
+          {
+           "displayValue": "32 PTS, 13 REB",
+           "value": 56.0,
+           "athlete": {
+            "id": "3032977",
+            "fullName": "Giannis Antetokounmpo",
+            "displayName": "Giannis Antetokounmpo",
+            "shortName": "G. Antetokounmpo",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3032977.png",
+            "jersey": "7",
+            "position": {
+             "abbreviation": "F"
+            },
+            "team": {
+             "id": "14"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "14"
+           }
+          }
+         ]
+        }
+       ],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "10-6"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "6-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "4-3"
+        }
+       ]
+      }
+     ],
+     "notes": [
+      {
+       "type": "event",
+       "headline": "NBA Cup - Group Play"
+      }
+     ],
+     "situation": {
+      "lastPlay": {
+       "id": "401909317666",
+       "type": {
+        "id": "16",
+        "text": "Full Timeout"
+       },
+       "text": "76ers Full timeout",
+       "scoreValue": 0,
+       "team": {
+        "id": "20"
+       },
+       "probability": {
+        "tiePercentage": 0.0,
+        "homeWinPercentage": 0.999,
+        "awayWinPercentage": 0.0010000000000000009
+       }
+      }
+     },
+     "status": {
+      "clock": 29.1,
+      "displayClock": "29.1",
+      "period": 4,
+      "type": {
+       "id": "2",
+       "name": "STATUS_IN_PROGRESS",
+       "state": "in",
+       "completed": false,
+       "description": "In Progress",
+       "detail": "29.1 - 4th Quarter",
+       "shortDetail": "29.1 - 4th"
+      }
+     },
+     "startDate": "2026-11-25T22:00Z",
+     "broadcast": "ESPN"
+    }
+   ],
+   "status": {
+    "clock": 29.1,
+    "displayClock": "29.1",
+    "period": 4,
+    "type": {
+     "id": "2",
+     "name": "STATUS_IN_PROGRESS",
+     "state": "in",
+     "completed": false,
+     "description": "In Progress",
+     "detail": "29.1 - 4th Quarter",
+     "shortDetail": "29.1 - 4th"
+    }
+   }
+  },
+  {
+   "id": "401909319",
+   "date": "2026-11-26T00:30Z",
+   "name": "Cleveland Cavaliers at New York Knicks",
+   "shortName": "CLE @ NY",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "id": "401909319",
+     "date": "2026-11-26T00:30Z",
+     "attendance": 0,
+     "type": {
+      "id": "1",
+      "abbreviation": "STD"
+     },
+     "timeValid": true,
+     "neutralSite": false,
+     "conferenceCompetition": false,
+     "playByPlayAvailable": false,
+     "recent": true,
+     "venue": {
+      "id": "1830",
+      "fullName": "Madison Square Garden",
+      "address": {
+       "city": "New York",
+       "state": "NY"
+      },
+      "indoor": true
+     },
+     "competitors": [
+      {
+       "id": "18",
+       "type": "team",
+       "order": 0,
+       "homeAway": "home",
+       "team": {
+        "id": "18",
+        "location": "New York",
+        "name": "Knicks",
+        "abbreviation": "NY",
+        "displayName": "New York Knicks",
+        "shortDisplayName": "Knicks",
+        "color": "1d428a",
+        "alternateColor": "f58426",
+        "isActive": true,
+        "venue": {
+         "id": "1830"
+        },
+        "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/ny.png"
+       },
+       "score": "0",
+       "statistics": [
+        {
+         "name": "rebounds",
+         "abbreviation": "REB",
+         "displayValue": "797"
+        },
+        {
+         "name": "avgRebounds",
+         "abbreviation": "REB",
+         "displayValue": "46.9"
+        },
+        {
+         "name": "assists",
+         "abbreviation": "AST",
+         "displayValue": "454",
+         "rankDisplayValue": "4th"
+        },
+        {
+         "name": "fieldGoalsAttempted",
+         "abbreviation": "FGA",
+         "displayValue": "1496",
+         "rankDisplayValue": "4th"
+        },
+        {
+         "name": "fieldGoalsMade",
+         "abbreviation": "FGM",
+         "displayValue": "660",
+         "rankDisplayValue": "4th"
+        },
+        {
+         "name": "fieldGoalPct",
+         "abbreviation": "FG%",
+         "displayValue": "44.1",
+         "rankDisplayValue": "5th"
+        },
+        {
+         "name": "freeThrowPct",
+         "abbreviation": "FT%",
+         "displayValue": "80.2",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "freeThrowsAttempted",
+         "abbreviation": "FTA",
+         "displayValue": "349",
+         "rankDisplayValue": "5th"
+        },
+        {
+         "name": "freeThrowsMade",
+         "abbreviation": "FTM",
+         "displayValue": "280",
+         "rankDisplayValue": "5th"
+        },
+        {
+         "name": "points",
+         "abbreviation": "PTS",
+         "displayValue": "1852",
+         "rankDisplayValue": "4th"
+        },
+        {
+         "name": "threePointPct",
+         "abbreviation": "3P%",
+         "displayValue": "36.9",
+         "rankDisplayValue": "1st"
+        },
+        {
+         "name": "threePointFieldGoalsAttempted",
+         "abbreviation": "3PA",
+         "displayValue": "683",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "threePointFieldGoalsMade",
+         "abbreviation": "3PM",
+         "displayValue": "252",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "avgPoints",
+         "abbreviation": "PTS",
+         "displayValue": "108.9"
+        },
+        {
+         "name": "avgAssists",
+         "abbreviation": "AST",
+         "displayValue": "26.7"
+        },
+        {
+         "name": "threePointFieldGoalPct",
+         "abbreviation": "3P%",
+         "displayValue": "36.9",
+         "rankDisplayValue": "1st"
+        }
+       ],
+       "leaders": [
+        {
+         "name": "pointsPerGame",
+         "displayName": "Points Per Game",
+         "shortDisplayName": "PPG",
+         "abbreviation": "PTS",
+         "leaders": [
+          {
+           "displayValue": "26.5",
+           "value": 26.52941131591797,
+           "athlete": {
+            "id": "3934672",
+            "fullName": "Jalen Brunson",
+            "displayName": "Jalen Brunson",
+            "shortName": "J. Brunson",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3934672.png",
+            "jersey": "11",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "18"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "18"
+           }
+          }
+         ]
+        },
+        {
+         "name": "reboundsPerGame",
+         "displayName": "Rebounds Per Game",
+         "shortDisplayName": "RPG",
+         "abbreviation": "REB",
+         "leaders": [
+          {
+           "displayValue": "13.9",
+           "value": 13.875,
+           "athlete": {
+            "id": "3136195",
+            "fullName": "Karl-Anthony Towns",
+            "displayName": "Karl-Anthony Towns",
+            "shortName": "K. Towns",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3136195.png",
+            "jersey": "32",
+            "position": {
+             "abbreviation": "C"
+            },
+            "team": {
+             "id": "18"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "18"
+           }
+          }
+         ]
+        },
+        {
+         "name": "assistsPerGame",
+         "displayName": "Assists Per Game",
+         "shortDisplayName": "APG",
+         "abbreviation": "AST",
+         "leaders": [
+          {
+           "displayValue": "5.9",
+           "value": 5.941176414489746,
+           "athlete": {
+            "id": "3934672",
+            "fullName": "Jalen Brunson",
+            "displayName": "Jalen Brunson",
+            "shortName": "J. Brunson",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3934672.png",
+            "jersey": "11",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "18"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "18"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rating",
+         "displayName": "Rating",
+         "shortDisplayName": "RAT",
+         "abbreviation": "RAT",
+         "leaders": [
+          {
+           "displayValue": "21.8 PPG, 13.9 RPG, 4.0 APG, 1.0 SPG, 0.7 BPG",
+           "value": 44.771873474121094,
+           "athlete": {
+            "id": "3136195",
+            "fullName": "Karl-Anthony Towns",
+            "displayName": "Karl-Anthony Towns",
+            "shortName": "K. Towns",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3136195.png",
+            "jersey": "32",
+            "position": {
+             "abbreviation": "C"
+            },
+            "team": {
+             "id": "18"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "18"
+           }
+          }
+         ]
+        }
+       ],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "11-6"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "6-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "5-3"
+        }
+       ]
+      },
+      {
+       "id": "5",
+       "type": "team",
+       "order": 1,
+       "homeAway": "away",
+       "team": {
+        "id": "5",
+        "location": "Cleveland",
+        "name": "Cavaliers",
+        "abbreviation": "CLE",
+        "displayName": "Cleveland Cavaliers",
+        "shortDisplayName": "Cavaliers",
+        "color": "860038",
+        "alternateColor": "bc945c",
+        "isActive": true,
+        "venue": {
+         "id": "3417"
+        },
+        "logoDark": "https://a.espncdn.com/i/teamlogos/nba/500-dark/scoreboard/cle.png"
+       },
+       "score": "0",
+       "statistics": [
+        {
+         "name": "rebounds",
+         "abbreviation": "REB",
+         "displayValue": "819"
+        },
+        {
+         "name": "avgRebounds",
+         "abbreviation": "REB",
+         "displayValue": "45.5"
+        },
+        {
+         "name": "assists",
+         "abbreviation": "AST",
+         "displayValue": "487",
+         "rankDisplayValue": "Tied-2nd"
+        },
+        {
+         "name": "fieldGoalsAttempted",
+         "abbreviation": "FGA",
+         "displayValue": "1607",
+         "rankDisplayValue": "1st"
+        },
+        {
+         "name": "fieldGoalsMade",
+         "abbreviation": "FGM",
+         "displayValue": "762",
+         "rankDisplayValue": "1st"
+        },
+        {
+         "name": "fieldGoalPct",
+         "abbreviation": "FG%",
+         "displayValue": "47.4",
+         "rankDisplayValue": "1st"
+        },
+        {
+         "name": "freeThrowPct",
+         "abbreviation": "FT%",
+         "displayValue": "77.6",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "freeThrowsAttempted",
+         "abbreviation": "FTA",
+         "displayValue": "433",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "freeThrowsMade",
+         "abbreviation": "FTM",
+         "displayValue": "336",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "points",
+         "abbreviation": "PTS",
+         "displayValue": "2128",
+         "rankDisplayValue": "1st"
+        },
+        {
+         "name": "threePointPct",
+         "abbreviation": "3P%",
+         "displayValue": "36.6",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "threePointFieldGoalsAttempted",
+         "abbreviation": "3PA",
+         "displayValue": "732",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "threePointFieldGoalsMade",
+         "abbreviation": "3PM",
+         "displayValue": "268",
+         "rankDisplayValue": "2nd"
+        },
+        {
+         "name": "avgPoints",
+         "abbreviation": "PTS",
+         "displayValue": "118.2"
+        },
+        {
+         "name": "avgAssists",
+         "abbreviation": "AST",
+         "displayValue": "27.1"
+        },
+        {
+         "name": "threePointFieldGoalPct",
+         "abbreviation": "3P%",
+         "displayValue": "36.6",
+         "rankDisplayValue": "1st"
+        }
+       ],
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "9-9"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "7-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "2-6"
+        }
+       ],
+       "leaders": [
+        {
+         "name": "pointsPerGame",
+         "displayName": "Points Per Game",
+         "shortDisplayName": "PPG",
+         "abbreviation": "PTS",
+         "leaders": [
+          {
+           "displayValue": "24.7",
+           "value": 24.705883026123047,
+           "athlete": {
+            "id": "3908809",
+            "fullName": "Donovan Mitchell",
+            "displayName": "Donovan Mitchell",
+            "shortName": "D. Mitchell",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3908809.png",
+            "jersey": "45",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "5"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "5"
+           }
+          }
+         ]
+        },
+        {
+         "name": "reboundsPerGame",
+         "displayName": "Rebounds Per Game",
+         "shortDisplayName": "RPG",
+         "abbreviation": "REB",
+         "leaders": [
+          {
+           "displayValue": "8.4",
+           "value": 8.399999618530273,
+           "athlete": {
+            "id": "4066328",
+            "fullName": "Jarrett Allen",
+            "displayName": "Jarrett Allen",
+            "shortName": "J. Allen",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/4066328.png",
+            "jersey": "31",
+            "position": {
+             "abbreviation": "C"
+            },
+            "team": {
+             "id": "5"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "5"
+           }
+          }
+         ]
+        },
+        {
+         "name": "assistsPerGame",
+         "displayName": "Assists Per Game",
+         "shortDisplayName": "APG",
+         "abbreviation": "AST",
+         "leaders": [
+          {
+           "displayValue": "6.2",
+           "value": 6.176470756530762,
+           "athlete": {
+            "id": "3992",
+            "fullName": "James Harden",
+            "displayName": "James Harden",
+            "shortName": "J. Harden",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3992.png",
+            "jersey": "1",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "5"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "5"
+           }
+          }
+         ]
+        },
+        {
+         "name": "rating",
+         "displayName": "Rating",
+         "shortDisplayName": "RAT",
+         "abbreviation": "RAT",
+         "leaders": [
+          {
+           "displayValue": "24.7 PPG, 4.6 RPG, 5.2 APG, 1.2 SPG, 0.5 BPG",
+           "value": 39.53529357910156,
+           "athlete": {
+            "id": "3908809",
+            "fullName": "Donovan Mitchell",
+            "displayName": "Donovan Mitchell",
+            "shortName": "D. Mitchell",
+            "headshot": "https://a.espncdn.com/i/headshots/nba/players/full/3908809.png",
+            "jersey": "45",
+            "position": {
+             "abbreviation": "G"
+            },
+            "team": {
+             "id": "5"
+            },
+            "active": true
+           },
+           "team": {
+            "id": "5"
+           }
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "notes": [
+      {
+       "type": "event",
+       "headline": "NBA Cup - Group Play"
+      }
+     ],
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 0,
+      "type": {
+       "id": "1",
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "description": "Scheduled",
+       "detail": "Wed, November 25th at 7:30 PM EST",
+       "shortDetail": "11/25 - 7:30 PM EST"
+      }
+     },
+     "startDate": "2026-11-26T00:30Z",
+     "broadcast": "",
+     "odds": [
+      {
+       "provider": {
+        "id": "100",
+        "name": "DraftKings",
+        "priority": 1,
+        "displayName": "DraftKings"
+       },
+       "details": "NY -4.5",
+       "overUnder": 221.5,
+       "spread": -4.5,
+       "awayTeamOdds": {
+        "favorite": false,
+        "underdog": true,
+        "team": {
+         "id": "5",
+         "abbreviation": "CLE",
+         "name": "Cavaliers",
+         "displayName": "Cleveland Cavaliers"
+        },
+        "favoriteAtOpen": false
+       },
+       "homeTeamOdds": {
+        "favorite": true,
+        "underdog": false,
+        "team": {
+         "id": "18",
+         "abbreviation": "NY",
+         "name": "Knicks",
+         "displayName": "New York Knicks"
+        },
+        "favoriteAtOpen": true
+       },
+       "moneyline": {
+        "displayName": "Moneyline",
+        "shortDisplayName": "ML",
+        "home": {
+         "close": {
+          "odds": "-180"
+         },
+         "open": {
+          "odds": "-224"
+         }
+        },
+        "away": {
+         "close": {
+          "odds": "+151"
+         },
+         "open": {
+          "odds": "+186"
+         }
+        }
+       },
+       "pointSpread": {
+        "displayName": "Spread",
+        "shortDisplayName": "Spread",
+        "home": {
+         "close": {
+          "line": "-4.5",
+          "odds": "-107"
+         },
+         "open": {
+          "line": "-5.5",
+          "odds": "-115"
+         }
+        },
+        "away": {
+         "close": {
+          "line": "+4.5",
+          "odds": "-113"
+         },
+         "open": {
+          "line": "+5.5",
+          "odds": "-105"
+         }
+        }
+       },
+       "total": {
+        "displayName": "Total",
+        "shortDisplayName": "Total",
+        "over": {
+         "close": {
+          "line": "o221.5",
+          "odds": "-105"
+         },
+         "open": {
+          "line": "o220.5",
+          "odds": "-110"
+         }
+        },
+        "under": {
+         "close": {
+          "line": "u221.5",
+          "odds": "-116"
+         },
+         "open": {
+          "line": "u220.5",
+          "odds": "-110"
+         }
+        }
+       },
+       "header": {
+        "text": "Game Odds"
+       },
+       "footer": {
+        "disclaimer": "GAMBLING PROBLEM? CALL 1-800-GAMBLER or 1-800-MY-RESET, (800) 327-5050 or visit gamblinghelplinema.org (MA). Call 877-8-HOPENY/text HOPENY (467369) (NY). Call 888-789-7777/visit ccpg.org (CT), or visit www.mdgamblinghelp.org (MD), 1-800-981-0023 (PR). 21+ and present in most states. (18+ DC/KY/NH/PR/WY). Void in ONT. Eligibility restrictions apply. Terms: draftkings.com/sportsbook. On behalf of Boot Hill Casino (KS). Pass-thru of per wager tax may apply in IL."
+       }
+      }
+     ]
+    }
+   ],
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 0,
+    "type": {
+     "id": "1",
+     "name": "STATUS_SCHEDULED",
+     "state": "pre",
+     "completed": false,
+     "description": "Scheduled",
+     "detail": "Wed, November 25th at 7:30 PM EST",
+     "shortDetail": "11/25 - 7:30 PM EST"
+    }
+   }
+  }
+ ]
+}

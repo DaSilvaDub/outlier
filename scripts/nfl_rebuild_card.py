@@ -85,6 +85,8 @@ def rebuild_pick(pick: dict[str, Any]) -> dict[str, Any]:
     out["gaps"] = [f"{n}:{s}" for n, s in statuses.items() if s != VERIFIED]
     if verdict != VALIDATED:
         out["stake_fraction"] = 0.0
+        if "kelly_stake_fraction" in out:
+            out["kelly_stake_fraction"] = 0.0
     out["rebuild_notes"] = notes
     return out
 

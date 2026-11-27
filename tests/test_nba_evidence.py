@@ -357,7 +357,7 @@ def _model_eval_table(conn: sqlite3.Connection) -> None:
         "win_loss_push TEXT, close_status TEXT, clv_prob REAL, "
         "model_market_id TEXT GENERATED ALWAYS AS (market_id), "
         "model_line TEXT GENERATED ALWAYS AS (line), "
-        "clv_minutes_before_tip REAL DEFAULT 30)"
+        "clv_minutes_before_tip REAL DEFAULT 30, model_side TEXT)"
     )
 
 

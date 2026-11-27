@@ -26,6 +26,7 @@ class ExternalLoad:
 
     records: list[dict[str, Any]] = field(default_factory=list)
     sources: list[SourceRecord] = field(default_factory=list)
+    drives: dict = field(default_factory=dict)
     before_week: int | None = None
     phase_records: list[dict[str, Any]] = field(default_factory=list)
 
@@ -68,7 +69,12 @@ def load_external_metrics(
         (f"external:ngs:{kind}", partial(fetch_ngs, client, season, kind))
         for kind in ("passing", "rushing", "receiving")
     ]
-    calls.append(("external:pbp", partial(fetch_pbp, client, season)))
+    completed = {
+        row["game_id"]: (row["home_team"], row["away_team"])
+        for row in schedule_records or []
+        if row.get("game_id") and row.get("home_score") is not None and row.get("away_score") is not None
+    }
+    calls.append(("external:pbp", partial(fetch_pbp, client, season, completed=completed)))
     for name, call in calls:
         if out.before_week is None:
             out.sources.append(SourceRecord(name, "UNAVAILABLE", "missing verified cutoff"))
@@ -80,6 +86,8 @@ def load_external_metrics(
             out.sources.append(SourceRecord(name, "UNAVAILABLE", f"fetch failed: {exc}"))
             continue
         records = result.get("records", []) if isinstance(result, dict) else []
+        if name == "external:pbp":
+            out.drives = result.get("drives", {})
         out.records.extend(records)
         weeks = [int(r["week"]) for r in records if isinstance(r.get("week"), int)]
         out.sources.append(SourceRecord(

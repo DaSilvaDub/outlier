@@ -77,6 +77,8 @@ from outlier_nfl.stage_receipts import (
     validation_receipt,
 )
 from outlier_nfl.snapshots import append_snapshot, load_snapshots, movement_index, snapshot_path
+from outlier_nfl.trace_capture import CAPTURE_NAME, save_trace_inputs
+from outlier_nfl.upgrade_b_trial import load_trial_config
 from outlier_nfl.enrich_close import attach_close_fields
 from outlier_nfl.calibration import (
     DEFAULT_MARKET_PRIOR_KAPPA,
@@ -383,6 +385,7 @@ class NflPipeline:
 
         # Load external advanced metrics for the season
         # Offline fixture replays never touch the network.
+        drive_history: dict = {}
         external_metrics: list[dict[str, Any]] = []
         phase_records: list[dict[str, Any]] = []
         # First week whose data is not admissible at ctx.as_of_utc (None: no verified cutoff).
@@ -409,6 +412,7 @@ class NflPipeline:
                                 else ExternalClient(cache_dir=self.nfl_dir / "cache" / "external")),
                     )
                     external_metrics = loaded.records
+                    drive_history = loaded.drives
                     phase_records = loaded.phase_records
                     before_week = loaded.before_week
                     sources.extend(loaded.sources)
@@ -454,6 +458,16 @@ class NflPipeline:
                 dests.append(norm / f"{stem}_latest.json")
             writer.stage_json(f"{stem}.json", payload, publish=dests)
 
+        from outlier_nfl.external.drives import matchup_receipts
+
+        writer.stage_json("nfl_drive_simulations.json", {
+            "run_id": run_id,
+            "records": matchup_receipts(
+                slate_events, drive_history,
+                [row for row in external_metrics if row.get("source") == "schedule"],
+                ctx.as_of_utc, _event_team_codes,
+            ),
+        })
         writer.stage_json("raw/schedule.json", schedule_raw)
         writer.stage_json("raw/event_markets.json", raw_markets)
         writer.stage_json("raw/player_props.json", raw_props)
@@ -809,7 +823,7 @@ class NflPipeline:
             errors.append(f"alt floors failed: {exc}")
 
         # =====================================================================
-        # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
+        # 8 & 9. REQUIRED â€” Calculate Matchup Advantage Rankings & Generate Reports
         # =====================================================================
         matchup_rankings_summary: dict[str, Any] = {}
         try:
@@ -923,7 +937,7 @@ class NflPipeline:
         }
 
         report_root = Path(reports_dir) if reports_dir is not None else Path("reports/NFL")
-        # Optional Game Script Generation — one markdown file per matchup
+        # Optional Game Script Generation â€” one markdown file per matchup
         if generate_game_script and all_game_lines:
             try:
                 from scripts.nfl_game_script import NflGameScriptGenerator
@@ -1064,22 +1078,28 @@ class NflPipeline:
             movement = movement_index(
                 load_snapshots(snapshot_path(self.nfl_dir, target_date), as_of_utc=as_of_utc)
             )
-            payload = build_best_bets(
-                TraceInputs(
-                    props=props_dict,
-                    run_date=to_eastern_date(now_utc) or target_date,
-                    scripts=scripts_records,
-                    external_metrics=external_metrics,
-                    usage_players=usage_players,
-                    weather=weather_records,
-                    inactive_by_team=tape.injury_report(),
-                    questionable_by_team=tape.team_lists("questionable"),
-                    tapes=tape.teams,
-                    movement=movement,
-                    as_of_utc=as_of_utc.isoformat(),
-                    before_week=before_week,
-                )
+            # Upgrade B live trial: gate thresholds and flat/paper staking come from
+            # config/nfl_upgrade_b_trial.json. A malformed file raises here and fails
+            # the card rather than silently staking quarter-Kelly.
+            trial = load_trial_config()
+            trace_inputs = TraceInputs(
+                props=props_dict,
+                run_date=to_eastern_date(now_utc) or target_date,
+                scripts=scripts_records,
+                external_metrics=external_metrics,
+                usage_players=usage_players,
+                weather=weather_records,
+                inactive_by_team=tape.injury_report(),
+                questionable_by_team=tape.team_lists("questionable"),
+                tapes=tape.teams,
+                movement=movement,
+                as_of_utc=as_of_utc.isoformat(),
+                before_week=before_week,
+                gate_config=trial.gate_config,
+                stake_policy=trial.stake_policy,
             )
+            payload = build_best_bets(trace_inputs)
+            payload["trial"] = trial.to_dict()
         except Exception as exc:  # the slate's data outputs above are already written
             logger.error("Best-bets trace failed: %s", exc)
             # Never leave an older card behind for a reader to mistake for this run's.
@@ -1095,6 +1115,17 @@ class NflPipeline:
                 (self.normalized_dir / stale).unlink(missing_ok=True)
             return {"error": f"best-bets trace failed: {exc}"}
         payload.update({"date": target_date, "window": window, "updated_at": now_utc})
+        try:  # replay input for gate backtests; never blocks the card
+            save_trace_inputs(
+                writer.staged_path(CAPTURE_NAME),
+                trace_inputs,
+                # No run_id: the bundle folder names the run, and an embedded id
+                # would make two rebuilds of one slate differ byte for byte.
+                meta={"date": target_date, "window": window, "suffix": suffix,
+                      "updated_at": now_utc},
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not capture best-bets trace inputs: %s", exc)
         card_dests = [self.normalized_dir / f"nfl_best_bets_{suffix}.json"] if publish else []
         if publish_latest:
             card_dests.append(self.normalized_dir / "nfl_best_bets_latest.json")
