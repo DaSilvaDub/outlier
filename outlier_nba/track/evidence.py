@@ -134,6 +134,29 @@ def _row_reason(r: sqlite3.Row) -> str | None:
     return None
 
 
+_SPREAD_SIGN = {"HOME": -1.0, "AWAY": 1.0}
+
+
+def _threshold_key(r: sqlite3.Row) -> str:
+    """The threshold the two sides of one quoted line share (see ``capture.orientation``).
+
+    A total quotes the same number to both sides, but a spread quotes ``-h`` to HOME and ``+h``
+    to AWAY, so grouping on the stored line would read one quoted spread as two observations.
+    HOME ``h`` is "home margin > -h" and AWAY ``a`` is "home margin < a", so both sides of a
+    rung map onto one threshold while the mirror rung of a ladder keeps its own. A moneyline
+    has no threshold. An unknown side falls back to the stored line, which pairs nothing.
+    """
+    if r["family"] == "team.ML":
+        return ""
+    sign = _SPREAD_SIGN.get(str(r["model_side"] or "").strip().upper())
+    if sign is None:
+        return str(r["line"])
+    try:
+        return f"{sign * float(r['line']) + 0.0:.6f}"  # + 0.0 so a pick'em is not -0.0
+    except (TypeError, ValueError):
+        return str(r["line"])
+
+
 def _clv_value(r: sqlite3.Row, excl: Exclusions) -> float | None:
     """CLV of a backed row: only a verified close inside the 60-minute policy, else None."""
     if r["close_status"] != VERIFIED:
@@ -159,7 +182,7 @@ def _load_report(conn: sqlite3.Connection) -> tuple[dict[str, list[Obs]], dict[s
         """
         SELECT family, event_id, market_id, line, selection, event_starts_at, model_prob,
                model_market_prob, win_loss_push, close_status, clv_prob, model_market_id,
-               model_line, clv_minutes_before_tip
+               model_line, clv_minutes_before_tip, model_side
         FROM nba_model_eval
         ORDER BY event_id, market_id, line, selection
         """
@@ -171,9 +194,9 @@ def _load_report(conn: sqlite3.Connection) -> tuple[dict[str, list[Obs]], dict[s
         if reason is not None:
             excl[r["family"]].add(reason)
             continue
-        sides[(r["family"], r["event_id"], r["market_id"], str(r["line"]))].append(r)
+        sides[(r["family"], r["event_id"], r["market_id"], _threshold_key(r))].append(r)
     out: dict[str, list[Obs]] = defaultdict(list)
-    for (family, event_id, market_id, line), group in sides.items():
+    for (family, event_id, market_id, threshold), group in sides.items():
         first = group[0]  # either side serves calibration and log loss
         favoured = next((r for r in group if r["model_prob"] > r["model_market_prob"]), None)
         clv = None if favoured is None else _clv_value(favoured, excl[family])
@@ -181,7 +204,7 @@ def _load_report(conn: sqlite3.Connection) -> tuple[dict[str, list[Obs]], dict[s
         out[family].append(
             Obs(
                 event=event_id,
-                key=(event_id, market_id, line),
+                key=(event_id, market_id, threshold),
                 day=(tip + ET_OFFSET).date().isoformat() if tip else "",
                 model=float(first["model_prob"]),
                 market=float(first["model_market_prob"]),
