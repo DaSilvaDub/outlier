@@ -955,7 +955,7 @@ def _market(prop: Mapping[str, Any], src: _Sources) -> Pillar:
         direction = (1 if last_line > open_line else -1) * _side_sign(position)
         pillar.evidence["line_move"] = round(last_line - open_line, 2)
     elif open_imp is not None and last_imp is not None:
-        pts = (last_imp - open_imp) * (100.0 if abs(last_imp) <= 1 and abs(open_imp) <= 1 else 1.0)
+        pts = last_imp - open_imp
         pillar.evidence["implied_move_pts"] = round(pts, 2)
         if abs(pts) >= MOVE_IMPLIED_PTS:
             direction = 1 if pts > 0 else -1

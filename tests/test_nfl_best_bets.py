@@ -706,6 +706,17 @@ def test_price_move_only_on_stable_line_verifies_and_boosts():
     assert pick["verdict"] == VALIDATED
 
 
+def test_sub_one_percent_implied_move_stays_in_percentage_points():
+    """0.99 -> 0.50 is -0.49 pts, the same unit as 52.00 -> 52.49."""
+    longshot = _pick(build_best_bets(_inputs(movement=_movement(open_implied=0.99, last_implied=0.50))))
+    ordinary = _pick(build_best_bets(_inputs(movement=_movement(open_implied=52.00, last_implied=52.49))))
+    assert longshot["pillars"]["market"]["evidence"]["implied_move_pts"] == -0.49
+    assert ordinary["pillars"]["market"]["evidence"]["implied_move_pts"] == 0.49
+    assert longshot["pillars"]["market"]["status"] == VERIFIED
+    assert ordinary["pillars"]["market"]["status"] == VERIFIED
+    assert longshot["verdict"] == ordinary["verdict"] == VALIDATED
+
+
 @pytest.mark.parametrize(
     ("rates", "expected_token"),
     [
