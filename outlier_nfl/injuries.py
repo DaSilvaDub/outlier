@@ -1,4 +1,4 @@
-﻿"""Same-day NFL injury / inactive status for pack filtering.
+"""Same-day NFL injury / inactive status for pack filtering.
 
 Primary source: ESPN public injuries feed (same site.api host pattern as
 ``outlier_nfl.boxscore``). Optional merge with nflverse tape inactives already

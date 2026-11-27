@@ -1,3 +1,109 @@
+# Session Handoff: Daily automated debug / code-health review (2026-11-26, agent `claude`)
+
+1. **Last Commit SHA**: `a5c1876` on `claude/inspiring-fermat-xh62xq` (from master `acd6c72`).
+2. **STEP 0**: Linux cloud sandbox, no `pwsh`, so the AGENTS.md "Cloud / Sandbox Agents" path was
+   used in its non-destructive form (5 marker greps only; no `git reset --hard`, since this is a
+   checkout and not a fresh clone). All 5 upgrade markers present (`player_id`,
+   `round_robin_then_fill`, `CANDIDATES_HEADER`, `decisions.csv` in `outlier_scrapers/pack.py`;
+   `_acquire_writer_lock` in `outlier_scrapers/daily_job.py`). HEAD == `origin/master` == `acd6c72`
+   after `git fetch origin master`.
+3. **Checks run** (no reasoning models, no provider calls — house rule respected; the 5
+   provider test files were excluded and the `provider` CI job was **not** run):
+   - Offline `pytest` (core CI scope) → **3758 passed, 6 skipped** in 290s.
+   - `mypy outlier_scrapers outlier_nfl` → clean (143 files). `mypy outlier_nba` → clean (49).
+   - `pyright outlier_scrapers outlier_nfl` → 0 errors. `pyright outlier_nba` → the 2 known
+     `capture --only-if-due` possibly-unbound reports; both are guarded by the same
+     `if args.only_if_due`, so they are narrowing artifacts, not defects.
+   - `pyright scripts` → 20 errors, all reviewed, all narrowing/stub artifacts (`.get()` results
+     re-checked with `isinstance` on a second call, `__doc__.splitlines()`, loop variables bound
+     by literal-tuple loops). No runtime defects.
+   - Import-smoke of every module in `outlier_scrapers`/`outlier_nfl`/`outlier_nba` (excluding
+     reasoning/desk modules) and all `scripts/*.py` → 0 failures. All 432 tracked `.py` files
+     AST-parse (after this commit).
+   - `verify_nfl_pipeline.py --mode fixture --out-dir <scratch>` → exit 0, all market
+     assertions pass — **but see finding 1**.
+4. **Code reviewed**: everything merged in the last 24h — the NFL drive stage (`11e998b`
+   `drive_sim.py`, `4b1e356` pipeline wiring, `ef39282` receipt scoping, `6e674da` typing) and
+   the NBA upstream-evidence batch (`ef22a68` BettingPros individual-book gate, `dd71623`
+   `no_matched_edges` status, `c2af9bc` `NBA_PIPELINE_REPO` env default). No defects found.
+   Notes from that review:
+   - `drive_sim.simulate` validation, the `weights()` blend in `external/drives.py` and the pace
+     clamp all keep the probability vectors summing to 1 within the 1e-8 tolerance. One receipt
+     benchmarks at 0.26s / 2378 distinct scores / 32KB JSON, so the new unconditional pipeline
+     stage is not a cost concern.
+   - The 16 ruff `B023` reports in `external/drives.py`, `tape_nflverse.py` and
+     `portfolio.py` are immediate-use closures (called in the same loop iteration), not
+     late-binding bugs. The 15 `PLR0124` reports are all the deliberate `x != x` NaN idiom.
+   - `scripts/refresh_nba_upstream.py` new status paths were exercised directly (5 cases). They
+     behave as intended; see finding 6 for one cosmetic mislabel.
+5. **Fix applied** (the only code change): `outlier_nfl/injuries.py` carried a UTF-8 BOM, the
+   only tracked `.py` file that did. Removed, plus `tests/test_source_hygiene.py`, which asserts
+   every tracked `.py` parses when read as plain UTF-8. Verified the test fails on the pre-fix
+   file with `invalid non-printable character U+FEFF`.
+6. **Needs human attention** — three of these are already fixed in PRs that have not been merged:
+   - **`verify_nfl_pipeline.py` ignores `--out-dir` for reports (reproduced today).** A
+     fixture-mode run from the repo root overwrote 3 tracked files under `reports/NFL/`, created
+     6 untracked ones, and wrote `data/outlier-pipeline.sqlite3` — the last violating the
+     "never write `data\` from an agent session" house rule for anyone following the documented
+     verification command. Root cause: the script passes `data_dir=args.out_dir` but leaves
+     `NflPipeline.run(reports_dir=None)`, and `pipeline.py:939` then defaults `report_root` to a
+     CWD-relative `reports/NFL`, which `writer.stage_tree("reports", report_root)` publishes into.
+     **Fix already exists in open PR #365** (opened 2026-11-19 by the daily review, still
+     unmerged). I restored the dirtied files rather than open a duplicate PR.
+   - **`requirements.lock` omits 5 declared runtime deps** (`structlog`, `SQLAlchemy`,
+     `psycopg2-binary`, `numpy`, `tzdata`), so all three CI jobs resolve them unpinned under a
+     step named "Install frozen dependencies". **Fix already exists in open PR #390**
+     (2026-11-24, unmerged), whose description also documents the numpy-2.5-stubs mypy break.
+   - **The lint gate is unusable with the pinned linter.** `pyproject.toml` `[tool.ruff]` sets
+     only `line-length` and `target-version` — no `lint.select` — and `ruff==0.16.5` enables 413
+     rules by default (verified against an empty directory outside the repo: it flags `I001`,
+     `UP035`, `S110`, `BLE001` with no config at all). `python -m ruff check .`, which CLAUDE.md
+     documents, reports **998 errors**, so `make lint-check` fires on pre-existing style in any
+     file a contributor touches. Recent handoffs already work around this ("18 ruff errors
+     elsewhere, pre-existing"). Ruff is not in CI, so nothing is red. Pinning an explicit
+     `[tool.ruff.lint] select`/`ignore` is a rule-set policy decision, so it was left for a human
+     rather than chosen here.
+   - **The reasoning guard blocks the safe command and permits the unsafe one.** The shared
+     pattern in `.claude/hooks/block-reasoning.{py,ps1}` ends with
+     `pytest\b[^;|]*test_(reasoning|gemini_research|claude_reasoning|claude_synthesis|c_research)`,
+     which matches the *path inside an exclusion flag*. The CI core recipe
+     (`pytest -q --ignore=tests/test_reasoning.py ...`) is therefore blocked with a message that
+     invites appending `DESK_OK` — i.e. it pushes an agent toward bypassing the guard to run the
+     command that excludes the provider tests. Meanwhile bare `pytest`, which CLAUDE.md documents
+     under "Common Commands" and which *collects* those files, does not match and is allowed.
+     Recommended: exclude `--ignore`, `--ignore-glob` and `--deselect` arguments from the match,
+     and gate on collection rather than on the literal filename. The `.py` and `.ps1` deny
+     patterns must stay identical (CLAUDE.md), and the `.ps1` twin cannot be tested from a Linux
+     sandbox, so this was not changed here.
+   - **`provider` pytest marker is declared but never applied.** `pyproject.toml` declares the
+     `provider` marker, and none of `tests/test_{reasoning,claude_reasoning,claude_synthesis,
+     gemini_research,c_research}.py` carries it. `pytest -m "not provider"` therefore does not
+     exclude the provider tests; CI separates them by filename only. Adding
+     `pytestmark = pytest.mark.provider` to those 5 files would make the marker mean what the
+     house rule needs it to mean.
+   - **Mislabelled stand-down status** (cosmetic, no behavioural risk): in
+     `scripts/refresh_nba_upstream.py`, a failure in the `grades` stage *after* the edges stage
+     recorded `source_lines > 0` still reports `status="awaiting_odds"` (reproduced), although
+     odds were collected — the same distinction `dd71623` added `no_matched_edges` to draw. The
+     stand-down itself is correct (`empty_inputs` runs). Separately, `name` and `edges` in the
+     `except` handler are only safe through `and` short-circuit ordering; a failure in the
+     post-loop `json.loads` would be misattributed to the availability stage.
+   - **Still-open pricing question from PR #365, unchanged on master.** In
+     `outlier_nfl/best_bets.py`, `_priced_american()` rejects an all-DFS board but
+     `_opposite_implied()` (line 985) still reads the opposite row's feed
+     `implied_probability`, so a two-sided devig on a mixed board can pair a sportsbook price
+     with a DFS one. And `EXCLUDED_FROM_SPORTSBOOK_BEST` (`outlier_nfl/games.py:166`) holds only
+     `prizepicks` while `_DFS_BOOKS` holds four books, so "sportsbook best" can still be an
+     Underdog/Sleeper/Dabble price. Both are card-changing, so neither was touched.
+7. **Next Steps**: merge PR #365 and PR #390 — both are fixes this review re-confirmed today.
+   30 PRs are now open, several of them fixes from earlier daily reviews (PR #364's own title
+   already reads "the fix queue keeps growing"); the review keeps finding real defects faster
+   than they are being merged. No live upstream collection, no paid reasoning, no desk run, no
+   `calibration/` or `data/` writes from this session (the one `data/` touch was the
+   `verify_nfl_pipeline.py` defect above, and it created only the gitignored sqlite file).
+
+---
+
 # NBA `slate` command and hardening — November 26, 2026 (Claude)
 
 - Merged: PR #394 (`6c34600`) added `python -m outlier_nba.cli slate`: 50k-draw team-model simulation per game, single-book ESPN/DraftKings lines, twelve gates (F1-F12, this command's own, thresholds in `SlateConfig`), quarter-Kelly under 1.0/1.5/3.0u caps, nine-section report + JSON under `~/outlier_nba_data/reports`. Follow-up PR (branch `claude/slate-cli-hardening`): `--draws` must be >= 1000 (exit 2), `run_slate_cmd` split into `_slate_team_state` / `_slate_summary`.
