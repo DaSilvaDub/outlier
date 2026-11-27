@@ -82,19 +82,31 @@ class Slate:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
 
 
-def open_events(schedule: Mapping[str, Any], as_of: datetime) -> list[dict[str, Any]]:
-    """Scheduled games that have not started as of ``as_of`` (pre-tip only)."""
-    out = []
+_NOT_PENDING = frozenset({"final", "closed", "complete", "completed", "inprogress", "live"})
+
+
+def _pending_events(schedule: Mapping[str, Any]):
     for event in schedule.get("events") or []:
         if not isinstance(event, dict) or event.get("live"):
             continue
-        status = str(event.get("status") or "").lower()
-        if status in {"final", "closed", "complete", "completed", "inprogress", "live"}:
+        if str(event.get("status") or "").lower() in _NOT_PENDING:
             continue
+        yield event
+
+
+def open_events(schedule: Mapping[str, Any], as_of: datetime) -> list[dict[str, Any]]:
+    """Scheduled games that have not started as of ``as_of`` (pre-tip only)."""
+    out = []
+    for event in _pending_events(schedule):
         tip = event_tip_utc(event)
         if tip is not None and tip > as_of:
             out.append(event)
     return out
+
+
+def schedule_no_tip(schedule: Mapping[str, Any]) -> int:
+    """Pending events dropped because they have no parseable tip."""
+    return sum(1 for event in _pending_events(schedule) if event_tip_utc(event) is None)
 
 
 def fetch_raw(
@@ -280,7 +292,15 @@ def raw_receipts(bundle: RawBundle, slate: Slate) -> list[StageReceipt]:
     if not isinstance(events, list):
         out.append(receipt("schedule", "INVALID", reason="schedule payload has no events list"))
     else:
-        out.append(receipt("schedule", "OK" if events else "EMPTY", received=len(events)))
+        no_tip = schedule_no_tip(bundle.schedule)
+        out.append(
+            receipt(
+                "schedule",
+                "OK" if events else "EMPTY",
+                received=len(events),
+                reason=f"schedule_no_tip={no_tip}" if no_tip else None,
+            )
+        )
 
     summary = bundle.props.get("_page_summary") or {}
     props = bundle.props.get("props")

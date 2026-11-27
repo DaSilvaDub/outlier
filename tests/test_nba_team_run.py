@@ -215,6 +215,9 @@ def test_strict_boolean_parsing() -> None:
     assert team_run.event_neutral({"neutralSite": "true"}) is True
     assert team_run.event_neutral({"neutralSite": "unknown"}) is None
     assert team_run.event_neutral({}) is None
+    # an unparseable first key must not hide a later one that does parse
+    assert team_run.event_neutral({"neutralSite": "unknown", "neutral_site": False}) is False
+    assert team_run.event_neutral({"neutralSite": "unknown", "neutral": True}) is True
 
 
 def test_string_false_does_not_make_a_game_neutral(tmp_path, games, promo) -> None:

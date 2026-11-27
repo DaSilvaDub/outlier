@@ -490,3 +490,16 @@ def test_eval_view_and_clv_table_exist_right_after_a_capture(tmp_path):
     conn = _db(tmp_path)
     assert conn.execute("SELECT COUNT(*) FROM nba_outcome_eval").fetchone()[0] == 23
     assert conn.execute("SELECT COUNT(*) FROM nba_clv").fetchone()[0] == 0
+
+
+def test_ensure_nba_schema_replaces_a_stale_outcome_view() -> None:
+    from outlier_nba.track.views import ensure_nba_schema
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE VIEW nba_outcome_eval AS SELECT 1 AS stale")
+    ensure_nba_schema(conn)
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'nba_outcome_eval'"
+    ).fetchone()[0]
+    assert "stale" not in sql.lower()
+    assert "ROW_NUMBER()" in sql

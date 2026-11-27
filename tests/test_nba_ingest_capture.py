@@ -202,6 +202,23 @@ def test_empty_schedule_is_an_empty_receipt():
     assert {r.name: r.status for r in raw_receipts(bundle, slate)}["schedule"] == "EMPTY"
 
 
+def test_a_pending_event_without_a_parseable_tip_is_counted_on_the_schedule_receipt():
+    sched = fx.schedule()
+    broken = dict(sched["events"][0])
+    broken["eventId"] = "ev-notip"
+    broken["scheduledTime"] = "not-a-tip"
+    finished = dict(sched["events"][0])
+    finished["eventId"] = "ev-final-notip"
+    finished["status"] = "final"
+    finished["scheduledTime"] = "not-a-tip"
+    sched["events"].extend([broken, finished])
+    bundle, slate = _slate(fx.FakeClient(sched=sched))
+    assert all(e.get("eventId") != "ev-notip" for e in slate.events)
+    receipt = {r.name: r for r in raw_receipts(bundle, slate)}["schedule"]
+    assert receipt.status == "OK"
+    assert receipt.reason == "schedule_no_tip=1"
+
+
 def test_requests_that_succeed_but_return_no_markets_are_incomplete():
     class NoMarkets(fx.FakeClient):
         def fetch_event_markets(self, event_id, market_type):

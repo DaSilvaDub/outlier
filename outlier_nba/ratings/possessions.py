@@ -93,13 +93,17 @@ def build_dataset(games: list[GameRow]) -> Dataset:
             continue
         base_h = (g.home_fga or 0) + FTA_WEIGHT * (g.home_fta or 0)
         base_a = (g.away_fga or 0) + FTA_WEIGHT * (g.away_fta or 0)
-        if g.home_oreb is not None and g.home_tov is not None and g.away_oreb is not None:
-            tov_a = g.away_tov if g.away_tov is not None else 0
+        if (
+            g.home_oreb is not None
+            and g.home_tov is not None
+            and g.away_oreb is not None
+            and g.away_tov is not None
+        ):
             ph = base_h - g.home_oreb + g.home_tov
-            pa = base_a - g.away_oreb + tov_a
+            pa = base_a - g.away_oreb + g.away_tov
             poss[i] = 0.5 * (ph + pa)
             exact[i] = True
-            adj_sum += 0.5 * ((g.home_tov - g.home_oreb) + (tov_a - g.away_oreb))
+            adj_sum += 0.5 * ((g.home_tov - g.home_oreb) + (g.away_tov - g.away_oreb))
             adj_n += 1
         elif adj_n:
             poss[i] = 0.5 * (base_h + base_a) + adj_sum / adj_n  # causal running mean

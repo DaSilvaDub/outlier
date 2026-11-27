@@ -46,13 +46,9 @@ class FamilyGate:
 
 
 def load_thresholds(config: Path | None = None) -> Mapping[str, Any]:
-    """Thresholds from a valid promotion file, else the coded defaults. Never raises: an
-    unreadable or tampered file must not change what the gate demands."""
+    """Thresholds from the promotion file. A tampered file raises, as the evaluator does."""
     path = Path(config) if config else promotion.DEFAULT_PATH
-    try:
-        loaded = promotion._load(path)
-    except promotion.PromotionTamperedError:
-        return promotion.THRESHOLDS
+    loaded = promotion._load(path)
     return {**promotion.THRESHOLDS, **loaded.get("thresholds", {})}
 
 
