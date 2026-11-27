@@ -109,3 +109,17 @@ def test_failure_keeps_the_previous_csv(env, monkeypatch):
     out.write_text("previous", encoding="utf-8")
     assert _run(monkeypatch, "--date", "2026-09-13") == mod.EXIT_MISSING
     assert out.read_text(encoding="utf-8") == "previous"
+
+
+def test_row_writes_sportsbook_quote_not_pickem_best_odds():
+    row = mod.row_from_record({
+        **REC,
+        "best_odds": -110,
+        "sportsbook_best_odds": -140,
+        "books": [
+            {"book": "PrizePicks", "odds": -110},
+            {"book": "DraftKings", "odds": -140},
+        ],
+    })
+    assert row["price"] == -140
+    assert row["book"] == "DraftKings"

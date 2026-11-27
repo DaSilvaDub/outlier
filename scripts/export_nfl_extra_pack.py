@@ -70,9 +70,15 @@ class ExportError(Exception):
         self.code = code
 
 
+def _quoted_odds(rec: dict[str, Any]) -> Any:
+    if rec.get("sportsbook_best_odds") is not None:
+        return rec["sportsbook_best_odds"]
+    return rec.get("best_odds")
+
+
 def _best_book(rec: dict[str, Any]) -> str:
     books = rec.get("books") or []
-    best = rec.get("best_odds")
+    best = _quoted_odds(rec)
     if not isinstance(books, list):
         return ""
     for entry in books:
@@ -163,6 +169,7 @@ def records_from_payload(payload: Any) -> list[dict[str, Any]]:
 
 
 def row_from_record(rec: dict[str, Any]) -> dict[str, Any]:
+    odds = _quoted_odds(rec)
     return {
         "sport": "NFL",
         "matchup": rec.get("matchup") or "",
@@ -174,7 +181,7 @@ def row_from_record(rec: dict[str, Any]) -> dict[str, Any]:
         "position": rec.get("position") or "",
         "selection": _selection(rec),
         "line": rec.get("line") if rec.get("line") is not None else "",
-        "price": rec.get("best_odds") if rec.get("best_odds") is not None else "",
+        "price": "" if odds is None else odds,
         "book": _best_book(rec),
         "confidence_tier": rec.get("confidence_tier") or "",
         "implied_probability": (
