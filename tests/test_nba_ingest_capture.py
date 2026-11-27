@@ -3,6 +3,8 @@ from datetime import timedelta
 import pytest
 
 from outlier_nba.ingest.outlier import fetch_raw, normalize_slate, raw_receipts
+from outlier_nba.market.devig import american_to_decimal, american_to_prob
+from outlier_nba.pricing.team_markets import Priced
 from outlier_nba.track.capture import (
     build_shadow_capture,
     orientation,
@@ -102,15 +104,17 @@ def test_two_sided_prop_consensus_excludes_dfs_and_sums_to_one():
     assert over["push_prob"] == "0.000000"  # half line
 
 
-def test_best_price_book_is_recorded_and_edge_is_consensus_minus_implied():
+def test_best_price_book_is_recorded_and_edge_matches_push_aware_ev():
     rows, _ = _rows()
     over = rows["o-pts-26.5-over"]
     assert (
         over["price"] == -105 and over["book"] == "Caesars"
     )  # PrizePicks +100 is not a priced book
-    assert float(over["edge"]) == pytest.approx(
-        float(over["market_consensus_prob"]) - 105 / 205, abs=1e-5
-    )
+    p_side = float(over["market_consensus_prob"])
+    decimal = american_to_decimal(int(over["price"]))
+    assert decimal is not None and over["push_prob"] == "0.000000"
+    expected = Priced(p_win=p_side, p_push=0.0, p_loss=1.0 - p_side, se=0.0, n_draws=0).ev(decimal)
+    assert float(over["edge"]) == pytest.approx(expected, abs=1e-5)
 
 
 def test_one_sided_alt_rungs_get_no_consensus_and_are_flagged():
@@ -128,6 +132,31 @@ def test_thin_two_way_market_is_flagged_but_priced():
     rows, _ = _rows()
     assert "THIN_MARKET" in rows["o-reb-over"]["data_quality_flags"]
     assert rows["o-reb-over"]["market_consensus_prob"] != ""
+
+
+def test_whole_number_line_edge_uses_push_aware_ev():
+    rows, _ = _rows()
+    over = rows["o-tot-over-221"]
+    under = rows["o-tot-under-221"]
+    push = float(over["push_prob"])
+    assert push > 0
+    assert float(under["push_prob"]) == pytest.approx(push, abs=1e-6)
+    for row in (over, under):
+        p_side = float(row["market_consensus_prob"])
+        price = int(row["price"])
+        decimal = american_to_decimal(price)
+        implied = american_to_prob(price)
+        assert decimal is not None and implied is not None
+        no_push = 1.0 - push
+        expected = Priced(
+            p_win=p_side * no_push,
+            p_push=push,
+            p_loss=(1.0 - p_side) * no_push,
+            se=0.0,
+            n_draws=0,
+        ).ev(decimal)
+        assert float(row["edge"]) == pytest.approx(expected, abs=1e-5)
+        assert float(row["edge"]) != pytest.approx(p_side - implied, abs=1e-4)
 
 
 def test_integer_total_rung_derives_push_from_adjacent_half_lines():
