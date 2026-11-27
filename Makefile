@@ -21,6 +21,6 @@ else
 endif
 
 typecheck:
-	$(PYTHON) -m mypy outlier_scrapers outlier_nfl
-	pyright outlier_scrapers outlier_nfl
+	$(PYTHON) -m mypy outlier_scrapers outlier_nfl outlier_nba
+	pyright outlier_scrapers outlier_nfl outlier_nba
 
