@@ -16,6 +16,7 @@ from .api import OutlierApiClient, AuthRequiredError, OutlierApiError
 from .environment import load_environment
 from .paths import otp_status_file, PROJECT_ROOT
 from .otp_fetcher import fetch_and_write_otp
+from .utils import _local_date
 from . import pack
 from . import feedback
 from . import probability_blend
@@ -644,7 +645,7 @@ def _finalize_run(
 
 
 def _new_run_id(target_date: str | None) -> str:
-    day = target_date or datetime.now().astimezone().date().isoformat()
+    day = target_date or _local_date(datetime.now(timezone.utc))
     return f"{day}-{int(time.time())}"
 
 
@@ -752,7 +753,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.date:
-        args.date = datetime.now().astimezone().date().isoformat()
+        args.date = _local_date(datetime.now(timezone.utc))
 
     leagues = [lg.strip().upper() for lg in args.leagues.split(",")]
     leagues, nba_shadow = split_nba_shadow(leagues)
@@ -766,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.t30_reprice_only:
             t30_pack_dir = args.t30_pack_dir or (
-                PROJECT_ROOT / "packs" / datetime.now().astimezone().date().isoformat()
+                PROJECT_ROOT / "packs" / _local_date(datetime.now(timezone.utc))
             )
             try:
                 t30_result = t30_reprice.run_t30_reprice(

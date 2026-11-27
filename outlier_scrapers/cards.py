@@ -32,7 +32,7 @@ from collections import defaultdict
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .cards_html import render_html
@@ -40,7 +40,7 @@ from .normalizer import _to_float, _to_int, implied_probability, percent_number
 from .paths import league_paths
 from .form_source import _token, canon_team
 from .registry import get_sport_config, normalize_market, supported_leagues
-from .utils import _summary_stat_for_team, safe_write_json
+from .utils import _local_date, _summary_stat_for_team, safe_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -1387,19 +1387,6 @@ def _expand_movement(view: dict[str, Any]) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 
 
-def _local_date(ts: str | None) -> str | None:
-    if not ts or not isinstance(ts, str):
-        return None
-    try:
-        clean = ts.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(clean)
-        return dt.astimezone().strftime("%Y-%m-%d")
-    except Exception:
-        if len(ts) >= 10 and ts[:4].isdigit() and ts[4] == "-" and ts[7] == "-":
-            return ts[:10]
-        return None
-
-
 def build_cards_payload(
     league: str,
     target_date: str | None = None,
@@ -1454,7 +1441,7 @@ def build_cards_payload(
     card_dates = {d for c in cards if (d := _local_date(c.get("event_starts_at"))) is not None}
     active_date = target_date
     if active_date is None and card_dates:
-        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        today = _local_date(datetime.now(timezone.utc))
         active_date = today if today in card_dates else max(card_dates)
 
     if active_date:
@@ -1608,7 +1595,7 @@ def build_game_cards_payload(
     card_dates = {d for c in cards if (d := _local_date(c.get("event_starts_at"))) is not None}
     active_date = target_date
     if active_date is None and card_dates:
-        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        today = _local_date(datetime.now(timezone.utc))
         active_date = today if today in card_dates else max(card_dates)
 
     if active_date:

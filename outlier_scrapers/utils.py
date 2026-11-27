@@ -13,7 +13,8 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence, overload
+from zoneinfo import ZoneInfo
 
 
 def _parse_start(ts: Any) -> datetime | None:
@@ -27,14 +28,31 @@ def _parse_start(ts: Any) -> datetime | None:
     return parsed if parsed.tzinfo else None
 
 
-def _local_date(iso_ts: str | None) -> str | None:
-    """Convert an ISO timestamp to a local YYYY-MM-DD string."""
-    if not iso_ts:
+_EASTERN = ZoneInfo("America/New_York")
+
+
+@overload
+def _local_date(iso_ts: datetime) -> str: ...
+
+
+@overload
+def _local_date(iso_ts: str | None) -> str | None: ...
+
+
+def _local_date(iso_ts: str | datetime | None) -> str | None:
+    """Eastern (America/New_York) slate date, YYYY-MM-DD."""
+    if iso_ts is None or iso_ts == "":
         return None
-    try:
-        return datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        return None
+    if isinstance(iso_ts, datetime):
+        parsed = iso_ts
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.strftime("%Y-%m-%d")
+    return parsed.astimezone(_EASTERN).strftime("%Y-%m-%d")
 
 
 def drop_locked_events(

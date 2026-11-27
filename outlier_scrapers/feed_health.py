@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from .paths import LeaguePaths, league_paths
+from .utils import _local_date
 
 
 SCHEMA_VERSION = "1.0"
@@ -743,7 +744,7 @@ def league_has_confirmed_empty_slate(league: str, *, now: datetime) -> bool:
     # inside the freshness window, or an explicit ``--date`` run for a future
     # slate -- must not be read as "today has no games", or today's real slate
     # is dropped from the pack date and today's feed-health gate is waived.
-    if str(payload.get("target_date") or "") != now.astimezone().date().isoformat():
+    if str(payload.get("target_date") or "") != _local_date(now):
         return False
     try:
         generated_at = _parse_timestamp(payload.get("generated_at"))
