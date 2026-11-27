@@ -90,8 +90,12 @@ def _player_key(team: Any, name: Any) -> tuple[str, str]:
 
 def _actual(row: Mapping[str, str], market: str) -> float | None:
     if market == TD_MARKET:
+        # Rush and receiving stay required. A missing return column is zero.
         rush, rec = _stat(row.get("rushing_tds")), _stat(row.get("receiving_tds"))
-        return None if rush is None or rec is None else rush + rec
+        if rush is None or rec is None:
+            return None
+        returns = _stat(row.get("special_teams_tds"))
+        return rush + rec + (0.0 if returns is None else returns)
     column = MARKET_COLUMNS.get(market)
     return _stat(row.get(column)) if column else None
 
