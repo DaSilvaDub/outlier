@@ -14,7 +14,7 @@ from itertools import combinations
 from typing import Any
 
 from outlier_scrapers.game_totals import FULL_GAME_SCOPES
-from outlier_scrapers.normalizer import MLB_ALT_PLAYER_OVER_MARKETS, percent_number
+from outlier_scrapers.normalizer import MLB_ALT_PLAYER_OVER_MARKETS
 from outlier_scrapers.utils import (
     _american_to_decimal,
     _local_date,
@@ -168,7 +168,9 @@ def _floor_ladder_score(row: dict[str, Any]) -> float:
     """Score a floor line balancing hit rate stability with playable odds."""
     l5 = float(row.get("l5_pct") or 0.0)
     l10 = float(row.get("l10_pct") or 0.0)
-    szn = float(row.get("season_pct") or 0.0)
+    season_raw = row.get("season_pct")
+    # Missing season is omitted, not scored as 0%. The 0.25 weight stays on the L10/L5 average.
+    szn = (l10 + l5) / 2.0 if season_raw is None else float(season_raw)
     odds = float(row.get("best_odds") or -110)
 
     # Hit rate baseline
@@ -255,8 +257,8 @@ def build_alt_player_props_board(
             continue
         best_book, best_odds = offer
 
-        l5 = percent_number(rec.get("l5_pct"))
-        l10 = percent_number(rec.get("l10_pct"))
+        l5 = _number(rec.get("l5_pct"))
+        l10 = _number(rec.get("l10_pct"))
         if l5 is None or l10 is None:
             continue
 
@@ -280,14 +282,8 @@ def build_alt_player_props_board(
 
         decimal_price = _american_to_decimal(best_odds)
         implied_p = (1.0 / decimal_price) if decimal_price and decimal_price > 0 else 0.5
-        # percent_number() returns None when the feed carries no season hit rate
-        # (normalizer passes curSeason straight through). The 0.0 below is only a
-        # display default for the CSV column -- it must not reach the probability
-        # model, where a missing season rate has its own branch. Collapsing None
-        # to 0.0 there scores the player as if they had hit 0% all season, which
-        # understates model_prob by up to 30 points and flips a real edge negative.
-        season_pct = percent_number(rec.get("season_pct"))
-        season_val = season_pct or 0.0
+        # None until after ranking. The CSV column still displays a missing season as 0.0.
+        season_pct = _number(rec.get("season_pct"))
         model_p = _calculate_alt_player_prop_probability(l10, season_pct, l5, implied_p)
         edge = round((model_p - implied_p) * 100.0, 2)
         units = 0.5 if edge > 0 else ""
@@ -309,7 +305,7 @@ def build_alt_player_props_board(
                 "best_odds": best_odds,
                 "l5_pct": l5,
                 "l10_pct": l10,
-                "season_pct": season_val,
+                "season_pct": season_pct,
                 "market_id": rec.get("market_id") or "",
                 "outcome_id": outcome_id,
                 "model_prob": model_p,
@@ -322,11 +318,14 @@ def build_alt_player_props_board(
         key=lambda row: (
             _floor_ladder_score(row),
             row["l10_pct"],
-            row["season_pct"],
+            0.0 if row["season_pct"] is None else row["season_pct"],
             -float(row["best_odds"]),
         ),
         reverse=True,
     )
+    for row in eligible:
+        if row["season_pct"] is None:
+            row["season_pct"] = 0.0
     by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in eligible:
         by_event[row["event_id"]].append(row)
