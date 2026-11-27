@@ -16,6 +16,7 @@ from outlier_nfl.best_bets import (
     PROVISIONAL,
     REJECTED,
     STALE,
+    UPGRADE_B_GATES,
     VALIDATED,
     VERIFIED,
     TraceInputs,
@@ -53,17 +54,17 @@ def _prop(position: str = "OVER", odds: int = -110, implied: float = 52.381, **k
         "opponent": "DAL",
         "player_name": "A.J. Brown",
         "player_id": "p1",
-        "market": "REC_YDS",
-        "market_raw": "Receiving Yards",
+        "market": "REC",
+        "market_raw": "Receptions",
         "position": position,
-        "line": 70.5,
+        "line": 5.5,
         "books": [{"book": "DraftKings", "odds": odds, "odds_raw": str(odds)}],
         "best_odds": odds,
         "implied_probability": implied,
         "l5_hit_rate": 0.8,
-        "l10_hit_rate": 0.7,
+        "l10_hit_rate": 0.8,
         "l20_hit_rate": None,
-        "season_hit_rate": 0.65,
+        "season_hit_rate": 0.75,
         "scope": "full_game",
         "is_consensus_line": True,
         "confidence_tier": "TIER_2_STRONG",
@@ -91,14 +92,14 @@ def _external():
     return records
 
 
-def _movement(open_line=69.5, last_line=72.5, snapshots=2):
+def _movement(open_line=5.5, last_line=5.5, snapshots=2, open_implied=50.0, last_implied=52.4):
     from outlier_nfl.snapshots import prop_key
 
     return {
         prop_key(_prop()): {
             "snapshots": snapshots, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": open_line,
-            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
-            "last_line": last_line, "last_odds": -110, "last_implied": 52.4,
+            "open_odds": -100, "open_implied": open_implied, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": last_line, "last_odds": -110, "last_implied": last_implied,
         }
     }
 
@@ -281,7 +282,8 @@ def test_weather_signal_flows_once_and_misnamed_market_is_orphaned():
              "reason": "wind", "confidence": "HIGH", "volume_adjustment": -0.10},
         ],
     }]
-    payload = build_best_bets(_inputs(scripts=scripts))
+    props = [_prop(market="REC_YDS", line=70.5), _prop("UNDER", market="REC_YDS", line=70.5)]
+    payload = build_best_bets(_inputs(props=props, scripts=scripts))
     over = _pick(payload)
     weather = over["pillars"]["injury_weather"]
     assert [s["tag"] for s in weather["evidence"]["signals"]] == ["WEATHER_WIND_HIGH"]
@@ -325,7 +327,8 @@ def test_regression_signal_counts_in_historical_pillar_only():
              "volume_adjustment": 0.15},
         ],
     }]
-    over = _pick(build_best_bets(_inputs(scripts=scripts)))
+    props = [_prop(market="REC_YDS", line=70.5), _prop("UNDER", market="REC_YDS", line=70.5)]
+    over = _pick(build_best_bets(_inputs(props=props, scripts=scripts)))
     assert over["pillars"]["historical"]["evidence"]["overridden_signals"] == [
         "OVERRIDDEN_MATCHUP_COVERAGE_LEAK"
     ]
@@ -653,19 +656,19 @@ def test_zero_hit_rate_longshot_td_is_rejected_not_validated():
 def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     from outlier_nfl.snapshots import prop_key
 
-    p1_over = _prop(market="REC_YDS", line=70.5, odds=-110, implied=52.381)
-    p1_under = _prop("UNDER", market="REC_YDS", line=70.5, odds=-110, implied=52.381)
+    p1_over = _prop(market="TARGETS", line=7.5, odds=-110, implied=52.381)
+    p1_under = _prop("UNDER", market="TARGETS", line=7.5, odds=-110, implied=52.381)
     p2_over = _prop(market="REC", line=5.5, odds=-110, implied=52.381)
     p2_under = _prop("UNDER", market="REC", line=5.5, odds=-110, implied=52.381)
     movement = {
         prop_key(p1_over): {
-            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 69.5,
-            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
-            "last_line": 72.5, "last_odds": -110, "last_implied": 52.4,
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 7.5,
+            "open_odds": -100, "open_implied": 50.0, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 7.5, "last_odds": -110, "last_implied": 52.4,
         },
         prop_key(p2_over): {
-            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 4.5,
-            "open_odds": -110, "open_implied": 52.4, "last_taken_at": "2026-10-04T14:30:00Z",
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 5.5,
+            "open_odds": -100, "open_implied": 50.0, "last_taken_at": "2026-10-04T14:30:00Z",
             "last_line": 5.5, "last_odds": -110, "last_implied": 52.4,
         },
     }
@@ -679,3 +682,169 @@ def test_same_player_correlation_guard_caps_one_validated_pick_per_player():
     assert len(provisional_same) == 1
     assert "correlation:CORRELATED_SAME_PLAYER" in provisional_same[0]["gaps"]
 
+
+# --- Upgrade B win-rate gates & bug fixes -----------------------------------
+
+
+def test_line_move_chase_caps_at_provisional_instead_of_boosting():
+    """Chasing a line that already moved >=0.5 toward our side must not validate or boost."""
+    pick = _pick(build_best_bets(_inputs(movement=_movement(open_line=4.5, last_line=5.5))))
+    mkt = pick["pillars"]["market"]
+    assert mkt["status"] == ESTIMATED
+    assert mkt["delta"] == 0.0
+    assert mkt["evidence"]["line_move_chase"] is True
+    assert pick["verdict"] == PROVISIONAL
+    assert pick["stake_fraction"] == 0.0
+
+
+def test_price_move_only_on_stable_line_verifies_and_boosts():
+    """Price-only steam on an unmoved line earns VERIFIED + positive delta."""
+    pick = _pick(build_best_bets(_inputs(movement=_movement(open_line=5.5, last_line=5.5, open_implied=50.0, last_implied=52.4))))
+    mkt = pick["pillars"]["market"]
+    assert mkt["status"] == VERIFIED
+    assert mkt["delta"] == pytest.approx(0.01)
+    assert pick["verdict"] == VALIDATED
+
+
+@pytest.mark.parametrize(
+    ("rates", "expected_token"),
+    [
+        ({"l5_hit_rate": 0.4, "l10_hit_rate": 0.8, "season_hit_rate": 0.8}, "L5"),
+        ({"l5_hit_rate": 0.8, "l10_hit_rate": 0.6, "season_hit_rate": 0.8}, "L10"),
+        ({"l5_hit_rate": 0.8, "l10_hit_rate": 0.8, "season_hit_rate": 0.6}, "season"),
+    ],
+)
+def test_multi_window_convergence_caps_cooling_or_weak_season_at_provisional(rates, expected_token):
+    props = [_prop(**rates), _prop("UNDER")]
+    pick = _pick(build_best_bets(_inputs(props=props)))
+    hist = pick["pillars"]["historical"]
+    assert hist["status"] == ESTIMATED
+    assert any(expected_token in note for note in hist["notes"])
+    assert pick["verdict"] == PROVISIONAL
+
+
+def test_market_prior_beta_shrinkage_uses_real_games_played():
+    """Standard -110 prop uses market_prior (kappa=12) and real usage_games, not Laplace(a=2)."""
+    pick = _pick(build_best_bets(_inputs()))
+    hist_ev = pick["pillars"]["historical"]["evidence"]
+    assert hist_ev["shrink_method"] == "market_prior"
+    assert hist_ev["shrink_kappa"] == 12.0
+    assert hist_ev["games_played_effective"] == 3
+    # With emp ~0.785, n=3, prior=0.5, kappa=12 -> base_p = (0.785*3 + 6) / 15 = 0.557 (not ~0.714 Laplace!)
+    assert 0.53 < pick["base_p"] < 0.60
+
+
+@pytest.mark.parametrize(
+    "bad_odds, bad_imp, opp_odds, opp_imp",
+    [(145, 40.82, -175, 63.64), (-180, 64.29, 150, 40.0)],
+)
+def test_odds_outside_validated_band_capped_at_provisional(bad_odds, bad_imp, opp_odds, opp_imp):
+    props = [
+        _prop(odds=bad_odds, implied=bad_imp, l5_hit_rate=0.95, l10_hit_rate=0.95, season_hit_rate=0.95),
+        _prop("UNDER", odds=opp_odds, implied=opp_imp),
+    ]
+    usage = [{"player": "A.J. Brown", "team": "PHI", "games": 10, "target_share": 0.27,
+              "carry_share": 0.0, "targets_pg": 9.0, "carries_pg": 0.0}]
+    pick = _pick(build_best_bets(_inputs(props=props, usage_players=usage)))
+    assert pick["pillars"]["price"]["evidence"]["ev_at_quote_positive"] is True
+    assert pick["pillars"]["price"]["status"] == ESTIMATED
+    assert any("outside validated band" in n for n in pick["pillars"]["price"]["notes"])
+    assert pick["verdict"] == PROVISIONAL
+
+
+@pytest.mark.parametrize("mkt", ["REC_YDS", "PASS_YDS", "RUSH_YDS", "RUSH_REC_YDS", "PASS_RUSH_YDS"])
+def test_continuous_yardage_over_capped_at_provisional(mkt):
+    over = _prop(market=mkt, line=65.5, l5_hit_rate=0.9, l10_hit_rate=0.9, season_hit_rate=0.9)
+    under = _prop("UNDER", market=mkt, line=65.5)
+    pillar = _price(over, 0.72, _by_line(over, under))
+    assert pillar.status == ESTIMATED
+    assert any("continuous yardage OVER" in n for n in pillar.notes)
+
+
+def test_continuous_yardage_under_still_validates():
+    from outlier_nfl.snapshots import prop_key
+
+    over = _prop("OVER", market="REC_YDS", line=70.5, l5_hit_rate=0.2, l10_hit_rate=0.2, season_hit_rate=0.2)
+    under = _prop("UNDER", market="REC_YDS", line=70.5, l5_hit_rate=0.8, l10_hit_rate=0.8, season_hit_rate=0.8)
+    movement = {
+        prop_key(under): {
+            "snapshots": 2, "open_taken_at": "2026-09-29T14:00:00Z", "open_line": 70.5,
+            "open_odds": -100, "open_implied": 50.0, "last_taken_at": "2026-10-04T14:30:00Z",
+            "last_line": 70.5, "last_odds": -110, "last_implied": 52.4,
+        }
+    }
+    pick = _pick(build_best_bets(_inputs(props=[over, under], movement=movement)), "UNDER")
+    assert pick["pillars"]["price"]["status"] == VERIFIED
+    assert pick["verdict"] == VALIDATED
+
+
+def test_int_market_negates_opponent_pass_epa_sign():
+    """Bad pass defense (+pass_epa_z) must reduce INT OVER probability, not boost it."""
+    int_over = _prop(player_name="Jalen Hurts", player_id="qb1", market="INT", position="OVER", line=0.5)
+    int_under = _prop(player_name="Jalen Hurts", player_id="qb1", market="INT", position="UNDER", line=0.5)
+    ext = _external() + [
+        {"source": "ngs", "kind": "passing", "week": w, "player": "Jalen Hurts", "team": "PHI", "attempts": 30}
+        for w in (1, 2, 3)
+    ]
+    payload = build_best_bets(_inputs(props=[int_over, int_under], external_metrics=ext))
+    over = _pick(payload, "OVER")
+    under = _pick(payload, "UNDER")
+    # DAL has +pass_epa_z (bad pass defense): OVER INT gets negative delta, UNDER INT gets positive delta
+    assert over["pillars"]["matchup"]["evidence"]["epa_sign_inverted"] is True
+    assert over["pillars"]["matchup"]["evidence"]["epa_delta"] < 0
+    assert under["pillars"]["matchup"]["evidence"]["epa_delta"] > 0
+
+
+def test_opportunity_role_surge_contradicts_under():
+    """A >=1.5x recent usage surge must reject UNDER picks symmetrically to role_collapse on OVER."""
+    ext = [r for r in _external() if not (r.get("source") == "ngs" and r.get("player") == "A.J. Brown")]
+    for week, targets in ((1, 4), (2, 5), (3, 14)):  # avg=7.67, last=14 >= 1.5*7.67
+        ext.append({"source": "ngs", "kind": "receiving", "week": week, "player": "A.J. Brown",
+                    "team": "PHI", "targets": targets, "avg_separation": 3.0})
+    under = _prop("UNDER", l5_hit_rate=0.8, l10_hit_rate=0.8, season_hit_rate=0.8)
+    over = _prop("OVER", l5_hit_rate=0.2, l10_hit_rate=0.2, season_hit_rate=0.2)
+    pick = _pick(build_best_bets(_inputs(props=[over, under], external_metrics=ext)), "UNDER")
+    assert pick["pillars"]["opportunity"]["evidence"]["role_surge"] is True
+    assert pick["pillars"]["opportunity"]["status"] == CONTRADICTS
+    assert pick["verdict"] == REJECTED
+
+
+def test_opportunity_thin_sample_caps_at_provisional():
+    """Fewer than 3 games of NGS/usage history caps opportunity at ESTIMATED."""
+    ext = [r for r in _external() if not (r.get("source") == "ngs" and r.get("player") == "A.J. Brown")]
+    ext.append({"source": "ngs", "kind": "receiving", "week": 1, "player": "A.J. Brown",
+                "team": "PHI", "targets": 9, "avg_separation": 3.2})
+    usage = [{"player": "A.J. Brown", "team": "PHI", "games": 1, "target_share": 0.25,
+              "carry_share": 0.0, "targets_pg": 9.0, "carries_pg": 0.0}]
+    pick = _pick(build_best_bets(_inputs(external_metrics=ext, usage_players=usage)))
+    assert pick["pillars"]["opportunity"]["status"] == ESTIMATED
+    assert pick["verdict"] == PROVISIONAL
+
+
+def test_exchange_vs_retail_gap_filter_h_caps_outlier_exchange():
+    """Exchange quote >4.5 implied pts better than retail median is capped at PROVISIONAL."""
+    over = _prop(
+        odds=130,
+        implied=43.48,
+        books=[
+            {"book": "Novig", "odds": 130, "odds_raw": "+130"},
+            {"book": "DraftKings", "odds": -110, "odds_raw": "-110"},
+            {"book": "FanDuel", "odds": -112, "odds_raw": "-112"},
+        ],
+        l5_hit_rate=0.9,
+        l10_hit_rate=0.9,
+        season_hit_rate=0.9,
+    )
+    under = _prop("UNDER", odds=-110, implied=52.381)
+    pillar = _price(over, 0.70, _by_line(over, under))
+    assert pillar.evidence["exchange_retail_gap_pts"] > 4.5
+    assert pillar.status == ESTIMATED
+    assert any("Filter H" in n for n in pillar.notes)
+
+
+def test_audit_records_upgrade_b_gates_and_stake_mode():
+    payload = build_best_bets(_inputs())
+    audit = payload["audit"]["upgrade_b"]
+    assert audit["enabled_gates"] == list(UPGRADE_B_GATES)
+    assert audit["stake_mode"] == "kelly"
+    assert "audit_rules" not in payload["audit"]

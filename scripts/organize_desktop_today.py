@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import hashlib
 import json
 import re
 import shutil
@@ -254,11 +255,11 @@ def is_stageable_csv(path: Path, dates: list[str]) -> bool:
     """
     with path.open(encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
-        first = next(reader, None)
-        if first is None:
+        rows = list(reader)
+        if not rows:
             return False
         if "slate_date" in (reader.fieldnames or []):
-            return (first.get("slate_date") or "") in dates
+            return all((row.get("slate_date") or "") in dates for row in rows)
     return True
 
 
@@ -271,8 +272,57 @@ def _current_exports(export_dir: Path, dates: list[str]) -> list[Source]:
     ]
 
 
+def verify_nba_csv(path: Path, slate_date: str) -> int:
+    """Verify the exact published bytes, including explicit zero-row stand-downs."""
+    from scripts.export_nba_extra_pack import publication_eligible
+
+    try:
+        status = json.loads(path.with_suffix(".status.json").read_text(encoding="utf-8"))
+        with path.open(encoding="utf-8-sig", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        if (
+            status.get("slate_date") != slate_date
+            or status.get("csv_sha256") != hashlib.sha256(path.read_bytes()).hexdigest()
+            or status.get("row_count") != len(rows)
+            or status.get("actionable_rows") != len(rows)
+            or status.get("status") not in {"ready", "awaiting_odds", "awaiting_availability"}
+            or (rows and status.get("status") != "ready")
+            or any(not publication_eligible(row, slate_date) for row in rows)
+        ):
+            raise OrganizerError(f"NBA publication bundle failed validation: {path}")
+    except (OSError, ValueError, TypeError) as exc:
+        raise OrganizerError(f"NBA publication bundle unreadable: {path}: {exc}") from exc
+    return len(rows)
+
+
 def nba_sources(repo_root: Path, slate_date: str) -> list[Source]:
-    return _current_exports(repo_root / "data" / "NBA" / "exports", [slate_date])
+    exports = repo_root / "data" / "NBA" / "exports"
+    sources: list[Source] = []
+    for path in _files(exports, "*.csv"):
+        if not is_current_artifact(path.name, [slate_date]):
+            continue
+        # Raw edge/grade exports are never evidence of current publication readiness.
+        if not path.with_suffix(".status.json").is_file():
+            if path.name == "nba_only.csv":
+                raise OrganizerError(f"NBA publication status missing: {path}")
+            continue
+        verify_nba_csv(path, slate_date)
+        sources.extend([(path, "01_Packs"), (path.with_suffix(".status.json"), "01_Packs")])
+    summary = exports / f"nba_only_filter_summary_{slate_date}.json"
+    pack = exports / "nba_only.csv"
+    if summary.is_file() and any(src == pack for src, _ in sources):
+        try:
+            data = json.loads(summary.read_text(encoding="utf-8"))
+            if (
+                data.get("slate_date") != slate_date
+                or data.get("after_rows") != verify_nba_csv(pack, slate_date)
+                or ("csv_sha256" in data and data["csv_sha256"] != hashlib.sha256(pack.read_bytes()).hexdigest())
+            ):
+                raise OrganizerError(f"NBA summary disagrees with CSV or slate date: {summary}")
+        except (OSError, ValueError, TypeError) as exc:
+            raise OrganizerError(f"NBA summary unreadable: {summary}: {exc}") from exc
+        sources.append((summary, "01_Packs"))
+    return sources
 
 
 def nfl_sources(repo_root: Path, slate_date: str) -> list[Source]:
@@ -356,6 +406,23 @@ def populate_sport_deliverables(
         for src, subdir in sources:
             safe_copy(src, fresh / subdir / src.name)
             copied += 1
+        if sp == "NBA":
+            for src, subdir in sources:
+                dst = fresh / subdir / src.name
+                if hashlib.sha256(dst.read_bytes()).digest() != hashlib.sha256(src.read_bytes()).digest():
+                    raise OrganizerError(f"NBA destination differs from source: {dst}")
+                if dst.suffix.lower() == ".csv":
+                    verify_nba_csv(dst, slate_date)
+            summary = fresh / "01_Packs" / f"nba_only_filter_summary_{slate_date}.json"
+            if any(src.name == summary.name for src, _ in sources):
+                summary_data = json.loads(summary.read_text(encoding="utf-8"))
+                pack = fresh / "01_Packs" / "nba_only.csv"
+                if (
+                    summary_data.get("slate_date") != slate_date
+                    or summary_data.get("after_rows") != verify_nba_csv(pack, slate_date)
+                    or ("csv_sha256" in summary_data and summary_data["csv_sha256"] != hashlib.sha256(pack.read_bytes()).hexdigest())
+                ):
+                    raise OrganizerError(f"NBA destination summary disagrees with CSV: {summary}")
     return copied
 
 

@@ -15,12 +15,20 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
+import math
+import os
+import tempfile
+from collections import Counter
+from datetime import UTC, date, datetime, timedelta
 import shutil
 import subprocess  # nosec B404 - only runs fixed local pipeline scripts, never shell or user input
 import sys
 import time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPORTS_DIR = REPO_ROOT / "data" / "NBA" / "exports"
@@ -49,6 +57,24 @@ FIELDNAMES = [
     "edge_pct",
     "projection_sources",
     "game_time",
+    "game_status",
+    "event_status",
+    "event_id",
+    "game_id",
+    "team",
+    "opponent",
+    "quote_timestamp",
+    "odds_timestamp",
+    "odds_as_of",
+    "quote_as_of",
+    "provider_event_id",
+    "provider_quote_id",
+    "provider_book",
+    "provider",
+    "source_name",
+    "bookmaker",
+    "captured_at_utc",
+    "quote_timestamp_basis",
 ]
 
 CANDIDATE_SOURCES = [
@@ -105,7 +131,7 @@ def trigger_live_prop_pipeline() -> bool:
             print(f"Executing {edges_script.name}...")
             # Fixed argv (this interpreter + a script under NBA_PIPELINE_REPO), no shell.
             res = subprocess.run(  # nosec B603  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-                [python_exe, str(edges_script), "--allow-stale-hardrock"],
+                [python_exe, str(edges_script), "--no-rg"],
                 cwd=str(NBA_PIPELINE_REPO),
                 capture_output=True,
                 text=True,
@@ -162,81 +188,183 @@ def resolve_source(explicit_src: str | None = None, auto_refresh: bool = True) -
     return resolved
 
 
+def _aware_utc(value: Any) -> datetime:
+    stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if stamp.tzinfo is None or stamp.utcoffset() is None:
+        raise ValueError("timestamp must include a timezone")
+    return stamp.astimezone(UTC)
+
+
+def publication_rejection(
+    row: dict[str, Any], slate_date: str | None, now: datetime | None = None
+) -> str | None:
+    """Return why this exact pregame quote cannot be published, or None.
+
+    File modification times never establish quote validity. A provider quote
+    timestamp is required; explicit stale flags always block publication.
+    """
+    cutoff = _aware_utc(now or datetime.now(UTC))
+    if not slate_date or row.get("slate_date") != slate_date:
+        return "wrong_slate"
+    try:
+        date.fromisoformat(slate_date)
+        tip = _aware_utc(row.get("game_time"))
+    except (ValueError, TypeError):
+        return "unverified_game_time"
+    if tip.astimezone(ZoneInfo("America/New_York")).date().isoformat() != slate_date:
+        return "wrong_game_date"
+    if tip <= cutoff:
+        return "game_started"
+    game_status = str(row.get("game_status") or row.get("event_status", "")).strip().upper()
+    if game_status in {
+        "LIVE",
+        "IN_PROGRESS",
+        "IN PROGRESS",
+        "FINAL",
+        "COMPLETED",
+        "CANCELLED",
+        "POSTPONED",
+    }:
+        return "game_unavailable"
+    for key in ("stale", "odds_stale", "quote_stale", "is_stale"):
+        if str(row.get(key, "")).strip().lower() in {"true", "1", "yes"}:
+            return "stale_odds"
+    if str(row.get("provider", "")).strip().casefold() == "bettingpros":
+        book = str(row.get("source_name") or "").strip().casefold()
+        if not book or "consensus" in book or book == "bettingpros":
+            return "consensus_price"
+        if (
+            book != str(row.get("provider_book") or "").strip().casefold()
+            or not all(
+                row.get(key)
+                for key in ("provider_quote_id", "provider_event_id", "quote_timestamp")
+            )
+            or not row.get(f"{str(row.get('recommended_side') or '').lower()}_odds")
+        ):
+            return "unverified_book_quote"
+    verified_quote_time = False
+    for key in ("quote_timestamp", "odds_timestamp", "odds_as_of", "quote_as_of"):
+        if row.get(key):
+            try:
+                quote_time = _aware_utc(row[key])
+            except (ValueError, TypeError):
+                return "unverified_quote_time"
+            if quote_time > cutoff or cutoff - quote_time > timedelta(hours=12):
+                return "stale_odds"
+            verified_quote_time = True
+    if not verified_quote_time:
+        return "awaiting_odds"
+    try:
+        line = float(row.get("line", ""))
+        odds = float(row.get("recommended_odds", ""))
+    except (TypeError, ValueError):
+        return "awaiting_odds"
+    side = str(row.get("recommended_side", "")).strip().upper()
+    if side not in {"OVER", "UNDER"} or not math.isfinite(line):
+        return "awaiting_odds"
+    if not math.isfinite(odds) or abs(odds) < 100 or not odds.is_integer():
+        return "awaiting_odds"
+    # If both fields are supplied they must describe the same exact quote.
+    side_price = row.get(f"{side.lower()}_odds")
+    if side_price not in (None, ""):
+        try:
+            if float(side_price) != odds:
+                return "price_mismatch"
+        except (TypeError, ValueError):
+            return "price_mismatch"
+    return None
+
+
+def publication_eligible(
+    row: dict[str, Any], slate_date: str | None, now: datetime | None = None
+) -> bool:
+    return publication_rejection(row, slate_date, now) is None
+
+
+def _atomic_text(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+            stream.write(contents)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def export_nba_pack(
     src_path: Path | None,
     out_path: Path,
     slate_date: str | None = None,
     min_edge_pct: float | None = None,
-    allow_latest_fallback: bool = True,
+    allow_latest_fallback: bool = False,
     fail_on_empty: bool = False,
+    now: datetime | None = None,
 ) -> int:
-    check_disk_space(min_gb=5.0)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    """Publish only verified quotes for the requested, unstarted Eastern slate.
 
+    The deprecated fallback argument is accepted for older callers but cannot
+    weaken the publication gate.
+    """
+    import io
+
+    check_disk_space(min_gb=5.0)
+    cutoff = _aware_utc(now or datetime.now(UTC))
+    if not slate_date:
+        slate_date = cutoff.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    date.fromisoformat(slate_date)
     raw_rows: list[dict[str, Any]] = []
     if src_path and src_path.exists():
-        with open(src_path, mode="r", encoding="utf-8-sig", errors="replace") as f:
-            reader = csv.DictReader(f)
-            raw_rows = list(reader)
+        with open(src_path, mode="r", encoding="utf-8-sig", errors="replace") as stream:
+            raw_rows = list(csv.DictReader(stream))
 
-    date_matches = [r for r in raw_rows if r.get("slate_date") == slate_date] if slate_date else []
-
-    use_rows = raw_rows
-    if slate_date:
-        if date_matches:
-            use_rows = date_matches
-        elif not allow_latest_fallback:
-            use_rows = []
-        elif raw_rows:
-            # Publishing another slate's rows under today's date is as damaging as
-            # publishing an empty pack, so say so on stderr instead of silently
-            # substituting them.
-            print(
-                f"[PIPELINE WARNING] No rows match slate_date '{slate_date}'; falling back to "
-                f"all {len(raw_rows)} row(s) in {src_path}, which may belong to another slate. "
-                "Pass --no-allow-latest-fallback to publish an empty pack instead.",
-                file=sys.stderr,
-            )
-
+    rejected: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
-    for row in use_rows:
+    for row in raw_rows:
+        reason = publication_rejection(row, slate_date, cutoff)
+        if reason:
+            rejected[reason] += 1
+            continue
         if min_edge_pct is not None:
-            # Signed comparison: a strongly negative edge is the worst bet on the
-            # board, not a strong one. abs() let -9% clear --min-edge 5. Every other
-            # edge gate in the repo compares the signed value (game_totals.py
-            # MIN_EDGE_TOTALS, ultimate_alt.py MIN_EDGE_PCT), and CLAUDE.md
-            # invariant 5 requires edge_pct > 0 for an actionable row.
             try:
                 edge = float(row.get("edge_pct", 0) or 0)
             except (ValueError, TypeError):
-                # An edge that cannot be read as a number has not cleared the bar.
-                # Dropping matches the absent-column path, which already yields 0.
+                rejected["invalid_edge"] += 1
                 continue
-            if edge < min_edge_pct:
+            if not math.isfinite(edge) or edge < min_edge_pct:
+                rejected["below_min_edge"] += 1
                 continue
+        rows.append({field: row.get(field, "") for field in FIELDNAMES})
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = str(index)
 
-        clean_row = {fn: row.get(fn, "") for fn in FIELDNAMES}
-        rows.append(clean_row)
-
-    for idx, r in enumerate(rows, start=1):
-        r["rank"] = str(idx)
-
-    with open(out_path, mode="w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
-
-    print(f"Exported {len(rows)} rows to {out_path}")
-
-    if len(rows) == 0:
-        warning_msg = (
-            f"[PIPELINE WARNING] Export produced 0 candidate rows for date '{slate_date}'. "
-            f"Source={src_path} had {len(raw_rows)} total rows."
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=FIELDNAMES)
+    writer.writeheader()
+    writer.writerows(rows)
+    contents = buffer.getvalue()
+    status = {
+        "slate_date": slate_date,
+        "as_of_utc": cutoff.isoformat(),
+        "row_count": len(rows),
+        "actionable_rows": len(rows),
+        "status": "ready" if rows else "awaiting_odds",
+        "source_rows": len(raw_rows),
+        "rejected_counts": dict(rejected),
+        "csv_sha256": hashlib.sha256(contents.encode("utf-8")).hexdigest(),
+    }
+    _atomic_text(out_path, contents)
+    _atomic_text(out_path.with_suffix(".status.json"), json.dumps(status, indent=2) + "\n")
+    print(f"Exported {len(rows)} rows to {out_path} (status={status['status']})")
+    if not rows:
+        warning = (
+            f"[AWAITING ODDS] Export produced 0 candidate rows for date '{slate_date}'. "
+            f"Source={src_path} had {len(raw_rows)} total rows; rejected={dict(rejected)}."
         )
-        print(warning_msg, file=sys.stderr)
+        print(warning, file=sys.stderr)
         if fail_on_empty:
-            raise RuntimeError(warning_msg)
-
+            raise RuntimeError(warning)
     return len(rows)
 
 
@@ -247,16 +375,10 @@ def main() -> int:
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="Output CSV path")
     parser.add_argument("--min-edge", type=float, default=None, help="Minimum edge_pct filter")
     parser.add_argument(
-        # BooleanOptionalAction (not store_true): with store_true and default=True
-        # the flag could never be turned off, so --no-allow-latest-fallback -- the
-        # only way to require rows that actually carry --date -- did not exist and
-        # a different slate's rows were always exported as today's pack.
         "--allow-latest-fallback",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use latest available active slate rows if requested date has no direct rows "
-        "(default: enabled; --no-allow-latest-fallback publishes an empty pack instead of "
-        "another slate's rows)",
+        default=False,
+        help="Deprecated compatibility flag; other slate dates are always rejected",
     )
     parser.add_argument(
         "--fail-on-empty",
