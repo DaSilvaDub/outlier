@@ -7,8 +7,7 @@ mask is built from ``ds.day < day``.
 
 The simulator's noise parameters (per-100 efficiency spread, the correlation between the
 two teams' efficiency noise, pace spread, the overtime ratio) are measured on *predictions
-made before each game*, never on in-sample residuals, and accumulate over all earlier
-history (an expanding window, so there is no half-life to invent).
+made before each game*, never on in-sample residuals, and decay by ``halflife`` games.
 """
 
 from __future__ import annotations
