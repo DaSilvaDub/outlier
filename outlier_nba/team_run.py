@@ -149,7 +149,7 @@ def compute_team_state(
     usable = ds.day < slate_day  # a result can never inform a game on its own day or later
     if not usable.any():
         raise TeamStateError(f"no results before {slate_date}")
-    last = int(ds.day[usable].max())
+    last = int(ds.day[usable].max())  # type: ignore[call-overload]
     in_season = any(s == season for s, u in zip(ds.season, usable) if u)
     prior_only = False
     if slate_day - last > max_age_days:

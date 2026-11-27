@@ -379,7 +379,7 @@ def portfolio_stats(
         p5=float(np.percentile(profit, 5)),
         p50=float(np.percentile(profit, 50)),
         p95=float(np.percentile(profit, 95)),
-        worst=float(profit.min()),
+        worst=float(profit.min()),  # type: ignore[call-overload]
     )
 
 

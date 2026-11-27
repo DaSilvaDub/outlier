@@ -802,7 +802,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     result = run_capture(client, db_path=args.db, nba_dir=nba_dir, fixture=args.fixture)
     if args.only_if_due and result.exit_code == EXIT_OK:
-        due_mod.record_attempt(args.db, now)
+        due_mod.record_attempt(args.db, now)  # pyright: ignore[reportPossiblyUnboundVariable]
     print(
         json.dumps(
             {**dataclasses.asdict(result), "receipts": [r.to_dict() for r in result.receipts]},
