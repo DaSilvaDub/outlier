@@ -312,8 +312,12 @@ def resolve_player_stats(
     if len(bare) == 1:
         return bare[0], None
     if shared:
-        team_code = str(team or "").strip().upper()
-        owned = [stats for key, stats in shared if team_code and key.split("#")[1] == team_code]
+        team_code = _team_token(team)
+        owned = [
+            stats
+            for key, stats in shared
+            if team_code and _team_token(key.split("#")[1]) == team_code
+        ]
         if len(owned) == 1:
             return owned[0], None
         return None, "ambiguous_player_match"

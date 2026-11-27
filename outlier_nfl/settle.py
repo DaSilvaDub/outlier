@@ -165,11 +165,11 @@ def _team_code(value: Any) -> str | None:
     if not text:
         return None
     compact = "".join(ch for ch in text if ch.isalnum())
-    if len(compact) <= 4:
-        return compact
+    if not compact:
+        return None
     from outlier_nfl.config import normalize_team
 
-    return normalize_team(text) or compact[:4]
+    return normalize_team(text) or (compact if len(compact) <= 4 else compact[:4])
 
 
 def _slate_date_from_prediction(record: Mapping[str, Any], fallback_date: str | None) -> str | None:

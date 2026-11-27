@@ -57,7 +57,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from outlier_nfl.boxscore import BoxScoreError, NflBoxScoreEvent, _number, _token
+from outlier_nfl.boxscore import BoxScoreError, NflBoxScoreEvent, _number, _team_token, _token
 from outlier_nfl.tape_nflverse import SCHEDULES_URL
 from outlier_nfl.utils import nfl_season_for_date
 
@@ -591,7 +591,7 @@ def _player_keys(
         per_token[token] = per_token.get(token, 0) + 1
     out: dict[str, dict[str, float]] = {}
     for pid, (token, team, stats) in sorted(by_id.items()):
-        key = token if per_token[token] == 1 else f"{token}#{_token(team)}#{_token(pid)}"
+        key = token if per_token[token] == 1 else f"{token}#{_team_token(team)}#{_token(pid)}"
         out[key] = stats
     return out
 
