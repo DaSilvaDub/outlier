@@ -748,6 +748,29 @@ def test_compute_sportsbook_edge_normalizes_model_p_pct():
     assert abs(edge - edge01) < 1e-6
 
 
+def test_plus_10000_sportsbook_percent_is_not_read_as_a_fraction():
+    """+10000 stores 0.99 percent. A 0–1 hit rate must stay a fraction."""
+    stored = american_to_implied_probability(10000)
+    assert stored == 0.99
+    edge = compute_sportsbook_edge_pts(0.55, stored)
+    assert edge == round(0.55 - stored / 100.0, 6)
+    prop = attach_empirical_model_p(
+        _make_prop("Long Shot", "REC_YDS", 10.5, best_odds=10000, l10=0.7),
+        method="market_prior",
+        overwrite=True,
+    )
+    expected = compute_shrunk_empirical_model_p(
+        l10_hit_rate=0.7,
+        method="market_prior",
+        market_prior=stored / 100.0,
+        kappa=DEFAULT_MARKET_PRIOR_KAPPA,
+    )
+    assert expected is not None
+    assert prop.sportsbook_implied_probability == stored
+    assert prop.model_p == expected[0]
+    assert prop.sportsbook_edge_pts == round(prop.model_p - stored / 100.0, 6)
+
+
 def test_enrich_close_refreshes_edge_after_projection_overwrite(monkeypatch):
     """After projection overwrites model_p, sportsbook_edge_pts must track it."""
     from outlier_nfl import enrich_close as ec
