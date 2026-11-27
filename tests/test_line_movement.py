@@ -12,6 +12,7 @@ from outlier_scrapers.line_movement import (
     normalize_ev_records,
     normalize_market_detail,
 )
+from outlier_scrapers.utils import _decimal_to_american
 
 
 def _game_market_detail(market_id="gm1"):
@@ -171,6 +172,32 @@ def test_build_line_movement_payload_local_ev_records_carry_american_odds():
         assert row["current_odds"] == row["book_odds"]
         assert row["book_ip_pct"] is not None
         assert row["current_ip_pct"] is not None
+
+
+@pytest.mark.parametrize("league", ["MLB", "WNBA"])
+def test_local_ev_devig_odds_are_american(league):
+    """LOCAL devig_odds must be American, matching the native writer and readers.
+
+    Native records store deVigOdds.american in devig_odds and the decimal in
+    devig_decimal. Cards copy devig_odds through and the HTML renderer formats
+    it with the American odds() helper. The local fallback must convert with
+    the shared decimal-to-American helper instead of writing the decimal.
+    """
+    result = build_line_movement_payload(
+        league=league,
+        market_payloads=[_local_ev_market_detail()],
+        props_context={},
+        source_url_template="t",
+        props_latest="x",
+    )
+    ev_rows = result["ev_records"]
+    assert ev_rows, "expected LOCAL EV records from a 3-operator two-way market"
+    for row in ev_rows:
+        decimal = row["devig_decimal"]
+        assert isinstance(decimal, float) and decimal > 1.0
+        american = _decimal_to_american(decimal)
+        assert isinstance(american, int)
+        assert row["devig_odds"] == american
 
 
 def _market_detail(*, market_id="m1", market_history=True, ev_outcomes=False):
