@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, date, datetime
@@ -13,6 +14,40 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.export_nba_extra_pack import FIELDNAMES
+
+# The ESPN_MODEL projections behind RG-free edges come from this engine's PlayerBook,
+# which refuses history more than a day behind the slate. Nothing else refreshes it.
+DEFAULT_ENGINE_DIR = Path(r"C:\Users\dasil\.gemini\config\skills\nba-master-betting-pipeline")
+ESPN_MODEL_STATUS = re.compile(r"ESPN PlayerBook (?:status=(\w+)|unavailable)")
+
+
+def season_start_year(slate: date) -> int:
+    return slate.year if slate.month >= 7 else slate.year - 1
+
+
+def refresh_history(engine_dir: Path, slate_date: str, env: dict, runner) -> dict:
+    """Bring the engine's ESPN results cache up to the slate. Best effort: edges still
+    run without it, but every Hard Rock line then goes unmatched in RG-free mode."""
+    script = engine_dir / "scripts" / "espn_history.py"
+    if not script.is_file():
+        return {"name": "history", "skipped": "engine_missing"}
+    season = str(season_start_year(date.fromisoformat(slate_date)))
+    codes = []
+    for what in ("games", "boxes"):
+        try:
+            result = runner(
+                [sys.executable, str(script), what, "--seasons", season],
+                cwd=engine_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=900,
+                check=False,
+            )
+            codes.append(result.returncode)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"name": "history", "error": type(exc).__name__}
+    return {"name": "history", "returncode": max(codes)}
 
 
 def empty_inputs(output: Path, slate_date: str, error: str) -> None:
@@ -52,6 +87,7 @@ def refresh(
     use_rg: bool = False,
     report_pdf: Path | None = None,
     report_url: str | None = None,
+    engine_dir: Path | None = None,
     runner=None,
 ) -> int:
     pipeline_repo = pipeline_repo.resolve()
@@ -70,6 +106,7 @@ def refresh(
     }
     # Clear retained input products before attempting a new collection.
     empty_inputs(output, slate_date, "refresh_in_progress")
+    engine_dir = engine_dir or Path(os.environ.get("NBA_ENGINE_DIR") or DEFAULT_ENGINE_DIR)
     stages = [
         (
             "odds",
@@ -122,6 +159,8 @@ def refresh(
         for name, args in stages:
             if not Path(args[0]).is_file():
                 raise RuntimeError(f"{name}: required upstream script missing")
+            if name == "edges":
+                status["stages"].append(refresh_history(engine_dir, slate_date, env, runner))
             result = runner(
                 [sys.executable, *args],
                 cwd=pipeline_repo,
@@ -141,6 +180,9 @@ def refresh(
                     raise RuntimeError("edges: requested slate mismatch or invalid rows")
                 status["source_lines"] = edges.get("hardrock_total_lines", 0)
                 status["matched_rows"] = len(edges["rows"])
+                # A fixed status token only; edge output carries no provider URLs.
+                found = ESPN_MODEL_STATUS.search(getattr(result, "stdout", None) or "")
+                status["espn_model"] = (found.group(1) or "unavailable") if found else "ok"
         edges = json.loads((output / "prop_edges_latest.json").read_text(encoding="utf-8"))
         status["status"] = (
             "inputs_collected"
@@ -185,6 +227,7 @@ def main() -> int:
     parser.add_argument("--report-pdf", type=Path)
     parser.add_argument("--report-url")
     parser.add_argument("--use-rg", action="store_true")
+    parser.add_argument("--engine-dir", type=Path, help="nba-master-betting-pipeline checkout")
     args = parser.parse_args()
     return refresh(
         args.pipeline_repo,
@@ -194,6 +237,7 @@ def main() -> int:
         use_rg=args.use_rg,
         report_pdf=args.report_pdf,
         report_url=args.report_url,
+        engine_dir=args.engine_dir,
     )
 
 
