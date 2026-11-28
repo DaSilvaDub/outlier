@@ -823,7 +823,7 @@ class NflPipeline:
             errors.append(f"alt floors failed: {exc}")
 
         # =====================================================================
-        # 8 & 9. REQUIRED â€” Calculate Matchup Advantage Rankings & Generate Reports
+        # 8 & 9. REQUIRED — Calculate Matchup Advantage Rankings & Generate Reports
         # =====================================================================
         matchup_rankings_summary: dict[str, Any] = {}
         try:
@@ -937,7 +937,7 @@ class NflPipeline:
         }
 
         report_root = Path(reports_dir) if reports_dir is not None else Path("reports/NFL")
-        # Optional Game Script Generation â€” one markdown file per matchup
+        # Optional Game Script Generation — one markdown file per matchup
         if generate_game_script and all_game_lines:
             try:
                 from scripts.nfl_game_script import NflGameScriptGenerator
