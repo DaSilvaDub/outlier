@@ -182,6 +182,18 @@ def test_prior_only_state_is_refused_once_the_opening_window_has_passed(games) -
     assert ok.prior_only
 
 
+def test_opener_verified_uses_the_eastern_date_of_fetched_at() -> None:
+    """21:30 ET is the next UTC date; covered_days are still the Eastern slate day."""
+    base = {
+        "covered_days": ["20261017", "20261018", "20261019", "20261020", "20261021"],
+        "final_games_by_season": {"2026-27": 0},
+    }
+    late_evening = {**base, "fetched_at": "2026-10-22T01:30:00+00:00"}  # 21:30 ET 2026-10-21
+    afternoon = {**base, "fetched_at": "2026-10-21T16:00:00+00:00"}
+    assert team_run.opener_verified(late_evening, "2026-10-21", "2026-27") is True
+    assert team_run.opener_verified(afternoon, "2026-10-21", "2026-27") is True
+
+
 def test_season_opener_without_a_verifying_refresh_fails_closed(games) -> None:
     opener = [g for g in games if g.season != "2026-27"]
     bad_receipts = [

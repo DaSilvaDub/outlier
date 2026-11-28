@@ -30,7 +30,7 @@ from outlier_nba.market.devig import american_to_prob
 from outlier_nba.pipeline import NbaPipeline, PipelineResult, Stage
 from outlier_nba.pricing import blend, team_markets
 from outlier_nba.ratings.model import AsOf, TeamModel, TeamParams, predict
-from outlier_nba.ratings.possessions import TEAM_INDEX, TEAMS, Dataset, build_dataset
+from outlier_nba.ratings.possessions import ET, TEAM_INDEX, TEAMS, Dataset, build_dataset
 from outlier_nba.receipts import StageReceipt, failing, receipt
 from outlier_nba.run_context import (
     AsOfReader,
@@ -88,7 +88,8 @@ def opener_verified(receipt: Mapping[str, Any] | None, slate_date: str, season: 
     """True only if a recent refresh covered the previous day and saw no game of ``season``.
 
     The local store alone cannot tell "the season has not started" from "the feed stopped
-    updating"; this evidence comes from the refresh itself.
+    updating"; this evidence comes from the refresh itself. ``fetched_at`` is dated in
+    Eastern, the same calendar ``refresh_recent`` stamps onto ``covered_days``.
     """
     if not receipt:
         return False
@@ -96,7 +97,7 @@ def opener_verified(receipt: Mapping[str, Any] | None, slate_date: str, season: 
     if fetched is None:
         return False
     slate = date.fromisoformat(slate_date)
-    if not 0 <= (slate - fetched.astimezone(UTC).date()).days <= 1:
+    if not 0 <= (slate - fetched.astimezone(ET).date()).days <= 1:
         return False
     if (slate - timedelta(days=1)).strftime("%Y%m%d") not in (receipt.get("covered_days") or []):
         return False
