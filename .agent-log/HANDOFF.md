@@ -1,3 +1,63 @@
+# Session Handoff: Daily Debug Review (2026-11-28, agent `claude`)
+
+1. **Work**: Automated daily debug/code-health review on branch
+   `claude/inspiring-fermat-jw413s` (HEAD `3ef91e4`). Cloud STEP 0 done: tree clean,
+   all 5 upgrade markers present (`player_id`, `round_robin_then_fill`,
+   `CANDIDATES_HEADER`, `decisions.csv` in `pack.py`; `_acquire_writer_lock` in
+   `daily_job.py`). Reviewed everything merged since the 2026-11-13 review
+   (`8e578fb..HEAD`, 136 commits): the NFL drive simulator stack (#396/#398/#399,
+   `drive_sim.py`, `external/drives.py`, pipeline wiring), the NBA `slate` command
+   (#394, `slate_report.py`, `slate_render.py`, `ingest/espn_slate.py`),
+   `refresh_nba_upstream.py` (#385/#393/#395), the NFL Cognito session refresh
+   (`outlier_nfl/session.py`), the BettingPros single-book acceptance in
+   `export_nba_extra_pack.py`, and the scheduled-task catch-up fix (#402).
+
+2. **Change made** (1 file, comment-only): `outlier_nfl/pipeline.py` lines 826 and 940 —
+   reverted double-encoded em dashes (`â€”`, bytes `C3 A2 E2 82 AC E2 80 9D`) back to
+   `—`. Introduced accidentally by `4b1e356` ("feat(nfl): build and save drive
+   simulations"), unrelated to that feature. Repo-wide mojibake grep is now clean.
+
+3. **Verification**: offline `pytest -m "not provider"` = 3829 passed, 6 skipped
+   (before and after the change); `mypy outlier_scrapers` / `outlier_nfl` /
+   `outlier_nba` all clean; `pyright --pythonpath .venv/bin/python outlier_scrapers
+   outlier_nfl` = 0 errors (1 warning: optional `playwright` import in `login.py`).
+   Provider-marked tests were NOT run (house rule: default offline).
+
+4. **Both 2026-11-13 findings are resolved** — re-verified, no action needed:
+   - The NBA refresh no longer dies on the missing roster registry.
+     `filter_csv` now catches `RegistryError` internally (`filter_nba_ruled_out.py:145-147`),
+     so a missing `resources/nba_roster_registry.json` yields exit 0 with every row
+     UNKNOWN, `status=awaiting_availability` and `availability_error` recorded —
+     fail-closed instead of exit 2. Reproduced: `before=1 after=0 removed=0`, exit 0.
+     `refresh_nba_pack.ps1:144` also now defaults `$Registry` to the upstream
+     `nba_availability_registry.json`.
+   - The `or injuries` over-filter is gone: `availability()` was rewritten to a
+     per-game sourced-evidence model (`OUT`/`AVAILABLE`/`UNKNOWN`), so a Probable
+     entry no longer removes an active player.
+
+5. **Observations left for a human (not changed, no fix recommended without a ruling)**:
+   - `slate_report._gate_failures` F4 uses `cfg.price_min <= odds < cfg.price_max`
+     (`slate_report.py:238`). The bound is inclusive at -250 but exclusive at +150,
+     so a quote of exactly +150 fails the gate while -250 passes, and the message
+     reads "price outside -250/+150". Loosening a bet gate is a desk decision, so
+     left alone — confirm whether the asymmetry is intended.
+   - `cli.run_slate_cmd` wraps `espn_slate.fetch_feeds` in `except espn.EspnError`
+     only; a malformed `--date` reaches `date.fromisoformat` and tracebacks instead
+     of printing a usage error. Cosmetic.
+   - Ruff repo-wide reports 971 findings, but every one is from a rule set outside
+     `[tool.ruff]` (which selects the default E4/E7/E9/F only); the Makefile lints
+     changed files only. Checked the bug-shaped classes by hand: all 15 `PLR0124`
+     are the deliberate NaN `x != x` idiom, and all 16 `B023` closures are invoked
+     within their own loop iteration. No real defects there.
+
+6. **Next Steps**: nothing blocking. Still open from earlier sessions: zero-stake
+   totals (#351), doubleheader starter (#345), devig decimal/American split, slate
+   date clock, placeholder quotes (#350), spread pairing in `evidence.py` (#340),
+   export flag (#334/#336/#344), bundle location (#338), roster registry /
+   injury filter (#349, draft #330).
+
+---
+
 # Session Handoff: WNBA alt-spread settlement (2026-11-15, agent `grok`)
 
 1. **Last Commit SHA**: `0d40270db7ee570debcf18281ff2f881df1cc49b` (grading fix; this handoff commit sits on top of it).
